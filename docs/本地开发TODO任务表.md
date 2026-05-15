@@ -25,23 +25,23 @@
 
 ### 1.1 本地基础设施安装
 
-- [ ] 安装 PostgreSQL 本地实例（端口 5432）
-- [ ] 安装 Redis 本地实例（端口 6379），或使用 Memurai 替代
-- [ ] 创建 Python 虚拟环境（venv），Python 3.11+
-- [ ] 配置 `.env` 本地开发环境变量（数据库连接串/Redis）
+- [x] 安装 PostgreSQL 本地实例（端口 3306）
+- [x] 安装 Redis 本地实例（端口 6379），或使用 Memurai 替代
+- [x] 创建 Python 虚拟环境（venv），Python 3.11+
+- [x] 配置 `.env` 本地开发环境变量（数据库连接串/Redis）
 
 ### 1.2 FastAPI 项目脚手架
 
-- [ ] 项目目录结构创建（参考下方目录结构）
-- [ ] FastAPI 应用初始化 + CORS 中间件配置
-- [ ] 配置管理模块（pydantic-settings 多环境）
-- [ ] 日志系统搭建（logging / loguru）
-- [ ] 全局异常处理中间件
-- [ ] 数据库连接池配置（asyncpg / SQLAlchemy async）
-- [ ] Redis 客户端封装
-- [ ] Alembic 迁移工具配置
-- [ ] 统一响应格式封装（`{code, message, data}`）
-- [ ] Git 仓库初始化 + `.gitignore`
+- [x] 项目目录结构创建（参考下方目录结构）
+- [x] FastAPI 应用初始化 + CORS 中间件配置
+- [x] 配置管理模块（pydantic-settings 多环境）
+- [x] 日志系统搭建（logging / loguru）
+- [x] 全局异常处理中间件
+- [x] 数据库连接池配置（asyncpg / SQLAlchemy async）
+- [x] Redis 客户端封装
+- [x] Alembic 迁移工具配置
+- [x] 统一响应格式封装（`{code, message, data}`）
+- [x] Git 仓库初始化 + `.gitignore`
 
 ```
 项目目录结构
@@ -67,10 +67,10 @@ backend/
 
 ### 1.3 数据库设计
 
-- [ ] 编写所有表的 SQLAlchemy ORM Model（13 张表，见下方清单）
-- [ ] 创建 Alembic 初始 Migration（DDL）
-- [ ] 执行 Migration，验证所有表创建成功
-- [ ] 编写种子数据脚本（价格配置 / 认证信息 / 题库分类的初始数据）
+- [x] 编写所有表的 SQLAlchemy ORM Model（18 张表，见下方清单）
+- [x] 创建 Alembic 初始 Migration（DDL）
+- [x] 执行 Migration，验证所有表创建成功
+- [x] 编写种子数据脚本（价格配置 / 认证信息 / 题库分类的初始数据）
 
 **13 张核心表**：user / order / conversation / price_config / certification / course / course_enrollment / quiz_category / quiz_question / quiz_record / quiz_checkin / user_points / points_history / coupon / user_coupon / agreement / competition_reg / ticket
 
