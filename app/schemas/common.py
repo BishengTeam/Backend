@@ -6,7 +6,7 @@ T = TypeVar("T")
 
 
 class APIResponse(BaseModel, Generic[T]):
-    code: int = 200
+    code: int = 0
     message: str = "ok"
     data: T | None = None
 
@@ -22,9 +22,9 @@ class PaginatedResponse(APIResponse[PaginatedData[T]], Generic[T]):
     data: PaginatedData[T]
 
 
-def success(data: Any = None, message: str = "ok", code: int = 200) -> APIResponse:
+def success(data: Any = None, message: str = "ok", code: int = 0) -> APIResponse:
     return APIResponse(code=code, message=message, data=data)
 
 
 def created(data: Any = None, message: str = "创建成功") -> APIResponse:
-    return APIResponse(code=201, message=message, data=data)
+    return APIResponse(code=0, message=message, data=data)

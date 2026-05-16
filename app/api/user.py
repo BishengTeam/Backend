@@ -2,30 +2,15 @@ from fastapi import APIRouter, Depends
 
 from app.middleware.auth import get_current_user
 from app.models.user import User
-from app.schemas.common import success
+from app.schemas.common import APIResponse, success
 from app.schemas.user import (
     PhoneDecryptRequest,
-    UserProfile,
-    UserProfileUpdate,
+    UserIdentityCreate,
+    UserIdentityResponse,
 )
 from app.services.user import UserService
 
 router = APIRouter(prefix="/user", tags=["用户"])
-
-
-@router.get("/profile", response_model=UserProfile)
-async def get_profile(current_user: User = Depends(get_current_user)):
-    """获取当前用户资料"""
-    return await UserService().get_profile(current_user.id)
-
-
-@router.put("/profile", response_model=UserProfile)
-async def update_profile(
-    body: UserProfileUpdate,
-    current_user: User = Depends(get_current_user),
-):
-    """更新用户资料（修改次数限制）"""
-    return await UserService().update_profile(current_user.id, body)
 
 
 @router.delete("/account")
@@ -42,6 +27,25 @@ async def decrypt_phone(
 ):
     """解密微信手机号"""
     phone = await UserService().decrypt_phone(
-        current_user.id, body.encrypted_data, body.iv, "re-auth-code"
+        current_user.id, body.encrypted_data, body.iv
     )
     return success(data={"phone": phone})
+
+
+@router.post("/identity")
+async def submit_identity(
+    body: UserIdentityCreate,
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[UserIdentityResponse]:
+    """提交实名认证信息"""
+    result = await UserService().submit_identity(current_user.id, body)
+    return success(data=result)
+
+
+@router.get("/identity")
+async def get_identity(
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[UserIdentityResponse]:
+    """查询实名认证状态"""
+    result = await UserService().get_identity(current_user.id)
+    return success(data=result)

@@ -18,7 +18,7 @@ class Settings(BaseSettings):
 
     JWT_SECRET: str
     JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRE_MINUTES: int = 43200
+    JWT_EXPIRE_MINUTES: int = 120
 
     WECHAT_APPID: str = ""
     WECHAT_SECRET: str = ""

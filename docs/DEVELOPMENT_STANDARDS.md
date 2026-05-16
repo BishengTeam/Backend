@@ -321,6 +321,36 @@ class WechatClient:
 
 ## 6. 数据库规范
 
+### 6.0 禁止高危命令
+
+以下命令在业务代码中**禁止使用**：
+
+**Redis：**
+
+| 禁止 | 原因 | 替代 |
+|------|------|------|
+| `KEYS pattern` | 单线程全量扫描，阻塞所有请求，生产环境阿里云/腾讯云默认禁用 | 反向设计 key 实现 O(1) 查询；仅运维脚本可用 `SCAN` |
+| `FLUSHDB` / `FLUSHALL` | 清空数据库，不可逆 | 无替代，禁止执行 |
+| `CONFIG SET` | 运行时修改 Redis 配置 | 通过运维工具管理配置 |
+
+**设计原则**：Redis key 必须以查询条件为核心，保证 O(1) 直接访问，严禁通过遍历查找。
+
+```
+错误：refresh_token:{user_id} → 存 token 值，刷新时需 KEYS * 遍历找匹配
+正确：refresh_token:{token值} → 存 user_id，刷新时 GET 即可 O(1) 查到
+```
+
+**PostgreSQL：**
+
+| 禁止 | 原因 | 替代 |
+|------|------|------|
+| `DROP TABLE/DATABASE` | 不可逆 | Alembic migrate down |
+| `TRUNCATE` | 不可逆，跳过触发器 | DELETE（带 WHERE 条件） |
+| 拼接字符串构造 SQL | SQL 注入风险 | SQLAlchemy ORM / 参数化查询 |
+| `SELECT *` | 多余字段、索引失效 | 显式列出所需字段 |
+
+---
+
 ### 6.1 表设计
 
 - 每张表必须包含 `id`（主键）、`created_at`、`updated_at` 字段
