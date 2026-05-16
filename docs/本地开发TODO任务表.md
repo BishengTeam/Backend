@@ -80,14 +80,14 @@ backend/
 
 ### 2.1 用户服务模块 `B-01`（P0）— 预计 5月15-16日
 
-- [ ] `POST /api/auth/login` — 微信 code 换取 openid + 签发 JWT（先用 mock code 测试）
-- [ ] `GET /api/user/profile` — 获取用户资料
-- [ ] `PUT /api/user/profile` — 更新用户资料（修改次数限制逻辑）
-- [ ] `DELETE /api/user/account` — 账号注销
-- [ ] 手机号解密存储逻辑（getPhoneNumber 敏感数据解密 — 代码完成，待真实环境验证）
-- [ ] JWT Token 签发 + 刷新 + 过期处理 + 认证中间件
-- [ ] 登录海报弹窗配置接口
-- [ ] 考试意向字段采集
+- [x] `POST /api/auth/login` — 微信 code 换取 openid + 签发 JWT（先用 mock code 测试）
+- [x] `GET /api/user/profile` — 获取用户资料
+- [x] `PUT /api/user/profile` — 更新用户资料（修改次数限制逻辑）
+- [x] `DELETE /api/user/account` — 账号注销
+- [x] 手机号解密存储逻辑（getPhoneNumber 敏感数据解密 — 代码完成，待真实环境验证）
+- [x] JWT Token 签发 + 刷新 + 过期处理 + 认证中间件
+- [x] 登录海报弹窗配置接口
+- [x] 考试意向字段采集
 
 ### 2.2 客服对话模块 `B-02`（P1）— 预计 5月16-17日
 
