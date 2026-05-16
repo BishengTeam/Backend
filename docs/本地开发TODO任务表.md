@@ -93,10 +93,10 @@ backend/
 
 > 当前实现消息收发骨架 + 快速问题配置，预留 AI 智能客服转发扩展点。
 
-- [ ] `POST /api/chat` — 消息接收 + 会话存储（Redis），预留 `ChatBackend` 接口
-- [ ] `GET /api/chat/stream` — SSE 流式响应骨架
-- [ ] `GET /api/quick-questions` — 推荐问题列表（后台可配置）
-- [ ] 对话上下文管理（Redis 会话存储）
+- [x] `POST /api/chat` — 消息接收 + 会话存储（Redis），预留 `ChatBackend` 接口
+- [x] `GET /api/chat/stream` — SSE 流式响应骨架
+- [x] `GET /api/quick-questions` — 推荐问题列表（后台可配置）
+- [x] 对话上下文管理（Redis 会话存储）
 
 ### 2.3 认证列表 + 报名缴费 + 支付（P0）— 预计 5月17-22日
 
