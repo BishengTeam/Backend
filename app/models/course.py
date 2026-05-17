@@ -1,5 +1,5 @@
 from sqlalchemy import String, Integer, JSON, Text, ForeignKey
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
 
@@ -27,3 +27,5 @@ class CourseEnrollment(Base, TimestampMixin):
     batch_selected: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(16), default="enrolled", server_default="enrolled")
     learning_access: Mapped[bool] = mapped_column(default=True, server_default="true")
+
+    course: Mapped[Course] = relationship()
