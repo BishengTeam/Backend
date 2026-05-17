@@ -1,11 +1,16 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.core.config import settings
-from app.schemas.common import success
+from app.middleware.auth import get_current_user
+from app.models.user import User
+from app.schemas.common import APIResponse, success
+from app.schemas.system import PosterResponse
 
 router = APIRouter(prefix="/system", tags=["系统"])
 
 
 @router.get("/poster")
-async def get_login_poster():
-    return success(data={"url": settings.LOGIN_POSTER_URL})
+async def get_login_poster(
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[PosterResponse]:
+    return success(data=PosterResponse(url=settings.LOGIN_POSTER_URL))
