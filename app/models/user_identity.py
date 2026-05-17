@@ -8,6 +8,7 @@ class UserIdentity(Base, TimestampMixin):
     __tablename__ = "user_identity"
 
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("user.id"), unique=True, nullable=False, index=True)
+    user_type: Mapped[str] = mapped_column(String(16), nullable=False)
     real_name: Mapped[str] = mapped_column(String(64), nullable=False)
     id_card_number: Mapped[str] = mapped_column(String(18), nullable=False, index=True)
     id_card_front_oss: Mapped[str | None] = mapped_column(String(512))

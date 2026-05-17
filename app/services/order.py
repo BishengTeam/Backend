@@ -27,7 +27,9 @@ class OrderService:
             if cert is None:
                 raise BusinessException("认证类型不存在或已下架")
             identity = await db.get(UserIdentity, user_id)
-            user_type = "student" if (identity and identity.student_card_oss) else "enterprise"
+            if identity is None:
+                raise BusinessException("请先完成实名认证")
+            user_type = identity.user_type
             price_row = (
                 await db.execute(
                     select(PriceConfig.price).where(

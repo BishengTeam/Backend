@@ -21,6 +21,7 @@ def _mask_identity(identity: UserIdentity) -> UserIdentityResponse:
     id_card = identity.id_card_number
     masked = id_card[:4] + "**********" + id_card[-4:] if len(id_card) == 18 else "****"
     return UserIdentityResponse(
+        user_type=identity.user_type,
         real_name=identity.real_name,
         id_card_number=masked,
         id_card_front_oss=identity.id_card_front_oss,
@@ -52,6 +53,8 @@ class UserService:
         error = validate_id_card(data.id_card_number)
         if error:
             raise ValidationException(error)
+        if data.user_type == "student" and not data.student_card_oss:
+            raise ValidationException("学生用户必须上传学生证")
         async with get_db_ctx() as db:
             user = await db.get(User, user_id)
             if user is None or not user.is_active:
@@ -64,6 +67,7 @@ class UserService:
             if existing is not None:
                 if existing.edit_count >= MAX_IDENTITY_EDITS:
                     raise BusinessException("实名信息最多修改 3 次，已达上限")
+                existing.user_type = data.user_type
                 existing.real_name = data.real_name
                 existing.id_card_number = data.id_card_number
                 existing.id_card_front_oss = data.id_card_front_oss
