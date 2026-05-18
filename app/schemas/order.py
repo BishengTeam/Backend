@@ -1,7 +1,12 @@
 import re
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+from app.utils.validators import validate_id_card
+
+OrderStatus = Literal["pending", "paid", "completed", "refunded"]
 
 
 class OrderCreate(BaseModel):
@@ -17,6 +22,23 @@ class OrderCreate(BaseModel):
             raise ValueError("手机号格式不正确")
         return v
 
+    @field_validator("candidate_idcard", mode="before")
+    @classmethod
+    def normalize_idcard(cls, v: str | None) -> str | None:
+        if v == "":
+            return None
+        return v
+
+    @field_validator("candidate_idcard")
+    @classmethod
+    def validate_idcard(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        error = validate_id_card(v)
+        if error:
+            raise ValueError(error)
+        return v.upper()
+
 
 class OrderResponse(BaseModel):
     id: int
@@ -25,7 +47,7 @@ class OrderResponse(BaseModel):
     candidate_phone: str = Field(..., description="考生手机号")
     candidate_idcard: str | None = Field(None, description="考生身份证号")
     price: int = Field(..., description="订单金额，单位为分")
-    status: str = Field(..., description="订单状态：pending / paid / completed / refunded")
+    status: OrderStatus = Field(..., description="订单状态：pending / paid / completed / refunded")
     out_trade_no: str | None = Field(None, description="商户订单号")
     created_at: datetime
 
@@ -39,7 +61,7 @@ class OrderDetailResponse(BaseModel):
     candidate_phone: str = Field(..., description="考生手机号")
     candidate_idcard: str | None = Field(None, description="考生身份证号")
     price: int = Field(..., description="订单金额，单位为分")
-    status: str = Field(..., description="订单状态：pending / paid / completed / refunded")
+    status: OrderStatus = Field(..., description="订单状态：pending / paid / completed / refunded")
     out_trade_no: str | None = Field(None, description="商户订单号")
     transaction_id: str | None = Field(None, description="微信支付交易号")
     paid_at: datetime | None = Field(None, description="支付时间，ISO 8601")
@@ -50,4 +72,4 @@ class OrderDetailResponse(BaseModel):
 
 
 class OrderFilter(BaseModel):
-    status: str | None = Field(None, description="按状态筛选：pending / paid / completed / refunded")
+    status: OrderStatus | None = Field(None, description="按状态筛选：pending / paid / completed / refunded")

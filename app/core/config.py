@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     WECHAT_PAY_APPID: str = ""
     WECHAT_PAY_NOTIFY_URL: str = ""
 
+    CHAT_BACKEND: str = "disabled"
+    DIFY_API_BASE: str = ""
+    DIFY_API_KEY: str = ""
+
     LOGIN_POSTER_URL: str | None = None
 
     UPLOAD_DIR: str = "./uploads"

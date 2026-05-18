@@ -30,6 +30,11 @@ class ConflictException(AppException):
         super().__init__(code=40201, message=message, http_status_code=409)
 
 
+class ThirdPartyException(AppException):
+    def __init__(self, message: str):
+        super().__init__(code=40400, message=message, http_status_code=502)
+
+
 class ValidationException(AppException):
     def __init__(self, message: str = "参数校验失败", detail: list[dict] | None = None):
         super().__init__(code=40001, message=message, http_status_code=422)

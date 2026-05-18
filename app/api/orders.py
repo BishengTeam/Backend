@@ -3,13 +3,19 @@ from fastapi import APIRouter, Depends, Path, Query
 from app.middleware.auth import get_current_user, require_identity
 from app.models.user import User
 from app.schemas.common import APIResponse, PaginatedData, success
-from app.schemas.order import OrderCreate, OrderDetailResponse, OrderFilter, OrderResponse
+from app.schemas.order import (
+    OrderCreate,
+    OrderDetailResponse,
+    OrderFilter,
+    OrderResponse,
+    OrderStatus,
+)
 from app.services.order import OrderService
 
 router = APIRouter(prefix="/orders", tags=["订单"])
 
 
-@router.post("")
+@router.post("", response_model=APIResponse[OrderResponse])
 async def create_order(
     body: OrderCreate,
     current_user: User = Depends(require_identity),
@@ -19,9 +25,11 @@ async def create_order(
     return success(data=result)
 
 
-@router.get("")
+@router.get("", response_model=APIResponse[PaginatedData[OrderResponse]])
 async def list_orders(
-    status: str | None = Query(None, description="按状态筛选：pending / paid / completed / refunded"),
+    status: OrderStatus | None = Query(
+        None, description="按状态筛选：pending / paid / completed / refunded"
+    ),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     current_user: User = Depends(get_current_user),
@@ -32,7 +40,7 @@ async def list_orders(
     return success(data=result)
 
 
-@router.get("/{order_id}")
+@router.get("/{order_id}", response_model=APIResponse[OrderDetailResponse])
 async def get_order(
     order_id: int = Path(..., description="订单 ID"),
     current_user: User = Depends(get_current_user),

@@ -1,4 +1,4 @@
-# 小程序平台后端 开发规范
+﻿# 小程序平台后端 开发规范
 
 > 编制日期：2026-05-14
 > 技术栈：Python 3.11+ / FastAPI / SQLAlchemy (async) / PostgreSQL / Redis / Dify / Ollama
@@ -274,29 +274,23 @@ class WechatClient:
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "message": "ok",
   "data": { ... }
 }
 ```
 
-| code | 含义 |
-|------|------|
-| 200 | 成功 |
-| 201 | 创建成功 |
-| 400 | 参数校验失败 |
-| 401 | 未认证 |
-| 403 | 无权限 |
-| 404 | 资源不存在 |
-| 409 | 业务冲突（如重复报名） |
-| 422 | 业务逻辑错误（如积分不足） |
-| 500 | 服务器内部错误 |
+- `code=0` 表示成功，非 0 表示错误
+- `message` 为人可读描述
+- `data` 为业务数据；列表接口返回 `{ "items": [], "total": 100 }`
+- HTTP 状态码只表达传输层结果，业务判断必须使用响应体中的 `code`
+- 成功响应一律使用 `code=0`，不再使用 `code=200` / `code=201`
 
 ### 5.4 分页响应格式
 
 ```json
 {
-  "code": 200,
+  "code": 0,
   "message": "ok",
   "data": {
     "items": [...],
@@ -307,15 +301,50 @@ class WechatClient:
 }
 ```
 
-### 5.5 错误响应格式
+### 5.5 错误码规范
+
+| 范围 | 含义 |
+|------|------|
+| 0 | 成功 |
+| 40001-40099 | 参数校验错误 |
+| 40100-40199 | 认证/鉴权错误 |
+| 40200-40299 | 业务逻辑错误（余额不足、状态不允许等） |
+| 40300-40399 | 资源不存在 |
+| 40400-40499 | 第三方服务错误（微信支付、OSS 等） |
+| 50000-50099 | 服务器内部错误 |
+
+约定：
+- 参数校验失败统一返回 `40001`
+- 未登录 / Token 无效返回 `40100`
+- Token 过期返回 `40101`
+- 业务状态不允许、余额不足、重复报名等返回 `40200-40299`
+- 资源不存在返回 `40300-40399`
+- 微信、OSS、支付等第三方服务错误返回 `40400-40499`
+- 未捕获异常兜底返回 `50000`
+
+### 5.6 错误响应格式
 
 ```json
 {
-  "code": 422,
+  "code": 40200,
   "message": "积分余额不足，当前余额 30，需要 100",
   "data": null
 }
 ```
+
+参数校验失败时返回 `detail`，用于前端定位具体字段：
+
+```json
+{
+  "code": 40001,
+  "message": "参数校验失败",
+  "detail": [
+    { "field": "candidate_phone", "reason": "手机号格式不正确" }
+  ]
+}
+```
+
+`detail` 仅在参数校验失败时出现。
 
 ---
 
@@ -445,21 +474,54 @@ settings = Settings()
 # core/exceptions.py
 class AppException(Exception):
     """应用基础异常"""
-    def __init__(self, code: int, message: str):
-        self.code = code
+    def __init__(
+        self,
+        code: int,
+        message: str,
+        http_status_code: int = 400,
+        detail: list[dict] | None = None,
+    ):
+        self.code = code  # 业务错误码
         self.message = message
+        self.http_status_code = http_status_code  # HTTP 状态码
+        self.detail = detail or []
 
-class NotFoundException(AppException):
-    def __init__(self, resource: str):
-        super().__init__(code=404, message=f"{resource} 不存在")
-
-class BusinessException(AppException):
-    def __init__(self, message: str):
-        super().__init__(code=422, message=message)
+class ValidationException(AppException):
+    def __init__(self, message: str = "参数校验失败", detail: list[dict] | None = None):
+        super().__init__(
+            code=40001,
+            message=message,
+            http_status_code=422,
+            detail=detail,
+        )
 
 class UnauthorizedException(AppException):
     def __init__(self, message: str = "请先登录"):
-        super().__init__(code=401, message=message)
+        super().__init__(code=40100, message=message, http_status_code=401)
+
+class TokenExpiredException(AppException):
+    def __init__(self, message: str = "Token 已过期"):
+        super().__init__(code=40101, message=message, http_status_code=401)
+
+class ForbiddenException(AppException):
+    def __init__(self, message: str = "无权限"):
+        super().__init__(code=40102, message=message, http_status_code=403)
+
+class BusinessException(AppException):
+    def __init__(self, message: str):
+        super().__init__(code=40200, message=message, http_status_code=422)
+
+class ConflictException(AppException):
+    def __init__(self, message: str):
+        super().__init__(code=40201, message=message, http_status_code=409)
+
+class NotFoundException(AppException):
+    def __init__(self, resource: str):
+        super().__init__(code=40300, message=f"{resource} 不存在", http_status_code=404)
+
+class ThirdPartyException(AppException):
+    def __init__(self, message: str):
+        super().__init__(code=40400, message=message, http_status_code=502)
 ```
 
 ### 8.2 全局异常处理器
@@ -467,12 +529,37 @@ class UnauthorizedException(AppException):
 ```python
 # middleware/error_handler.py
 from fastapi import Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 async def app_exception_handler(request: Request, exc: AppException):
+    content = {"code": exc.code, "message": exc.message, "data": None}
+    if exc.detail:
+        content["detail"] = exc.detail
     return JSONResponse(
-        status_code=exc.code,
-        content={"code": exc.code, "message": exc.message, "data": None},
+        status_code=exc.http_status_code,
+        content=content,
+    )
+
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    detail = []
+    for error in exc.errors():
+        field = ".".join(
+            str(loc)
+            for loc in error["loc"]
+            if loc not in ("body", "query", "path")
+        )
+        detail.append({"field": field, "reason": error["msg"]})
+
+    return JSONResponse(
+        status_code=422,
+        content={"code": 40001, "message": "参数校验失败", "detail": detail},
+    )
+
+async def global_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"code": 50000, "message": "服务器内部错误", "data": None},
     )
 ```
 
@@ -491,6 +578,9 @@ async def app_exception_handler(request: Request, exc: AppException):
 - [ ] Service 不直接操作 HTTP 上下文（req/res）
 - [ ] Pydantic 模型命名正确（Request/Response/Create/Update 后缀）
 - [ ] API 响应格式统一 `{code, message, data}`
+- [ ] 成功响应 `code=0`，不使用 `code=200` / `code=201`
+- [ ] 错误响应使用 5 位业务错误码，且与 HTTP 状态码分离
+- [ ] 参数校验错误返回 `40001`，并携带 `detail: [{field, reason}]`
 - [ ] 配置通过 `settings` 对象访问，不直接读环境变量
 - [ ] 异常通过 `raise AppException` 抛出，不手动构造错误响应
 - [ ] DB 字段使用 `snake_case`，ORM 模型使用 PascalCase
@@ -530,3 +620,29 @@ chore(db): 新增 user_points 积分表 migration
 
 > **参考依据**：SubGate 项目 [DEVELOPMENT_STANDARDS.md](../../SubGate/docs/DEVELOPMENT_STANDARDS.md)
 > **编制日期**：2026-05-14
+
+---
+---
+
+## 11. 测试标准
+
+详细标准见 `docs/TESTING_STANDARDS.md`。本项目测试分为两类：
+
+1. **本地无数据库测试**：目录 `tests/unit/`，使用 `pytest` 快速验证 schema、纯业务逻辑、路由声明、分层规范和测试 mock 场景；允许 mock 只存在于 `tests/`，生产代码不得硬编码 mock、假数据或占位回复。
+2. **PostgreSQL 数据库集成测试**：目录 `tests/integration/db/`，必须使用 PostgreSQL 测试库验证迁移、真实读写、事务、约束、幂等和状态流转；SQLite 不作为数据库集成测试替代。
+
+接口状态口径：
+
+- `🧪`：代码完成 + 本地无DB测试，待 PostgreSQL 数据库集成测试或外部联调。
+- `✅`：代码完成 + 本地无DB测试 + PostgreSQL 数据库集成测试；不依赖数据库的健康检查/纯配置接口可在本地验证充分后标 `✅`。
+
+推荐命令：
+
+```powershell
+python -m compileall -q app alembic tests
+python -m pytest tests/unit -v
+$env:TEST_DATABASE_URL="postgresql+asyncpg://<user>:<password>@localhost:5432/<test_db>"
+$env:TEST_DATABASE_URL_SYNC="postgresql://<user>:<password>@localhost:5432/<test_db>"
+alembic upgrade head
+python -m pytest tests/integration/db -v
+```

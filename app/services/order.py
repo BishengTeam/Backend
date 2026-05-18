@@ -3,13 +3,30 @@ import uuid
 from sqlalchemy import func, select
 
 from app.core.database import get_db_ctx
-from app.core.exceptions import BusinessException, NotFoundException
+from app.core.exceptions import BusinessException, ConflictException, NotFoundException
 from app.models.certification import Certification
 from app.models.order import Order
 from app.models.price_config import PriceConfig
 from app.models.user_identity import UserIdentity
 from app.schemas.common import PaginatedData
 from app.schemas.order import OrderCreate, OrderDetailResponse, OrderFilter, OrderResponse
+
+ORDER_STATUS_TRANSITIONS: dict[str, set[str]] = {
+    "pending": {"paid"},
+    "paid": {"completed", "refunded"},
+    "completed": {"refunded"},
+    "refunded": set(),
+}
+
+
+def apply_order_status_transition(order: Order, target_status: str) -> bool:
+    if order.status == target_status:
+        return False
+    allowed_targets = ORDER_STATUS_TRANSITIONS.get(order.status, set())
+    if target_status not in allowed_targets:
+        raise ConflictException(f"订单状态不允许从 {order.status} 变更为 {target_status}")
+    order.status = target_status
+    return True
 
 
 class OrderService:
@@ -20,34 +37,43 @@ class OrderService:
                 await db.execute(
                     select(Certification).where(
                         Certification.code == data.cert_type,
-                        Certification.is_active == True,
+                        Certification.is_active.is_(True),
                     )
                 )
             ).scalar_one_or_none()
             if cert is None:
                 raise BusinessException("认证类型不存在或已下架")
-            identity = await db.get(UserIdentity, user_id)
-            if identity is None:
-                raise BusinessException("请先完成实名认证")
-            user_type = identity.user_type
-            price_row = (
+            identity = (
                 await db.execute(
-                    select(PriceConfig.price).where(
-                        PriceConfig.cert_type == data.cert_type,
-                        PriceConfig.user_type == user_type,
-                        PriceConfig.is_active == True,
+                    select(UserIdentity).where(
+                        UserIdentity.user_id == user_id,
+                        UserIdentity.status == "verified",
                     )
                 )
             ).scalar_one_or_none()
-            if price_row is None:
+            if identity is None:
+                raise BusinessException("请先完成实名认证")
+            user_type = identity.user_type
+            price_rows = (
+                await db.execute(
+                    select(PriceConfig).where(
+                        PriceConfig.cert_type == data.cert_type,
+                        PriceConfig.user_type == user_type,
+                        PriceConfig.is_active.is_(True),
+                    ).limit(2)
+                )
+            ).scalars().all()
+            if not price_rows:
                 raise BusinessException("该认证类型暂未配置价格")
+            if len(price_rows) > 1:
+                raise ConflictException("该认证类型价格配置重复，请联系管理员")
             order = Order(
                 user_id=user_id,
                 cert_type=data.cert_type,
                 candidate_name=data.candidate_name,
                 candidate_phone=data.candidate_phone,
                 candidate_idcard=data.candidate_idcard,
-                price=price_row,
+                price=price_rows[0].price,
                 out_trade_no=str(uuid.uuid4()),
             )
             db.add(order)
