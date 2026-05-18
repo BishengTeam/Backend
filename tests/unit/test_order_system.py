@@ -66,7 +66,7 @@ class OrderSystemTests(unittest.TestCase):
                     OrderCreate(**payload)
 
     def test_order_filter_accepts_known_status_values(self):
-        for status in [None, "pending", "paid", "completed", "refunded"]:
+        for status in [None, "pending", "paid", "completed", "refunded", "closed"]:
             with self.subTest(status=status):
                 filters = OrderFilter(status=status)
                 self.assertEqual(filters.status, status)
@@ -133,9 +133,41 @@ class OrderSystemTests(unittest.TestCase):
     def test_order_status_machine_defines_required_transitions(self):
         source = (REPO_ROOT / "app/services/order.py").read_text(encoding="utf-8")
 
-        self.assertIn('"pending": {"paid"}', source)
+        self.assertIn('"pending": {"paid", "closed"}', source)
+        self.assertIn('"closed": set()', source)
         self.assertIn('"paid": {"completed", "refunded"}', source)
         self.assertIn('"completed": {"refunded"}', source)
+
+    def test_order_model_declares_inventory_and_close_fields(self):
+        source = (REPO_ROOT / "app/models/order.py").read_text(encoding="utf-8")
+
+        self.assertIn("inventory_id: Mapped[int | None]", source)
+        self.assertIn("mapped_column(Integer, nullable=True, index=True)", source)
+        self.assertIn("expires_at: Mapped[datetime | None]", source)
+        self.assertIn("closed_at: Mapped[datetime | None]", source)
+        self.assertIn("close_reason: Mapped[str | None] = mapped_column(String(128))", source)
+
+    def test_order_status_constraint_allows_closed(self):
+        source = (REPO_ROOT / "app/models/order.py").read_text(encoding="utf-8")
+
+        self.assertIn("ck_order_status", source)
+        self.assertIn("status IN ('pending', 'paid', 'completed', 'refunded', 'closed')", source)
+
+    def test_closed_status_migration_replaces_constraint_and_adds_fields(self):
+        source = (
+            REPO_ROOT
+            / "alembic/versions/d3e4f5a6b7c8_add_closed_order_status_and_inventory_fields.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertLess(
+            source.index('op.drop_constraint("ck_order_status", "order", type_="check")'),
+            source.index("op.create_check_constraint("),
+        )
+        self.assertIn('sa.Column("inventory_id", sa.Integer(), nullable=True)', source)
+        self.assertIn('sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True)', source)
+        self.assertIn('sa.Column("closed_at", sa.DateTime(timezone=True), nullable=True)', source)
+        self.assertIn('sa.Column("close_reason", sa.String(length=128), nullable=True)', source)
+        self.assertIn("status IN ('pending', 'paid', 'completed', 'refunded', 'closed')", source)
 
     def test_payment_callback_verifies_signature_locks_order_and_transitions_status(self):
         source = (REPO_ROOT / "app/services/payment.py").read_text(encoding="utf-8")

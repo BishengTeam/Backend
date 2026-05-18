@@ -12,10 +12,11 @@ from app.schemas.common import PaginatedData
 from app.schemas.order import OrderCreate, OrderDetailResponse, OrderFilter, OrderResponse
 
 ORDER_STATUS_TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"paid"},
+    "pending": {"paid", "closed"},
     "paid": {"completed", "refunded"},
     "completed": {"refunded"},
     "refunded": set(),
+    "closed": set(),
 }
 
 

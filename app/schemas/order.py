@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.utils.validators import validate_id_card
 
-OrderStatus = Literal["pending", "paid", "completed", "refunded"]
+OrderStatus = Literal["pending", "paid", "completed", "refunded", "closed"]
 
 
 class OrderCreate(BaseModel):
@@ -47,8 +47,12 @@ class OrderResponse(BaseModel):
     candidate_phone: str = Field(..., description="考生手机号")
     candidate_idcard: str | None = Field(None, description="考生身份证号")
     price: int = Field(..., description="订单金额，单位为分")
-    status: OrderStatus = Field(..., description="订单状态：pending / paid / completed / refunded")
+    status: OrderStatus = Field(..., description="订单状态：pending / paid / completed / refunded / closed")
     out_trade_no: str | None = Field(None, description="商户订单号")
+    inventory_id: int | None = Field(None, description="库存锁定记录 ID")
+    expires_at: datetime | None = Field(None, description="订单过期时间，ISO 8601")
+    closed_at: datetime | None = Field(None, description="订单关闭时间，ISO 8601")
+    close_reason: str | None = Field(None, description="订单关闭原因")
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -61,10 +65,14 @@ class OrderDetailResponse(BaseModel):
     candidate_phone: str = Field(..., description="考生手机号")
     candidate_idcard: str | None = Field(None, description="考生身份证号")
     price: int = Field(..., description="订单金额，单位为分")
-    status: OrderStatus = Field(..., description="订单状态：pending / paid / completed / refunded")
+    status: OrderStatus = Field(..., description="订单状态：pending / paid / completed / refunded / closed")
     out_trade_no: str | None = Field(None, description="商户订单号")
     transaction_id: str | None = Field(None, description="微信支付交易号")
     paid_at: datetime | None = Field(None, description="支付时间，ISO 8601")
+    inventory_id: int | None = Field(None, description="库存锁定记录 ID")
+    expires_at: datetime | None = Field(None, description="订单过期时间，ISO 8601")
+    closed_at: datetime | None = Field(None, description="订单关闭时间，ISO 8601")
+    close_reason: str | None = Field(None, description="订单关闭原因")
     created_at: datetime
     updated_at: datetime
 
@@ -72,4 +80,4 @@ class OrderDetailResponse(BaseModel):
 
 
 class OrderFilter(BaseModel):
-    status: OrderStatus | None = Field(None, description="按状态筛选：pending / paid / completed / refunded")
+    status: OrderStatus | None = Field(None, description="按状态筛选：pending / paid / completed / refunded / closed")
