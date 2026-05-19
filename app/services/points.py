@@ -43,11 +43,6 @@ class PointsService:
         page: int = 1,
         page_size: int = 20,
     ) -> PaginatedData[PointsHistoryResponse]:
-        if page <= 0:
-            raise BusinessException("page must be greater than 0")
-        if page_size <= 0 or page_size > 100:
-            raise BusinessException("page_size must be between 1 and 100")
-
         async with get_db_ctx() as db:
             await self._require_user(db, user_id)
             base = select(PointsHistory).where(PointsHistory.user_id == user_id)
