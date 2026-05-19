@@ -30,8 +30,8 @@
 | T-10 | P0 | 增加 `transaction_id` 唯一约束 | `app/models/order.py`、Alembic | T-09 | 同一微信交易号不能绑定多个订单，PostgreSQL 约束测试通过 | 已完成 |
 | T-11 | P0 | 新增超时关闭服务或脚本 | `app/services/`、`scripts/` | T-08 | 扫描过期 `pending` 订单，执行 `pending -> closed`，写入 `closed_at`/`close_reason` 并释放库存 | 已完成 |
 | T-12 | P0 | 补充本地无数据库测试 | `tests/unit/` | T-02、T-08、T-09 | 覆盖状态机、过期支付拒绝、回调幂等结构约束 | 已完成 |
-| T-13 | P0 | 补充 PostgreSQL 集成测试 | `tests/integration/db/` | T-07、T-09、T-11 | 覆盖并发下单不超卖、重复回调不重复成交、超时释放库存 | 阻塞 |
-| T-14 | P1 | 更新接口文档和接口状态 | `docs/接口文档.md`、`docs/接口列表.md` | T-12、T-13 | 文档说明 `closed`、`expires_at`、库存不足、订单过期错误；状态标注符合测试证据 | 未开始 |
+| T-13 | P0 | 补充 PostgreSQL 集成测试 | `tests/integration/db/` | T-07、T-09、T-11 | 覆盖并发下单不超卖、重复回调不重复成交、超时释放库存 | 已完成 |
+| T-14 | P1 | 更新接口文档和接口状态 | `docs/接口文档.md`、`docs/接口列表.md` | T-12、T-13 | 文档说明 `closed`、`expires_at`、库存不足、订单过期错误；状态标注符合测试证据 | 已完成 |
 
 ---
 
