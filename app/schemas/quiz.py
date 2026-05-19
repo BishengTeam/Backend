@@ -83,20 +83,10 @@ class QuizToggleResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class QuizWrongBookRequest(QuizToggleRequest):
-    pass
-
-
-class QuizWrongBookResponse(QuizToggleResponse):
-    pass
-
-
-class QuizCollectionRequest(QuizToggleRequest):
-    pass
-
-
-class QuizCollectionResponse(QuizToggleResponse):
-    pass
+QuizWrongBookRequest = QuizToggleRequest
+QuizWrongBookResponse = QuizToggleResponse
+QuizCollectionRequest = QuizToggleRequest
+QuizCollectionResponse = QuizToggleResponse
 
 
 class QuizCheckinRequest(BaseModel):

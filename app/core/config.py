@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     APP_DEBUG: bool = True
     APP_HOST: str = "0.0.0.0"
     APP_PORT: int = 8000
+    APP_TIMEZONE: str = "Asia/Shanghai"
 
     DATABASE_URL: str
     DATABASE_URL_SYNC: str

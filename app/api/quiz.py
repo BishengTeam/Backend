@@ -11,7 +11,6 @@ from app.schemas.quiz import (
     QuizCheckinResponse,
     QuizCollectionRequest,
     QuizCollectionResponse,
-    QuizQuestionQuery,
     QuizQuestionResponse,
     QuizQuestionType,
     QuizRecordQuestionResponse,
@@ -43,13 +42,10 @@ async def list_questions(
     page_size: int = Query(20, ge=1, le=100, description="Page size"),
 ) -> APIResponse[PaginatedData[QuizQuestionResponse]]:
     """List quiz questions."""
-    query = QuizQuestionQuery(
-        category_id=category_id,
-        question_type=question_type,
-        page=page,
-        page_size=page_size,
+    result = await QuizService().list_questions(
+        category_id=category_id, question_type=question_type,
+        page=page, page_size=page_size,
     )
-    result = await QuizService().list_questions(query)
     return success(data=result)
 
 

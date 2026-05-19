@@ -297,7 +297,7 @@ class QuizSystemTests(unittest.TestCase):
         )
 
     def test_quiz_answer_normalization_supports_core_question_types(self):
-        source = _read_text(_path("app/services/quiz.py"))
+        source = _read_text(_path("app/utils/quiz_helpers.py"))
 
         self.assertIn('if question_type == "multiple_choice"', source)
         self.assertIn('replace("，", ",")', source)
@@ -308,10 +308,10 @@ class QuizSystemTests(unittest.TestCase):
         self.assertIn('return "FALSE"', source)
 
     def test_quiz_record_payload_omits_answer_by_default_and_can_include_it_for_submit(self):
-        source = _read_text(_path("app/services/quiz.py"))
+        source = _read_text(_path("app/utils/quiz_helpers.py"))
 
         self.assertIn("include_correct_answer: bool = False", source)
-        self.assertIn('"question": _question_payload(question, include_correct_answer=False)', source)
+        self.assertIn('"question": question_payload(question, include_correct_answer=False)', source)
         self.assertIn('if include_correct_answer:', source)
         self.assertIn('payload["correct_answer"] = question.correct_answer', source)
 

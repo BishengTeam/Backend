@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -14,6 +13,18 @@ from app.core.exceptions import NotFoundException, ValidationException
 from app.models.quiz import QuizCategory, QuizCheckin, QuizQuestion, QuizRecord
 from app.models.user import User
 from app.schemas.common import PaginatedData
+from app.utils.quiz_helpers import (
+    answer_to_storage,
+    checkin_payload,
+    normalize_answer,
+    normalize_page,
+    normalize_question_type,
+    question_payload,
+    read_field,
+    record_question_payload,
+    require_positive_int,
+    today,
+)
 
 if TYPE_CHECKING:
     from app.schemas.quiz import (
@@ -22,161 +33,6 @@ if TYPE_CHECKING:
         QuizSubmitRequest,
         QuizToggleRequest,
     )
-
-
-DEFAULT_PAGE = 1
-DEFAULT_PAGE_SIZE = 20
-MAX_PAGE_SIZE = 100
-QUESTION_TYPES = {"single_choice", "multiple_choice", "judge"}
-LOCAL_TZ = ZoneInfo("Asia/Shanghai")
-JUDGE_TRUE_VALUES = {"1", "true", "t", "yes", "y", "对", "正确", "是", "√", "✓"}
-JUDGE_FALSE_VALUES = {"0", "false", "f", "no", "n", "错", "错误", "否", "×", "x"}
-
-
-def _read_field(data: Any, name: str, default: Any = None) -> Any:
-    if data is None:
-        return default
-    if isinstance(data, dict):
-        return data.get(name, default)
-    return getattr(data, name, default)
-
-
-def _require_positive_int(value: int | None, field: str) -> int:
-    if value is None:
-        raise ValidationException(f"{field} 不能为空")
-    if not isinstance(value, int) or value <= 0:
-        raise ValidationException(f"{field} 必须为正整数")
-    return value
-
-
-def _normalize_page(page: int | None, page_size: int | None) -> tuple[int, int]:
-    page = page or DEFAULT_PAGE
-    page_size = page_size or DEFAULT_PAGE_SIZE
-    if not isinstance(page, int) or page <= 0:
-        raise ValidationException("page 必须为正整数")
-    if not isinstance(page_size, int) or page_size <= 0 or page_size > MAX_PAGE_SIZE:
-        raise ValidationException(f"page_size 必须在 1-{MAX_PAGE_SIZE} 之间")
-    return page, page_size
-
-
-def _normalize_question_type(question_type: str | None) -> str | None:
-    if question_type is None:
-        return None
-    value = question_type.strip()
-    if value and value not in QUESTION_TYPES:
-        raise ValidationException("question_type 不合法")
-    return value or None
-
-
-def _answer_to_storage(answer: Any) -> str:
-    if answer is None:
-        raise ValidationException("user_answer 不能为空")
-    if isinstance(answer, (list, tuple, set)):
-        value = ",".join(str(item).strip() for item in answer if str(item).strip())
-    else:
-        value = str(answer).strip()
-    if not value:
-        raise ValidationException("user_answer 不能为空")
-    return value
-
-
-def _split_multi_answer(answer: str) -> list[str]:
-    value = answer.strip().replace("，", ",").replace("；", ",").replace("、", ",")
-    for separator in ("|", "/", ";"):
-        value = value.replace(separator, ",")
-    if "," in value:
-        parts = value.split(",")
-    elif " " in value:
-        parts = value.split()
-    elif len(value) > 1 and value.isascii() and value.isalpha():
-        parts = list(value)
-    else:
-        parts = [value]
-    return sorted(part.strip().upper() for part in parts if part.strip())
-
-
-def _normalize_answer(answer: Any, question_type: str) -> str:
-    value = _answer_to_storage(answer)
-    if question_type == "multiple_choice":
-        return ",".join(_split_multi_answer(value))
-    if question_type == "judge":
-        lowered = value.strip().lower()
-        if lowered in JUDGE_TRUE_VALUES:
-            return "TRUE"
-        if lowered in JUDGE_FALSE_VALUES:
-            return "FALSE"
-    return value.strip().upper()
-
-
-def _today() -> date:
-    return datetime.now(LOCAL_TZ).date()
-
-
-def _question_payload(question: QuizQuestion, *, include_correct_answer: bool = False) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "id": question.id,
-        "category_id": question.category_id,
-        "question_type": question.question_type,
-        "question_text": question.question_text,
-        "options": question.options,
-        "explanation": question.explanation,
-    }
-    if include_correct_answer:
-        payload["correct_answer"] = question.correct_answer
-    return payload
-
-
-def _record_question_payload(
-    record: QuizRecord,
-    question: QuizQuestion,
-    *,
-    include_correct_answer: bool = False,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "id": record.id,
-        "record_id": record.id,
-        "question_id": question.id,
-        "user_answer": record.user_answer,
-        "is_correct": record.is_correct,
-        "is_wrong": bool(record.is_wrong),
-        "is_collected": bool(record.is_collected),
-        "question": _question_payload(question, include_correct_answer=False),
-        "created_at": record.created_at,
-        "updated_at": record.updated_at,
-    }
-    if include_correct_answer:
-        payload["correct_answer"] = question.correct_answer
-        payload["explanation"] = question.explanation
-    return payload
-
-
-def _checkin_payload(
-    record: QuizCheckin | None,
-    *,
-    today: date,
-    checked_in: bool,
-    consecutive_days: int,
-    last_checkin_date: date | None = None,
-) -> dict[str, Any]:
-    if record is not None:
-        return {
-            "id": record.id,
-            "checkin_date": record.checkin_date,
-            "questions_completed": record.questions_completed,
-            "consecutive_days": record.consecutive_days,
-            "checked_in": checked_in,
-            "today_checked_in": checked_in,
-            "last_checkin_date": record.checkin_date,
-        }
-    return {
-        "id": None,
-        "checkin_date": today,
-        "questions_completed": 0,
-        "consecutive_days": consecutive_days,
-        "checked_in": False,
-        "today_checked_in": False,
-        "last_checkin_date": last_checkin_date,
-    }
 
 
 class QuizService:
@@ -238,15 +94,15 @@ class QuizService:
         *,
         category_id: int | None = None,
         question_type: str | None = None,
-        page: int | None = DEFAULT_PAGE,
-        page_size: int | None = DEFAULT_PAGE_SIZE,
+        page: int | None = None,
+        page_size: int | None = None,
     ) -> PaginatedData[dict[str, Any]]:
-        category_id = _read_field(query, "category_id", category_id)
-        question_type = _normalize_question_type(_read_field(query, "question_type", question_type))
-        page, page_size = _normalize_page(_read_field(query, "page", page), _read_field(query, "page_size", page_size))
+        category_id = read_field(query, "category_id", category_id)
+        question_type = normalize_question_type(read_field(query, "question_type", question_type))
+        page, page_size = normalize_page(read_field(query, "page", page), read_field(query, "page_size", page_size))
 
         if category_id is not None:
-            _require_positive_int(category_id, "category_id")
+            require_positive_int(category_id, "category_id")
 
         stmt = select(QuizQuestion)
         if category_id is not None:
@@ -263,7 +119,7 @@ class QuizService:
             ).scalars().all()
 
         return PaginatedData[dict[str, Any]](
-            items=[_question_payload(question, include_correct_answer=False) for question in questions],
+            items=[question_payload(question, include_correct_answer=False) for question in questions],
             total=total,
             page=page,
             page_size=page_size,
@@ -277,14 +133,14 @@ class QuizService:
         question_id: int | None = None,
         user_answer: Any = None,
     ) -> dict[str, Any]:
-        user_id = _require_positive_int(user_id, "user_id")
-        question_id = _require_positive_int(_read_field(data, "question_id", question_id), "question_id")
-        answer_for_storage = _answer_to_storage(_read_field(data, "user_answer", user_answer))
+        user_id = require_positive_int(user_id, "user_id")
+        question_id = require_positive_int(read_field(data, "question_id", question_id), "question_id")
+        answer_for_storage = answer_to_storage(read_field(data, "user_answer", user_answer))
 
         async with get_db_ctx() as db:
             await self._require_user(db, user_id)
             question = await self._get_question(db, question_id)
-            is_correct = _normalize_answer(answer_for_storage, question.question_type) == _normalize_answer(
+            is_correct = normalize_answer(answer_for_storage, question.question_type) == normalize_answer(
                 question.correct_answer,
                 question.question_type,
             )
@@ -299,7 +155,7 @@ class QuizService:
                 },
             )
             return {
-                **_record_question_payload(record, question, include_correct_answer=True),
+                **record_question_payload(record, question, include_correct_answer=True),
                 "correct_answer": question.correct_answer,
                 "explanation": question.explanation,
             }
@@ -308,8 +164,8 @@ class QuizService:
         self,
         user_id: int,
         *,
-        page: int | None = DEFAULT_PAGE,
-        page_size: int | None = DEFAULT_PAGE_SIZE,
+        page: int | None = None,
+        page_size: int | None = None,
     ) -> PaginatedData[dict[str, Any]]:
         return await self._list_record_questions(
             user_id=user_id,
@@ -352,8 +208,8 @@ class QuizService:
         self,
         user_id: int,
         *,
-        page: int | None = DEFAULT_PAGE,
-        page_size: int | None = DEFAULT_PAGE_SIZE,
+        page: int | None = None,
+        page_size: int | None = None,
     ) -> PaginatedData[dict[str, Any]]:
         return await self._list_record_questions(
             user_id=user_id,
@@ -393,16 +249,16 @@ class QuizService:
         )
 
     async def get_checkin_status(self, user_id: int) -> dict[str, Any]:
-        user_id = _require_positive_int(user_id, "user_id")
-        today = _today()
-        yesterday = today - timedelta(days=1)
+        user_id = require_positive_int(user_id, "user_id")
+        today_ = today()
+        yesterday = today_ - timedelta(days=1)
         async with get_db_ctx() as db:
             await self._require_user(db, user_id)
-            today_record = await self._get_checkin(db, user_id, today)
+            today_record = await self._get_checkin(db, user_id, today_)
             if today_record is not None:
-                return _checkin_payload(
+                return checkin_payload(
                     today_record,
-                    today=today,
+                    target_date=today_,
                     checked_in=True,
                     consecutive_days=today_record.consecutive_days,
                 )
@@ -420,9 +276,9 @@ class QuizService:
                 if latest_record is not None and latest_record.checkin_date == yesterday
                 else 0
             )
-            return _checkin_payload(
+            return checkin_payload(
                 None,
-                today=today,
+                target_date=today_,
                 checked_in=False,
                 consecutive_days=consecutive_days,
                 last_checkin_date=latest_record.checkin_date if latest_record else None,
@@ -435,21 +291,21 @@ class QuizService:
         *,
         questions_completed: int | None = None,
     ) -> dict[str, Any]:
-        user_id = _require_positive_int(user_id, "user_id")
-        completed = _read_field(data, "questions_completed", questions_completed)
+        user_id = require_positive_int(user_id, "user_id")
+        completed = read_field(data, "questions_completed", questions_completed)
         completed = 0 if completed is None else completed
         if not isinstance(completed, int) or completed < 0:
             raise ValidationException("questions_completed 必须为非负整数")
 
-        today = _today()
-        yesterday = today - timedelta(days=1)
+        today_ = today()
+        yesterday = today_ - timedelta(days=1)
         async with get_db_ctx() as db:
             await self._require_user(db, user_id)
-            today_record = await self._get_checkin(db, user_id, today)
+            today_record = await self._get_checkin(db, user_id, today_)
             if today_record is not None:
-                return _checkin_payload(
+                return checkin_payload(
                     today_record,
-                    today=today,
+                    target_date=today_,
                     checked_in=True,
                     consecutive_days=today_record.consecutive_days,
                 )
@@ -458,7 +314,7 @@ class QuizService:
             consecutive_days = (yesterday_record.consecutive_days + 1) if yesterday_record else 1
             record = QuizCheckin(
                 user_id=user_id,
-                checkin_date=today,
+                checkin_date=today_,
                 questions_completed=completed,
                 consecutive_days=consecutive_days,
             )
@@ -467,13 +323,13 @@ class QuizService:
                 await db.commit()
             except IntegrityError:
                 await db.rollback()
-                record = await self._get_checkin(db, user_id, today)
+                record = await self._get_checkin(db, user_id, today_)
                 if record is None:
                     raise
             await db.refresh(record)
-            return _checkin_payload(
+            return checkin_payload(
                 record,
-                today=today,
+                target_date=today_,
                 checked_in=True,
                 consecutive_days=record.consecutive_days,
             )
@@ -549,8 +405,8 @@ class QuizService:
         page: int | None,
         page_size: int | None,
     ) -> PaginatedData[dict[str, Any]]:
-        user_id = _require_positive_int(user_id, "user_id")
-        page, page_size = _normalize_page(page, page_size)
+        user_id = require_positive_int(user_id, "user_id")
+        page, page_size = normalize_page(page, page_size)
         flag_column = getattr(QuizRecord, flag_field)
 
         async with get_db_ctx() as db:
@@ -572,7 +428,7 @@ class QuizService:
 
         return PaginatedData[dict[str, Any]](
             items=[
-                _record_question_payload(record, question, include_correct_answer=False)
+                record_question_payload(record, question, include_correct_answer=False)
                 for record, question in rows
             ],
             total=total,
@@ -590,8 +446,8 @@ class QuizService:
         flag_value: bool,
         create_defaults: dict[str, Any],
     ) -> dict[str, Any]:
-        user_id = _require_positive_int(user_id, "user_id")
-        question_id = _require_positive_int(_read_field(data, "question_id", question_id), "question_id")
+        user_id = require_positive_int(user_id, "user_id")
+        question_id = require_positive_int(read_field(data, "question_id", question_id), "question_id")
 
         async with get_db_ctx() as db:
             await self._require_user(db, user_id)
@@ -603,7 +459,7 @@ class QuizService:
                 question_id=question_id,
                 values=values,
             )
-            return _record_question_payload(record, question, include_correct_answer=False)
+            return record_question_payload(record, question, include_correct_answer=False)
 
     async def _unset_record_flag(
         self,
@@ -613,7 +469,7 @@ class QuizService:
         question_id: int | None,
         flag_field: str,
     ) -> dict[str, Any]:
-        user_id = _require_positive_int(user_id, "user_id")
+        user_id = require_positive_int(user_id, "user_id")
         if record_id is None and question_id is None:
             raise ValidationException("record_id 或 question_id 不能为空")
 
@@ -624,10 +480,10 @@ class QuizService:
                 QuizQuestion.id == QuizRecord.question_id,
             )
             if record_id is not None:
-                record_id = _require_positive_int(record_id, "record_id")
+                record_id = require_positive_int(record_id, "record_id")
                 stmt = stmt.where(QuizRecord.user_id == user_id, QuizRecord.id == record_id)
             else:
-                question_id = _require_positive_int(question_id, "question_id")
+                question_id = require_positive_int(question_id, "question_id")
                 stmt = stmt.where(QuizRecord.user_id == user_id, QuizRecord.question_id == question_id)
 
             row = (await db.execute(stmt.limit(1))).first()
@@ -638,7 +494,7 @@ class QuizService:
             setattr(record, flag_field, False)
             await db.commit()
             await db.refresh(record)
-            return _record_question_payload(record, question, include_correct_answer=False)
+            return record_question_payload(record, question, include_correct_answer=False)
 
     async def _get_checkin(self, db: AsyncSession, user_id: int, checkin_date: date) -> QuizCheckin | None:
         return (
