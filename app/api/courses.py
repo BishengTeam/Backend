@@ -15,7 +15,7 @@ from app.services.course import CourseService
 router = APIRouter(prefix="/courses", tags=["课程"])
 
 
-@router.get("")
+@router.get("", response_model=APIResponse[PaginatedData[CourseListResponse]])
 async def list_courses(
     category: str | None = Query(None, description="按类目筛选"),
     page: int = Query(1, ge=1, description="页码"),
@@ -28,7 +28,7 @@ async def list_courses(
     return success(data=result)
 
 
-@router.get("/my")
+@router.get("/my", response_model=APIResponse[PaginatedData[CourseEnrollmentResponse]])
 async def my_courses(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
@@ -39,7 +39,7 @@ async def my_courses(
     return success(data=result)
 
 
-@router.get("/{course_id}")
+@router.get("/{course_id}", response_model=APIResponse[CourseDetailResponse])
 async def get_course(
     course_id: int = Path(..., description="课程 ID"),
     current_user: User = Depends(get_current_user),
@@ -49,7 +49,7 @@ async def get_course(
     return success(data=result)
 
 
-@router.post("/enroll")
+@router.post("/enroll", response_model=APIResponse[CourseEnrollmentResponse])
 async def enroll_course(
     body: CourseEnrollRequest,
     current_user: User = Depends(get_current_user),

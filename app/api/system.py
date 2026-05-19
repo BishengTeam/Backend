@@ -9,7 +9,7 @@ from app.schemas.system import PosterResponse
 router = APIRouter(prefix="/system", tags=["系统"])
 
 
-@router.get("/poster")
+@router.get("/poster", response_model=APIResponse[PosterResponse])
 async def get_login_poster(
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[PosterResponse]:

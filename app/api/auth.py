@@ -7,14 +7,14 @@ from app.services.auth import AuthService
 router = APIRouter(prefix="/auth", tags=["认证"])
 
 
-@router.post("/login")
+@router.post("/login", response_model=APIResponse[LoginResponse])
 async def login(body: LoginRequest) -> APIResponse[LoginResponse]:
     """微信 code 登录，返回 JWT token"""
     result = await AuthService().login(body.code)
     return success(data=result)
 
 
-@router.post("/refresh")
+@router.post("/refresh", response_model=APIResponse[RefreshResponse])
 async def refresh_token(body: RefreshRequest) -> APIResponse[RefreshResponse]:
     """刷新 access_token"""
     result = await AuthService().refresh(body.refresh_token)

@@ -13,14 +13,14 @@ from app.services.user import UserService
 router = APIRouter(prefix="/user", tags=["用户"])
 
 
-@router.delete("/account")
+@router.delete("/account", response_model=APIResponse)
 async def delete_account(current_user: User = Depends(get_current_user)):
     """注销账号"""
     await UserService().delete_account(current_user.id)
     return success(message="账号已注销")
 
 
-@router.post("/phone/decrypt")
+@router.post("/phone/decrypt", response_model=APIResponse)
 async def decrypt_phone(
     body: PhoneDecryptRequest,
     current_user: User = Depends(get_current_user),
@@ -32,7 +32,7 @@ async def decrypt_phone(
     return success(data={"phone": phone})
 
 
-@router.post("/identity")
+@router.post("/identity", response_model=APIResponse[UserIdentityResponse])
 async def submit_identity(
     body: UserIdentityCreate,
     current_user: User = Depends(get_current_user),
@@ -42,7 +42,7 @@ async def submit_identity(
     return success(data=result)
 
 
-@router.get("/identity")
+@router.get("/identity", response_model=APIResponse[UserIdentityResponse])
 async def get_identity(
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[UserIdentityResponse]:

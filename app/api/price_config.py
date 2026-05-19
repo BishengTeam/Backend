@@ -7,7 +7,7 @@ from app.services.price_config import PriceConfigService
 router = APIRouter(prefix="/prices", tags=["价格配置"])
 
 
-@router.get("")
+@router.get("", response_model=APIResponse[list[PriceResponse]])
 async def list_prices(
     cert_type: str | None = Query(None),
     user_type: str | None = Query(None),

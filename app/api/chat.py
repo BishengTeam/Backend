@@ -12,7 +12,7 @@ router = APIRouter(prefix="/chat", tags=["客服"])
 quick_router = APIRouter()
 
 
-@quick_router.get("/quick-questions")
+@quick_router.get("/quick-questions", response_model=APIResponse[list[QuickQuestionResponse]])
 async def quick_questions(
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[list[QuickQuestionResponse]]:
@@ -21,7 +21,7 @@ async def quick_questions(
     return success(data=result)
 
 
-@router.post("")
+@router.post("", response_model=APIResponse[ChatResponse])
 async def chat(
     body: ChatRequest,
     current_user: User = Depends(get_current_user),
