@@ -1,8 +1,17 @@
 from logging.config import fileConfig
+import os
 
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
+
+if os.getenv("TEST_DATABASE_URL") or os.getenv("TEST_DATABASE_URL_SYNC"):
+    if os.getenv("TEST_DATABASE_URL"):
+        os.environ.setdefault("DATABASE_URL", os.environ["TEST_DATABASE_URL"])
+    if os.getenv("TEST_DATABASE_URL_SYNC"):
+        os.environ.setdefault("DATABASE_URL_SYNC", os.environ["TEST_DATABASE_URL_SYNC"])
+    os.environ.setdefault("JWT_SECRET", "test-secret")
+
 from app.core.database import Base
 
 # Import all models so Base.metadata knows about them
@@ -12,6 +21,7 @@ import app.models.conversation  # noqa: F401
 import app.models.price_config  # noqa: F401
 import app.models.certification  # noqa: F401
 import app.models.course  # noqa: F401
+import app.models.inventory  # noqa: F401
 import app.models.quiz  # noqa: F401
 import app.models.points  # noqa: F401
 import app.models.coupon  # noqa: F401
@@ -21,6 +31,13 @@ import app.models.ticket  # noqa: F401
 import app.models.quick_question  # noqa: F401
 
 config = context.config
+
+database_url = (
+    os.getenv("TEST_DATABASE_URL_SYNC")
+    or os.getenv("DATABASE_URL_SYNC")
+    or config.get_main_option("sqlalchemy.url")
+)
+config.set_main_option("sqlalchemy.url", database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

@@ -21,16 +21,16 @@
 | T-01 | P0 | 确认库存归属模型和业务规则 | 业务设计、`docs/接口文档.md` | 无 | 第一期采用 `cert_type` 级别认证报名名额库存：`inventory_type='certification'`，`ref_code` 关联 `cert_type`；退款默认不恢复库存，后续由配置决定 | 已完成 |
 | T-02 | P0 | 扩展订单状态机，新增 `closed` | `app/services/order.py`、`app/schemas/order.py` | T-01 | 状态迁移包含 `pending -> closed`，`closed` 为终态，非法迁移会抛 `ConflictException` | 已完成 |
 | T-03 | P0 | 扩展订单表字段 | `app/models/order.py`、Alembic | T-02 | 新增 `inventory_id`、`expires_at`、`closed_at`、`close_reason`；`ck_order_status` 包含 `closed` | 已完成 |
-| T-04 | P0 | 新增库存/名额表 | `app/models/`、Alembic | T-01 | 表包含总量、可售、锁定、已售字段；数据库约束保证库存数量非负 | 未开始 |
-| T-05 | P0 | 新增库存流水表 | `app/models/`、Alembic | T-04 | 能记录 lock、confirm、release 等动作及变更前后数量 | 未开始 |
-| T-06 | P0 | 实现库存原子锁定能力 | `app/services/` | T-04、T-05 | 使用条件 `UPDATE ... WHERE available_quota >= 1`，库存不足时不创建订单 | 未开始 |
-| T-07 | P0 | 改造创建订单接口 | `app/services/order.py`、`app/api/orders.py` | T-03、T-06 | 下单与锁库存处于同一事务；订单创建为 `pending` 且写入 `expires_at` | 未开始 |
-| T-08 | P0 | 改造支付预下单过期校验 | `app/services/payment.py` | T-03、T-07 | 过期 `pending` 订单会先关闭并释放库存，不能继续发起微信支付 | 未开始 |
-| T-09 | P0 | 改造支付成功回调确认成交 | `app/services/payment.py` | T-06、T-07 | `pending -> paid` 时库存 `locked -> sold`；重复回调不会重复确认成交 | 未开始 |
-| T-10 | P0 | 增加 `transaction_id` 唯一约束 | `app/models/order.py`、Alembic | T-09 | 同一微信交易号不能绑定多个订单，PostgreSQL 约束测试通过 | 未开始 |
-| T-11 | P0 | 新增超时关闭服务或脚本 | `app/services/`、`scripts/` | T-08 | 扫描过期 `pending` 订单，执行 `pending -> closed` 并释放库存 | 未开始 |
-| T-12 | P0 | 补充本地无数据库测试 | `tests/unit/` | T-02、T-08、T-09 | 覆盖状态机、过期支付拒绝、回调幂等结构约束 | 未开始 |
-| T-13 | P0 | 补充 PostgreSQL 集成测试 | `tests/integration/db/` | T-07、T-09、T-11 | 覆盖并发下单不超卖、重复回调不重复成交、超时释放库存 | 未开始 |
+| T-04 | P0 | 新增库存/名额表 | `app/models/`、Alembic | T-01 | 表包含总量、可售、锁定、已售字段；数据库约束保证库存数量非负 | 已完成 |
+| T-05 | P0 | 新增库存流水表 | `app/models/`、Alembic | T-04 | 能记录 lock、confirm、release 等动作及变更前后数量 | 已完成 |
+| T-06 | P0 | 实现库存原子锁定能力 | `app/services/` | T-04、T-05 | 使用条件 `UPDATE ... WHERE available_quota >= 1`，库存不足时不创建订单 | 已完成 |
+| T-07 | P0 | 改造创建订单接口 | `app/services/order.py`、`app/api/orders.py` | T-03、T-06 | 下单与锁库存处于同一事务；订单创建为 `pending` 且写入 `expires_at` | 已完成 |
+| T-08 | P0 | 改造支付预下单过期校验 | `app/services/payment.py` | T-03、T-07 | 过期 `pending` 订单会先关闭并释放库存，不能继续发起微信支付 | 已完成 |
+| T-09 | P0 | 改造支付成功回调确认成交 | `app/services/payment.py` | T-06、T-07 | `pending -> paid` 时库存 `locked -> sold`；重复回调不会重复确认成交 | 已完成 |
+| T-10 | P0 | 增加 `transaction_id` 唯一约束 | `app/models/order.py`、Alembic | T-09 | 同一微信交易号不能绑定多个订单，PostgreSQL 约束测试通过 | 已完成 |
+| T-11 | P0 | 新增超时关闭服务或脚本 | `app/services/`、`scripts/` | T-08 | 扫描过期 `pending` 订单，执行 `pending -> closed`，写入 `closed_at`/`close_reason` 并释放库存 | 已完成 |
+| T-12 | P0 | 补充本地无数据库测试 | `tests/unit/` | T-02、T-08、T-09 | 覆盖状态机、过期支付拒绝、回调幂等结构约束 | 已完成 |
+| T-13 | P0 | 补充 PostgreSQL 集成测试 | `tests/integration/db/` | T-07、T-09、T-11 | 覆盖并发下单不超卖、重复回调不重复成交、超时释放库存 | 阻塞 |
 | T-14 | P1 | 更新接口文档和接口状态 | `docs/接口文档.md`、`docs/接口列表.md` | T-12、T-13 | 文档说明 `closed`、`expires_at`、库存不足、订单过期错误；状态标注符合测试证据 | 未开始 |
 
 ---

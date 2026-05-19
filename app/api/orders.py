@@ -20,7 +20,7 @@ async def create_order(
     body: OrderCreate,
     current_user: User = Depends(require_identity),
 ) -> APIResponse[OrderResponse]:
-    """创建订单"""
+    """创建订单并锁定库存"""
     result = await OrderService().create_order(current_user.id, body)
     return success(data=result)
 
@@ -28,7 +28,7 @@ async def create_order(
 @router.get("", response_model=APIResponse[PaginatedData[OrderResponse]])
 async def list_orders(
     status: OrderStatus | None = Query(
-        None, description="按状态筛选：pending / paid / completed / refunded"
+        None, description="按状态筛选：pending / paid / completed / refunded / closed"
     ),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),

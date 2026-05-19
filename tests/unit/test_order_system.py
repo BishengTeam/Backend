@@ -137,12 +137,45 @@ class OrderSystemTests(unittest.TestCase):
         self.assertIn('"closed": set()', source)
         self.assertIn('"paid": {"completed", "refunded"}', source)
         self.assertIn('"completed": {"refunded"}', source)
+        self.assertIn("if order.status == target_status:", source)
+        self.assertIn("return False", source)
+        self.assertIn("if target_status not in allowed_targets:", source)
+        self.assertIn("raise ConflictException", source)
+
+    def test_order_service_locks_inventory_with_conditional_update(self):
+        source = (REPO_ROOT / "app/services/inventory.py").read_text(encoding="utf-8")
+
+        self.assertIn("UPDATE inventory", source)
+        self.assertIn("available_quota = available_quota - 1", source)
+        self.assertIn("locked_quota = locked_quota + 1", source)
+        self.assertEqual(source.count("UPDATE inventory"), source.count("updated_at = now()"))
+        self.assertIn("AND available_quota >= 1", source)
+        self.assertIn("RETURNING id, total_quota, available_quota, locked_quota, sold_quota", source)
+        self.assertIn('raise BusinessException("认证报名名额不足")', source)
+
+    def test_order_creation_sets_inventory_and_expiration_in_transaction(self):
+        source = (REPO_ROOT / "app/services/order.py").read_text(encoding="utf-8")
+        create_order_source = source[
+            source.index("async def create_order") : source.index("async def list_orders")
+        ]
+
+        self.assertIn("async with db.begin():", create_order_source)
+        self.assertLess(
+            create_order_source.index("inventory_change = await lock_certification_inventory"),
+            create_order_source.index("order = Order("),
+        )
+        self.assertIn("inventory_id=inventory_change.inventory_id", create_order_source)
+        self.assertIn("expires_at=expires_at", create_order_source)
+        self.assertIn('status="pending"', create_order_source)
+        self.assertIn("add_inventory_record(", create_order_source)
+        self.assertIn("action=INVENTORY_LOCK_ACTION", create_order_source)
+        self.assertNotIn("await db.commit()", create_order_source)
 
     def test_order_model_declares_inventory_and_close_fields(self):
         source = (REPO_ROOT / "app/models/order.py").read_text(encoding="utf-8")
 
         self.assertIn("inventory_id: Mapped[int | None]", source)
-        self.assertIn("mapped_column(Integer, nullable=True, index=True)", source)
+        self.assertIn('ForeignKey("inventory.id")', source)
         self.assertIn("expires_at: Mapped[datetime | None]", source)
         self.assertIn("closed_at: Mapped[datetime | None]", source)
         self.assertIn("close_reason: Mapped[str | None] = mapped_column(String(128))", source)
@@ -175,6 +208,122 @@ class OrderSystemTests(unittest.TestCase):
         self.assertIn("verify_signature", source)
         self.assertIn("with_for_update", source)
         self.assertIn("apply_order_status_transition", source)
+        self.assertIn('order.transaction_id = data.transaction_id', source)
+        self.assertIn("order.paid_at = data.paid_at or self._now()", source)
+        self.assertIn("confirm_inventory_sale", source)
+        self.assertIn("await self._confirm_inventory_sale(db, order)", source)
+
+    def test_payment_callback_idempotency_confirms_inventory_only_for_pending_order(self):
+        source = (REPO_ROOT / "app/services/payment.py").read_text(encoding="utf-8")
+        success_source = source[
+            source.index('if data.trade_state == "SUCCESS":') :
+            source.index('elif data.trade_state == "REFUND":')
+        ]
+        paid_or_completed_source = success_source[
+            success_source.index('elif order.status in {"paid", "completed"}:') :
+            success_source.index("else:")
+        ]
+
+        self.assertIn("if not data.transaction_id:", success_source)
+        self.assertIn("Order.transaction_id == data.transaction_id", success_source)
+        self.assertIn("Order.id != order.id", success_source)
+        self.assertIn("raise ConflictException", success_source)
+        self.assertIn('if order.status == "pending":', success_source)
+        self.assertIn("await self._confirm_inventory_sale(db, order)", success_source)
+        self.assertIn('elif order.status in {"paid", "completed"}:', success_source)
+        self.assertNotIn("await self._confirm_inventory_sale", paid_or_completed_source)
+        self.assertIn("metadata_changed = True", paid_or_completed_source)
+
+    def test_inventory_service_confirms_and_releases_locked_inventory(self):
+        source = (REPO_ROOT / "app/services/inventory.py").read_text(encoding="utf-8")
+
+        self.assertIn("def add_inventory_record", source)
+        self.assertIn("async def confirm_inventory_sale", source)
+        self.assertIn("locked_quota = locked_quota - 1", source)
+        self.assertIn("sold_quota = sold_quota + 1", source)
+        self.assertIn("async def release_inventory_lock", source)
+        self.assertIn("available_quota = available_quota + 1", source)
+        self.assertIn("action=INVENTORY_CONFIRM_ACTION", source)
+        self.assertIn("action=INVENTORY_RELEASE_ACTION", source)
+
+    def test_close_expired_pending_order_closes_only_expired_pending_orders(self):
+        source = (REPO_ROOT / "app/services/order_timeout.py").read_text(encoding="utf-8")
+
+        self.assertIn('if order.status != "pending":', source)
+        self.assertIn("if order.expires_at is None:", source)
+        self.assertIn("expires_at = order.expires_at", source)
+        self.assertIn("expires_at = expires_at.replace(tzinfo=timezone.utc)", source)
+        self.assertIn("if expires_at > now:", source)
+        self.assertIn('apply_order_status_transition(order, "closed")', source)
+        self.assertIn("order.closed_at = now", source)
+        self.assertIn("order.close_reason = close_reason", source)
+
+    def test_order_timeout_close_service_selects_expired_pending_orders_with_row_lock(self):
+        source = (REPO_ROOT / "app/services/order_timeout.py").read_text(encoding="utf-8")
+
+        self.assertIn('Order.status == "pending"', source)
+        self.assertIn("Order.expires_at.is_not(None)", source)
+        self.assertIn("Order.expires_at <= closed_at", source)
+        self.assertIn("with_for_update(skip_locked=True)", source)
+        self.assertIn("from app.core.exceptions import BusinessException", source)
+        self.assertIn('raise BusinessException("limit must be greater than 0")', source)
+        self.assertIn('raise BusinessException("close_reason must be 1-128 characters")', source)
+        self.assertNotIn("raise ValueError", source)
+        self.assertIn("close_reason", source)
+        self.assertIn("await release_inventory_lock(db, order, reason=close_reason)", source)
+
+    def test_payment_prepay_closes_expired_pending_order_before_wechat_call(self):
+        source = (REPO_ROOT / "app/services/payment.py").read_text(encoding="utf-8")
+
+        self.assertIn("def _is_expired", source)
+        self.assertIn("PREPAY_EXPIRATION_GUARD_SECONDS = 60", source)
+        self.assertIn("def _seconds_until_expiration", source)
+        self.assertIn("def _is_expiring_soon", source)
+        self.assertIn("async def _ensure_order_payable_for_prepay", source)
+        self.assertIn("remaining_seconds <= PREPAY_EXPIRATION_GUARD_SECONDS", source)
+        self.assertIn('raise BusinessException("订单即将过期，请重新下单")', source)
+        self.assertIn("await self._close_expired_order(db, order, now)", source)
+        self.assertIn('apply_order_status_transition(order, "closed")', source)
+        self.assertIn("order.closed_at = now", source)
+        self.assertIn('order.close_reason = "expired"', source)
+        self.assertIn("await self._release_inventory_lock(db, order)", source)
+        self.assertIn("release_inventory_lock", source)
+        self.assertLess(
+            source.index("await self._ensure_order_payable_for_prepay(db, order, now)"),
+            source.index("await self.wechat_pay.create_jsapi_prepay("),
+        )
+        self.assertLess(
+            source.index("await self.wechat_pay.create_jsapi_prepay("),
+            source.rindex("await self._ensure_order_payable_for_prepay(db, order, now)"),
+        )
+        self.assertLess(
+            source.rindex("await self._ensure_order_payable_for_prepay(db, order, now)"),
+            source.index("return PaymentPrepayResponse("),
+        )
+        self.assertEqual(
+            source.count("await self._ensure_order_payable_for_prepay(db, order, now)"),
+            2,
+        )
+        self.assertLess(
+            source.index("if self._is_expiring_soon(order, now):"),
+            source.index("await self.wechat_pay.create_jsapi_prepay("),
+        )
+
+    def test_order_model_declares_unique_transaction_id_index(self):
+        source = (REPO_ROOT / "app/models/order.py").read_text(encoding="utf-8")
+
+        self.assertIn('Index("ix_order_transaction_id_unique", "transaction_id", unique=True)', source)
+
+    def test_transaction_id_unique_index_migration_exists(self):
+        source = (
+            REPO_ROOT
+            / "alembic/versions/e1f2a3b4c5d6_add_unique_order_transaction_id.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('down_revision: Union[str, Sequence[str], None] = "d3e4f5a6b7c8"', source)
+        self.assertIn('"ix_order_transaction_id_unique"', source)
+        self.assertIn('"transaction_id"', source)
+        self.assertIn("unique=True", source)
 
     def test_payment_integration_has_no_implicit_hardcoded_mock_path(self):
         source = (REPO_ROOT / "app/integrations/wechat_pay.py").read_text(encoding="utf-8")
