@@ -15,7 +15,9 @@ if os.getenv("TEST_DATABASE_URL") or os.getenv("TEST_DATABASE_URL_SYNC"):
 from app.core.database import Base
 
 # Import all models so Base.metadata knows about them
+import app.models.admin_user  # noqa: F401
 import app.models.user  # noqa: F401
+import app.models.zone  # noqa: F401
 import app.models.order  # noqa: F401
 import app.models.conversation  # noqa: F401
 import app.models.price_config  # noqa: F401

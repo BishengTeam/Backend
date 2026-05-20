@@ -31,6 +31,32 @@ async def get_current_user(
     return user
 
 
+async def get_current_admin(
+    authorization: str = Header(...),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.admin_user import AdminUser
+
+    if not authorization.startswith("Bearer "):
+        raise UnauthorizedException("认证格式错误")
+    token = authorization[7:]
+    try:
+        payload = decode_access_token(token)
+    except Exception:
+        raise UnauthorizedException("登录已过期，请重新登录")
+    if payload.get("type") != "admin":
+        raise UnauthorizedException("请使用管理员账号登录")
+    admin_id = payload.get("admin_id")
+    if admin_id is None:
+        raise UnauthorizedException("登录已过期，请重新登录")
+    admin = await db.get(AdminUser, admin_id)
+    if admin is None:
+        raise UnauthorizedException("管理员不存在")
+    if not admin.is_active:
+        raise UnauthorizedException("账号已被禁用")
+    return admin
+
+
 async def require_identity(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

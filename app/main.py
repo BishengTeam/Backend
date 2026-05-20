@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api import router as api_router
+from app.api.admin import router as admin_router
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.middleware import setup_middleware
@@ -27,6 +28,7 @@ app = FastAPI(
 
 setup_middleware(app)
 app.include_router(api_router)
+app.include_router(admin_router)
 
 
 @app.get("/health")
