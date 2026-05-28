@@ -1,0 +1,66 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      # 数据库 — 容器内通过 service name 互联
+      - DATABASE_URL=postgresql+asyncpg://wemini:wemini_pass@db:5432/wemini_app
+      - DATABASE_URL_SYNC=postgresql://wemini:wemini_pass@db:5432/wemini_app
+      # Redis
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # JWT — 生产环境务必替换为强随机值
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - JWT_ALGORITHM=HS256
+      - JWT_EXPIRE_MINUTES=120
+      # 微信小程序 — 用实际值替换
+      - WECHAT_APPID=${WECHAT_APPID:-}
+      - WECHAT_SECRET=${WECHAT_SECRET:-}
+      # 微信支付 — 用实际值替换
+      - WECHAT_PAY_MCHID=${WECHAT_PAY_MCHID:-}
+      - WECHAT_PAY_API_KEY=${WECHAT_PAY_API_KEY:-}
+      - WECHAT_PAY_APPID=${WECHAT_PAY_APPID:-}
+      - WECHAT_PAY_NOTIFY_URL=${WECHAT_PAY_NOTIFY_URL:-}
+      # 文件存储
+      - UPLOAD_DIR=/app/uploads
+      - STORAGE_TYPE=local
+    volumes:
+      - uploads:/app/uploads
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=wemini
+      - POSTGRES_PASSWORD=wemini_pass
+      - POSTGRES_DB=wemini_app
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wemini -d wemini_app"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  uploads:
