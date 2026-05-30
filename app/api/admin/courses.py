@@ -10,11 +10,13 @@ router = APIRouter(prefix="/courses", tags=["管理后台-课程管理"])
 
 @router.get("", response_model=APIResponse[PaginatedData[AdminCourseListItem]])
 async def list_courses(
+    keyword: str | None = Query(None, description="按标题关键词模糊搜索"),
+    category: str | None = Query(None, description="按分类筛选"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     _admin=Depends(get_current_admin),
 ) -> APIResponse[PaginatedData[AdminCourseListItem]]:
-    result = await AdminCourseService().list_courses(page, page_size)
+    result = await AdminCourseService().list_courses(keyword, category, page, page_size)
     return success(data=result)
 
 

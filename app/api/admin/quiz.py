@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, File, Form, Path, UploadFile
 
 from app.middleware.auth import get_current_admin
+from app.schemas.admin import AdminBatchDeleteRequest
 from app.schemas.admin_quiz import (
     AdminQuizCategoryCreate,
     AdminQuizCategoryUpdate,
+    AdminQuizImportJsonRequest,
     AdminQuizQuestionCreate,
     AdminQuizQuestionUpdate,
 )
@@ -77,6 +79,15 @@ async def delete_question(
     return success(message="题目已删除")
 
 
+@router.post(f"{QUESTION}/batch-delete", response_model=APIResponse[int])
+async def batch_delete_questions(
+    body: AdminBatchDeleteRequest,
+    _admin=Depends(get_current_admin),
+):
+    count = await AdminQuizService().batch_delete_questions(body.ids)
+    return success(data=count, message=f"已删除 {count} 道题目")
+
+
 # ── Import route ──
 
 @router.post("/import", response_model=APIResponse)
@@ -87,4 +98,13 @@ async def import_questions(
 ):
     content = await file.read()
     result = await AdminQuizService().import_questions_csv(content, create_missing_categories)
+    return success(data=result)
+
+
+@router.post("/import/json", response_model=APIResponse)
+async def import_questions_json(
+    body: AdminQuizImportJsonRequest,
+    _admin=Depends(get_current_admin),
+):
+    result = await AdminQuizService().import_questions_json(body)
     return success(data=result)

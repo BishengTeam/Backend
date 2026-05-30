@@ -29,3 +29,16 @@ class AdminQuizQuestionUpdate(BaseModel):
     options: dict | None = None
     correct_answer: str | None = Field(None, min_length=1, max_length=256)
     explanation: str | None = Field(None, max_length=1024)
+
+
+class AdminQuizQuestionItem(BaseModel):
+    question_text: str = Field(..., min_length=1, max_length=1024)
+    options: dict
+    correct_answer: str = Field(..., min_length=1, max_length=256)
+    question_type: str = Field(default="single", min_length=1, max_length=16)
+    explanation: str | None = Field(None, max_length=1024)
+
+
+class AdminQuizImportJsonRequest(BaseModel):
+    category_id: int = Field(..., ge=1)
+    questions: list[AdminQuizQuestionItem] = Field(..., min_length=1)

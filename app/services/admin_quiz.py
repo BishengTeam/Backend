@@ -11,6 +11,7 @@ from app.models.quiz import QuizCategory, QuizQuestion, QuizRecord
 from app.schemas.admin_quiz import (
     AdminQuizCategoryCreate,
     AdminQuizCategoryUpdate,
+    AdminQuizImportJsonRequest,
     AdminQuizQuestionCreate,
     AdminQuizQuestionUpdate,
 )
@@ -122,6 +123,26 @@ class AdminQuizService:
             await db.delete(question)
             await db.commit()
 
+    async def batch_delete_questions(self, question_ids: list[int]) -> int:
+        async with get_db_ctx() as db:
+            result = await db.execute(
+                select(QuizQuestion).where(QuizQuestion.id.in_(question_ids))
+            )
+            questions = result.scalars().all()
+            for question in questions:
+                record_count = (
+                    await db.execute(
+                        select(func.count()).select_from(QuizRecord).where(
+                            QuizRecord.question_id == question.id
+                        )
+                    )
+                ).scalar() or 0
+                if record_count > 0:
+                    continue  # skip questions with records
+                await db.delete(question)
+            await db.commit()
+            return len(questions)
+
     # ── Import ──
 
     async def import_questions_csv(
@@ -204,6 +225,40 @@ class AdminQuizService:
             await db.commit()
 
         return {"created": created, "skipped": skipped, "errors": errors}
+
+    async def import_questions_json(self, data: AdminQuizImportJsonRequest) -> dict:
+        async with get_db_ctx() as db:
+            category = await db.get(QuizCategory, data.category_id)
+            if category is None:
+                raise NotFoundException("题库分类")
+
+            created = 0
+            skipped = 0
+            errors: list[dict] = []
+
+            for idx, item in enumerate(data.questions):
+                try:
+                    if item.question_type not in ("single_choice", "multiple_choice", "judge"):
+                        errors.append({"index": idx, "reason": f"无效题型: {item.question_type}"})
+                        skipped += 1
+                        continue
+
+                    question = QuizQuestion(
+                        category_id=data.category_id,
+                        question_type=item.question_type,
+                        question_text=item.question_text,
+                        options=item.options,
+                        correct_answer=item.correct_answer,
+                        explanation=item.explanation,
+                    )
+                    db.add(question)
+                    created += 1
+                except Exception as exc:
+                    errors.append({"index": idx, "reason": str(exc)})
+                    skipped += 1
+
+            await db.commit()
+            return {"created": created, "skipped": skipped, "errors": errors}
 
     async def _resolve_category(
         self, db, path: str, create_missing: bool

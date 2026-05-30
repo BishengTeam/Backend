@@ -22,11 +22,15 @@ class AdminCourseService:
     )
 
     async def list_courses(
-        self, page: int, page_size: int
+        self, keyword: str | None, category: str | None, page: int, page_size: int
     ) -> PaginatedData[AdminCourseListItem]:
         async with get_db_ctx() as db:
             base = select(*self._list_columns)
-            count_stmt = select(func.count()).select_from(Course)
+            if keyword:
+                base = base.where(Course.title.ilike(f"%{keyword}%"))
+            if category:
+                base = base.where(Course.category == category)
+            count_stmt = select(func.count()).select_from(base.subquery())
             total = (await db.execute(count_stmt)).scalar() or 0
             stmt = base.order_by(Course.id.desc()).offset((page - 1) * page_size).limit(page_size)
             result = await db.execute(stmt)

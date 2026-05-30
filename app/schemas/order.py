@@ -81,3 +81,5 @@ class OrderDetailResponse(BaseModel):
 
 class OrderFilter(BaseModel):
     status: OrderStatus | None = Field(None, description="按状态筛选：pending / paid / completed / refunded / closed")
+    cert_type: str | None = Field(None, description="按认证类型筛选")
+    phone: str | None = Field(None, description="按考生手机号筛选")

@@ -22,11 +22,13 @@ class AdminZoneService:
     )
 
     async def list_zones(
-        self, page: int, page_size: int
+        self, keyword: str | None, page: int, page_size: int
     ) -> PaginatedData[AdminZoneListItem]:
         async with get_db_ctx() as db:
             base = select(*self._list_columns)
-            count_stmt = select(func.count()).select_from(Zone)
+            if keyword:
+                base = base.where(Zone.title.ilike(f"%{keyword}%"))
+            count_stmt = select(func.count()).select_from(base.subquery())
             total = (await db.execute(count_stmt)).scalar() or 0
             stmt = base.order_by(Zone.zone_type, Zone.sort_order, Zone.id.desc()).offset(
                 (page - 1) * page_size
@@ -60,6 +62,16 @@ class AdminZoneService:
             await db.refresh(zone)
             return AdminZoneListItem.model_validate(zone)
 
+    async def toggle_status(self, zone_id: int, is_active: bool) -> AdminZoneListItem:
+        async with get_db_ctx() as db:
+            zone = await db.get(Zone, zone_id)
+            if zone is None:
+                raise NotFoundException("专区内容")
+            zone.is_active = is_active
+            await db.commit()
+            await db.refresh(zone)
+            return AdminZoneListItem.model_validate(zone)
+
     async def deactivate(self, zone_id: int) -> None:
         async with get_db_ctx() as db:
             zone = await db.get(Zone, zone_id)
@@ -67,3 +79,25 @@ class AdminZoneService:
                 raise NotFoundException("专区内容")
             zone.is_active = False
             await db.commit()
+
+    async def batch_deactivate(self, zone_ids: list[int]) -> int:
+        async with get_db_ctx() as db:
+            result = await db.execute(
+                select(Zone).where(Zone.id.in_(zone_ids))
+            )
+            zones = result.scalars().all()
+            for zone in zones:
+                zone.is_active = False
+            await db.commit()
+            return len(zones)
+
+    async def update_sort(self, updates: list[dict]) -> int:
+        async with get_db_ctx() as db:
+            count = 0
+            for item in updates:
+                zone = await db.get(Zone, item["id"])
+                if zone is not None:
+                    zone.sort_order = item["sort_order"]
+                    count += 1
+            await db.commit()
+            return count

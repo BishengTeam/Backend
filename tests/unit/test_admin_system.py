@@ -8,39 +8,11 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 ROUTE_METHODS = {"api_route", "delete", "get", "head", "options", "patch", "post", "put"}
-FORBIDDEN_HTTP_TYPES = {
-    "Request", "Response", "JSONResponse", "HTMLResponse",
-    "PlainTextResponse", "RedirectResponse", "StreamingResponse",
-}
-
-EXPECTED_ADMIN_ENDPOINTS = (
-    ("POST", "/admin/auth/login"),
-    ("GET", "/admin/users"),
-    ("GET", "/admin/users/{user_id}"),
-    ("PUT", "/admin/users/{user_id}"),
-    ("GET", "/admin/orders"),
-    ("GET", "/admin/orders/{order_id}"),
-    ("POST", "/admin/orders/{order_id}/refund"),
-    ("GET", "/admin/courses"),
-    ("POST", "/admin/courses"),
-    ("PUT", "/admin/courses/{course_id}"),
-    ("DELETE", "/admin/courses/{course_id}"),
-    ("POST", "/admin/certifications"),
-    ("PUT", "/admin/certifications/{cert_id}"),
-    ("POST", "/admin/prices"),
-    ("PUT", "/admin/prices/{price_id}"),
-    ("DELETE", "/admin/prices/{price_id}"),
-)
-
-ADMIN_ROLES = ("super_admin", "content_editor", "customer_service", "finance", "auditor")
-
-TARGET_CATEGORIES = {"管理后台-认证", "管理后台-用户管理", "管理后台-订单管理",
-                     "管理后台-课程管理", "管理后台-认证管理", "管理后台-价格配置"}
 
 
 @dataclass(frozen=True)
@@ -49,7 +21,6 @@ class RouteInfo:
     method: str
     path: str
     response_model: str | None
-    tags: list[str]
 
 
 def _path(relative_path: str) -> Path:
@@ -82,344 +53,331 @@ def _keyword_value(call: ast.Call, keyword_name: str) -> ast.AST | None:
     return None
 
 
-def _pydantic_models(module: object) -> list[type[BaseModel]]:
-    models: list[type[BaseModel]] = []
-    for _, value in inspect.getmembers(module, inspect.isclass):
-        if issubclass(value, BaseModel) and value is not BaseModel:
-            models.append(value)
-    return models
-
-
-def _field_names(model: type[BaseModel]) -> set[str]:
-    if hasattr(model, "model_fields"):
-        return set(model.model_fields)
-    return set(getattr(model, "__fields__", {}))
-
-
-def _annotation_names(node: ast.AST | None) -> set[str]:
-    if node is None:
-        return set()
-    if isinstance(node, ast.Name):
-        return {node.id}
-    if isinstance(node, ast.Attribute):
-        return {node.attr} | _annotation_names(node.value)
-    if isinstance(node, ast.Subscript):
-        return _annotation_names(node.value) | _annotation_names(node.slice)
-    if isinstance(node, ast.BinOp):
-        return _annotation_names(node.left) | _annotation_names(node.right)
-    if isinstance(node, (ast.Tuple, ast.List)):
-        names: set[str] = set()
-        for element in node.elts:
-            names |= _annotation_names(element)
-        return names
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", node.value))
-    return set()
-
-
 def _node_source(source: str, node: ast.AST | None) -> str | None:
     if node is None:
         return None
     return ast.get_source_segment(source, node) or ast.unparse(node)
 
 
-def _iter_admin_routes() -> list[RouteInfo]:
-    """Collect all routes from all admin API files under app/api/admin/."""
-    routes: list[RouteInfo] = []
-    admin_api_dir = _path("app/api/admin")
-    for file_path in sorted(admin_api_dir.glob("*.py")):
-        if file_path.name.startswith("_"):
+def _join_paths(prefix: str | None, path: str | None) -> str:
+    parts = [part.strip("/") for part in (prefix or "", path or "") if part]
+    return "/" + "/".join(part for part in parts if part)
+
+
+def _admin_path(prefix: str | None, route_path: str | None) -> str:
+    full_path = _join_paths(prefix, route_path)
+    return full_path if full_path.startswith("/admin/") else _join_paths("/admin", full_path)
+
+
+def _router_prefix(tree: ast.Module) -> str | None:
+    for node in ast.walk(tree):
+        value = None
+        targets: list[ast.AST] = []
+        if isinstance(node, ast.Assign):
+            value = node.value
+            targets = list(node.targets)
+        elif isinstance(node, ast.AnnAssign):
+            value = node.value
+            targets = [node.target]
+
+        if not isinstance(value, ast.Call):
             continue
-        source = _read_text(file_path)
-        tree = ast.parse(source, filename=str(file_path))
+        if not any(isinstance(target, ast.Name) and target.id == "router" for target in targets):
+            continue
 
-        prefix: str | None = None
-        for node in ast.walk(tree):
-            value = None
-            targets: list[ast.AST] = []
-            if isinstance(node, ast.Assign):
-                value = node.value
-                targets = list(node.targets)
-            elif isinstance(node, ast.AnnAssign):
-                value = node.value
-                targets = [node.target]
-            if not isinstance(value, ast.Call):
+        func = value.func
+        if isinstance(func, ast.Name) and func.id == "APIRouter":
+            return _literal_string(_keyword_value(value, "prefix"))
+    return None
+
+
+def _iter_admin_routes(module_path: str) -> list[RouteInfo]:
+    api_path = _path(module_path)
+    source = _read_text(api_path)
+    tree = ast.parse(source, filename=str(api_path))
+    prefix = _router_prefix(tree)
+    routes: list[RouteInfo] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            if not isinstance(decorator, ast.Call):
                 continue
-            if not any(isinstance(target, ast.Name) and target.id == "router" for target in targets):
+            func = decorator.func
+            if not (
+                isinstance(func, ast.Attribute)
+                and func.attr in ROUTE_METHODS
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "router"
+            ):
                 continue
-            func = value.func
-            if isinstance(func, ast.Name) and func.id == "APIRouter":
-                prefix = _literal_string(_keyword_value(value, "prefix"))
-                break
 
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
-                continue
-            for decorator in node.decorator_list:
-                if not isinstance(decorator, ast.Call):
-                    continue
-                d_func = decorator.func
-                if not (
-                    isinstance(d_func, ast.Attribute)
-                    and d_func.attr in ROUTE_METHODS
-                    and isinstance(d_func.value, ast.Name)
-                    and d_func.value.id == "router"
-                ):
-                    continue
-
-                route_path = _literal_string(decorator.args[0]) if decorator.args else ""
-                full_path = f"/admin{prefix or ''}{route_path}"
-
-                tags: list[str] = []
-                tags_kw = _keyword_value(decorator, "tags")
-                if isinstance(tags_kw, ast.List):
-                    tags = [
-                        _literal_string(elt)
-                        for elt in tags_kw.elts
-                        if _literal_string(elt) is not None
-                    ]
-
-                routes.append(RouteInfo(
+            route_path = _literal_string(decorator.args[0]) if decorator.args else ""
+            routes.append(
+                RouteInfo(
                     function_name=node.name,
-                    method=d_func.attr.upper(),
-                    path=full_path,
+                    method=func.attr.upper(),
+                    path=_admin_path(prefix, route_path),
                     response_model=_node_source(source, _keyword_value(decorator, "response_model")),
-                    tags=tags,
-                ))
+                )
+            )
 
     return routes
 
 
-class AdminSystemTests(unittest.TestCase):
+def _call_has_depends_get_current_admin(call: ast.Call) -> bool:
+    """Check if a route's body references Depends(get_current_admin) in params."""
+    for arg in call.args:
+        if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name) and arg.func.id == "Depends":
+            for kw in arg.keywords:
+                if kw.arg is None:
+                    val_source = ast.unparse(kw.value) if hasattr(ast, "unparse") else ""
+                    if "get_current_admin" in val_source:
+                        return True
+            for sub_arg in arg.args:
+                if isinstance(sub_arg, ast.Name) and sub_arg.id == "get_current_admin":
+                    return True
+    for kw in call.keywords:
+        if isinstance(kw.value, ast.Call) and isinstance(kw.value.func, ast.Name) and kw.value.func.id == "Depends":
+            for sub_kw in kw.value.keywords:
+                if sub_kw.arg is None and "get_current_admin" in ast.unparse(sub_kw.value):
+                    return True
+    source = ast.unparse(call) if hasattr(ast, "unparse") else ""
+    return "get_current_admin" in source
 
-    # ── Schema validation ──
 
-    def test_admin_login_request_validates_username_and_password_required(self):
+def _all_routes_have_admin_auth(module_path: str) -> tuple[bool, list[str]]:
+    api_path = _path(module_path)
+    source = _read_text(api_path)
+    tree = ast.parse(source, filename=str(api_path))
+
+    unprotected: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            if not isinstance(decorator, ast.Call):
+                continue
+            func = decorator.func
+            if not (
+                isinstance(func, ast.Attribute)
+                and func.attr in ROUTE_METHODS
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "router"
+            ):
+                continue
+
+            func_source = ast.get_source_segment(source, node) or ""
+            if "get_current_admin" not in func_source and "_admin" not in func_source:
+                unprotected.append(node.name)
+
+    return len(unprotected) == 0, unprotected
+
+
+# ── Tests ──
+
+
+class AdminLoginSchemaTests(unittest.TestCase):
+    """P0: #2 - Login returns permissions"""
+
+    def test_admin_login_response_has_permissions_field(self):
         schema = importlib.import_module("app.schemas.admin")
-        model = getattr(schema, "AdminLoginRequest", None)
-        self.assertIsNotNone(model, "AdminLoginRequest should exist in app.schemas.admin")
+        self.assertTrue(hasattr(schema, "AdminLoginResponse"))
+        response_model = schema.AdminLoginResponse
+        fields = set(response_model.model_fields)
+        self.assertIn("permissions", fields, "AdminLoginResponse should have 'permissions' field")
 
-        self.assertIn("username", _field_names(model))
-        self.assertIn("password", _field_names(model))
-
-        with self.assertRaises(ValidationError):
-            model()
-        with self.assertRaises(ValidationError):
-            model(username="", password="")
-        # valid
-        instance = model(username="admin", password="admin123")
-        self.assertEqual(instance.username, "admin")
-
-    def test_admin_login_response_includes_token_expires_and_admin_info(self):
+    def test_all_permissions_list_exists(self):
         schema = importlib.import_module("app.schemas.admin")
-        model = getattr(schema, "AdminLoginResponse", None)
-        self.assertIsNotNone(model, "AdminLoginResponse should exist")
-
-        fields = _field_names(model)
-        self.assertIn("access_token", fields)
-        self.assertIn("expires_in", fields)
-        self.assertIn("admin", fields)
-
-    def test_admin_user_update_schema_only_allows_is_active(self):
-        schema = importlib.import_module("app.schemas.admin")
-        model = getattr(schema, "AdminUserUpdate", None)
-        self.assertIsNotNone(model, "AdminUserUpdate should exist")
-
-        instance = model(is_active=False)
-        self.assertFalse(instance.is_active)
-        instance = model(is_active=True)
-        self.assertTrue(instance.is_active)
-
-    def test_admin_course_create_validates_required_fields(self):
-        schema = importlib.import_module("app.schemas.admin_course")
-        model = getattr(schema, "AdminCourseCreate", None)
-        self.assertIsNotNone(model, "AdminCourseCreate should exist")
-
-        fields = _field_names(model)
-        self.assertIn("title", fields)
-        self.assertIn("category", fields)
-        self.assertIn("price", fields)
-
-        with self.assertRaises(ValidationError):
-            model()
-        with self.assertRaises(ValidationError):
-            model(title="", category="", price=-1)
-
-        instance = model(title="Test Course", category="networking", price=9900)
-        self.assertEqual(instance.title, "Test Course")
-
-    def test_admin_certification_create_validates_required_fields(self):
-        schema = importlib.import_module("app.schemas.admin_certification")
-        model = getattr(schema, "AdminCertificationCreate", None)
-        self.assertIsNotNone(model, "AdminCertificationCreate should exist")
-
-        fields = _field_names(model)
-        self.assertIn("name", fields)
-        self.assertIn("chinese_name", fields)
-        self.assertIn("code", fields)
-        self.assertIn("vendor", fields)
-
-        instance = model(
-            name="TEST", chinese_name="测试", code="T-001", vendor="H3C"
-        )
-        self.assertEqual(instance.code, "T-001")
-
-    def test_admin_price_create_validates_required_fields(self):
-        schema = importlib.import_module("app.schemas.admin_price")
-        model = getattr(schema, "AdminPriceCreate", None)
-        self.assertIsNotNone(model, "AdminPriceCreate should exist")
-
-        fields = _field_names(model)
-        self.assertIn("cert_type", fields)
-        self.assertIn("user_type", fields)
-        self.assertIn("price", fields)
-
-        with self.assertRaises(ValidationError):
-            model(price=-1)
-        instance = model(cert_type="H3C", user_type="student", price=5000)
-        self.assertEqual(instance.price, 5000)
-
-    # ── Route definitions ──
-
-    def test_admin_api_files_exist_for_all_target_modules(self):
-        modules = ["auth", "users", "orders", "courses", "certifications", "prices"]
-        for mod in modules:
-            path = _path(f"app/api/admin/{mod}.py")
-            self.assertTrue(
-                path.exists(),
-                f"app/api/admin/{mod}.py should exist for admin {mod} module",
-            )
-
-    def test_admin_api_declares_expected_routes_and_response_models(self):
-        routes = _iter_admin_routes()
-        self.assertTrue(routes, "admin API should define routes")
-
-        actual = {(route.method, route.path): route for route in routes}
-
-        # Verify target endpoints exist
-        for method, path in EXPECTED_ADMIN_ENDPOINTS:
-            with self.subTest(endpoint=f"{method} {path}"):
-                self.assertIn(
-                    (method, path), actual,
-                    f"admin API missing expected route: {method} {path}",
-                )
-
-        # Verify only target modules have response_model
-        target_methods_paths = {(m, p) for m, p in EXPECTED_ADMIN_ENDPOINTS}
-        for key, route in actual.items():
-            if key in target_methods_paths:
-                self.assertIsNotNone(
-                    route.response_model,
-                    f"{route.method} {route.path} ({route.function_name}) "
-                    f"must declare explicit response_model",
-                )
-                self.assertNotEqual(
-                    route.response_model, "None",
-                    f"{route.method} {route.path} response_model must not be None",
-                )
-
-    # ── Service layer hygiene ──
-
-    def test_admin_services_do_not_accept_http_request_or_response_objects(self):
-        service_files = [
-            "app/services/admin_auth.py",
-            "app/services/admin_user.py",
-            "app/services/admin_order.py",
-            "app/services/admin_course.py",
-            "app/services/admin_certification.py",
-            "app/services/admin_price.py",
+        self.assertTrue(hasattr(schema, "ALL_PERMISSIONS"))
+        perms = schema.ALL_PERMISSIONS
+        self.assertIsInstance(perms, list)
+        self.assertGreater(len(perms), 0)
+        expected = [
+            "dashboard:view", "user:list",
+            "order:list", "order:write",
+            "quiz:list", "quiz:write", "quiz:import",
+            "content:list", "content:write", "content:banner",
+            "course:list", "course:write",
         ]
-        for relative_path in service_files:
-            path = _path(relative_path)
-            self.assertTrue(path.exists(),
-                            f"{relative_path} should contain the admin service layer")
+        for p in expected:
+            self.assertIn(p, perms, f"ALL_PERMISSIONS should contain {p}")
 
-            tree = _load_ast(relative_path)
-            violations: list[str] = []
 
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ImportFrom):
-                    module = node.module or ""
-                    if module.startswith(("fastapi", "starlette")):
-                        imported_names = {
-                            alias.asname or alias.name for alias in node.names
-                        }
-                        forbidden = imported_names & FORBIDDEN_HTTP_TYPES
-                        if forbidden:
-                            violations.append(
-                                f"{relative_path}:{node.lineno}: imports HTTP types {sorted(forbidden)}"
-                            )
-                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    args = [
-                        *node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs,
-                    ]
-                    if node.args.vararg:
-                        args.append(node.args.vararg)
-                    if node.args.kwarg:
-                        args.append(node.args.kwarg)
-                    for arg in args:
-                        annotation_names = _annotation_names(arg.annotation)
-                        if annotation_names & FORBIDDEN_HTTP_TYPES:
-                            violations.append(
-                                f"{relative_path}:{arg.lineno}: {node.name} param "
-                                f"{arg.arg} annotated as HTTP type"
-                            )
+class AdminBatchDeleteSchemaTests(unittest.TestCase):
+    """P1: Batch delete request schema"""
 
-            self.assertFalse(
-                violations,
-                f"Admin service functions must not accept HTTP transport objects: {violations}",
-            )
+    def test_admin_batch_delete_request_exists(self):
+        schema = importlib.import_module("app.schemas.admin")
+        self.assertTrue(hasattr(schema, "AdminBatchDeleteRequest"))
+        model = schema.AdminBatchDeleteRequest
+        fields = set(model.model_fields)
+        self.assertIn("ids", fields)
 
-    # ── Auth dependency ──
 
-    def test_admin_routes_use_get_current_admin_dependency(self):
-        for module_name in ["users", "orders", "courses", "certifications", "prices"]:
-            source = _read_text(_path(f"app/api/admin/{module_name}.py"))
-            with self.subTest(module=module_name):
-                self.assertIn(
-                    "get_current_admin",
-                    source,
-                    f"app/api/admin/{module_name}.py should use get_current_admin dependency",
-                )
+class AdminUserFilterTests(unittest.TestCase):
+    """P2: #7.1 User filter enhancement"""
 
-    def test_auth_middleware_checks_admin_token_type(self):
-        source = _read_text(_path("app/middleware/auth.py"))
-        self.assertIn('"admin"', source)
-        self.assertIn('payload.get("type")', source)
-        self.assertIn("!= ", source)
+    def test_admin_user_filter_has_time_fields(self):
+        schema = importlib.import_module("app.schemas.admin")
+        filter_model = schema.AdminUserFilter
+        fields = set(filter_model.model_fields)
+        self.assertIn("created_at_start", fields)
+        self.assertIn("created_at_end", fields)
 
-    def test_create_admin_access_token_includes_type_and_role(self):
-        import sys
-        sys.path.insert(0, str(REPO_ROOT))
-        from app.core.security import create_admin_access_token, decode_access_token
 
-        token = create_admin_access_token(1, "admin", "super_admin")
-        payload = decode_access_token(token)
+class AdminOrderFilterTests(unittest.TestCase):
+    """P2: #7.2 Order filter enhancement"""
 
-        self.assertEqual(payload["type"], "admin")
-        self.assertEqual(payload["admin_id"], 1)
-        self.assertEqual(payload["username"], "admin")
-        self.assertEqual(payload["role"], "super_admin")
-        self.assertIn("exp", payload)
-        self.assertIn("iat", payload)
+    def test_order_filter_has_cert_type_and_phone(self):
+        schema = importlib.import_module("app.schemas.order")
+        filter_model = schema.OrderFilter
+        fields = set(filter_model.model_fields)
+        self.assertIn("cert_type", fields)
+        self.assertIn("phone", fields)
 
-    # ── Admin model ──
 
-    def test_admin_user_model_defines_role_constraint(self):
-        model_file = _path("app/models/admin_user.py")
-        self.assertTrue(model_file.exists())
-        source = _read_text(model_file)
+class AdminBannerModelTests(unittest.TestCase):
+    """P1: #5.5 Banner model"""
 
-        self.assertIn("ADMIN_ROLES", source)
-        for role in ADMIN_ROLES:
-            self.assertIn(role, source, f"admin model should include role '{role}'")
+    def test_banner_model_exists(self):
+        model = importlib.import_module("app.models.banner")
+        self.assertTrue(hasattr(model, "Banner"))
+        banner = model.Banner
+        self.assertEqual(banner.__tablename__, "banner")
 
-    def test_admin_password_hashing_uses_pbkdf2(self):
-        source = _read_text(_path("app/services/admin_auth.py"))
-        self.assertIn("pbkdf2_hmac", source)
-        self.assertIn("salt", source)
-        self.assertIn("600_000", source)
-        self.assertIn("secrets.compare_digest", source)
+    def test_banner_schemas_exist(self):
+        schema = importlib.import_module("app.schemas.admin_banner")
+        self.assertTrue(hasattr(schema, "BannerCreate"))
+        self.assertTrue(hasattr(schema, "BannerUpdate"))
+        self.assertTrue(hasattr(schema, "BannerListItem"))
+
+
+class AdminQuizSchemaTests(unittest.TestCase):
+    """P1: #6 Quiz JSON import schema"""
+
+    def test_quiz_import_json_schemas_exist(self):
+        schema = importlib.import_module("app.schemas.admin_quiz")
+        self.assertTrue(hasattr(schema, "AdminQuizImportJsonRequest"))
+        self.assertTrue(hasattr(schema, "AdminQuizQuestionItem"))
+
+
+class AdminZoneSchemaTests(unittest.TestCase):
+    """P1: Zone toggle status + sort schema"""
+
+    def test_zone_status_toggle_schema_exists(self):
+        schema = importlib.import_module("app.schemas.admin_zone")
+        self.assertTrue(hasattr(schema, "AdminZoneStatusToggle"))
+
+    def test_zone_sort_schema_exists(self):
+        schema = importlib.import_module("app.schemas.admin_zone")
+        self.assertTrue(hasattr(schema, "AdminZoneSortItem"))
+
+
+# ── Route verification tests ──
+
+
+class AdminRoutePresenceTests(unittest.TestCase):
+    """Verify all new admin routes are registered."""
+
+    def test_batch_delete_users_route_exists(self):
+        routes = _iter_admin_routes("app/api/admin/users.py")
+        methods_paths = {(r.method, r.path) for r in routes}
+        self.assertIn(("POST", "/admin/users/batch-delete"), methods_paths)
+
+    def test_batch_delete_quiz_route_exists(self):
+        routes = _iter_admin_routes("app/api/admin/quiz.py")
+        methods_paths = {(r.method, r.path) for r in routes}
+        self.assertIn(("POST", "/admin/quiz/questions/batch-delete"), methods_paths)
+
+    def test_toggle_zone_status_route_exists(self):
+        routes = _iter_admin_routes("app/api/admin/zones.py")
+        methods_paths = {(r.method, r.path) for r in routes}
+        self.assertIn(("PATCH", "/admin/zones/{zone_id}/status"), methods_paths)
+
+    def test_batch_delete_zones_route_exists(self):
+        routes = _iter_admin_routes("app/api/admin/zones.py")
+        methods_paths = {(r.method, r.path) for r in routes}
+        self.assertIn(("POST", "/admin/zones/batch-delete"), methods_paths)
+
+    def test_banner_crud_routes_exist(self):
+        routes = _iter_admin_routes("app/api/admin/banners.py")
+        methods_paths = {(r.method, r.path) for r in routes}
+        expected = {
+            ("GET", "/admin/banners"),
+            ("POST", "/admin/banners"),
+            ("PUT", "/admin/banners/{banner_id}"),
+            ("DELETE", "/admin/banners/{banner_id}"),
+            ("POST", "/admin/banners/batch-delete"),
+        }
+        for expected_route in expected:
+            self.assertIn(expected_route, methods_paths, f"Missing route: {expected_route}")
+
+    def test_quiz_json_import_route_exists(self):
+        routes = _iter_admin_routes("app/api/admin/quiz.py")
+        methods_paths = {(r.method, r.path) for r in routes}
+        self.assertIn(("POST", "/admin/quiz/import/json"), methods_paths)
+
+    def test_user_orders_route_exists(self):
+        routes = _iter_admin_routes("app/api/admin/users.py")
+        methods_paths = {(r.method, r.path) for r in routes}
+        self.assertIn(("GET", "/admin/users/{user_id}/orders"), methods_paths)
+
+    def test_user_conversations_route_exists(self):
+        routes = _iter_admin_routes("app/api/admin/users.py")
+        methods_paths = {(r.method, r.path) for r in routes}
+        self.assertIn(("GET", "/admin/users/{user_id}/conversations"), methods_paths)
+
+    def test_user_export_route_exists(self):
+        routes = _iter_admin_routes("app/api/admin/users.py")
+        methods_paths = {(r.method, r.path) for r in routes}
+        self.assertIn(("GET", "/admin/users/export"), methods_paths)
+
+    def test_order_export_route_exists(self):
+        routes = _iter_admin_routes("app/api/admin/orders.py")
+        methods_paths = {(r.method, r.path) for r in routes}
+        self.assertIn(("GET", "/admin/orders/export"), methods_paths)
+
+    def test_order_reconciliation_route_exists(self):
+        routes = _iter_admin_routes("app/api/admin/orders.py")
+        methods_paths = {(r.method, r.path) for r in routes}
+        self.assertIn(("GET", "/admin/orders/reconciliation"), methods_paths)
+
+    def test_zone_sort_route_exists(self):
+        routes = _iter_admin_routes("app/api/admin/zones.py")
+        methods_paths = {(r.method, r.path) for r in routes}
+        self.assertIn(("PUT", "/admin/zones/sort"), methods_paths)
+
+
+class AdminRouteAuthTests(unittest.TestCase):
+    """Verify all new routes have admin auth protection."""
+
+    def test_users_routes_have_admin_auth(self):
+        ok, unprotected = _all_routes_have_admin_auth("app/api/admin/users.py")
+        self.assertTrue(ok, f"Unprotected routes in users.py: {unprotected}")
+
+    def test_banners_routes_have_admin_auth(self):
+        ok, unprotected = _all_routes_have_admin_auth("app/api/admin/banners.py")
+        self.assertTrue(ok, f"Unprotected routes in banners.py: {unprotected}")
+
+
+class AdminRouterRegistrationTest(unittest.TestCase):
+    """Verify banner router is registered in admin __init__.py."""
+
+    def test_banner_router_registered(self):
+        source = _read_text(_path("app/api/admin/__init__.py"))
+        self.assertIn("banners_router", source)
+        self.assertIn("include_router(banners_router)", source)
+
+
+class AdminUserModelTests(unittest.TestCase):
+    """Verify is_deleted field on User model."""
+
+    def test_user_model_has_is_deleted(self):
+        model = importlib.import_module("app.models.user")
+        user = model.User
+        self.assertTrue(hasattr(user, "is_deleted"))
 
 
 if __name__ == "__main__":

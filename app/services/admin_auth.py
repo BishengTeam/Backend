@@ -8,7 +8,7 @@ from app.core.database import get_db_ctx
 from app.core.exceptions import UnauthorizedException
 from app.core.security import create_admin_access_token
 from app.models.admin_user import AdminUser
-from app.schemas.admin import AdminInfo, AdminLoginResponse
+from app.schemas.admin import ALL_PERMISSIONS, AdminInfo, AdminLoginResponse
 
 SALT_LENGTH = 32
 HASH_ITERATIONS = 600_000
@@ -46,4 +46,5 @@ class AdminAuthService:
                 access_token=access_token,
                 expires_in=settings.JWT_EXPIRE_MINUTES * 60,
                 admin=AdminInfo.model_validate(admin),
+                permissions=ALL_PERMISSIONS,
             )

@@ -23,6 +23,15 @@ class AdminZoneUpdate(BaseModel):
     is_active: bool | None = None
 
 
+class AdminZoneStatusToggle(BaseModel):
+    is_active: bool
+
+
+class AdminZoneSortItem(BaseModel):
+    id: int
+    sort_order: int
+
+
 class AdminZoneListItem(BaseModel):
     id: int
     zone_type: str

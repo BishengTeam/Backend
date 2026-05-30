@@ -16,10 +16,27 @@ class AdminInfo(BaseModel):
     model_config = {"from_attributes": True}
 
 
+ALL_PERMISSIONS = [
+    "dashboard:view",
+    "user:list",
+    "order:list",
+    "order:write",
+    "quiz:list",
+    "quiz:write",
+    "quiz:import",
+    "content:list",
+    "content:write",
+    "content:banner",
+    "course:list",
+    "course:write",
+]
+
+
 class AdminLoginResponse(BaseModel):
     access_token: str
     expires_in: int
     admin: AdminInfo
+    permissions: list[str] = ALL_PERMISSIONS
 
 
 # ── User management ──
@@ -28,6 +45,8 @@ class AdminLoginResponse(BaseModel):
 class AdminUserFilter(BaseModel):
     openid: str | None = None
     phone: str | None = None
+    created_at_start: datetime | None = None
+    created_at_end: datetime | None = None
 
 
 class AdminUserListItem(BaseModel):
@@ -42,3 +61,7 @@ class AdminUserListItem(BaseModel):
 
 class AdminUserUpdate(BaseModel):
     is_active: bool
+
+
+class AdminBatchDeleteRequest(BaseModel):
+    ids: list[int] = Field(..., min_length=1)

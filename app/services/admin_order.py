@@ -22,8 +22,13 @@ class AdminOrderService:
     ) -> PaginatedData[OrderResponse]:
         async with get_db_ctx() as db:
             base = select(Order)
-            if filters and filters.status:
-                base = base.where(Order.status == filters.status)
+            if filters:
+                if filters.status:
+                    base = base.where(Order.status == filters.status)
+                if filters.cert_type:
+                    base = base.where(Order.cert_type == filters.cert_type)
+                if filters.phone:
+                    base = base.where(Order.candidate_phone == filters.phone)
             if start_time:
                 base = base.where(Order.created_at >= start_time)
             if end_time:
@@ -59,3 +64,58 @@ class AdminOrderService:
             await db.commit()
             await db.refresh(order)
             return OrderDetailResponse.model_validate(order)
+
+    async def reconciliation(self, date: str) -> dict:
+        from datetime import datetime as dt
+
+        date_start = dt.fromisoformat(date)
+        date_end = dt.fromisoformat(f"{date}T23:59:59")
+        async with get_db_ctx() as db:
+            stmt = select(Order).where(
+                Order.created_at >= date_start,
+                Order.created_at <= date_end,
+            )
+            result = await db.execute(stmt)
+            orders = result.scalars().all()
+            order_total = sum(o.price for o in orders if o.status != "refunded")
+            refund_total = sum(o.price for o in orders if o.status == "refunded")
+            net_income = order_total - refund_total
+            order_count = len(orders)
+            return {
+                "order_total": order_total,
+                "refund_total": refund_total,
+                "net_income": net_income,
+                "order_count": order_count,
+            }
+
+    async def export_orders(
+        self,
+        filters: OrderFilter | None,
+        start_time: datetime | None,
+        end_time: datetime | None,
+    ) -> str:
+        import csv
+        import io
+
+        async with get_db_ctx() as db:
+            base = select(Order)
+            if filters:
+                if filters.status:
+                    base = base.where(Order.status == filters.status)
+                if filters.cert_type:
+                    base = base.where(Order.cert_type == filters.cert_type)
+                if filters.phone:
+                    base = base.where(Order.candidate_phone == filters.phone)
+            if start_time:
+                base = base.where(Order.created_at >= start_time)
+            if end_time:
+                base = base.where(Order.created_at <= end_time)
+            stmt = base.order_by(Order.id.desc())
+            result = await db.execute(stmt)
+            orders = result.scalars().all()
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(["ID", "UserID", "CertType", "CandidateName", "CandidatePhone", "Price", "Status", "CreatedAt"])
+            for o in orders:
+                writer.writerow([o.id, o.user_id, o.cert_type, o.candidate_name, o.candidate_phone, o.price, o.status, o.created_at])
+            return output.getvalue()

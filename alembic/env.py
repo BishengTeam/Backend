@@ -30,6 +30,7 @@ import app.models.coupon  # noqa: F401
 import app.models.agreement  # noqa: F401
 import app.models.competition  # noqa: F401
 import app.models.ticket  # noqa: F401
+import app.models.banner  # noqa: F401
 import app.models.quick_question  # noqa: F401
 
 config = context.config

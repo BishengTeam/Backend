@@ -10,3 +10,4 @@ class User(Base, TimestampMixin):
     openid: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     phone: Mapped[str | None] = mapped_column(String(20))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
