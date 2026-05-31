@@ -1,8 +1,14 @@
+import logging
+import traceback
+
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.core.config import settings
 from app.core.exceptions import AppException
+
+logger = logging.getLogger(__name__)
 
 
 async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
@@ -26,6 +32,24 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception(
+        "Unhandled exception on %s %s",
+        request.method,
+        request.url.path,
+    )
+    if settings.APP_DEBUG:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "code": 50000,
+                "message": "服务器内部错误",
+                "detail": {
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc),
+                    "traceback": traceback.format_exc().split("\n"),
+                },
+            },
+        )
     return JSONResponse(
         status_code=500,
         content={"code": 50000, "message": "服务器内部错误", "data": None},

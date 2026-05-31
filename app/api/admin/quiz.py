@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, File, Form, Path, UploadFile
 
-from app.middleware.auth import get_current_admin
+from app.core.exceptions import BusinessException
+from app.middleware.auth import require_permission
 from app.schemas.admin import AdminBatchDeleteRequest
 from app.schemas.admin_quiz import (
     AdminQuizCategoryCreate,
@@ -17,6 +18,8 @@ router = APIRouter(prefix="/quiz", tags=["管理后台-题库管理"])
 
 CATEGORY = "/categories"
 QUESTION = "/questions"
+CSV_ALLOWED_CONTENT_TYPES = {"text/csv", "application/vnd.ms-excel"}
+CSV_MAX_UPLOAD_SIZE = 5 * 1024 * 1024  # 5MB
 
 
 # ── Category routes ──
@@ -24,7 +27,7 @@ QUESTION = "/questions"
 @router.post(CATEGORY, response_model=APIResponse[QuizCategoryResponse])
 async def create_category(
     body: AdminQuizCategoryCreate,
-    _admin=Depends(get_current_admin),
+    _admin=Depends(require_permission("quiz:write")),
 ) -> APIResponse[QuizCategoryResponse]:
     result = await AdminQuizService().create_category(body)
     return success(data=result)
@@ -34,7 +37,7 @@ async def create_category(
 async def update_category(
     body: AdminQuizCategoryUpdate,
     category_id: int = Path(..., ge=1),
-    _admin=Depends(get_current_admin),
+    _admin=Depends(require_permission("quiz:write")),
 ) -> APIResponse[QuizCategoryResponse]:
     result = await AdminQuizService().update_category(category_id, body)
     return success(data=result)
@@ -43,7 +46,7 @@ async def update_category(
 @router.delete(f"{CATEGORY}/{{category_id}}", response_model=APIResponse)
 async def delete_category(
     category_id: int = Path(..., ge=1),
-    _admin=Depends(get_current_admin),
+    _admin=Depends(require_permission("quiz:write")),
 ):
     await AdminQuizService().delete_category(category_id)
     return success(message="分类已删除")
@@ -54,7 +57,7 @@ async def delete_category(
 @router.post(QUESTION, response_model=APIResponse[QuizQuestionResponse])
 async def create_question(
     body: AdminQuizQuestionCreate,
-    _admin=Depends(get_current_admin),
+    _admin=Depends(require_permission("quiz:write")),
 ) -> APIResponse[QuizQuestionResponse]:
     result = await AdminQuizService().create_question(body)
     return success(data=result)
@@ -64,7 +67,7 @@ async def create_question(
 async def update_question(
     body: AdminQuizQuestionUpdate,
     question_id: int = Path(..., ge=1),
-    _admin=Depends(get_current_admin),
+    _admin=Depends(require_permission("quiz:write")),
 ) -> APIResponse[QuizQuestionResponse]:
     result = await AdminQuizService().update_question(question_id, body)
     return success(data=result)
@@ -73,7 +76,7 @@ async def update_question(
 @router.delete(f"{QUESTION}/{{question_id}}", response_model=APIResponse)
 async def delete_question(
     question_id: int = Path(..., ge=1),
-    _admin=Depends(get_current_admin),
+    _admin=Depends(require_permission("quiz:write")),
 ):
     await AdminQuizService().delete_question(question_id)
     return success(message="题目已删除")
@@ -82,7 +85,7 @@ async def delete_question(
 @router.post(f"{QUESTION}/batch-delete", response_model=APIResponse[int])
 async def batch_delete_questions(
     body: AdminBatchDeleteRequest,
-    _admin=Depends(get_current_admin),
+    _admin=Depends(require_permission("quiz:write")),
 ):
     count = await AdminQuizService().batch_delete_questions(body.ids)
     return success(data=count, message=f"已删除 {count} 道题目")
@@ -94,9 +97,13 @@ async def batch_delete_questions(
 async def import_questions(
     file: UploadFile = File(..., description="CSV 文件"),
     create_missing_categories: bool = Form(False, description="是否自动创建缺失的分类"),
-    _admin=Depends(get_current_admin),
+    _admin=Depends(require_permission("quiz:import")),
 ):
+    if file.content_type not in CSV_ALLOWED_CONTENT_TYPES:
+        raise BusinessException("不支持的文件类型，仅允许上传 CSV 文件")
     content = await file.read()
+    if len(content) > CSV_MAX_UPLOAD_SIZE:
+        raise BusinessException("文件大小超过限制（最大 5MB）")
     result = await AdminQuizService().import_questions_csv(content, create_missing_categories)
     return success(data=result)
 
@@ -104,7 +111,7 @@ async def import_questions(
 @router.post("/import/json", response_model=APIResponse)
 async def import_questions_json(
     body: AdminQuizImportJsonRequest,
-    _admin=Depends(get_current_admin),
+    _admin=Depends(require_permission("quiz:import")),
 ):
     result = await AdminQuizService().import_questions_json(body)
     return success(data=result)

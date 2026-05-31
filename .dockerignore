@@ -12,6 +12,5 @@ dist/
 build/
 tests/
 docs/
-scripts/
 uploads/*
 !uploads/.gitkeep

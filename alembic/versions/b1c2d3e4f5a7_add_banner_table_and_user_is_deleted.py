@@ -1,7 +1,7 @@
 """add banner table and is_deleted to user
 
 Revision ID: b1c2d3e4f5a7
-Revises: f9d64f386d8f
+Revises: e8f9a0b1c2d3
 Create Date: 2026-06-10 10:00:00.000000
 
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b1c2d3e4f5a7"
-down_revision: Union[str, Sequence[str], None] = "f9d64f386d8f"
+down_revision: Union[str, Sequence[str], None] = "e8f9a0b1c2d3"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

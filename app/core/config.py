@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -12,6 +13,9 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     DATABASE_URL_SYNC: str
 
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 20
+
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
@@ -20,6 +24,15 @@ class Settings(BaseSettings):
     JWT_SECRET: str
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 120
+
+    @field_validator("JWT_SECRET")
+    @classmethod
+    def validate_jwt_secret(cls, v: str) -> str:
+        if len(v) < 32:
+            raise ValueError("JWT_SECRET must be at least 32 characters")
+        if v in {"change-me-in-production", "change-me", "your-secret-key"}:
+            raise ValueError("JWT_SECRET must not be a default/placeholder value")
+        return v
 
     WECHAT_APPID: str = ""
     WECHAT_SECRET: str = ""

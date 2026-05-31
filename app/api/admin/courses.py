@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Path, Query
 
-from app.middleware.auth import get_current_admin
+from app.middleware.auth import require_permission
 from app.schemas.admin_course import AdminCourseCreate, AdminCourseListItem, AdminCourseUpdate
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.services.admin_course import AdminCourseService
@@ -14,7 +14,7 @@ async def list_courses(
     category: str | None = Query(None, description="按分类筛选"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
-    _admin=Depends(get_current_admin),
+    _admin=Depends(require_permission("course:list")),
 ) -> APIResponse[PaginatedData[AdminCourseListItem]]:
     result = await AdminCourseService().list_courses(keyword, category, page, page_size)
     return success(data=result)
@@ -23,7 +23,7 @@ async def list_courses(
 @router.post("", response_model=APIResponse[AdminCourseListItem])
 async def create_course(
     body: AdminCourseCreate,
-    _admin=Depends(get_current_admin),
+    _admin=Depends(require_permission("course:write")),
 ) -> APIResponse[AdminCourseListItem]:
     result = await AdminCourseService().create_course(body)
     return success(data=result)
@@ -33,7 +33,7 @@ async def create_course(
 async def update_course(
     body: AdminCourseUpdate,
     course_id: int = Path(..., description="课程 ID"),
-    _admin=Depends(get_current_admin),
+    _admin=Depends(require_permission("course:write")),
 ) -> APIResponse[AdminCourseListItem]:
     result = await AdminCourseService().update_course(course_id, body)
     return success(data=result)
@@ -42,7 +42,7 @@ async def update_course(
 @router.delete("/{course_id}", response_model=APIResponse)
 async def delete_course(
     course_id: int = Path(..., description="课程 ID"),
-    _admin=Depends(get_current_admin),
+    _admin=Depends(require_permission("course:write")),
 ):
     await AdminCourseService().deactivate_course(course_id)
     return success(message="课程已下架")

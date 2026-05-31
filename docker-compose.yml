@@ -19,7 +19,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       # JWT — 生产环境务必替换为强随机值
-      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - JWT_SECRET=${JWT_SECRET}
       - JWT_ALGORITHM=HS256
       - JWT_EXPIRE_MINUTES=120
       # 微信小程序 — 用实际值替换

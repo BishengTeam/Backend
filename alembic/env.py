@@ -15,23 +15,8 @@ if os.getenv("TEST_DATABASE_URL") or os.getenv("TEST_DATABASE_URL_SYNC"):
 from app.core.database import Base
 
 # Import all models so Base.metadata knows about them
-import app.models.admin_user  # noqa: F401
-import app.models.user  # noqa: F401
-import app.models.zone  # noqa: F401
-import app.models.order  # noqa: F401
-import app.models.conversation  # noqa: F401
-import app.models.price_config  # noqa: F401
-import app.models.certification  # noqa: F401
-import app.models.course  # noqa: F401
-import app.models.inventory  # noqa: F401
-import app.models.quiz  # noqa: F401
-import app.models.points  # noqa: F401
-import app.models.coupon  # noqa: F401
-import app.models.agreement  # noqa: F401
-import app.models.competition  # noqa: F401
-import app.models.ticket  # noqa: F401
-import app.models.banner  # noqa: F401
-import app.models.quick_question  # noqa: F401
+# models/__init__.py is the single source of truth — it imports every model class
+import app.models  # noqa: F401
 
 config = context.config
 

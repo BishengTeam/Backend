@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from sqlalchemy import delete, select, func
+from sqlalchemy import delete, select, func, text
 
 from app.core.database import get_db_ctx
 from app.models.deleted_openid import DeletedOpenid
@@ -25,7 +25,7 @@ async def cleanup_loop():
 
 async def _cleanup_expired_accounts():
     async with get_db_ctx() as db:
-        cutoff = func.now() - func.make_interval(days=CLEANUP_DAYS)
+        cutoff = func.now() - text(f"INTERVAL '{CLEANUP_DAYS} days'")
         stale = (
             await db.execute(
                 select(User.id, User.openid)

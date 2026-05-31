@@ -3,10 +3,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.exceptions import BusinessException, UnauthorizedException
+from app.core.exceptions import BusinessException, ForbiddenException, UnauthorizedException
 from app.core.security import decode_access_token
 from app.models.user import User
 from app.models.user_identity import UserIdentity
+from app.schemas.admin import ROLE_PERMISSIONS
 
 
 async def get_current_user(
@@ -73,3 +74,17 @@ async def require_identity(
     if identity is None:
         raise BusinessException("请先完成实名认证")
     return current_user
+
+
+def require_permission(permission: str):
+    """Dependency factory: returns a dependency that checks admin permission."""
+
+    async def _check(admin=Depends(get_current_admin)):
+        if admin.role == "super_admin":
+            return admin
+        allowed = ROLE_PERMISSIONS.get(admin.role, [])
+        if permission not in allowed and "*" not in allowed:
+            raise ForbiddenException(f"缺少权限: {permission}")
+        return admin
+
+    return _check
