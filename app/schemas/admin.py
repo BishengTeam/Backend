@@ -92,5 +92,9 @@ class AdminUserUpdate(BaseModel):
     is_active: bool
 
 
+class AdminUserStatusToggle(BaseModel):
+    is_active: bool
+
+
 class AdminBatchDeleteRequest(BaseModel):
     ids: list[int] = Field(..., min_length=1)

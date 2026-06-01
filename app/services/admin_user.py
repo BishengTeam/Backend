@@ -54,6 +54,16 @@ class AdminUserService:
             await db.refresh(user)
             return AdminUserListItem.model_validate(user)
 
+    async def toggle_user_status(self, user_id: int, is_active: bool) -> AdminUserListItem:
+        async with get_db_ctx() as db:
+            user = await db.get(User, user_id)
+            if user is None:
+                raise NotFoundException("用户")
+            user.is_active = is_active
+            await db.commit()
+            await db.refresh(user)
+            return AdminUserListItem.model_validate(user)
+
     async def batch_delete(self, user_ids: list[int]) -> int:
         async with get_db_ctx() as db:
             result = await db.execute(

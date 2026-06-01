@@ -13,6 +13,10 @@ HASH_ITERATIONS = 600_000
 
 DEFAULT_ADMINS = [
     {"username": "admin", "password": "admin123", "role": "super_admin"},
+    {"username": "editor", "password": "editor123", "role": "content_editor"},
+    {"username": "cs", "password": "cs123", "role": "customer_service"},
+    {"username": "finance", "password": "finance123", "role": "finance"},
+    {"username": "auditor", "password": "auditor123", "role": "auditor"},
 ]
 
 

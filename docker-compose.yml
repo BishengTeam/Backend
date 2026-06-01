@@ -61,6 +61,24 @@ services:
       retries: 10
     restart: unless-stopped
 
+  seed:
+    build: .
+    command: python scripts/seed_all.py
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - APP_ENV=development
+      - APP_DEBUG=false
+      - DATABASE_URL=postgresql+asyncpg://wemini:wemini_pass@db:5432/wemini_app
+      - DATABASE_URL_SYNC=postgresql://wemini:wemini_pass@db:5432/wemini_app
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET=${JWT_SECRET:-dev-jwt-secret-for-testing-only-min-32-chars}
+      - JWT_ALGORITHM=HS256
+      - JWT_EXPIRE_MINUTES=120
+    profiles:
+      - seed
+
 volumes:
   pgdata:
   uploads:

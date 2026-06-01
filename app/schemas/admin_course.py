@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -10,7 +11,7 @@ class AdminCourseCreate(BaseModel):
     cover_url: str | None = Field(None, max_length=512)
     video_url: str | None = Field(None, max_length=512)
     price: int = Field(..., ge=0)
-    batches: dict | None = None
+    batches: Any | None = None
     teacher_name: str | None = Field(None, max_length=64)
     teacher_contact: str | None = Field(None, max_length=128)
     is_active: bool = True
@@ -23,7 +24,7 @@ class AdminCourseUpdate(BaseModel):
     cover_url: str | None = Field(None, max_length=512)
     video_url: str | None = Field(None, max_length=512)
     price: int | None = Field(None, ge=0)
-    batches: dict | None = None
+    batches: Any | None = None
     teacher_name: str | None = Field(None, max_length=64)
     teacher_contact: str | None = Field(None, max_length=128)
     is_active: bool | None = None

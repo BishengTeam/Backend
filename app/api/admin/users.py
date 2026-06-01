@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Path, Query
 from fastapi.responses import Response
 
 from app.middleware.auth import require_permission
-from app.schemas.admin import AdminBatchDeleteRequest, AdminUserFilter, AdminUserListItem, AdminUserUpdate
+from app.schemas.admin import AdminBatchDeleteRequest, AdminUserFilter, AdminUserListItem, AdminUserStatusToggle, AdminUserUpdate
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.services.admin_user import AdminUserService
 
@@ -58,6 +58,16 @@ async def update_user(
 ) -> APIResponse[AdminUserListItem]:
     result = await AdminUserService().update_user(user_id, body)
     return success(data=result)
+
+
+@router.patch("/{user_id}/status", response_model=APIResponse[AdminUserListItem])
+async def toggle_user_status(
+    body: AdminUserStatusToggle,
+    user_id: int = Path(..., description="用户 ID"),
+    _admin=Depends(require_permission("user:list")),
+) -> APIResponse[AdminUserListItem]:
+    result = await AdminUserService().toggle_user_status(user_id, body.is_active)
+    return success(data=result, message="用户状态已更新")
 
 
 @router.post("/batch-delete", response_model=APIResponse[int])

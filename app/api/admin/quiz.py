@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, Form, Path, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
 
 from app.core.exceptions import BusinessException
 from app.middleware.auth import require_permission
@@ -8,9 +8,10 @@ from app.schemas.admin_quiz import (
     AdminQuizCategoryUpdate,
     AdminQuizImportJsonRequest,
     AdminQuizQuestionCreate,
+    AdminQuizQuestionResponse,
     AdminQuizQuestionUpdate,
 )
-from app.schemas.common import APIResponse, success
+from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.quiz import QuizCategoryResponse, QuizQuestionResponse
 from app.services.admin_quiz import AdminQuizService
 
@@ -23,6 +24,32 @@ CSV_MAX_UPLOAD_SIZE = 5 * 1024 * 1024  # 5MB
 
 
 # ── Category routes ──
+
+@router.get(CATEGORY, response_model=APIResponse[list[QuizCategoryResponse]])
+async def list_categories(
+    _admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[list[QuizCategoryResponse]]:
+    result = await AdminQuizService().list_categories()
+    return success(data=result)
+
+
+# ── Question routes ──
+
+@router.get(QUESTION, response_model=APIResponse[PaginatedData[AdminQuizQuestionResponse]])
+async def list_questions(
+    category_id: int | None = Query(None, ge=1, description="分类 ID"),
+    question_type: str | None = Query(None, description="题型：single_choice / multiple_choice / judge"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    _admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[PaginatedData[AdminQuizQuestionResponse]]:
+    result = await AdminQuizService().list_questions(
+        category_id=category_id, question_type=question_type, page=page, page_size=page_size,
+    )
+    return success(data=result)
+
+
+# ── Category write routes ──
 
 @router.post(CATEGORY, response_model=APIResponse[QuizCategoryResponse])
 async def create_category(

@@ -1,4 +1,6 @@
-from pydantic import field_validator
+import urllib.parse
+
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -10,11 +12,35 @@ class Settings(BaseSettings):
     APP_PORT: int = 8000
     APP_TIMEZONE: str = "Asia/Shanghai"
 
-    DATABASE_URL: str
-    DATABASE_URL_SYNC: str
+    # 数据库连接组件（优先），有特殊字符的密码不会经过 configparser
+    DB_HOST: str = "localhost"
+    DB_PORT: int = 5432
+    DB_USER: str = "bisheng"
+    DB_PASSWORD: str = ""
+    DB_NAME: str = "wemini_app_dev"
+
+    # 也支持直接传完整 URL（不含特殊字符时）
+    DATABASE_URL: str = ""
+    DATABASE_URL_SYNC: str = ""
 
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20
+
+    @model_validator(mode="after")
+    def build_database_urls(self) -> "Settings":
+        if not self.DATABASE_URL:
+            encoded = urllib.parse.quote_plus(self.DB_PASSWORD)
+            self.DATABASE_URL = (
+                f"postgresql+asyncpg://{self.DB_USER}:{encoded}"
+                f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+            )
+        if not self.DATABASE_URL_SYNC:
+            encoded = urllib.parse.quote_plus(self.DB_PASSWORD)
+            self.DATABASE_URL_SYNC = (
+                f"postgresql://{self.DB_USER}:{encoded}"
+                f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+            )
+        return self
 
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_HOST: str = "localhost"
