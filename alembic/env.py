@@ -10,7 +10,7 @@ if os.getenv("TEST_DATABASE_URL") or os.getenv("TEST_DATABASE_URL_SYNC"):
         os.environ.setdefault("DATABASE_URL", os.environ["TEST_DATABASE_URL"])
     if os.getenv("TEST_DATABASE_URL_SYNC"):
         os.environ.setdefault("DATABASE_URL_SYNC", os.environ["TEST_DATABASE_URL_SYNC"])
-    os.environ.setdefault("JWT_SECRET", "test-secret")
+    os.environ.setdefault("JWT_SECRET", "test-secret-for-integration-testing-min-32-chars")
 
 from app.core.database import Base
 
