@@ -11,3 +11,4 @@ uploads/*
 *.egg-info/
 dist/
 build/
+.codewhale
