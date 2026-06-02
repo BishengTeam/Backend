@@ -13,6 +13,7 @@ from app.schemas.admin_quiz import (
     AdminQuizCategoryUpdate,
     AdminQuizImportJsonRequest,
     AdminQuizQuestionCreate,
+    AdminQuizQuestionResponse,
     AdminQuizQuestionUpdate,
 )
 from app.schemas.common import PaginatedData
@@ -20,6 +21,48 @@ from app.schemas.quiz import QuizCategoryResponse, QuizQuestionResponse
 
 
 class AdminQuizService:
+
+    # ── Category queries ──
+
+    async def list_categories(self) -> list[QuizCategoryResponse]:
+        async with get_db_ctx() as db:
+            result = await db.execute(
+                select(QuizCategory).order_by(QuizCategory.parent_id.asc().nullsfirst(), QuizCategory.id.asc())
+            )
+            categories = result.scalars().all()
+        return [QuizCategoryResponse.model_validate(c) for c in categories]
+
+    # ── Question queries ──
+
+    async def list_questions(
+        self,
+        *,
+        category_id: int | None = None,
+        question_type: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> PaginatedData[AdminQuizQuestionResponse]:
+        async with get_db_ctx() as db:
+            base = select(QuizQuestion)
+            if category_id is not None:
+                base = base.where(QuizQuestion.category_id == category_id)
+            if question_type is not None:
+                base = base.where(QuizQuestion.question_type == question_type)
+
+            count_stmt = select(func.count()).select_from(base.subquery())
+            total = (await db.execute(count_stmt)).scalar() or 0
+
+            result = await db.execute(
+                base.order_by(QuizQuestion.id.desc()).offset((page - 1) * page_size).limit(page_size)
+            )
+            questions = result.scalars().all()
+
+        return PaginatedData[AdminQuizQuestionResponse](
+            items=[AdminQuizQuestionResponse.model_validate(q) for q in questions],
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
 
     # ── Category CRUD ──
 

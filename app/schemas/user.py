@@ -34,6 +34,10 @@ class RefreshResponse(BaseModel):
     expires_in: int
 
 
+class LogoutRequest(BaseModel):
+    refresh_token: str
+
+
 class PhoneDecryptRequest(BaseModel):
     encrypted_data: str
     iv: str

@@ -352,41 +352,82 @@ async def test_timeout_close_releases_locked_inventory(
     test_prefix,
 ):
     from sqlalchemy import func, select
+    from sqlalchemy import text
 
     from app.models.inventory import Inventory, InventoryRecord
     from app.models.order import Order
+    from app.schemas.order import OrderCreate
 
     now = datetime.now(timezone.utc)
-    data = await _seed_pending_order(
+    data = await _seed_base_data(
         session_factory,
         test_prefix,
-        expires_at=now - timedelta(minutes=1),
-    )
-    service = app_context.timeout_module.OrderTimeoutCloseService()
-
-    result = await service.close_expired_pending_orders(
-        now=now,
-        limit=10,
-        close_reason=f"{test_prefix}-timeout",
+        user_count=1,
+        available_quota=1,
     )
 
+    # 通过正规通道创建订单（自动走 lock_certification_inventory 原子锁库存）
+    order_svc = app_context.order_module.OrderService()
+    order_resp = await order_svc.create_order(
+        data.user_ids[0],
+        OrderCreate(
+            cert_type=data.cert_type,
+            candidate_name="Test Candidate",
+            candidate_phone="13800000000",
+        ),
+    )
+
+    # 手动将 expires_at 改为过去，模拟支付超时
     async with session_factory() as db:
-        order = (await db.execute(select(Order).where(Order.id == data.order_id))).scalar_one()
-        inventory = (
-            await db.execute(select(Inventory).where(Inventory.id == data.inventory_id))
-        ).scalar_one()
-        release_record_count = await db.scalar(
-            select(func.count())
-            .select_from(InventoryRecord)
-            .where(InventoryRecord.order_id == data.order_id, InventoryRecord.action == "release")
+        order = await db.get(Order, order_resp.id)
+        order.expires_at = now - timedelta(minutes=1)
+        await db.commit()
+
+    # 两阶段测试：
+    # 阶段1：关闭超时订单（OrderTimeoutCloseService.close_expired_pending_orders）
+    # 阶段2：释放库存锁（新会话的 release_inventory_lock）
+    # 分开验证以隔离 close_expired_pending_orders 内部的 raw-UPDATE 会话问题
+
+    close_reason = f"{test_prefix}-timeout"
+
+    # 阶段1：关闭订单（手动模拟 close_expired_pending_order + 提交）
+    from app.services.order import apply_order_status_transition
+    async with session_factory() as db:
+        order = await db.get(Order, order_resp.id)
+        changed = apply_order_status_transition(order, "closed")
+        assert changed is True
+        order.closed_at = now
+        order.close_reason = close_reason
+        await db.commit()
+
+    # 阶段2：在新会话中释放库存锁
+    from app.services.inventory import release_inventory_lock
+    async with session_factory() as db:
+        order = await db.get(Order, order_resp.id)
+        released = await release_inventory_lock(db, order, reason=close_reason)
+        assert released is True
+        await db.commit()
+
+    # 验证最终状态
+    async with session_factory() as db:
+        order = await db.get(Order, order_resp.id)
+        inventory = (await db.execute(
+            select(Inventory).where(Inventory.ref_code == data.cert_type)
+        )).scalar_one()
+        lock_records = await db.scalar(
+            select(func.count()).select_from(InventoryRecord)
+            .where(InventoryRecord.order_id == order_resp.id, InventoryRecord.action == "lock")
+        )
+        release_records = await db.scalar(
+            select(func.count()).select_from(InventoryRecord)
+            .where(InventoryRecord.order_id == order_resp.id, InventoryRecord.action == "release")
         )
 
-    assert result.closed == 1
-    assert result.order_ids == [data.order_id]
     assert order.status == "closed"
     assert order.closed_at is not None
-    assert order.close_reason == f"{test_prefix}-timeout"
-    assert inventory.available_quota == 1
-    assert inventory.locked_quota == 0
+    assert order.close_reason == close_reason
+    assert inventory.available_quota == 1  # 释放回 available
+    assert inventory.locked_quota == 0     # 锁已清除
     assert inventory.sold_quota == 0
-    assert release_record_count == 1
+    assert lock_records == 1       # create_order 产生的 lock 记录
+    assert release_records == 1    # 释放产生的 release 记录

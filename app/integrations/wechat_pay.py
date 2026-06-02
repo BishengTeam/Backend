@@ -49,7 +49,9 @@ class WechatPayClient:
         params["sign"] = self._sign(params)
 
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0),
+            ) as client:
                 response = await client.post(
                     WECHAT_UNIFIED_ORDER_URL,
                     content=self._to_xml(params),

@@ -9,12 +9,12 @@ from app.middleware.error_handler import (
     validation_exception_handler,
 )
 from app.middleware.request_id import RequestIDMiddleware
-from app.middleware.security import SecurityMiddleware
+from app.middleware.security import SecureHeadersMiddleware
 
 
 def setup_middleware(app: FastAPI) -> None:
     setup_cors(app)
-    app.add_middleware(SecurityMiddleware)
+    app.add_middleware(SecureHeadersMiddleware)
     app.add_middleware(RequestIDMiddleware)
     app.add_exception_handler(AppException, app_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)

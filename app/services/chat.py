@@ -1,8 +1,11 @@
 import json
+import logging
 import uuid
 from typing import AsyncGenerator
 
 from sqlalchemy import func, select
+
+logger = logging.getLogger(__name__)
 
 from app.core.config import settings
 from app.core.database import get_db_ctx
@@ -61,6 +64,7 @@ class ChatService:
         except BusinessException as exc:
             yield f"data: {json.dumps({'error': exc.message, 'session_id': session_id}, ensure_ascii=False)}\n\n"
         except Exception:
+            logger.exception("Chat stream error for user_id=%s session=%s", user_id, session_id)
             yield f"data: {json.dumps({'error': 'Service unavailable, please retry', 'session_id': session_id}, ensure_ascii=False)}\n\n"
         finally:
             await self._save_context(session_id, context)
@@ -103,6 +107,7 @@ class ChatService:
                         Conversation.user_id == user_id,
                         Conversation.session_id == session_id,
                     )
+                    .with_for_update()
                 )
             ).scalar_one_or_none()
             if conv is None:

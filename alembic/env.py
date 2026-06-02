@@ -1,7 +1,7 @@
 from logging.config import fileConfig
 import os
 
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import pool
 
 from alembic import context
 
@@ -10,37 +10,27 @@ if os.getenv("TEST_DATABASE_URL") or os.getenv("TEST_DATABASE_URL_SYNC"):
         os.environ.setdefault("DATABASE_URL", os.environ["TEST_DATABASE_URL"])
     if os.getenv("TEST_DATABASE_URL_SYNC"):
         os.environ.setdefault("DATABASE_URL_SYNC", os.environ["TEST_DATABASE_URL_SYNC"])
-    os.environ.setdefault("JWT_SECRET", "test-secret")
+    os.environ.setdefault("JWT_SECRET", "test-secret-for-integration-testing-min-32-chars")
 
 from app.core.database import Base
 
 # Import all models so Base.metadata knows about them
-import app.models.admin_user  # noqa: F401
-import app.models.user  # noqa: F401
-import app.models.zone  # noqa: F401
-import app.models.order  # noqa: F401
-import app.models.conversation  # noqa: F401
-import app.models.price_config  # noqa: F401
-import app.models.certification  # noqa: F401
-import app.models.course  # noqa: F401
-import app.models.inventory  # noqa: F401
-import app.models.quiz  # noqa: F401
-import app.models.points  # noqa: F401
-import app.models.coupon  # noqa: F401
-import app.models.agreement  # noqa: F401
-import app.models.competition  # noqa: F401
-import app.models.ticket  # noqa: F401
-import app.models.banner  # noqa: F401
-import app.models.quick_question  # noqa: F401
+# models/__init__.py is the single source of truth — it imports every model class
+import app.models  # noqa: F401
 
 config = context.config
+
+# 优先从 pydantic Settings 获取已组装的 URL（含 URL 编码的密码），不在 env var 中
+from app.core.config import settings  # noqa: E402
 
 database_url = (
     os.getenv("TEST_DATABASE_URL_SYNC")
     or os.getenv("DATABASE_URL_SYNC")
+    or settings.DATABASE_URL_SYNC
     or config.get_main_option("sqlalchemy.url")
 )
-config.set_main_option("sqlalchemy.url", database_url)
+# 不存入 configparser，避免 %40 等 URL 编码被误解析为插值语法
+_migration_db_url = database_url
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -49,9 +39,8 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url,
+        url=_migration_db_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -61,11 +50,8 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    from sqlalchemy import create_engine
+    connectable = create_engine(_migration_db_url, poolclass=pool.NullPool)
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():

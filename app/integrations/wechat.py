@@ -6,6 +6,7 @@ import httpx
 from Crypto.Cipher import AES
 
 from app.core.config import settings
+from app.core.exceptions import ThirdPartyException
 from app.core.redis import redis_client
 
 WECHAT_CODE2SESSION_URL = "https://api.weixin.qq.com/sns/jscode2session"
@@ -20,7 +21,9 @@ class WechatClient:
         self.secret = settings.WECHAT_SECRET
 
     async def code2session(self, code: str) -> dict:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0),
+        ) as client:
             resp = await client.get(
                 WECHAT_CODE2SESSION_URL,
                 params={
@@ -33,7 +36,7 @@ class WechatClient:
             resp.raise_for_status()
             data = resp.json()
             if "errcode" in data and data["errcode"] != 0:
-                raise Exception(f"微信 code2session 失败: {data.get('errmsg', 'unknown')}")
+                raise ThirdPartyException(f"微信 code2session 失败: {data.get('errmsg', 'unknown')}")
             return data
 
     async def get_access_token(self) -> str:
@@ -48,7 +51,9 @@ class WechatClient:
                 if cached:
                     return cached
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0),
+            ) as client:
                 resp = await client.get(
                     WECHAT_TOKEN_URL,
                     params={

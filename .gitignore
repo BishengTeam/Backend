@@ -11,4 +11,8 @@ uploads/*
 *.egg-info/
 dist/
 build/
+<<<<<<< HEAD
 .codewhale
+=======
+.deepseek
+>>>>>>> bb123c7769a79e1125654aa6c6e6da6c3c37adec

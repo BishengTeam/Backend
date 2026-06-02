@@ -33,7 +33,9 @@ class DifyChatBackend(ChatBackend):
     async def send_message(self, user_id: int, message: str, context: list[dict]) -> str:
         payload = self._payload(user_id=user_id, message=message, response_mode="blocking")
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0),
+            ) as client:
                 response = await client.post(self._chat_url, headers=self._headers, json=payload)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
