@@ -60,6 +60,16 @@ class Settings(BaseSettings):
             raise ValueError("JWT_SECRET must not be a default/placeholder value")
         return v
 
+    @field_validator("APP_DEBUG")
+    @classmethod
+    def validate_debug_in_production(cls, v: bool, info) -> bool:
+        env = info.data.get("APP_ENV", "")
+        if env == "production" and v:
+            import warnings
+            warnings.warn("APP_DEBUG forced to False in production environment", UserWarning)
+            return False
+        return v
+
     WECHAT_APPID: str = ""
     WECHAT_SECRET: str = ""
 
@@ -73,6 +83,8 @@ class Settings(BaseSettings):
     DIFY_API_KEY: str = ""
 
     LOGIN_POSTER_URL: str | None = None
+
+    CORS_ORIGINS: list[str] = []
 
     UPLOAD_DIR: str = "./uploads"
     STORAGE_TYPE: str = "local"

@@ -8,6 +8,7 @@ from sqlalchemy import text
 
 from app.api import router as api_router
 from app.api.admin import router as admin_router
+from app.api.agreement import router as agreement_router
 from app.core.config import settings
 from app.core.database import engine, get_db_ctx
 from app.core.redis import redis_client
@@ -50,6 +51,7 @@ app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
 app.include_router(api_router)
 app.include_router(admin_router)
+app.include_router(agreement_router)
 
 
 @app.get("/health")

@@ -39,6 +39,13 @@ async def my_courses(
     return success(data=result)
 
 
+@router.get("/categories", response_model=APIResponse[list[str]])
+async def list_categories() -> APIResponse[list[str]]:
+    """获取所有不重复的课程类目"""
+    result = await CourseService().list_categories()
+    return success(data=result)
+
+
 @router.get("/{course_id}", response_model=APIResponse[CourseDetailResponse])
 async def get_course(
     course_id: int = Path(..., description="课程 ID"),

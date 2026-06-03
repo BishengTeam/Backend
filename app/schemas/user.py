@@ -64,3 +64,36 @@ class UserIdentityResponse(BaseModel):
     created_at: str = Field(..., description="创建时间，ISO 8601")
 
     model_config = {"from_attributes": True}
+
+
+class UserProfileDetail(BaseModel):
+    id: int
+    openid: str
+    phone: str | None = None
+    email: str | None = None
+    real_name: str | None = None
+    id_card: str | None = None
+    user_type: str | None = None
+    gender: str | None = None
+    education: str | None = None
+    school: str | None = None
+    major: str | None = None
+    organization: str | None = None
+    identity_status: str | None = None
+    created_at: datetime | str
+
+    model_config = {"from_attributes": True}
+
+
+class UserProfileUpdate(BaseModel):
+    phone: str | None = Field(None, min_length=11, max_length=11, description="手机号")
+    email: str | None = Field(None, max_length=128, description="邮箱")
+    gender: str | None = Field(None, max_length=8, description="性别")
+    education: str | None = Field(None, max_length=32, description="学历")
+    school: str | None = Field(None, max_length=128, description="学校")
+    major: str | None = Field(None, max_length=128, description="专业")
+    organization: str | None = Field(None, max_length=256, description="单位")
+
+
+class UserUnbindRequest(BaseModel):
+    type: Literal["phone", "wechat"] = Field(..., description="解绑类型：phone 手机号 / wechat 微信")

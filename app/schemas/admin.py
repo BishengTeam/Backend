@@ -27,6 +27,8 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
     "customer_service": [
         "dashboard:view",
         "user:list",
+        "user:write",
+        "user:delete",
         "order:list",
     ],
     "finance": [
@@ -43,6 +45,8 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
 ALL_PERMISSIONS = [
     "dashboard:view",
     "user:list",
+    "user:write",
+    "user:delete",
     "order:list",
     "order:write",
     "quiz:list",

@@ -3,8 +3,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.exceptions import BusinessException, ForbiddenException, UnauthorizedException
-from app.core.security import decode_access_token
+from app.core.exceptions import AppException, BusinessException, ForbiddenException, UnauthorizedException
+from app.core.security import decode_access_token, is_token_revoked
 from app.models.user import User
 from app.models.user_identity import UserIdentity
 from app.schemas.admin import ROLE_PERMISSIONS
@@ -20,6 +20,8 @@ async def get_current_user(
     try:
         payload = decode_access_token(token)
     except Exception:
+        raise UnauthorizedException("登录已过期，请重新登录")
+    if await is_token_revoked(token):
         raise UnauthorizedException("登录已过期，请重新登录")
     user_id = payload.get("user_id")
     if user_id is None:
@@ -45,6 +47,8 @@ async def get_current_admin(
         payload = decode_access_token(token)
     except Exception:
         raise UnauthorizedException("登录已过期，请重新登录")
+    if await is_token_revoked(token):
+        raise UnauthorizedException("登录已过期，请重新登录")
     if payload.get("type") != "admin":
         raise UnauthorizedException("请使用管理员账号登录")
     admin_id = payload.get("admin_id")
@@ -56,6 +60,18 @@ async def get_current_admin(
     if not admin.is_active:
         raise UnauthorizedException("账号已被禁用")
     return admin
+
+
+async def get_current_user_optional(
+    authorization: str | None = Header(None),
+    db: AsyncSession = Depends(get_db),
+) -> User | None:
+    if not authorization:
+        return None
+    try:
+        return await get_current_user(authorization=authorization, db=db)
+    except AppException:
+        return None
 
 
 async def require_identity(

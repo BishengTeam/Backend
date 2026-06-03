@@ -42,6 +42,16 @@ class CourseService:
                 raise NotFoundException("课程")
             return CourseDetailResponse.model_validate(course)
 
+    async def list_categories(self) -> list[str]:
+        async with get_db_ctx() as db:
+            result = await db.execute(
+                select(Course.category)
+                .where(Course.is_active == True)
+                .distinct()
+                .order_by(Course.category)
+            )
+            return [row[0] for row in result.all()]
+
     async def enroll(self, user_id: int, data: CourseEnrollRequest) -> CourseEnrollmentResponse:
         async with get_db_ctx() as db:
             course = await db.get(Course, data.course_id)

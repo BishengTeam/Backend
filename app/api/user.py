@@ -7,6 +7,9 @@ from app.schemas.user import (
     PhoneDecryptRequest,
     UserIdentityCreate,
     UserIdentityResponse,
+    UserProfileDetail,
+    UserProfileUpdate,
+    UserUnbindRequest,
 )
 from app.services.user import UserService
 
@@ -49,3 +52,32 @@ async def get_identity(
     """查询实名认证状态"""
     result = await UserService().get_identity(current_user.id)
     return success(data=result)
+
+
+@router.get("/profile", response_model=APIResponse[UserProfileDetail])
+async def get_profile(
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[UserProfileDetail]:
+    """获取用户个人信息"""
+    result = await UserService().get_profile(current_user.id)
+    return success(data=result)
+
+
+@router.put("/profile", response_model=APIResponse[UserProfileDetail])
+async def update_profile(
+    body: UserProfileUpdate,
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[UserProfileDetail]:
+    """编辑个人信息（重新绑定手机号）"""
+    result = await UserService().update_profile(current_user.id, body)
+    return success(data=result)
+
+
+@router.post("/unbind", response_model=APIResponse)
+async def unbind(
+    body: UserUnbindRequest,
+    current_user: User = Depends(get_current_user),
+) -> APIResponse:
+    """解绑手机号/微信"""
+    await UserService().unbind(current_user.id, body.type)
+    return success(message="解绑成功")

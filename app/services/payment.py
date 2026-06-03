@@ -135,10 +135,35 @@ class PaymentService:
             )
 
     async def handle_callback(self, data: PaymentCallbackRequest) -> PaymentCallbackResponse:
-        payload = data.model_dump(mode="json", exclude_none=True)
-        if not self.wechat_pay.verify_signature(payload):
+        """DEPRECATED: 使用 handle_callback_raw 替代，该方法因 Pydantic extra='ignore' 会丢字段导致签名验证失败。"""
+        return await self._handle_callback_inner(data)
+
+    async def handle_callback_raw(self, raw_body: bytes) -> PaymentCallbackResponse:
+        # 1. 用 WechatPayClient._from_xml 解析原始 XML → dict（保留所有字段）
+        data = self.wechat_pay._from_xml(raw_body.decode("utf-8"))
+
+        # 2. 用完整 dict 验证签名
+        if not self.wechat_pay.verify_signature(data):
             raise ThirdPartyException("微信支付回调签名验证失败")
 
+        # 3. 将关键字段映射到 PaymentCallbackRequest
+        time_end = data.get("time_end")
+        paid_at = None
+        if time_end:
+            paid_at = datetime.strptime(time_end, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+
+        callback_data = PaymentCallbackRequest(
+            out_trade_no=data.get("out_trade_no", ""),
+            transaction_id=data.get("transaction_id"),
+            trade_state=data.get("trade_state", "SUCCESS"),
+            total_fee=int(data["total_fee"]) if data.get("total_fee") else None,
+            paid_at=paid_at,
+            sign=data.get("sign"),
+        )
+
+        return await self._handle_callback_inner(callback_data)
+
+    async def _handle_callback_inner(self, data: PaymentCallbackRequest) -> PaymentCallbackResponse:
         async with get_db_ctx() as db:
             order = (
                 await db.execute(

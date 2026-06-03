@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Header, Request
 
+from app.core.security import revoke_token
 from app.middleware.auth import get_current_admin
 from app.middleware.rate_limit import limiter
 from app.schemas.admin import ROLE_PERMISSIONS, AdminInfo, AdminLoginRequest, AdminLoginResponse, AdminMeResponse
@@ -27,6 +28,9 @@ async def login(request: Request, body: AdminLoginRequest) -> APIResponse[AdminL
 
 
 @router.post("/logout", response_model=APIResponse)
-async def logout():
-    """退出登录（JWT 无状态，客户端自行清除 token）"""
+async def logout(authorization: str = Header(...)):
+    """退出登录，将 token 加入撤销黑名单"""
+    if authorization.startswith("Bearer "):
+        token = authorization[7:]
+        await revoke_token(token)
     return success(message="已退出登录")

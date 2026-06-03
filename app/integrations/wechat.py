@@ -43,7 +43,7 @@ class WechatClient:
         cached = await redis_client.get(ACCESS_TOKEN_CACHE_KEY)
         if cached:
             return cached
-        acquired = await redis_client.setnx(ACCESS_TOKEN_LOCK_KEY, "1")
+        acquired = await redis_client.set(ACCESS_TOKEN_LOCK_KEY, "1", nx=True, ex=10)
         if not acquired:
             for _ in range(30):
                 await asyncio.sleep(0.1)

@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.core.exceptions import ThirdPartyException
 
 WECHAT_UNIFIED_ORDER_URL = "https://api.mch.weixin.qq.com/pay/unifiedorder"
+WECHAT_REFUND_URL = "https://api.mch.weixin.qq.com/secapi/pay/refund"
 WECHAT_SIGN_TYPE = "MD5"
 
 
@@ -70,6 +71,53 @@ class WechatPayClient:
         if not prepay_id:
             raise ThirdPartyException("Wechat unified order did not return prepay_id")
         return self._build_jsapi_params(prepay_id=prepay_id, nonce_str=nonce_str)
+
+    async def refund(
+        self,
+        *,
+        out_trade_no: str,
+        out_refund_no: str,
+        total_fee: int,
+        refund_fee: int,
+    ) -> dict[str, str]:
+        if not self._is_configured():
+            raise ThirdPartyException("Wechat Pay configuration is incomplete")
+
+        nonce_str = self._nonce()
+        params: dict[str, Any] = {
+            "appid": self.appid,
+            "mch_id": self.mch_id,
+            "nonce_str": nonce_str,
+            "out_trade_no": out_trade_no,
+            "out_refund_no": out_refund_no,
+            "total_fee": total_fee,
+            "refund_fee": refund_fee,
+        }
+        params["sign"] = self._sign(params)
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0),
+            ) as client:
+                response = await client.post(
+                    WECHAT_REFUND_URL,
+                    content=self._to_xml(params),
+                    headers={"Content-Type": "text/xml"},
+                )
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise ThirdPartyException(f"Wechat refund request failed: {exc}") from exc
+
+        data = self._from_xml(response.text)
+        if data.get("return_code") != "SUCCESS":
+            raise ThirdPartyException(
+                f"Wechat refund failed: {data.get('return_msg', 'unknown')}"
+            )
+        if data.get("result_code") != "SUCCESS":
+            raise ThirdPartyException(
+                f"Wechat refund failed: {data.get('err_code_des', 'unknown')}"
+            )
+        return data
 
     def verify_signature(self, payload: dict[str, Any]) -> bool:
         sign = payload.get("sign")

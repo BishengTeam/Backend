@@ -1,9 +1,10 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Path, Query, Request
 from fastapi.responses import Response
 
 from app.middleware.auth import require_permission
+from app.middleware.rate_limit import limiter
 from app.schemas.admin import AdminBatchDeleteRequest, AdminUserFilter, AdminUserListItem, AdminUserStatusToggle, AdminUserUpdate
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.services.admin_user import AdminUserService
@@ -71,9 +72,11 @@ async def toggle_user_status(
 
 
 @router.post("/batch-delete", response_model=APIResponse[int])
+@limiter.limit("3/minute")
 async def batch_delete_users(
+    request: Request,
     body: AdminBatchDeleteRequest,
-    _admin=Depends(require_permission("user:list")),
+    _admin=Depends(require_permission("user:delete")),
 ):
     count = await AdminUserService().batch_delete(body.ids)
     return success(data=count, message=f"已删除 {count} 个用户")

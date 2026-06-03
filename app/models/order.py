@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -32,3 +32,5 @@ class Order(Base, TimestampMixin):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     close_reason: Mapped[str | None] = mapped_column(String(128))
+    extra_data: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="按 cert_type 存的差异化报名数据")
+    attachments: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="上传材料 URL 列表")

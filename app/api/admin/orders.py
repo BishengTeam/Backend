@@ -1,9 +1,10 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Path, Query, Request
 from fastapi.responses import Response
 
 from app.middleware.auth import require_permission
+from app.middleware.rate_limit import limiter
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.order import OrderDetailResponse, OrderFilter, OrderResponse, OrderStatus
 from app.services.admin_order import AdminOrderService
@@ -63,7 +64,9 @@ async def get_order(
 
 
 @router.post("/{order_id}/refund", response_model=APIResponse[OrderDetailResponse])
+@limiter.limit("10/minute")
 async def refund_order(
+    request: Request,
     order_id: int = Path(..., description="订单 ID"),
     _admin=Depends(require_permission("order:write")),
 ) -> APIResponse[OrderDetailResponse]:

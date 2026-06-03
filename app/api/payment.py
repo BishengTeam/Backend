@@ -1,10 +1,9 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.middleware.auth import get_current_user
 from app.models.user import User
 from app.schemas.common import APIResponse, success
 from app.schemas.payment import (
-    PaymentCallbackRequest,
     PaymentCallbackResponse,
     PaymentPrepayRequest,
     PaymentPrepayResponse,
@@ -25,7 +24,8 @@ async def prepay(
 
 
 @router.post("/callback", response_model=APIResponse[PaymentCallbackResponse])
-async def payment_callback(body: PaymentCallbackRequest) -> APIResponse[PaymentCallbackResponse]:
+async def payment_callback(request: Request) -> APIResponse[PaymentCallbackResponse]:
     """支付回调通知"""
-    result = await PaymentService().handle_callback(body)
+    raw_body = await request.body()
+    result = await PaymentService().handle_callback_raw(raw_body)
     return success(data=result)

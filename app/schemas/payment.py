@@ -32,6 +32,8 @@ class PaymentPrepayResponse(BaseModel):
 
 
 class PaymentCallbackRequest(BaseModel):
+    model_config = {"extra": "allow"}
+
     out_trade_no: str = Field(..., min_length=1, max_length=64, description="商户订单号")
     transaction_id: str | None = Field(None, max_length=64, description="微信支付交易号")
     trade_state: PaymentTradeState = Field("SUCCESS", description="微信支付交易状态")

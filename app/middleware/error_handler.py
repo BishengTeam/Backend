@@ -1,4 +1,5 @@
 import logging
+import re
 import traceback
 
 from fastapi import Request
@@ -9,6 +10,21 @@ from app.core.config import settings
 from app.core.exceptions import AppException
 
 logger = logging.getLogger(__name__)
+_PROJECT_ROOT = "/home/bisheng/work/weMiniApp/Backend"
+_SQL_PATTERN = re.compile(
+    r"\b(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|FROM|WHERE|JOIN|INTO|VALUES|SET)\b",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_traceback(tb: str) -> list[str]:
+    """Sanitize traceback by replacing project paths and stripping SQL fragments."""
+    lines: list[str] = []
+    for line in tb.split("\n"):
+        line = line.replace(_PROJECT_ROOT, "<project_root>")
+        if not _SQL_PATTERN.search(line):
+            lines.append(line)
+    return lines
 
 
 async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
@@ -38,6 +54,10 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
         request.url.path,
     )
     if settings.APP_DEBUG:
+        tb_text = traceback.format_exc()
+        exc_msg = str(exc)
+        if _SQL_PATTERN.search(exc_msg):
+            exc_msg = "[SQL content redacted]"
         return JSONResponse(
             status_code=500,
             content={
@@ -45,8 +65,8 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
                 "message": "服务器内部错误",
                 "detail": {
                     "exception_type": type(exc).__name__,
-                    "exception_message": str(exc),
-                    "traceback": traceback.format_exc().split("\n"),
+                    "exception_message": exc_msg,
+                    "traceback": _sanitize_traceback(tb_text),
                 },
             },
         )

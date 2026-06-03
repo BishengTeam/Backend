@@ -14,6 +14,8 @@ class OrderCreate(BaseModel):
     candidate_name: str = Field(..., min_length=1, max_length=64, description="考生姓名")
     candidate_phone: str = Field(..., min_length=1, max_length=20, description="考生手机号")
     candidate_idcard: str | None = Field(None, max_length=20, description="考生身份证号")
+    extra_data: dict | None = Field(None, description="差异化报名数据，键名取决于 cert_type")
+    attachments: list[str] | None = Field(None, description="上传材料 URL 列表")
 
     @field_validator("candidate_phone")
     @classmethod
@@ -54,6 +56,8 @@ class OrderResponse(BaseModel):
     closed_at: datetime | None = Field(None, description="订单关闭时间，ISO 8601")
     close_reason: str | None = Field(None, description="订单关闭原因")
     created_at: datetime
+    extra_data: dict | None = Field(None, description="差异化报名数据")
+    attachments: list[str] | None = Field(None, description="上传材料 URL 列表")
 
     model_config = {"from_attributes": True}
 
@@ -75,6 +79,8 @@ class OrderDetailResponse(BaseModel):
     close_reason: str | None = Field(None, description="订单关闭原因")
     created_at: datetime
     updated_at: datetime
+    extra_data: dict | None = Field(None, description="差异化报名数据")
+    attachments: list[str] | None = Field(None, description="上传材料 URL 列表")
 
     model_config = {"from_attributes": True}
 

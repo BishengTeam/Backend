@@ -94,6 +94,89 @@ class UserService:
                 raise NotFoundException("实名认证信息")
             return _mask_identity(identity)
 
+    async def get_profile(self, user_id: int) -> "UserProfileDetail":
+        """获取用户个人信息，含脱敏手机号、身份证号和扩展字段"""
+        from app.schemas.user import UserProfileDetail
+
+        async with get_db_ctx() as db:
+            user = await db.get(User, user_id)
+            if user is None or not user.is_active:
+                raise NotFoundException("用户")
+            identity = (
+                await db.execute(
+                    select(UserIdentity).where(UserIdentity.user_id == user_id)
+                )
+            ).scalar_one_or_none()
+
+            phone = user.phone
+            if phone and len(phone) >= 7:
+                phone = phone[:3] + "****" + phone[-4:]
+
+            id_card = None
+            if identity and identity.id_card_number:
+                idn = identity.id_card_number
+                id_card = idn[:4] + "**********" + idn[-4:] if len(idn) == 18 else "****"
+
+            return UserProfileDetail(
+                id=user.id,
+                openid=user.openid,
+                phone=phone,
+                email=identity.email if identity else None,
+                real_name=identity.real_name if identity else None,
+                id_card=id_card,
+                user_type=identity.user_type if identity else None,
+                gender=identity.gender if identity else None,
+                education=identity.education if identity else None,
+                school=identity.school if identity else None,
+                major=identity.major if identity else None,
+                organization=identity.organization if identity else None,
+                identity_status=identity.status if identity else None,
+                created_at=user.created_at.isoformat() if user.created_at else "",
+            )
+
+    async def update_profile(self, user_id: int, data: "UserProfileUpdate") -> "UserProfileDetail":
+        """编辑个人信息，含 edit_count 限制；只更新传入的字段"""
+        from app.schemas.user import UserProfileUpdate
+
+        async with get_db_ctx() as db:
+            user = await db.get(User, user_id)
+            if user is None or not user.is_active:
+                raise NotFoundException("用户")
+
+            identity = (
+                await db.execute(
+                    select(UserIdentity).where(UserIdentity.user_id == user_id)
+                )
+            ).scalar_one_or_none()
+
+            if identity and identity.edit_count >= MAX_IDENTITY_EDITS:
+                raise BusinessException("实名信息最多修改 3 次，已达上限")
+
+            update_data = data.model_dump(exclude_unset=True)
+
+            if "phone" in update_data:
+                user.phone = update_data.pop("phone")
+
+            if update_data and identity:
+                for key, value in update_data.items():
+                    setattr(identity, key, value)
+                identity.edit_count += 1
+
+            await db.commit()
+            await db.refresh(user)
+            return await self.get_profile(user_id)
+
+    async def unbind(self, user_id: int, unbind_type: str) -> None:
+        """解绑手机号或微信"""
+        if unbind_type == "wechat":
+            raise BusinessException("暂不支持解绑微信")
+        async with get_db_ctx() as db:
+            user = await db.get(User, user_id)
+            if user is None or not user.is_active:
+                raise NotFoundException("用户")
+            user.phone = None
+            await db.commit()
+
     async def decrypt_phone(self, user_id: int, encrypted_data: str, iv: str) -> str:
         session_key = await redis_client.get(f"{SESSION_KEY_PREFIX}{user_id}")
         if not session_key:
