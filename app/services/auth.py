@@ -6,8 +6,7 @@ from app.port.exceptions import UnauthorizedException
 from app.adapter.redis import redis_client, redis_get_safe, redis_setex_safe, redis_getdel_safe
 from app.adapter.security import create_access_token, create_refresh_token, decode_access_token
 from app.integrations.wechat import WechatClient
-from app.models.deleted_openid import DeletedOpenid
-from app.models.user import User
+from app.domain.user.src.index import DeletedOpenid, User
 from app.schemas.user import LoginResponse, RefreshResponse, UserProfile
 
 REFRESH_TOKEN_PREFIX = "refresh_token:"

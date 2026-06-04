@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 
 from app.port.exceptions import NotFoundException
 from app.middleware.auth import get_current_user
-from app.models.user import User
+from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, success
 from app.schemas.upload import UploadResponse
 from app.services.upload import UploadService

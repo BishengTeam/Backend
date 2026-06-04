@@ -11,7 +11,7 @@ from app.domain.order.src.index import (
     confirm_inventory_sale,
     release_inventory_lock,
 )
-from app.models.user import User
+from app.domain.user.src.index import User
 from app.schemas.payment import (
     PaymentCallbackRequest,
     PaymentCallbackResponse,

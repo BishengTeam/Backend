@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Path, Query
 from fastapi.responses import PlainTextResponse
 
 from app.middleware.auth import get_current_user
-from app.models.user import User
+from app.domain.user.src.index import User
 from app.schemas.certification import (
     CertificationDetailResponse,
     CertificationFilter,

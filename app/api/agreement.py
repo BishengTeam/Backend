@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Path, Query
 
 from app.middleware.auth import get_current_user
-from app.models.user import User
+from app.domain.user.src.index import User
 from app.schemas.agreement import AgreementCreate, AgreementResponse, AgreementSign
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.services.agreement import AgreementService

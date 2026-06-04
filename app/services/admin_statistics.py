@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
 from app.domain.order.src.index import Order
-from app.models.user import User
+from app.domain.user.src.index import User
 
 
 class AdminStatisticsService:

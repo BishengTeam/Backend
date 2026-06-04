@@ -6,7 +6,7 @@ import secrets
 from sqlalchemy import select
 
 from app.core.database import async_session_factory
-from app.models.admin_user import AdminUser
+from app.domain.user.src.index import AdminUser
 
 SALT_LENGTH = 32
 HASH_ITERATIONS = 600_000

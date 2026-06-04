@@ -2,7 +2,7 @@ from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import NotFoundException
-from app.models.admin_user import AdminUser, ADMIN_ROLES
+from app.domain.user.src.index import AdminUser, ADMIN_ROLES
 from app.schemas.admin_settings import AdminSettingsUserCreate, AdminSettingsUserListItem, AdminSettingsUserUpdate
 from app.schemas.common import PaginatedData
 from app.services.admin_auth import AdminAuthService

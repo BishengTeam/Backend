@@ -12,7 +12,7 @@ os.environ.setdefault('APP_ENV', 'development')
 from app.core.database import async_session_factory
 from app.core.redis import redis_client
 from app.core.security import decode_access_token, is_token_revoked
-from app.models.admin_user import AdminUser
+from app.domain.user.src.index import AdminUser
 from sqlalchemy import select
 
 

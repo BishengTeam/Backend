@@ -94,7 +94,7 @@ async def test_context(monkeypatch):
 
 async def test_batch_delete_soft_deletes_users(test_context):
     """Create 3 users, batch-delete them, verify is_deleted=True."""
-    from app.models.user import User
+    from app.domain.user.src.index import User
     from app.services.admin_user import AdminUserService
 
     factory, prefix = test_context
@@ -130,7 +130,7 @@ async def test_batch_delete_soft_deletes_users(test_context):
 
 async def test_export_users_returns_csv_with_header_and_data(test_context):
     """Create 2 users, export CSV, verify header and data rows."""
-    from app.models.user import User
+    from app.domain.user.src.index import User
     from app.services.admin_user import AdminUserService
 
     factory, prefix = test_context
@@ -169,7 +169,7 @@ async def test_export_users_returns_csv_with_header_and_data(test_context):
 async def test_get_user_orders_returns_order_list(test_context):
     """Create a user + order, then fetch orders via the admin service."""
     from app.domain.order.src.index import Order
-    from app.models.user import User
+    from app.domain.user.src.index import User
     from app.services.admin_user import AdminUserService
 
     factory, prefix = test_context
@@ -212,7 +212,7 @@ async def test_get_user_orders_returns_order_list(test_context):
 async def test_get_user_conversations_returns_session_list(test_context):
     """Create a user + conversation, then verify conversation fields."""
     from app.domain.community.src.index import Conversation
-    from app.models.user import User
+    from app.domain.user.src.index import User
     from app.services.admin_user import AdminUserService
 
     factory, prefix = test_context

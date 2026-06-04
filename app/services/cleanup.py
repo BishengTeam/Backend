@@ -9,11 +9,8 @@ from app.models.agreement import Agreement
 from app.domain.community.src.index import Collection, Conversation, Share
 from app.domain.certification.src.index import CompetitionReg, CourseEnrollment
 from app.domain.order.src.index import InventoryRecord, Order, UserCoupon
-from app.models.deleted_openid import DeletedOpenid
-from app.models.points import PointsHistory, UserPoints
 from app.models.ticket import Ticket
-from app.models.user import User
-from app.models.user_identity import UserIdentity
+from app.domain.user.src.index import DeletedOpenid, PointsHistory, User, UserIdentity, UserPoints
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,7 @@ from app.port.config import settings
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import UnauthorizedException
 from app.adapter.security import create_admin_access_token
-from app.models.admin_user import AdminUser
+from app.domain.user.src.index import AdminUser
 from app.policy.permissions import ROLE_PERMISSIONS
 from app.schemas.admin import AdminInfo, AdminLoginResponse
 

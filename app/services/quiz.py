@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import NotFoundException, ValidationException
 from app.domain.community.src.index import QuizCategory, QuizCheckin, QuizQuestion, QuizRecord
-from app.models.user import User
+from app.domain.user.src.index import User
 from app.schemas.common import PaginatedData
 from app.utils.quiz_helpers import (
     answer_to_storage,

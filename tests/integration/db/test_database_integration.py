@@ -193,7 +193,7 @@ class TestTableStructure:
 
 class TestUserCRUD:
     async def test_create_and_read(self, db_session):
-        from app.models.user import User
+        from app.domain.user.src.index import User
         user = User(openid="test_crud_001")
         db_session.add(user)
         await db_session.flush()
@@ -204,7 +204,7 @@ class TestUserCRUD:
         assert fetched.is_active is True
 
     async def test_openid_uniqueness(self, db_session):
-        from app.models.user import User
+        from app.domain.user.src.index import User
         db_session.add(User(openid="dup_test_001"))
         await db_session.flush()
         db_session.add(User(openid="dup_test_001"))
@@ -212,7 +212,7 @@ class TestUserCRUD:
             await db_session.flush()
 
     async def test_update_phone(self, db_session):
-        from app.models.user import User
+        from app.domain.user.src.index import User
         user = User(openid="phone_update_test")
         db_session.add(user)
         await db_session.flush()
@@ -222,7 +222,7 @@ class TestUserCRUD:
         assert fetched.phone == "13800138001"
 
     async def test_soft_delete(self, db_session):
-        from app.models.user import User
+        from app.domain.user.src.index import User
         user = User(openid="soft_delete_test")
         db_session.add(user)
         await db_session.flush()
@@ -234,7 +234,7 @@ class TestUserCRUD:
 
 class TestOrderCRUD:
     async def test_create_order_valid_statuses(self, db_session):
-        from app.models.user import User
+        from app.domain.user.src.index import User
         from app.domain.order.src.index import Order
         user = User(openid="order_status_user")
         db_session.add(user)
@@ -250,7 +250,7 @@ class TestOrderCRUD:
             assert order.id is not None
 
     async def test_rejects_invalid_status(self, db_session):
-        from app.models.user import User
+        from app.domain.user.src.index import User
         from app.domain.order.src.index import Order
         user = User(openid="bad_status_user")
         db_session.add(user)
@@ -265,7 +265,7 @@ class TestOrderCRUD:
             await db_session.flush()
 
     async def test_out_trade_no_unique(self, db_session):
-        from app.models.user import User
+        from app.domain.user.src.index import User
         from app.domain.order.src.index import Order
         user = User(openid="trade_no_user")
         db_session.add(user)
@@ -292,7 +292,7 @@ class TestCourseCRUD:
         assert fetched.title == "测试课程"
 
     async def test_enrollment(self, db_session):
-        from app.models.user import User
+        from app.domain.user.src.index import User
         from app.domain.certification.src.index import Course, CourseEnrollment
         user = User(openid="enroll_user")
         db_session.add(user)
@@ -335,7 +335,7 @@ class TestCertificationCRUD:
 
 class TestQuizCRUD:
     async def test_full_flow(self, db_session):
-        from app.models.user import User
+        from app.domain.user.src.index import User
         from app.domain.community.src.index import QuizCategory, QuizQuestion, QuizRecord
         user = User(openid="quiz_flow_user")
         db_session.add(user)
@@ -361,7 +361,7 @@ class TestQuizCRUD:
         assert record.is_wrong is False
 
     async def test_checkin(self, db_session):
-        from app.models.user import User
+        from app.domain.user.src.index import User
         from app.domain.community.src.index import QuizCheckin
         user = User(openid="checkin_user")
         db_session.add(user)
@@ -397,7 +397,7 @@ class TestQuickQuestionCRUD:
 
 class TestDeletedOpenidCRUD:
     async def test_create_and_uniqueness(self, db_session):
-        from app.models.deleted_openid import DeletedOpenid
+        from app.domain.user.src.index import DeletedOpenid
         db_session.add(DeletedOpenid(openid="deleted_001"))
         await db_session.flush()
         db_session.add(DeletedOpenid(openid="deleted_001"))
@@ -428,7 +428,7 @@ class TestPriceConfigCRUD:
 
 class TestConversationCRUD:
     async def test_create(self, db_session):
-        from app.models.user import User
+        from app.domain.user.src.index import User
         from app.domain.community.src.index import Conversation
         user = User(openid="conv_user")
         db_session.add(user)
@@ -450,7 +450,7 @@ class TestConversationCRUD:
 
 class TestConstraintEnforcement:
     async def test_user_identity_fk_enforced(self, db_session):
-        from app.models.user_identity import UserIdentity
+        from app.domain.user.src.index import UserIdentity
         identity = UserIdentity(
             user_id=99999, user_type="student", real_name="张三",
             id_card_number="11010519491231002X",

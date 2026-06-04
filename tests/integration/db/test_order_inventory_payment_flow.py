@@ -143,8 +143,7 @@ async def _seed_base_data(
 ) -> SimpleNamespace:
     from app.domain.certification.src.index import Certification
     from app.domain.order.src.index import Inventory, PriceConfig
-    from app.models.user import User
-    from app.models.user_identity import UserIdentity
+    from app.domain.user.src.index import User, UserIdentity
 
     cert_type = prefix
     total_quota = available_quota + locked_quota + sold_quota

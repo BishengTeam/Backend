@@ -58,7 +58,7 @@ class TestAdminAuthMe:
 
     async def test_me_returns_admin_info_and_permissions(self, test_client):
         """Verify /me returns correct AdminInfo and ROLE_PERMISSIONS for super_admin."""
-        from app.models.admin_user import AdminUser
+        from app.domain.user.src.index import AdminUser
 
         client, factory, prefix = test_client
 
@@ -86,7 +86,7 @@ class TestAdminAuthMe:
 
     async def test_me_returns_role_specific_permissions(self, test_client):
         """content_editor gets quiz:write but not order:write in /me."""
-        from app.models.admin_user import AdminUser
+        from app.domain.user.src.index import AdminUser
 
         client, factory, prefix = test_client
 
@@ -123,7 +123,7 @@ class TestAdminAuthMe:
         client, factory, prefix = test_client
 
         async with factory() as db:
-            from app.models.user import User
+            from app.domain.user.src.index import User
             user = User(openid=f"{prefix}_user", phone="13800000000")
             db.add(user)
             await db.flush()

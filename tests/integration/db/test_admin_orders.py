@@ -138,7 +138,7 @@ async def _cleanup_test_data(session_factory, prefix: str) -> None:
 
 
 async def _seed_user(session_factory, prefix: str) -> int:
-    from app.models.user import User
+    from app.domain.user.src.index import User
 
     async with session_factory() as db:
         user = User(openid=f"{prefix}-openid", phone="13800000001")

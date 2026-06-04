@@ -16,7 +16,7 @@ from app.domain.order.src.index import (
     validate_extra_data,
 )
 from app.domain.certification.src.index import Certification
-from app.models.user_identity import UserIdentity
+from app.domain.user.src.index import UserIdentity
 from app.schemas.common import PaginatedData
 from app.schemas.order import OrderCreate, OrderDetailResponse, OrderFilter, OrderResponse
 
