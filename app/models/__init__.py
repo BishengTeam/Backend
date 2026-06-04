@@ -3,14 +3,13 @@ from app.models.admin_user import AdminUser
 from app.models.agreement import Agreement
 from app.models.banner import Banner
 from app.domain.certification.src.index import Certification, CompetitionReg, Course, CourseEnrollment, Job, JobApplication
-from app.models.collection import Collection
-from app.models.conversation import Conversation
+from app.domain.community.src.index import (
+    Collection, Conversation, QuickQuestion,
+    QuizCategory, QuizCheckin, QuizQuestion, QuizRecord, Share,
+)
 from app.models.deleted_openid import DeletedOpenid
 from app.models.points import PointsHistory, UserPoints
 from app.domain.order.src.index import Coupon, Inventory, InventoryRecord, Order, PriceConfig, UserCoupon
-from app.models.quick_question import QuickQuestion
-from app.models.quiz import QuizCategory, QuizCheckin, QuizQuestion, QuizRecord
-from app.models.share import Share
 from app.models.ticket import Ticket
 from app.models.user import User
 from app.models.user_identity import UserIdentity

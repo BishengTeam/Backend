@@ -17,7 +17,7 @@ from app.models.banner import Banner
 from app.domain.certification.src.index import Certification, Course, CourseEnrollment
 from app.models.points import PointsHistory, UserPoints
 from app.domain.order.src.index import Coupon, Inventory, Order, PriceConfig, UserCoupon
-from app.models.quick_question import QuickQuestion
+from app.domain.community.src.index import QuickQuestion
 from app.models.user import User
 from app.models.user_identity import UserIdentity
 from app.models.zone import Zone

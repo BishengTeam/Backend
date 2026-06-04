@@ -336,7 +336,7 @@ class TestCertificationCRUD:
 class TestQuizCRUD:
     async def test_full_flow(self, db_session):
         from app.models.user import User
-        from app.models.quiz import QuizCategory, QuizQuestion, QuizRecord
+        from app.domain.community.src.index import QuizCategory, QuizQuestion, QuizRecord
         user = User(openid="quiz_flow_user")
         db_session.add(user)
         await db_session.flush()
@@ -362,7 +362,7 @@ class TestQuizCRUD:
 
     async def test_checkin(self, db_session):
         from app.models.user import User
-        from app.models.quiz import QuizCheckin
+        from app.domain.community.src.index import QuizCheckin
         user = User(openid="checkin_user")
         db_session.add(user)
         await db_session.flush()
@@ -375,7 +375,7 @@ class TestQuizCRUD:
         assert checkin.id is not None
 
     async def test_parent_child_category_fk(self, db_session):
-        from app.models.quiz import QuizCategory
+        from app.domain.community.src.index import QuizCategory
         parent = QuizCategory(name="父分类")
         db_session.add(parent)
         await db_session.flush()
@@ -387,7 +387,7 @@ class TestQuizCRUD:
 
 class TestQuickQuestionCRUD:
     async def test_create(self, db_session):
-        from app.models.quick_question import QuickQuestion
+        from app.domain.community.src.index import QuickQuestion
         q = QuickQuestion(question_text="什么是H3C?", category="认证")
         db_session.add(q)
         await db_session.flush()
@@ -429,7 +429,7 @@ class TestPriceConfigCRUD:
 class TestConversationCRUD:
     async def test_create(self, db_session):
         from app.models.user import User
-        from app.models.conversation import Conversation
+        from app.domain.community.src.index import Conversation
         user = User(openid="conv_user")
         db_session.add(user)
         await db_session.flush()

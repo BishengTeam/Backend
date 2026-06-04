@@ -85,7 +85,7 @@ async def _cleanup_quiz_data(session_factory, prefix: str) -> None:
 async def _create_category(session_factory, name: str) -> int:
     """Insert a quiz category and return its id."""
     async with session_factory() as db:
-        from app.models.quiz import QuizCategory
+        from app.domain.community.src.index import QuizCategory
         cat = QuizCategory(name=name)
         db.add(cat)
         await db.commit()
@@ -97,7 +97,7 @@ async def _create_question(session_factory, category_id: int, *, text: str, qtyp
                            answer: str = "A", options: dict | None = None) -> int:
     """Insert a quiz question and return its id."""
     async with session_factory() as db:
-        from app.models.quiz import QuizQuestion
+        from app.domain.community.src.index import QuizQuestion
         q = QuizQuestion(
             category_id=category_id,
             question_type=qtype,
@@ -130,7 +130,7 @@ async def test_batch_delete_questions(session_factory, test_prefix, patched_serv
 
     # Verify questions are gone
     async with session_factory() as db:
-        from app.models.quiz import QuizQuestion
+        from app.domain.community.src.index import QuizQuestion
         result = await db.execute(
             select(QuizQuestion).where(QuizQuestion.id.in_([qid1, qid2, qid3]))
         )
@@ -179,7 +179,7 @@ async def test_import_questions_json(session_factory, test_prefix, patched_servi
 
     # Verify questions exist in DB
     async with session_factory() as db:
-        from app.models.quiz import QuizQuestion
+        from app.domain.community.src.index import QuizQuestion
         result_set = await db.execute(
             select(QuizQuestion).where(QuizQuestion.category_id == cat_id)
         )

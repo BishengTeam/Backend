@@ -6,13 +6,11 @@ from sqlalchemy import delete, select, func, text
 from app.adapter.database import get_db_ctx
 from app.models.activity import ActivityRegistration
 from app.models.agreement import Agreement
-from app.models.collection import Collection
+from app.domain.community.src.index import Collection, Conversation, Share
 from app.domain.certification.src.index import CompetitionReg, CourseEnrollment
-from app.models.conversation import Conversation
 from app.domain.order.src.index import InventoryRecord, Order, UserCoupon
 from app.models.deleted_openid import DeletedOpenid
 from app.models.points import PointsHistory, UserPoints
-from app.models.share import Share
 from app.models.ticket import Ticket
 from app.models.user import User
 from app.models.user_identity import UserIdentity

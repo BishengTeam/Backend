@@ -2,7 +2,7 @@ from sqlalchemy import and_, func, select
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import NotFoundException
-from app.models.collection import Collection
+from app.domain.community.src.index import Collection
 from app.schemas.collection import CollectionCreate, CollectionResponse
 from app.schemas.common import PaginatedData
 

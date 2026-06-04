@@ -211,7 +211,7 @@ async def test_get_user_orders_returns_order_list(test_context):
 
 async def test_get_user_conversations_returns_session_list(test_context):
     """Create a user + conversation, then verify conversation fields."""
-    from app.models.conversation import Conversation
+    from app.domain.community.src.index import Conversation
     from app.models.user import User
     from app.services.admin_user import AdminUserService
 

@@ -439,8 +439,8 @@ def load_models_and_session_factory() -> sessionmaker:
     global QuizCategory, QuizQuestion
 
     from app.core.config import settings
-    from app.models.quiz import QuizCategory as LoadedQuizCategory
-    from app.models.quiz import QuizQuestion as LoadedQuizQuestion
+    from app.domain.community.src.index import QuizCategory as LoadedQuizCategory
+    from app.domain.community.src.index import QuizQuestion as LoadedQuizQuestion
 
     QuizCategory = LoadedQuizCategory
     QuizQuestion = LoadedQuizQuestion
