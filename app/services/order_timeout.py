@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app.core.database import get_db_ctx
-from app.core.exceptions import BusinessException
+from app.adapter.database import get_db_ctx
+from app.port.exceptions import BusinessException
 from app.models.order import Order
 from app.services.inventory import release_inventory_lock
 from app.services.order import apply_order_status_transition

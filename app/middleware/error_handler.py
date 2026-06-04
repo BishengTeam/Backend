@@ -6,11 +6,12 @@ from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.core.config import settings
-from app.core.exceptions import AppException
+from app.port.config import settings
+from app.port.exceptions import AppException
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
-_PROJECT_ROOT = "/home/bisheng/work/weMiniApp/Backend"
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
 _SQL_PATTERN = re.compile(
     r"\b(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|FROM|WHERE|JOIN|INTO|VALUES|SET)\b",
     re.IGNORECASE,

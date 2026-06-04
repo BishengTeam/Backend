@@ -5,9 +5,9 @@ import json
 import httpx
 from Crypto.Cipher import AES
 
-from app.core.config import settings
-from app.core.exceptions import ThirdPartyException
-from app.core.redis import redis_get_safe, redis_setex_safe, redis_client
+from app.port.config import settings
+from app.port.exceptions import ThirdPartyException
+from app.adapter.redis import redis_get_safe, redis_setex_safe, redis_client
 
 WECHAT_CODE2SESSION_URL = "https://api.weixin.qq.com/sns/jscode2session"
 WECHAT_TOKEN_URL = "https://api.weixin.qq.com/cgi-bin/token"

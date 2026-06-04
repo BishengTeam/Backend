@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app.core.database import get_db_ctx
+from app.adapter.database import get_db_ctx
 from app.models.activity import Activity
 from app.models.banner import Banner
 from app.models.certification import Certification

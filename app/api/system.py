@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Path, UploadFile, File
 
-from app.core.config import settings
+from app.port.config import settings
 from app.middleware.auth import get_current_user
 from app.models.user import User
 from app.schemas.common import APIResponse, success

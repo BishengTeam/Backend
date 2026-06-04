@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, Integer, func
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.database import Base
+from app.adapter.database import Base
 
 
 class TimestampMixin:

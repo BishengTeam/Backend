@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import BusinessException, ConflictException
+from app.port.exceptions import BusinessException, ConflictException
 from app.models.inventory import InventoryRecord
 from app.models.order import Order
 

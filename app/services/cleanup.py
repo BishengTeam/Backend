@@ -3,7 +3,7 @@ import logging
 
 from sqlalchemy import delete, select, func, text
 
-from app.core.database import get_db_ctx
+from app.adapter.database import get_db_ctx
 from app.models.activity import ActivityRegistration
 from app.models.agreement import Agreement
 from app.models.collection import Collection

@@ -1,10 +1,10 @@
 from sqlalchemy import select
 
-from app.core.config import settings
-from app.core.database import get_db_ctx
-from app.core.exceptions import UnauthorizedException
-from app.core.redis import redis_client, redis_get_safe, redis_setex_safe, redis_getdel_safe
-from app.core.security import create_access_token, create_refresh_token, decode_access_token
+from app.port.config import settings
+from app.adapter.database import get_db_ctx
+from app.port.exceptions import UnauthorizedException
+from app.adapter.redis import redis_client, redis_get_safe, redis_setex_safe, redis_getdel_safe
+from app.adapter.security import create_access_token, create_refresh_token, decode_access_token
 from app.integrations.wechat import WechatClient
 from app.models.deleted_openid import DeletedOpenid
 from app.models.user import User

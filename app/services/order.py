@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 
-from app.core.database import get_db_ctx
-from app.core.exceptions import BusinessException, ConflictException, NotFoundException
+from app.adapter.database import get_db_ctx
+from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.models.certification import Certification
 from app.models.order import Order
 from app.models.price_config import PriceConfig

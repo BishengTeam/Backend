@@ -3,7 +3,7 @@ import io
 
 from sqlalchemy import select, func, distinct
 
-from app.core.database import get_db_ctx
+from app.adapter.database import get_db_ctx
 from app.models.competition import CompetitionReg
 from app.schemas.competition import CompetitionSignupRequest
 

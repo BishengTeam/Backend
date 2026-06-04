@@ -3,8 +3,8 @@ from datetime import datetime, timedelta, timezone
 
 import jwt
 
-from app.core.config import settings
-from app.core.redis import redis_get_safe, redis_setex_safe
+from app.port.config import settings
+from app.adapter.redis import redis_get_safe, redis_setex_safe
 
 
 def create_access_token(user_id: int, openid: str) -> str:

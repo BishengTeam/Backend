@@ -1,7 +1,7 @@
 from sqlalchemy import func, select
 
-from app.core.database import get_db_ctx
-from app.core.exceptions import NotFoundException
+from app.adapter.database import get_db_ctx
+from app.port.exceptions import NotFoundException
 from app.models.zone import Zone
 from app.schemas.admin_zone import AdminZoneCreate, AdminZoneListItem, AdminZoneUpdate
 from app.schemas.common import PaginatedData

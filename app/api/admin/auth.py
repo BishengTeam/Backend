@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, Header, Request
 
-from app.core.security import revoke_token
+from app.adapter.security import revoke_token
 from app.middleware.auth import get_current_admin
 from app.middleware.rate_limit import limiter
-from app.schemas.admin import ROLE_PERMISSIONS, AdminInfo, AdminLoginRequest, AdminLoginResponse, AdminMeResponse
+from app.policy.permissions import ROLE_PERMISSIONS
+from app.schemas.admin import AdminInfo, AdminLoginRequest, AdminLoginResponse, AdminMeResponse
 from app.schemas.common import APIResponse, success
 from app.services.admin_auth import AdminAuthService
 

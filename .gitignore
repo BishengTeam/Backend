@@ -4,15 +4,13 @@ __pycache__/
 *.pyo
 .env.development
 .env
-uploads/*
-!uploads/.gitkeep
+data/storage/uploads/*
+!data/storage/uploads/.gitkeep
 .idea/
 .vscode/
 *.egg-info/
 dist/
 build/
-<<<<<<< HEAD
 .codewhale
-=======
 .deepseek
->>>>>>> bb123c7769a79e1125654aa6c6e6da6c3c37adec
+.pytest_cache/

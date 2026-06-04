@@ -3,7 +3,7 @@ from typing import AsyncGenerator, Any
 
 import httpx
 
-from app.core.exceptions import ThirdPartyException
+from app.port.exceptions import ThirdPartyException
 
 
 class ChatBackend(ABC):

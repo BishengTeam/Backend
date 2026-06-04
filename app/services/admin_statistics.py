@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 
-from app.core.database import get_db_ctx
+from app.adapter.database import get_db_ctx
 from app.models.order import Order
 from app.models.user import User
 

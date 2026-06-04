@@ -71,7 +71,7 @@ class TestAdminAuthMe:
     async def test_role_permissions_mapping(self, db_factory):
         """ROLE_PERMISSIONS.get(admin.role, []) returns the correct list."""
         from app.models.admin_user import AdminUser
-        from app.schemas.admin import ROLE_PERMISSIONS
+        from app.policy.permissions import ROLE_PERMISSIONS
 
         factory, prefix = db_factory
 

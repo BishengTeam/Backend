@@ -1,7 +1,7 @@
 from sqlalchemy import func, select
 
-from app.core.database import get_db_ctx
-from app.core.exceptions import NotFoundException
+from app.adapter.database import get_db_ctx
+from app.port.exceptions import NotFoundException
 from app.models.agreement import Agreement
 from app.schemas.admin_agreement import AdminAgreementCreate, AdminAgreementListItem, AdminAgreementReview
 from app.schemas.common import PaginatedData

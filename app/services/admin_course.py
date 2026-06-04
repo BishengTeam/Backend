@@ -1,7 +1,7 @@
 from sqlalchemy import func, select
 
-from app.core.database import get_db_ctx
-from app.core.exceptions import NotFoundException
+from app.adapter.database import get_db_ctx
+from app.port.exceptions import NotFoundException
 from app.models.course import Course
 from app.schemas.admin_course import AdminCourseCreate, AdminCourseListItem, AdminCourseUpdate
 from app.schemas.common import PaginatedData

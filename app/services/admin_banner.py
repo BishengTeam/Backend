@@ -1,7 +1,7 @@
 from sqlalchemy import select
 
-from app.core.database import get_db_ctx
-from app.core.exceptions import NotFoundException
+from app.adapter.database import get_db_ctx
+from app.port.exceptions import NotFoundException
 from app.models.banner import Banner
 from app.schemas.admin_banner import BannerCreate, BannerListItem, BannerUpdate
 

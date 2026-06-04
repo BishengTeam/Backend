@@ -2,7 +2,7 @@ import logging
 import sys
 from contextvars import ContextVar
 
-from app.core.config import settings
+from app.port.config import settings
 
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 
