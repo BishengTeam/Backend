@@ -7,10 +7,9 @@ from app.adapter.database import get_db_ctx
 from app.models.activity import ActivityRegistration
 from app.models.agreement import Agreement
 from app.models.collection import Collection
-from app.models.competition import CompetitionReg
+from app.domain.certification.src.index import CompetitionReg, CourseEnrollment
 from app.models.conversation import Conversation
 from app.domain.order.src.index import InventoryRecord, Order, UserCoupon
-from app.models.course import CourseEnrollment
 from app.models.deleted_openid import DeletedOpenid
 from app.models.points import PointsHistory, UserPoints
 from app.models.share import Share

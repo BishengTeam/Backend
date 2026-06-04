@@ -141,7 +141,7 @@ async def _seed_base_data(
     locked_quota: int = 0,
     sold_quota: int = 0,
 ) -> SimpleNamespace:
-    from app.models.certification import Certification
+    from app.domain.certification.src.index import Certification
     from app.domain.order.src.index import Inventory, PriceConfig
     from app.models.user import User
     from app.models.user_identity import UserIdentity

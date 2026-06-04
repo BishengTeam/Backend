@@ -14,8 +14,7 @@ from sqlalchemy import select, text
 from app.adapter.database import async_session_factory
 from app.models.admin_user import AdminUser
 from app.models.banner import Banner
-from app.models.certification import Certification
-from app.models.course import Course, CourseEnrollment
+from app.domain.certification.src.index import Certification, Course, CourseEnrollment
 from app.models.points import PointsHistory, UserPoints
 from app.domain.order.src.index import Coupon, Inventory, Order, PriceConfig, UserCoupon
 from app.models.quick_question import QuickQuestion

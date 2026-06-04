@@ -283,7 +283,7 @@ class TestOrderCRUD:
 
 class TestCourseCRUD:
     async def test_create_and_read(self, db_session):
-        from app.models.course import Course
+        from app.domain.certification.src.index import Course
         course = Course(title="测试课程", category="网络", price=9900)
         db_session.add(course)
         await db_session.flush()
@@ -293,7 +293,7 @@ class TestCourseCRUD:
 
     async def test_enrollment(self, db_session):
         from app.models.user import User
-        from app.models.course import Course, CourseEnrollment
+        from app.domain.certification.src.index import Course, CourseEnrollment
         user = User(openid="enroll_user")
         db_session.add(user)
         await db_session.flush()
@@ -311,7 +311,7 @@ class TestCourseCRUD:
 
 class TestCertificationCRUD:
     async def test_create(self, db_session):
-        from app.models.certification import Certification
+        from app.domain.certification.src.index import Certification
         cert = Certification(
             name="H3CNE", chinese_name="H3C认证网络工程师",
             code="H3C-NE-crud", vendor="H3C",
@@ -321,7 +321,7 @@ class TestCertificationCRUD:
         assert cert.is_active is True
 
     async def test_code_unique(self, db_session):
-        from app.models.certification import Certification
+        from app.domain.certification.src.index import Certification
         db_session.add(Certification(
             name="A", chinese_name="A证", code="CODE-UNIQUE-crud", vendor="H3C",
         ))
@@ -470,7 +470,7 @@ class TestConstraintEnforcement:
             await db_session.flush()
 
     async def test_course_enrollment_fk_enforced(self, db_session):
-        from app.models.course import CourseEnrollment
+        from app.domain.certification.src.index import CourseEnrollment
         enrollment = CourseEnrollment(user_id=99999, course_id=99999)
         db_session.add(enrollment)
         with pytest.raises(IntegrityError):

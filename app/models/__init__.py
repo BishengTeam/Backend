@@ -2,13 +2,10 @@ from app.models.activity import Activity, ActivityRegistration, ActivityReminder
 from app.models.admin_user import AdminUser
 from app.models.agreement import Agreement
 from app.models.banner import Banner
-from app.models.certification import Certification
+from app.domain.certification.src.index import Certification, CompetitionReg, Course, CourseEnrollment, Job, JobApplication
 from app.models.collection import Collection
-from app.models.competition import CompetitionReg
 from app.models.conversation import Conversation
-from app.models.course import Course, CourseEnrollment
 from app.models.deleted_openid import DeletedOpenid
-from app.models.job import Job, JobApplication
 from app.models.points import PointsHistory, UserPoints
 from app.domain.order.src.index import Coupon, Inventory, InventoryRecord, Order, PriceConfig, UserCoupon
 from app.models.quick_question import QuickQuestion

@@ -4,7 +4,7 @@ import io
 from sqlalchemy import select
 
 from app.adapter.database import get_db_ctx
-from app.models.competition import CompetitionReg
+from app.domain.certification.src.index import CompetitionReg
 
 
 class AdminCompetitionService:
