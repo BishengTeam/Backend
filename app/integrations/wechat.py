@@ -7,7 +7,7 @@ from Crypto.Cipher import AES
 
 from app.core.config import settings
 from app.core.exceptions import ThirdPartyException
-from app.core.redis import redis_client
+from app.core.redis import redis_get_safe, redis_setex_safe, redis_client
 
 WECHAT_CODE2SESSION_URL = "https://api.weixin.qq.com/sns/jscode2session"
 WECHAT_TOKEN_URL = "https://api.weixin.qq.com/cgi-bin/token"
@@ -40,14 +40,18 @@ class WechatClient:
             return data
 
     async def get_access_token(self) -> str:
-        cached = await redis_client.get(ACCESS_TOKEN_CACHE_KEY)
+        cached = await redis_get_safe(ACCESS_TOKEN_CACHE_KEY)
         if cached:
             return cached
-        acquired = await redis_client.set(ACCESS_TOKEN_LOCK_KEY, "1", nx=True, ex=10)
+        # 获取分布式锁（Redis 不可用时跳过锁，直接请求微信 API）
+        try:
+            acquired = await redis_client.set(ACCESS_TOKEN_LOCK_KEY, "1", nx=True, ex=10)
+        except Exception:
+            acquired = False
         if not acquired:
             for _ in range(30):
                 await asyncio.sleep(0.1)
-                cached = await redis_client.get(ACCESS_TOKEN_CACHE_KEY)
+                cached = await redis_get_safe(ACCESS_TOKEN_CACHE_KEY)
                 if cached:
                     return cached
         try:
@@ -68,10 +72,13 @@ class WechatClient:
                     raise Exception(f"微信获取 access_token 失败: {data.get('errmsg')}")
                 token = data["access_token"]
                 expires_in = data.get("expires_in", 7200) - 300
-                await redis_client.setex(ACCESS_TOKEN_CACHE_KEY, expires_in, token)
+                await redis_setex_safe(ACCESS_TOKEN_CACHE_KEY, expires_in, token)
                 return token
         finally:
-            await redis_client.delete(ACCESS_TOKEN_LOCK_KEY)
+            try:
+                await redis_client.delete(ACCESS_TOKEN_LOCK_KEY)
+            except Exception:
+                pass
 
     @staticmethod
     def decrypt_phone(encrypted_data: str, iv: str, session_key: str) -> str:

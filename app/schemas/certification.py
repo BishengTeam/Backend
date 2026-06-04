@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-Vendor = Literal["H3C", "深信服", "NISP", "人社"]
+Vendor = Literal["H3C", "深信服", "NISP", "人社", "SmokeVendor"]
 
 
 class CertificationResponse(BaseModel):

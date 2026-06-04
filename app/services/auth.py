@@ -3,7 +3,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.database import get_db_ctx
 from app.core.exceptions import UnauthorizedException
-from app.core.redis import redis_client, redis_getdel_with_retry
+from app.core.redis import redis_client, redis_get_safe, redis_setex_safe, redis_getdel_safe
 from app.core.security import create_access_token, create_refresh_token, decode_access_token
 from app.integrations.wechat import WechatClient
 from app.models.deleted_openid import DeletedOpenid
@@ -39,11 +39,11 @@ class AuthService:
                 raise UnauthorizedException("账号已注销，如需恢复请联系客服")
             access_token = create_access_token(user.id, user.openid)
             refresh_token = create_refresh_token()
-            await redis_client.setex(
-                f"{REFRESH_TOKEN_PREFIX}{refresh_token}", REFRESH_TOKEN_TTL, user.id
+            await redis_setex_safe(
+                f"{REFRESH_TOKEN_PREFIX}{refresh_token}", REFRESH_TOKEN_TTL, str(user.id)
             )
             if session_key:
-                await redis_client.setex(
+                await redis_setex_safe(
                     f"{SESSION_KEY_PREFIX}{user.id}", SESSION_KEY_TTL, session_key
                 )
             return LoginResponse(
@@ -55,7 +55,7 @@ class AuthService:
 
     async def refresh(self, refresh_token: str) -> RefreshResponse:
         key = f"{REFRESH_TOKEN_PREFIX}{refresh_token}"
-        user_id_raw = await redis_getdel_with_retry(key)  # 原子：读 + 删 + 重试
+        user_id_raw = await redis_getdel_safe(key)
         if user_id_raw is None:
             raise UnauthorizedException("refresh_token 无效或已过期")
         user_id = int(user_id_raw)
@@ -65,10 +65,10 @@ class AuthService:
                 raise UnauthorizedException("账号不存在或已注销")
             new_access_token = create_access_token(user.id, user.openid)
             new_refresh_token = create_refresh_token()
-            await redis_client.setex(
+            await redis_setex_safe(
                 f"{REFRESH_TOKEN_PREFIX}{new_refresh_token}",
                 REFRESH_TOKEN_TTL,
-                user.id,
+                str(user.id),
             )
             return RefreshResponse(
                 access_token=new_access_token,
@@ -79,4 +79,8 @@ class AuthService:
     @staticmethod
     async def logout(refresh_token: str) -> None:
         key = f"{REFRESH_TOKEN_PREFIX}{refresh_token}"
-        await redis_client.delete(key)
+        # delete 不影响核心流程，Redis 不可用时静默跳过
+        try:
+            await redis_client.delete(key)
+        except Exception:
+            pass

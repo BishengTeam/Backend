@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 from app.core.config import settings
 from app.core.database import get_db_ctx
 from app.core.exceptions import BusinessException
-from app.core.redis import redis_client
+from app.core.redis import redis_get_safe, redis_setex_safe
 from app.integrations.chat_backend import ChatBackend, DifyChatBackend
 from app.models.conversation import Conversation
 from app.models.quick_question import QuickQuestion
@@ -125,11 +125,11 @@ class ChatService:
 
     async def _get_context(self, session_id: str) -> list[dict]:
         key = f"chat:session:{session_id}"
-        data = await redis_client.get(key)
+        data = await redis_get_safe(key)
         if data:
             return json.loads(data)
         return []
 
     async def _save_context(self, session_id: str, context: list[dict]) -> None:
         key = f"chat:session:{session_id}"
-        await redis_client.setex(key, SESSION_TTL, json.dumps(context, ensure_ascii=False))
+        await redis_setex_safe(key, SESSION_TTL, json.dumps(context, ensure_ascii=False))

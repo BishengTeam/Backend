@@ -2,7 +2,7 @@ from sqlalchemy import select, update
 
 from app.core.database import get_db_ctx
 from app.core.exceptions import BusinessException, NotFoundException, ValidationException
-from app.core.redis import redis_client
+from app.core.redis import redis_get_safe
 from app.integrations.wechat import WechatClient
 from app.models.deleted_openid import DeletedOpenid
 from app.models.order import Order
@@ -178,7 +178,7 @@ class UserService:
             await db.commit()
 
     async def decrypt_phone(self, user_id: int, encrypted_data: str, iv: str) -> str:
-        session_key = await redis_client.get(f"{SESSION_KEY_PREFIX}{user_id}")
+        session_key = await redis_get_safe(f"{SESSION_KEY_PREFIX}{user_id}")
         if not session_key:
             raise BusinessException("session_key 已过期，请重新登录")
         phone = WechatClient.decrypt_phone(encrypted_data, iv, session_key)

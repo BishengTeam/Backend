@@ -11,7 +11,7 @@ from app.api.admin import router as admin_router
 from app.api.agreement import router as agreement_router
 from app.core.config import settings
 from app.core.database import engine, get_db_ctx
-from app.core.redis import redis_client
+from app.core.redis import redis_client, redis_ping
 from app.core.logging import setup_logging
 from app.middleware import setup_middleware
 from app.middleware.rate_limit import limiter
@@ -87,8 +87,4 @@ async def _check_db() -> bool:
 
 
 async def _check_redis() -> bool:
-    try:
-        await redis_client.ping()
-        return True
-    except Exception:
-        return False
+    return await redis_ping()

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import jwt
 
 from app.core.config import settings
-from app.core.redis import redis_client
+from app.core.redis import redis_get_safe, redis_setex_safe
 
 
 def create_access_token(user_id: int, openid: str) -> str:
@@ -39,11 +39,13 @@ def decode_access_token(token: str) -> dict:
 
 
 async def revoke_token(token: str) -> None:
-    """Add token to Redis blacklist with TTL matching remaining validity."""
+    """Add token to Redis blacklist with TTL matching remaining validity.
+    Redis 不可用时静默跳过，不影响业务主流程。
+    """
     try:
         payload = decode_access_token(token)
     except Exception:
-        return  # invalid/expired token, no need to blacklist
+        return
     exp = payload.get("exp")
     if exp is None:
         return
@@ -51,9 +53,12 @@ async def revoke_token(token: str) -> None:
     ttl = int(exp - now)
     if ttl <= 0:
         return
-    await redis_client.setex(f"jwt:blacklist:{token}", ttl, "1")
+    await redis_setex_safe(f"jwt:blacklist:{token}", ttl, "1")
 
 
 async def is_token_revoked(token: str) -> bool:
-    """Check whether a token has been revoked."""
-    return await redis_client.get(f"jwt:blacklist:{token}") is not None
+    """Check whether a token has been revoked.
+    Redis 不可用时返回 False（假定未被撤销），保证认证链路不中断。
+    """
+    result = await redis_get_safe(f"jwt:blacklist:{token}")
+    return result is not None
