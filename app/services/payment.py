@@ -5,7 +5,12 @@ from sqlalchemy import select
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException, ThirdPartyException
 from app.integrations.wechat_pay import WechatPayClient
-from app.models.order import Order
+from app.domain.order.src.index import (
+    Order,
+    apply_order_status_transition,
+    confirm_inventory_sale,
+    release_inventory_lock,
+)
 from app.models.user import User
 from app.schemas.payment import (
     PaymentCallbackRequest,
@@ -13,8 +18,6 @@ from app.schemas.payment import (
     PaymentPrepayRequest,
     PaymentPrepayResponse,
 )
-from app.services.inventory import confirm_inventory_sale, release_inventory_lock
-from app.services.order import apply_order_status_transition
 
 PREPAY_EXPIRATION_GUARD_SECONDS = 60
 

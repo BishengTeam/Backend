@@ -9,11 +9,9 @@ from app.models.agreement import Agreement
 from app.models.collection import Collection
 from app.models.competition import CompetitionReg
 from app.models.conversation import Conversation
-from app.models.coupon import UserCoupon
+from app.domain.order.src.index import InventoryRecord, Order, UserCoupon
 from app.models.course import CourseEnrollment
 from app.models.deleted_openid import DeletedOpenid
-from app.models.inventory import InventoryRecord
-from app.models.order import Order
 from app.models.points import PointsHistory, UserPoints
 from app.models.share import Share
 from app.models.ticket import Ticket

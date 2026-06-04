@@ -6,14 +6,11 @@ from app.models.certification import Certification
 from app.models.collection import Collection
 from app.models.competition import CompetitionReg
 from app.models.conversation import Conversation
-from app.models.coupon import Coupon, UserCoupon
 from app.models.course import Course, CourseEnrollment
 from app.models.deleted_openid import DeletedOpenid
-from app.models.inventory import Inventory, InventoryRecord
 from app.models.job import Job, JobApplication
-from app.models.order import Order
 from app.models.points import PointsHistory, UserPoints
-from app.models.price_config import PriceConfig
+from app.domain.order.src.index import Coupon, Inventory, InventoryRecord, Order, PriceConfig, UserCoupon
 from app.models.quick_question import QuickQuestion
 from app.models.quiz import QuizCategory, QuizCheckin, QuizQuestion, QuizRecord
 from app.models.share import Share

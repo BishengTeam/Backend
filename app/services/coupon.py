@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import BusinessException, NotFoundException
-from app.models.coupon import Coupon, UserCoupon
+from app.domain.order.src.index import Coupon, UserCoupon
 from app.schemas.common import PaginatedData
 from app.schemas.coupon import CouponAssignRequest, CouponResponse, CouponVerifyRequest
 

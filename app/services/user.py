@@ -5,7 +5,7 @@ from app.port.exceptions import BusinessException, NotFoundException, Validation
 from app.adapter.redis import redis_get_safe
 from app.integrations.wechat import WechatClient
 from app.models.deleted_openid import DeletedOpenid
-from app.models.order import Order
+from app.domain.order.src.index import Order
 from app.models.user import User
 from app.models.user_identity import UserIdentity
 from app.schemas.user import (

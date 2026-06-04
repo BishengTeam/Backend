@@ -165,7 +165,7 @@ async def _seed_order(
     ``cert_type`` defaults to *prefix* so the row is captured by the
     prefix-based cleanup.
     """
-    from app.models.order import Order
+    from app.domain.order.src.index import Order
 
     ct = cert_type or prefix
     async with session_factory() as db:

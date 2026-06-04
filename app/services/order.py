@@ -6,61 +6,19 @@ from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
+from app.domain.order.src.index import (
+    INVENTORY_LOCK_ACTION,
+    ORDER_PAYMENT_EXPIRE_MINUTES,
+    Order,
+    PriceConfig,
+    add_inventory_record,
+    lock_certification_inventory,
+    validate_extra_data,
+)
 from app.models.certification import Certification
-from app.models.order import Order
-from app.models.price_config import PriceConfig
 from app.models.user_identity import UserIdentity
 from app.schemas.common import PaginatedData
 from app.schemas.order import OrderCreate, OrderDetailResponse, OrderFilter, OrderResponse
-from app.services.inventory import (
-    INVENTORY_LOCK_ACTION,
-    add_inventory_record,
-    lock_certification_inventory,
-)
-
-ORDER_STATUS_TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"paid", "closed"},
-    "paid": {"completed", "refunded"},
-    "completed": {"refunded"},
-    "refunded": set(),
-    "closed": set(),
-}
-
-ORDER_PAYMENT_EXPIRE_MINUTES = 30
-
-EXTRA_DATA_SCHEMA: dict[str, list[str]] = {
-    "H3C-NE": ["gender", "education", "organization", "country", "language",
-               "first_name", "last_name", "exam_date"],
-    "H3C-SE": ["gender", "education", "organization", "country", "language",
-               "first_name", "last_name", "exam_date"],
-    "SF-CSE": ["exam_date", "email", "first_name", "last_name",
-                "mailing_address", "organization", "exam_direction"],
-    "NISP-1": ["pinyin", "major", "school", "province"],
-    "NISP-2": ["pinyin", "school", "gender", "age", "education",
-               "major", "province", "address", "zip_code"],
-    "RS-ZY":  ["branch"],
-}
-
-
-def _validate_extra_data(cert_type: str, extra_data: dict | None) -> None:
-    required = EXTRA_DATA_SCHEMA.get(cert_type)
-    if required is None:
-        return
-    if not extra_data:
-        raise BusinessException(f"认证类型 {cert_type} 需要填写报名信息")
-    missing = [k for k in required if k not in extra_data or extra_data.get(k) is None]
-    if missing:
-        raise BusinessException(f"缺少必填字段: {', '.join(missing)}")
-
-
-def apply_order_status_transition(order: Order, target_status: str) -> bool:
-    if order.status == target_status:
-        return False
-    allowed_targets = ORDER_STATUS_TRANSITIONS.get(order.status, set())
-    if target_status not in allowed_targets:
-        raise ConflictException(f"订单状态不允许从 {order.status} 变更为 {target_status}")
-    order.status = target_status
-    return True
 
 
 class OrderService:
@@ -103,7 +61,7 @@ class OrderService:
                 if len(price_rows) > 1:
                     raise ConflictException("该认证类型价格配置重复，请联系管理员")
 
-                _validate_extra_data(data.cert_type, data.extra_data)
+                validate_extra_data(data.cert_type, data.extra_data)
 
                 inventory_change = await lock_certification_inventory(db, data.cert_type)
                 expires_at = datetime.now(timezone.utc) + timedelta(

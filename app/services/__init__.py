@@ -3,16 +3,18 @@ from app.services.auth import AuthService
 from app.services.certification import CertificationService
 from app.services.chat import ChatService
 from app.services.course import CourseService
-from app.services.order import OrderService, apply_order_status_transition
-from app.services.order_timeout import CloseExpiredOrdersResult, OrderTimeoutCloseService, close_expired_pending_order
+from app.services.order import OrderService
+from app.services.order_timeout import CloseExpiredOrdersResult, OrderTimeoutCloseService
 from app.services.payment import PaymentService
 from app.services.points import PointsService
 from app.services.price_config import PriceConfigService
 from app.services.quiz import QuizService
 from app.services.user import UserService, _mask_identity
 
-# Inventory helpers
-from app.services.inventory import (
+# Domain order re-exports
+from app.domain.order.src.index import (
+    apply_order_status_transition,
+    close_expired_pending_order,
     InventoryChange,
     add_inventory_record,
     confirm_inventory_sale,

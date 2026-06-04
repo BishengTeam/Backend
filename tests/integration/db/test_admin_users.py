@@ -168,7 +168,7 @@ async def test_export_users_returns_csv_with_header_and_data(test_context):
 
 async def test_get_user_orders_returns_order_list(test_context):
     """Create a user + order, then fetch orders via the admin service."""
-    from app.models.order import Order
+    from app.domain.order.src.index import Order
     from app.models.user import User
     from app.services.admin_user import AdminUserService
 

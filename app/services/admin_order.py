@@ -5,10 +5,12 @@ from sqlalchemy import func, select
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import BusinessException, NotFoundException, ThirdPartyException
 from app.integrations.wechat_pay import WechatPayClient
-from app.models.order import Order
+from app.domain.order.src.index import (
+    Order,
+    apply_order_status_transition,
+)
 from app.schemas.common import PaginatedData
 from app.schemas.order import OrderDetailResponse, OrderFilter, OrderResponse
-from app.services.order import ORDER_STATUS_TRANSITIONS, apply_order_status_transition
 
 
 class AdminOrderService:

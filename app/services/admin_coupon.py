@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import NotFoundException
-from app.models.coupon import Coupon
+from app.domain.order.src.index import Coupon
 from app.schemas.admin_coupon import AdminCouponBatchCreate, AdminCouponCreate, AdminCouponListItem
 from app.schemas.common import PaginatedData
 

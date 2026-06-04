@@ -142,8 +142,7 @@ async def _seed_base_data(
     sold_quota: int = 0,
 ) -> SimpleNamespace:
     from app.models.certification import Certification
-    from app.models.inventory import Inventory
-    from app.models.price_config import PriceConfig
+    from app.domain.order.src.index import Inventory, PriceConfig
     from app.models.user import User
     from app.models.user_identity import UserIdentity
 
@@ -203,7 +202,7 @@ async def _seed_pending_order(
     available_quota: int = 0,
     locked_quota: int = 1,
 ) -> SimpleNamespace:
-    from app.models.order import Order
+    from app.domain.order.src.index import Order
 
     data = await _seed_base_data(
         session_factory,
@@ -248,8 +247,7 @@ async def test_concurrent_order_creation_does_not_oversell(
     from sqlalchemy import func, select
 
     from app.core.exceptions import BusinessException
-    from app.models.inventory import Inventory, InventoryRecord
-    from app.models.order import Order
+    from app.domain.order.src.index import Inventory, InventoryRecord, Order
     from app.schemas.order import OrderCreate
 
     data = await _seed_base_data(session_factory, test_prefix, user_count=2, available_quota=1)
@@ -302,8 +300,7 @@ async def test_success_callback_is_idempotent_and_confirms_inventory_once(
 ):
     from sqlalchemy import func, select
 
-    from app.models.inventory import Inventory, InventoryRecord
-    from app.models.order import Order
+    from app.domain.order.src.index import Inventory, InventoryRecord, Order
     from app.schemas.payment import PaymentCallbackRequest
 
     data = await _seed_pending_order(
@@ -354,8 +351,7 @@ async def test_timeout_close_releases_locked_inventory(
     from sqlalchemy import func, select
     from sqlalchemy import text
 
-    from app.models.inventory import Inventory, InventoryRecord
-    from app.models.order import Order
+    from app.domain.order.src.index import Inventory, InventoryRecord, Order, release_inventory_lock
     from app.schemas.order import OrderCreate
 
     now = datetime.now(timezone.utc)
@@ -401,7 +397,6 @@ async def test_timeout_close_releases_locked_inventory(
         await db.commit()
 
     # 阶段2：在新会话中释放库存锁
-    from app.services.inventory import release_inventory_lock
     async with session_factory() as db:
         order = await db.get(Order, order_resp.id)
         released = await release_inventory_lock(db, order, reason=close_reason)

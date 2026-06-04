@@ -1,7 +1,7 @@
 from sqlalchemy import select
 
 from app.adapter.database import get_db_ctx
-from app.models.price_config import PriceConfig
+from app.domain.order.src.index import PriceConfig
 from app.schemas.price_config import PriceFilter, PriceResponse
 
 

@@ -235,7 +235,7 @@ class TestUserCRUD:
 class TestOrderCRUD:
     async def test_create_order_valid_statuses(self, db_session):
         from app.models.user import User
-        from app.models.order import Order
+        from app.domain.order.src.index import Order
         user = User(openid="order_status_user")
         db_session.add(user)
         await db_session.flush()
@@ -251,7 +251,7 @@ class TestOrderCRUD:
 
     async def test_rejects_invalid_status(self, db_session):
         from app.models.user import User
-        from app.models.order import Order
+        from app.domain.order.src.index import Order
         user = User(openid="bad_status_user")
         db_session.add(user)
         await db_session.flush()
@@ -266,7 +266,7 @@ class TestOrderCRUD:
 
     async def test_out_trade_no_unique(self, db_session):
         from app.models.user import User
-        from app.models.order import Order
+        from app.domain.order.src.index import Order
         user = User(openid="trade_no_user")
         db_session.add(user)
         await db_session.flush()
@@ -407,14 +407,14 @@ class TestDeletedOpenidCRUD:
 
 class TestPriceConfigCRUD:
     async def test_create(self, db_session):
-        from app.models.price_config import PriceConfig
+        from app.domain.order.src.index import PriceConfig
         pc = PriceConfig(cert_type="H3C-NE", user_type="student", price=29900)
         db_session.add(pc)
         await db_session.flush()
         assert pc.is_active is True
 
     async def test_active_unique_constraint(self, db_session):
-        from app.models.price_config import PriceConfig
+        from app.domain.order.src.index import PriceConfig
         db_session.add(PriceConfig(
             cert_type="H3C-NE", user_type="student", price=29900, is_active=True,
         ))
@@ -460,7 +460,7 @@ class TestConstraintEnforcement:
             await db_session.flush()
 
     async def test_order_fk_enforced(self, db_session):
-        from app.models.order import Order
+        from app.domain.order.src.index import Order
         order = Order(
             user_id=99999, cert_type="H3C-NE", candidate_name="测试",
             candidate_phone="13800138000", price=9900,

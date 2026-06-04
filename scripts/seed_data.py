@@ -3,9 +3,9 @@ import asyncio
 
 from sqlalchemy import select
 
-from app.core.database import async_session_factory
+from app.adapter.database import async_session_factory
 from app.models.certification import Certification
-from app.models.price_config import PriceConfig
+from app.domain.order.src.index import PriceConfig
 from app.models.quiz import QuizCategory
 
 
