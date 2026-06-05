@@ -34,6 +34,7 @@ class AuthService:
                 user = User(openid=openid)
                 db.add(user)
                 await db.flush()
+                await db.commit()
             elif not user.is_active:
                 raise UnauthorizedException("账号已注销，如需恢复请联系客服")
             access_token = create_access_token(user.id, user.openid)
