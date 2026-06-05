@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.core.exceptions import UnauthorizedException
+from app.port.exceptions import UnauthorizedException
 from app.services.auth import REFRESH_TOKEN_PREFIX, AuthService
 
 

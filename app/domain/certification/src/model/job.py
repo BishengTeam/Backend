@@ -1,7 +1,7 @@
 from sqlalchemy import ForeignKey, String, Integer, Text, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, TimestampMixin
+from app.adapter.database import Base, TimestampMixin
 
 
 class Job(Base, TimestampMixin):

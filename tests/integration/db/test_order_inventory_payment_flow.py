@@ -245,7 +245,7 @@ async def test_concurrent_order_creation_does_not_oversell(
 ):
     from sqlalchemy import func, select
 
-    from app.core.exceptions import BusinessException
+    from app.port.exceptions import BusinessException
     from app.domain.order.src.index import Inventory, InventoryRecord, Order
     from app.schemas.order import OrderCreate
 

@@ -1,7 +1,7 @@
 from sqlalchemy import Integer, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, TimestampMixin
+from app.adapter.database import Base, TimestampMixin
 
 
 class Collection(Base, TimestampMixin):

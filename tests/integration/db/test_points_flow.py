@@ -217,7 +217,7 @@ async def test_redeem_points_debits_balance_and_writes_history(
 async def test_redeem_points_rejects_insufficient_balance(session_factory, app_context, test_prefix):
     from sqlalchemy import func, select
 
-    from app.core.exceptions import BusinessException
+    from app.port.exceptions import BusinessException
     from app.domain.user.src.index import PointsHistory, UserPoints
     from app.schemas.points import PointsRedeemRequest
 
@@ -244,7 +244,7 @@ async def test_redeem_points_rejects_insufficient_balance(session_factory, app_c
 async def test_concurrent_redeem_points_does_not_overdraw(session_factory, app_context, test_prefix):
     from sqlalchemy import func, select
 
-    from app.core.exceptions import BusinessException
+    from app.port.exceptions import BusinessException
     from app.domain.user.src.index import PointsHistory, UserPoints
     from app.schemas.points import PointsRedeemRequest
 

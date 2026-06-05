@@ -16,8 +16,22 @@ engine = create_async_engine(
 async_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
+from datetime import datetime
+
+from sqlalchemy import DateTime, Integer, func
+from sqlalchemy.orm import Mapped, mapped_column
+
+
 class Base(DeclarativeBase):
     pass
+
+
+class TimestampMixin:
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 async def get_db() -> AsyncSession:

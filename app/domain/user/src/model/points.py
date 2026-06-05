@@ -1,7 +1,7 @@
 from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, TimestampMixin
+from app.adapter.database import Base, TimestampMixin
 
 
 class UserPoints(Base, TimestampMixin):

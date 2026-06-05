@@ -1,7 +1,7 @@
 from sqlalchemy import String, Integer, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, TimestampMixin
+from app.adapter.database import Base, TimestampMixin
 
 
 class Certification(Base, TimestampMixin):

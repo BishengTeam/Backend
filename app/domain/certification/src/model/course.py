@@ -1,7 +1,7 @@
 from sqlalchemy import String, Integer, JSON, Text, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin
+from app.adapter.database import Base, TimestampMixin
 
 
 class Course(Base, TimestampMixin):

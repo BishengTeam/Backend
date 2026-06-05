@@ -265,7 +265,7 @@ class OrderSystemTests(unittest.TestCase):
         self.assertIn("Order.expires_at.is_not(None)", source)
         self.assertIn("Order.expires_at <= closed_at", source)
         self.assertIn("with_for_update(skip_locked=True)", source)
-        self.assertIn("from app.core.exceptions import BusinessException", source)
+        self.assertIn("from app.port.exceptions import BusinessException", source)
         self.assertIn('raise BusinessException("limit must be greater than 0")', source)
         self.assertIn('raise BusinessException("close_reason must be 1-128 characters")', source)
         self.assertNotIn("raise ValueError", source)

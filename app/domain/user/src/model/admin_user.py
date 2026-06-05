@@ -1,7 +1,7 @@
 from sqlalchemy import Boolean, CheckConstraint, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, TimestampMixin
+from app.adapter.database import Base, TimestampMixin
 
 ADMIN_ROLES = ("super_admin", "content_editor", "customer_service", "finance", "auditor")
 

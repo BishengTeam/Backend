@@ -18,14 +18,14 @@ ROLES = ("super_admin", "content_editor", "customer_service", "finance", "audito
 
 
 def _make_admin_token(admin_id: int, username: str, role: str) -> str:
-    from app.core.security import create_admin_access_token
+    from app.adapter.security import create_admin_access_token
     return create_admin_access_token(admin_id, username, role)
 
 
 @pytest.fixture
 async def test_client():
     """Fixtures a FastAPI TestClient wired to the real test database."""
-    from app.core.database import get_db
+    from app.adapter.database import get_db
 
     engine = create_async_engine(os.environ["TEST_DATABASE_URL"], echo=False)
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -118,7 +118,7 @@ class TestAdminAuthMe:
 
     async def test_me_rejects_user_token(self, test_client):
         """A regular user JWT (type=access) is rejected by /admin/auth/me."""
-        from app.core.security import create_access_token
+        from app.adapter.security import create_access_token
 
         client, factory, prefix = test_client
 
