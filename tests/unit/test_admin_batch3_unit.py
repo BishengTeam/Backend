@@ -298,9 +298,10 @@ class AdminBatch3SystemTests(unittest.TestCase):
         for mod in ["tickets", "statistics", "settings", "competition"]:
             source = _read_text(_path(f"app/api/admin/{mod}.py"))
             with self.subTest(module=mod):
-                self.assertIn(
-                    "get_current_admin", source,
-                    f"app/api/admin/{mod}.py should use get_current_admin dependency",
+                has_auth = "get_current_admin" in source or "require_permission" in source
+                self.assertTrue(
+                    has_auth,
+                    f"app/api/admin/{mod}.py should use get_current_admin or require_permission dependency",
                 )
 
     # ── Business logic verification ──

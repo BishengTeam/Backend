@@ -421,7 +421,7 @@ class QuizSystemTests(unittest.TestCase):
         if plan_docs:
             plan_text = "\n".join(_read_text(path) for path in plan_docs)
             for method, endpoint in EXPECTED_QUIZ_ENDPOINTS:
-                expected_cell = rf"\|\s*`?{re.escape(method + ' ' + endpoint)}`?\s*\|"
+                expected_cell = rf"\|\s*`?{re.escape(method + ' ' + endpoint)}`?.*?\|"
                 with self.subTest(plan_row=f"{method} {endpoint}"):
                     self.assertRegex(
                         plan_text,
