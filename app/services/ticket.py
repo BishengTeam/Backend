@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import NotFoundException
-from app.models.ticket import Ticket
+from app.domain.content.src.index import Ticket
 from app.schemas.common import PaginatedData
 from app.schemas.ticket import TicketCreateRequest, TicketDetail, TicketListItem
 

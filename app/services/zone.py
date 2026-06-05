@@ -3,10 +3,8 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 from app.adapter.database import get_db_ctx
-from app.models.activity import Activity
-from app.models.banner import Banner
+from app.domain.content.src.index import Activity, Banner, Zone
 from app.domain.certification.src.index import Certification, CompetitionReg, Course, Job
-from app.models.zone import Zone
 from app.schemas.certification import CertificationResponse
 from app.schemas.zone import (
     ActivityBrief,

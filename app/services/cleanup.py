@@ -4,12 +4,10 @@ import logging
 from sqlalchemy import delete, select, func, text
 
 from app.adapter.database import get_db_ctx
-from app.models.activity import ActivityRegistration
-from app.models.agreement import Agreement
+from app.domain.content.src.index import ActivityRegistration, Agreement, Ticket
 from app.domain.community.src.index import Collection, Conversation, Share
 from app.domain.certification.src.index import CompetitionReg, CourseEnrollment
 from app.domain.order.src.index import InventoryRecord, Order, UserCoupon
-from app.models.ticket import Ticket
 from app.domain.user.src.index import DeletedOpenid, PointsHistory, User, UserIdentity, UserPoints
 
 logger = logging.getLogger(__name__)

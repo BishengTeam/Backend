@@ -2,7 +2,7 @@ from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import NotFoundException
-from app.models.ticket import Ticket
+from app.domain.content.src.index import Ticket
 from app.schemas.admin_ticket import AdminTicketFilter, AdminTicketListItem, AdminTicketUpdate
 from app.schemas.common import PaginatedData
 

@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import BusinessException, NotFoundException
-from app.models.activity import Activity, ActivityRegistration, ActivityReminder
+from app.domain.content.src.index import Activity, ActivityRegistration, ActivityReminder
 from app.schemas.common import PaginatedData
 
 

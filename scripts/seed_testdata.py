@@ -13,11 +13,10 @@ from sqlalchemy import select, text
 
 from app.adapter.database import async_session_factory
 from app.domain.user.src.index import AdminUser, PointsHistory, User, UserIdentity, UserPoints
-from app.models.banner import Banner
+from app.domain.content.src.index import Banner, Zone
 from app.domain.certification.src.index import Certification, Course, CourseEnrollment
 from app.domain.order.src.index import Coupon, Inventory, Order, PriceConfig, UserCoupon
 from app.domain.community.src.index import QuickQuestion
-from app.models.zone import Zone
 
 # ── 测试用户定义 ──────────────────────────────────────────────
 TEST_USERS = [
