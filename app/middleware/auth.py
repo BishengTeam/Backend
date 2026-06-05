@@ -18,7 +18,9 @@ async def get_current_user(
     token = authorization[7:]
     try:
         payload = decode_access_token(token)
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"JWT decode failed: {e}, token prefix: {token[:20]}...")
         raise UnauthorizedException("登录已过期，请重新登录")
     if await is_token_revoked(token):
         raise UnauthorizedException("登录已过期，请重新登录")
@@ -42,7 +44,9 @@ async def get_current_admin(
     token = authorization[7:]
     try:
         payload = decode_access_token(token)
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"JWT decode failed: {e}, token prefix: {token[:20]}...")
         raise UnauthorizedException("登录已过期，请重新登录")
     if await is_token_revoked(token):
         raise UnauthorizedException("登录已过期，请重新登录")
