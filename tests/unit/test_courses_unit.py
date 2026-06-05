@@ -124,7 +124,9 @@ def _api_decorator_has_response_model(file_path_relative: str, router_var: str =
                 and func.value.id == router_var
             ):
                 continue
-            result[node.name] = any(kw.arg == "response_model" for kw in decorator.keywords)
+            result[node.name] = any(
+                kw.arg in ("response_model", "response_class") for kw in decorator.keywords
+            )
     return result
 
 

@@ -40,15 +40,17 @@ class TestRefreshTokenRace:
         mock_db_ctx.__aenter__.return_value.get = AsyncMock(return_value=user)
 
         with (
+            patch("app.services.auth.redis_getdel_safe") as mock_getdel,
+            patch("app.services.auth.redis_setex_safe") as mock_setex,
             patch("app.services.auth.redis_client") as mock_redis,
             patch("app.services.auth.get_db_ctx", return_value=mock_db_ctx),
         ):
-            mock_redis.getdel = AsyncMock(return_value="1")
-            mock_redis.setex = AsyncMock()
+            mock_getdel.return_value = "1"
+            mock_setex.return_value = True
 
             await svc.refresh("valid_token")
 
-            mock_redis.getdel.assert_called_once_with(f"{REFRESH_TOKEN_PREFIX}valid_token")
+            mock_getdel.assert_called_once_with(f"{REFRESH_TOKEN_PREFIX}valid_token")
             mock_redis.get.assert_not_called()
 
     # ------------------------------------------------------------------
@@ -59,8 +61,8 @@ class TestRefreshTokenRace:
         """When getdel returns None the caller MUST receive UnauthorizedException."""
         svc = AuthService()
 
-        with patch("app.services.auth.redis_client") as mock_redis:
-            mock_redis.getdel = AsyncMock(return_value=None)
+        with patch("app.services.auth.redis_getdel_safe") as mock_getdel:
+            mock_getdel.return_value = None
 
             with pytest.raises(UnauthorizedException) as exc_info:
                 await svc.refresh("expired_or_consumed_token")
@@ -79,10 +81,12 @@ class TestRefreshTokenRace:
         mock_db_ctx.__aenter__.return_value.get = AsyncMock(return_value=inactive_user)
 
         with (
+            patch("app.services.auth.redis_getdel_safe") as mock_getdel,
+            patch("app.services.auth.redis_setex_safe") as mock_setex,
             patch("app.services.auth.redis_client") as mock_redis,
             patch("app.services.auth.get_db_ctx", return_value=mock_db_ctx),
         ):
-            mock_redis.getdel = AsyncMock(return_value="1")
+            mock_getdel.return_value = "1"
 
             with pytest.raises(UnauthorizedException) as exc_info:
                 await svc.refresh("token_for_deactivated")
@@ -101,20 +105,22 @@ class TestRefreshTokenRace:
         mock_db_ctx.__aenter__.return_value.get = AsyncMock(return_value=user)
 
         with (
+            patch("app.services.auth.redis_getdel_safe") as mock_getdel,
+            patch("app.services.auth.redis_setex_safe") as mock_setex,
             patch("app.services.auth.redis_client") as mock_redis,
             patch("app.services.auth.get_db_ctx", return_value=mock_db_ctx),
         ):
-            mock_redis.getdel = AsyncMock(return_value="42")
-            mock_redis.setex = AsyncMock()
+            mock_getdel.return_value = "42"
+            mock_setex.return_value = True
 
             response = await svc.refresh("valid_token")
 
             assert response.access_token
             assert response.refresh_token
             assert response.expires_in > 0
-            # Verify new refresh token is persisted
-            mock_redis.setex.assert_called_once()
-            args, _kwargs = mock_redis.setex.call_args
+            # Verify new refresh token is persisted via redis_setex_safe
+            mock_setex.assert_called_once()
+            args, _kwargs = mock_setex.call_args
             assert args[0].startswith(REFRESH_TOKEN_PREFIX)
             assert int(args[2]) == 42
 
@@ -140,11 +146,12 @@ class TestRefreshTokenRace:
             return None      # second caller finds nothing
 
         with (
+            patch("app.services.auth.redis_getdel_safe", side_effect=mock_getdel),
+            patch("app.services.auth.redis_setex_safe") as mock_setex,
             patch("app.services.auth.redis_client") as mock_redis,
             patch("app.services.auth.get_db_ctx", return_value=mock_db_ctx),
         ):
-            mock_redis.getdel = mock_getdel
-            mock_redis.setex = AsyncMock()
+            mock_setex.return_value = True
 
             # First caller — succeeds
             resp1 = await svc.refresh("shared_token")

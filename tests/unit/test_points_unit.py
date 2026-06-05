@@ -306,7 +306,7 @@ class PointsSystemTests(unittest.TestCase):
         self.assertIn("amount=-data.amount", source)
 
     def test_points_model_and_migration_define_constraints(self):
-        model_source = _read_text(_path("app/models/points.py"))
+        model_source = _read_text(_path("app/domain/user/src/model/points.py"))
         migration_source = _read_text(
             _path("alembic/versions/a4b5c6d7e8f9_add_points_constraints_and_source_fields.py")
         )

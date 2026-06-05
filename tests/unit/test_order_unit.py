@@ -131,19 +131,15 @@ class OrderSystemTests(unittest.TestCase):
         self.assertFalse(missing, f"payment API routes missing explicit response_model: {missing}")
 
     def test_order_status_machine_defines_required_transitions(self):
-        source = (REPO_ROOT / "app/services/order.py").read_text(encoding="utf-8")
+        source = (REPO_ROOT / "app/domain/order/src/rule/order_rules.py").read_text(encoding="utf-8")
 
         self.assertIn('"pending": {"paid", "closed"}', source)
         self.assertIn('"closed": set()', source)
         self.assertIn('"paid": {"completed", "refunded"}', source)
         self.assertIn('"completed": {"refunded"}', source)
-        self.assertIn("if order.status == target_status:", source)
-        self.assertIn("return False", source)
-        self.assertIn("if target_status not in allowed_targets:", source)
-        self.assertIn("raise ConflictException", source)
 
     def test_order_service_locks_inventory_with_conditional_update(self):
-        source = (REPO_ROOT / "app/services/inventory.py").read_text(encoding="utf-8")
+        source = (REPO_ROOT / "app/domain/order/src/transition/inventory_transitions.py").read_text(encoding="utf-8")
 
         self.assertIn("UPDATE inventory", source)
         self.assertIn("available_quota = available_quota - 1", source)
@@ -152,6 +148,13 @@ class OrderSystemTests(unittest.TestCase):
         self.assertIn("AND available_quota >= 1", source)
         self.assertIn("RETURNING id, total_quota, available_quota, locked_quota, sold_quota", source)
         self.assertIn('raise BusinessException("认证报名名额不足")', source)
+
+    def test_order_transition_guards_validate_and_raise(self):
+        source = (REPO_ROOT / "app/domain/order/src/transition/order_transitions.py").read_text(encoding="utf-8")
+        self.assertIn("if order.status == target_status:", source)
+        self.assertIn("return False", source)
+        self.assertIn("if target_status not in allowed_targets:", source)
+        self.assertIn("raise ConflictException", source)
 
     def test_order_creation_sets_inventory_and_expiration_in_transaction(self):
         source = (REPO_ROOT / "app/services/order.py").read_text(encoding="utf-8")
@@ -172,7 +175,7 @@ class OrderSystemTests(unittest.TestCase):
         self.assertNotIn("await db.commit()", create_order_source)
 
     def test_order_model_declares_inventory_and_close_fields(self):
-        source = (REPO_ROOT / "app/models/order.py").read_text(encoding="utf-8")
+        source = (REPO_ROOT / "app/domain/order/src/model/order.py").read_text(encoding="utf-8")
 
         self.assertIn("inventory_id: Mapped[int | None]", source)
         self.assertIn('ForeignKey("inventory.id")', source)
@@ -181,7 +184,7 @@ class OrderSystemTests(unittest.TestCase):
         self.assertIn("close_reason: Mapped[str | None] = mapped_column(String(128))", source)
 
     def test_order_status_constraint_allows_closed(self):
-        source = (REPO_ROOT / "app/models/order.py").read_text(encoding="utf-8")
+        source = (REPO_ROOT / "app/domain/order/src/model/order.py").read_text(encoding="utf-8")
 
         self.assertIn("ck_order_status", source)
         self.assertIn("status IN ('pending', 'paid', 'completed', 'refunded', 'closed')", source)
@@ -235,7 +238,7 @@ class OrderSystemTests(unittest.TestCase):
         self.assertIn("metadata_changed = True", paid_or_completed_source)
 
     def test_inventory_service_confirms_and_releases_locked_inventory(self):
-        source = (REPO_ROOT / "app/services/inventory.py").read_text(encoding="utf-8")
+        source = (REPO_ROOT / "app/domain/order/src/transition/inventory_transitions.py").read_text(encoding="utf-8")
 
         self.assertIn("def add_inventory_record", source)
         self.assertIn("async def confirm_inventory_sale", source)
@@ -247,7 +250,7 @@ class OrderSystemTests(unittest.TestCase):
         self.assertIn("action=INVENTORY_RELEASE_ACTION", source)
 
     def test_close_expired_pending_order_closes_only_expired_pending_orders(self):
-        source = (REPO_ROOT / "app/services/order_timeout.py").read_text(encoding="utf-8")
+        source = (REPO_ROOT / "app/domain/order/src/transition/order_transitions.py").read_text(encoding="utf-8")
 
         self.assertIn('if order.status != "pending":', source)
         self.assertIn("if order.expires_at is None:", source)
@@ -310,7 +313,7 @@ class OrderSystemTests(unittest.TestCase):
         )
 
     def test_order_model_declares_unique_transaction_id_index(self):
-        source = (REPO_ROOT / "app/models/order.py").read_text(encoding="utf-8")
+        source = (REPO_ROOT / "app/domain/order/src/model/order.py").read_text(encoding="utf-8")
 
         self.assertIn('Index("ix_order_transaction_id_unique", "transaction_id", unique=True)', source)
 

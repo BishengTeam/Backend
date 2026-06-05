@@ -350,7 +350,7 @@ class AdminBatch3SystemTests(unittest.TestCase):
     # ── AdminUser model ──
 
     def test_admin_user_model_has_role_constraint(self):
-        source = _read_text(_path("app/models/admin_user.py"))
+        source = _read_text(_path("app/domain/user/src/model/admin_user.py"))
         self.assertIn("ck_admin_user_role", source)
         self.assertIn("ADMIN_ROLES", source)
         self.assertIn("super_admin", source)
