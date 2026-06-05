@@ -4,8 +4,8 @@ from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.core.config import settings
-from app.core.exceptions import ValidationException
+from app.port.config import settings
+from app.port.exceptions import ValidationException
 
 DEFAULT_PAGE = 1
 DEFAULT_PAGE_SIZE = 20

@@ -3,7 +3,7 @@ import uuid
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.core.logging import request_id_var
+from app.adapter.logging import request_id_var
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):

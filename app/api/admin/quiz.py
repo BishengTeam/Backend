@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
 
-from app.core.exceptions import BusinessException
+from app.port.exceptions import BusinessException
 from app.middleware.auth import require_permission
 from app.schemas.admin import AdminBatchDeleteRequest
 from app.schemas.admin_quiz import (

@@ -5,10 +5,9 @@ from datetime import date
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db_ctx
-from app.core.exceptions import BusinessException, NotFoundException
-from app.models.points import PointsHistory, UserPoints
-from app.models.user import User
+from app.adapter.database import get_db_ctx
+from app.port.exceptions import BusinessException, NotFoundException
+from app.domain.user.src.index import PointsHistory, User, UserPoints
 from app.schemas.common import PaginatedData
 from app.schemas.points import (
     PointsBalanceResponse,

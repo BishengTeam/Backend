@@ -1,9 +1,9 @@
 from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload
 
-from app.core.database import get_db_ctx
-from app.core.exceptions import BusinessException, NotFoundException
-from app.models.course import Course, CourseEnrollment
+from app.adapter.database import get_db_ctx
+from app.port.exceptions import BusinessException, NotFoundException
+from app.domain.certification.src.index import Course, CourseEnrollment
 from app.schemas.common import PaginatedData
 from app.schemas.course import (
     CourseDetailResponse,

@@ -3,10 +3,10 @@ import asyncio
 
 from sqlalchemy import select
 
-from app.core.database import async_session_factory
-from app.models.certification import Certification
-from app.models.price_config import PriceConfig
-from app.models.quiz import QuizCategory
+from app.adapter.database import async_session_factory
+from app.domain.certification.src.index import Certification
+from app.domain.order.src.index import PriceConfig
+from app.domain.community.src.index import QuizCategory
 
 
 async def seed_price_configs():

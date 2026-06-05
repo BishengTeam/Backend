@@ -41,7 +41,7 @@ class TestAdminAuthMe:
 
     async def test_admin_info_serialization_for_all_roles(self, db_factory):
         """AdminInfo.model_validate correctly serializes each AdminUser role."""
-        from app.models.admin_user import AdminUser
+        from app.domain.user.src.index import AdminUser
         from app.schemas.admin import AdminInfo
 
         factory, prefix = db_factory
@@ -70,8 +70,8 @@ class TestAdminAuthMe:
 
     async def test_role_permissions_mapping(self, db_factory):
         """ROLE_PERMISSIONS.get(admin.role, []) returns the correct list."""
-        from app.models.admin_user import AdminUser
-        from app.schemas.admin import ROLE_PERMISSIONS
+        from app.domain.user.src.index import AdminUser
+        from app.policy.permissions import ROLE_PERMISSIONS
 
         factory, prefix = db_factory
 

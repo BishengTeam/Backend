@@ -7,13 +7,12 @@ from sqlalchemy import func, select
 
 logger = logging.getLogger(__name__)
 
-from app.core.config import settings
-from app.core.database import get_db_ctx
-from app.core.exceptions import BusinessException
-from app.core.redis import redis_get_safe, redis_setex_safe
+from app.port.config import settings
+from app.adapter.database import get_db_ctx
+from app.port.exceptions import BusinessException
+from app.adapter.redis import redis_get_safe, redis_setex_safe
 from app.integrations.chat_backend import ChatBackend, DifyChatBackend
-from app.models.conversation import Conversation
-from app.models.quick_question import QuickQuestion
+from app.domain.community.src.index import Conversation, QuickQuestion
 from app.schemas.chat import ChatResponse, QuickQuestionResponse
 
 SESSION_TTL = 3600

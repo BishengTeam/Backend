@@ -12,9 +12,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.core.exceptions import ForbiddenException
+from app.port.exceptions import ForbiddenException
 from app.middleware.auth import require_permission
-from app.schemas.admin import ROLE_PERMISSIONS
+from app.policy.permissions import ROLE_PERMISSIONS
 
 
 # ---------------------------------------------------------------------------

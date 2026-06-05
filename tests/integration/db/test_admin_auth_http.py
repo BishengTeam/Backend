@@ -18,14 +18,14 @@ ROLES = ("super_admin", "content_editor", "customer_service", "finance", "audito
 
 
 def _make_admin_token(admin_id: int, username: str, role: str) -> str:
-    from app.core.security import create_admin_access_token
+    from app.adapter.security import create_admin_access_token
     return create_admin_access_token(admin_id, username, role)
 
 
 @pytest.fixture
 async def test_client():
     """Fixtures a FastAPI TestClient wired to the real test database."""
-    from app.core.database import get_db
+    from app.adapter.database import get_db
 
     engine = create_async_engine(os.environ["TEST_DATABASE_URL"], echo=False)
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -58,7 +58,7 @@ class TestAdminAuthMe:
 
     async def test_me_returns_admin_info_and_permissions(self, test_client):
         """Verify /me returns correct AdminInfo and ROLE_PERMISSIONS for super_admin."""
-        from app.models.admin_user import AdminUser
+        from app.domain.user.src.index import AdminUser
 
         client, factory, prefix = test_client
 
@@ -86,7 +86,7 @@ class TestAdminAuthMe:
 
     async def test_me_returns_role_specific_permissions(self, test_client):
         """content_editor gets quiz:write but not order:write in /me."""
-        from app.models.admin_user import AdminUser
+        from app.domain.user.src.index import AdminUser
 
         client, factory, prefix = test_client
 
@@ -118,12 +118,12 @@ class TestAdminAuthMe:
 
     async def test_me_rejects_user_token(self, test_client):
         """A regular user JWT (type=access) is rejected by /admin/auth/me."""
-        from app.core.security import create_access_token
+        from app.adapter.security import create_access_token
 
         client, factory, prefix = test_client
 
         async with factory() as db:
-            from app.models.user import User
+            from app.domain.user.src.index import User
             user = User(openid=f"{prefix}_user", phone="13800000000")
             db.add(user)
             await db.flush()

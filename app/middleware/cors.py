@@ -1,7 +1,7 @@
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
 
-from app.core.config import settings
+from app.port.config import settings
 
 
 def setup_cors(app: FastAPI) -> None:

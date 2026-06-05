@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Path, Query
 
 from app.middleware.auth import get_current_user
-from app.models.user import User
+from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.ticket import TicketCreateRequest, TicketDetail, TicketListItem
 from app.services.ticket import TicketService

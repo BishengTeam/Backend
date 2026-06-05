@@ -11,20 +11,12 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, text
 
-from app.core.database import async_session_factory
-from app.models.admin_user import AdminUser
-from app.models.banner import Banner
-from app.models.certification import Certification
-from app.models.coupon import Coupon, UserCoupon
-from app.models.course import Course, CourseEnrollment
-from app.models.inventory import Inventory
-from app.models.order import Order
-from app.models.points import PointsHistory, UserPoints
-from app.models.price_config import PriceConfig
-from app.models.quick_question import QuickQuestion
-from app.models.user import User
-from app.models.user_identity import UserIdentity
-from app.models.zone import Zone
+from app.adapter.database import async_session_factory
+from app.domain.user.src.index import AdminUser, PointsHistory, User, UserIdentity, UserPoints
+from app.domain.content.src.index import Banner, Zone
+from app.domain.certification.src.index import Certification, Course, CourseEnrollment
+from app.domain.order.src.index import Coupon, Inventory, Order, PriceConfig, UserCoupon
+from app.domain.community.src.index import QuickQuestion
 
 # ── 测试用户定义 ──────────────────────────────────────────────
 TEST_USERS = [

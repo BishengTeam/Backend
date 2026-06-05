@@ -26,6 +26,10 @@ def _load_points_api_module():
             "app.models.user",
             "app.services",
             "app.services.points",
+            "app.domain",
+            "app.domain.user",
+            "app.domain.user.src",
+            "app.domain.user.src.index",
         )
     }
 
@@ -47,6 +51,15 @@ def _load_points_api_module():
 
     user_module.User = User
 
+    domain_package = types.ModuleType("app.domain")
+    domain_package.__path__ = []
+    domain_user_package = types.ModuleType("app.domain.user")
+    domain_user_package.__path__ = []
+    domain_user_src_package = types.ModuleType("app.domain.user.src")
+    domain_user_src_package.__path__ = []
+    domain_user_index = types.ModuleType("app.domain.user.src.index")
+    domain_user_index.User = User
+
     services_package = types.ModuleType("app.services")
     services_package.__path__ = []
     points_service_module = types.ModuleType("app.services.points")
@@ -60,6 +73,10 @@ def _load_points_api_module():
     sys.modules["app.middleware.auth"] = auth_module
     sys.modules["app.models"] = models_package
     sys.modules["app.models.user"] = user_module
+    sys.modules["app.domain"] = domain_package
+    sys.modules["app.domain.user"] = domain_user_package
+    sys.modules["app.domain.user.src"] = domain_user_src_package
+    sys.modules["app.domain.user.src.index"] = domain_user_index
     sys.modules["app.services"] = services_package
     sys.modules["app.services.points"] = points_service_module
 
@@ -142,7 +159,9 @@ class PointsHttpSmokeTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.original_points_service = self.points_api.PointsService
+        self.original_service = self.points_api._service
         self.points_api.PointsService = FakePointsService
+        self.points_api._service = FakePointsService()
         self.addCleanup(self._restore_points_service)
 
         app = FastAPI()
@@ -156,6 +175,7 @@ class PointsHttpSmokeTests(unittest.TestCase):
 
     def _restore_points_service(self) -> None:
         self.points_api.PointsService = self.original_points_service
+        self.points_api._service = self.original_service
 
     def test_points_routes_depend_on_current_user(self):
         expected_paths = {"/points", "/points/history", "/points/claim", "/points/redeem"}

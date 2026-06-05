@@ -18,8 +18,7 @@ from sqlalchemy import select
 
 from app.core.database import async_session_factory
 from app.core.security import create_access_token, create_admin_access_token
-from app.models.user import User
-from app.models.admin_user import AdminUser
+from app.domain.user.src.index import AdminUser, User
 
 
 async def main():

@@ -2,12 +2,11 @@ from fastapi import Depends, Header
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
-from app.core.exceptions import AppException, BusinessException, ForbiddenException, UnauthorizedException
-from app.core.security import decode_access_token, is_token_revoked
-from app.models.user import User
-from app.models.user_identity import UserIdentity
-from app.schemas.admin import ROLE_PERMISSIONS
+from app.adapter.database import get_db
+from app.port.exceptions import AppException, BusinessException, ForbiddenException, UnauthorizedException
+from app.adapter.security import decode_access_token, is_token_revoked
+from app.domain.user.src.index import AdminUser, User, UserIdentity
+from app.policy.permissions import ROLE_PERMISSIONS
 
 
 async def get_current_user(
@@ -38,8 +37,6 @@ async def get_current_admin(
     authorization: str = Header(...),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.models.admin_user import AdminUser
-
     if not authorization.startswith("Bearer "):
         raise UnauthorizedException("认证格式错误")
     token = authorization[7:]

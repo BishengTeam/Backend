@@ -9,10 +9,10 @@ from sqlalchemy import text
 from app.api import router as api_router
 from app.api.admin import router as admin_router
 from app.api.agreement import router as agreement_router
-from app.core.config import settings
-from app.core.database import engine, get_db_ctx
-from app.core.redis import redis_client, redis_ping
-from app.core.logging import setup_logging
+from app.port.config import settings
+from app.adapter.database import engine, get_db_ctx
+from app.adapter.redis import redis_client, redis_ping
+from app.adapter.logging import setup_logging
 from app.middleware import setup_middleware
 from app.middleware.rate_limit import limiter
 from app.schemas.common import success

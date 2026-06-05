@@ -99,7 +99,7 @@ async def _cleanup_test_data(session_factory, prefix: str) -> None:
 
 
 async def _seed_user(session_factory, prefix: str, index: int = 0) -> int:
-    from app.models.user import User
+    from app.domain.user.src.index import User
 
     async with session_factory() as db:
         user = User(openid=f"{prefix}-openid-{index}", phone=f"138{index:08d}")
@@ -122,7 +122,7 @@ async def test_new_user_balance_defaults_to_zero(session_factory, app_context, t
 async def test_claim_points_is_idempotent(session_factory, app_context, test_prefix):
     from sqlalchemy import func, select
 
-    from app.models.points import PointsHistory, UserPoints
+    from app.domain.user.src.index import PointsHistory, UserPoints
     from app.schemas.points import PointsClaimRequest
 
     user_id = await _seed_user(session_factory, test_prefix)
@@ -153,7 +153,7 @@ async def test_claim_points_is_idempotent(session_factory, app_context, test_pre
 async def test_concurrent_claim_points_only_grants_once(session_factory, app_context, test_prefix):
     from sqlalchemy import func, select
 
-    from app.models.points import PointsHistory, UserPoints
+    from app.domain.user.src.index import PointsHistory, UserPoints
     from app.schemas.points import PointsClaimRequest
 
     user_id = await _seed_user(session_factory, test_prefix)
@@ -185,7 +185,7 @@ async def test_redeem_points_debits_balance_and_writes_history(
 ):
     from sqlalchemy import select
 
-    from app.models.points import PointsHistory, UserPoints
+    from app.domain.user.src.index import PointsHistory, UserPoints
     from app.schemas.points import PointsRedeemRequest
 
     user_id = await _seed_user(session_factory, test_prefix)
@@ -217,8 +217,8 @@ async def test_redeem_points_debits_balance_and_writes_history(
 async def test_redeem_points_rejects_insufficient_balance(session_factory, app_context, test_prefix):
     from sqlalchemy import func, select
 
-    from app.core.exceptions import BusinessException
-    from app.models.points import PointsHistory, UserPoints
+    from app.port.exceptions import BusinessException
+    from app.domain.user.src.index import PointsHistory, UserPoints
     from app.schemas.points import PointsRedeemRequest
 
     user_id = await _seed_user(session_factory, test_prefix)
@@ -244,8 +244,8 @@ async def test_redeem_points_rejects_insufficient_balance(session_factory, app_c
 async def test_concurrent_redeem_points_does_not_overdraw(session_factory, app_context, test_prefix):
     from sqlalchemy import func, select
 
-    from app.core.exceptions import BusinessException
-    from app.models.points import PointsHistory, UserPoints
+    from app.port.exceptions import BusinessException
+    from app.domain.user.src.index import PointsHistory, UserPoints
     from app.schemas.points import PointsRedeemRequest
 
     user_id = await _seed_user(session_factory, test_prefix)

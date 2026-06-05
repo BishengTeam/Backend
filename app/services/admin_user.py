@@ -1,10 +1,10 @@
 from sqlalchemy import func, select
 
-from app.core.database import get_db_ctx
-from app.core.exceptions import NotFoundException
-from app.models.conversation import Conversation
-from app.models.order import Order
-from app.models.user import User
+from app.adapter.database import get_db_ctx
+from app.port.exceptions import NotFoundException
+from app.domain.community.src.index import Conversation
+from app.domain.order.src.index import Order
+from app.domain.user.src.index import User
 from app.schemas.admin import AdminUserFilter, AdminUserListItem, AdminUserUpdate
 from app.schemas.common import PaginatedData
 

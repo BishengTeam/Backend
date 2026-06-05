@@ -8,10 +8,10 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db_ctx
-from app.core.exceptions import NotFoundException, ValidationException
-from app.models.quiz import QuizCategory, QuizCheckin, QuizQuestion, QuizRecord
-from app.models.user import User
+from app.adapter.database import get_db_ctx
+from app.port.exceptions import NotFoundException, ValidationException
+from app.domain.community.src.index import QuizCategory, QuizCheckin, QuizQuestion, QuizRecord
+from app.domain.user.src.index import User
 from app.schemas.common import PaginatedData
 from app.utils.quiz_helpers import (
     answer_to_storage,

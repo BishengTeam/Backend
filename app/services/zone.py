@@ -2,14 +2,9 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app.core.database import get_db_ctx
-from app.models.activity import Activity
-from app.models.banner import Banner
-from app.models.certification import Certification
-from app.models.competition import CompetitionReg
-from app.models.course import Course
-from app.models.job import Job
-from app.models.zone import Zone
+from app.adapter.database import get_db_ctx
+from app.domain.content.src.index import Activity, Banner, Zone
+from app.domain.certification.src.index import Certification, CompetitionReg, Course, Job
 from app.schemas.certification import CertificationResponse
 from app.schemas.zone import (
     ActivityBrief,

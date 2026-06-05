@@ -5,13 +5,16 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app.core.database import get_db_ctx
-from app.core.exceptions import BusinessException
-from app.models.order import Order
-from app.services.inventory import release_inventory_lock
-from app.services.order import apply_order_status_transition
+from app.adapter.database import get_db_ctx
+from app.port.exceptions import BusinessException
+from app.domain.order.src.index import (
+    DEFAULT_TIMEOUT_CLOSE_REASON,
+    Order,
+    apply_order_status_transition,
+    close_expired_pending_order,
+    release_inventory_lock,
+)
 
-DEFAULT_TIMEOUT_CLOSE_REASON = "payment_timeout"
 MAX_CLOSE_REASON_LENGTH = 128
 
 
@@ -20,29 +23,6 @@ class CloseExpiredOrdersResult:
     scanned: int
     closed: int
     order_ids: list[int]
-
-
-def close_expired_pending_order(
-    order: Order,
-    *,
-    now: datetime,
-    close_reason: str = DEFAULT_TIMEOUT_CLOSE_REASON,
-) -> bool:
-    if order.status != "pending":
-        return False
-    if order.expires_at is None:
-        return False
-    expires_at = order.expires_at
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at > now:
-        return False
-
-    changed = apply_order_status_transition(order, "closed")
-    if changed:
-        order.closed_at = now
-        order.close_reason = close_reason
-    return changed
 
 
 class OrderTimeoutCloseService:

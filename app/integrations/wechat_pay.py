@@ -6,8 +6,8 @@ from xml.etree import ElementTree as ET
 
 import httpx
 
-from app.core.config import settings
-from app.core.exceptions import ThirdPartyException
+from app.port.config import settings
+from app.port.exceptions import ThirdPartyException
 
 WECHAT_UNIFIED_ORDER_URL = "https://api.mch.weixin.qq.com/pay/unifiedorder"
 WECHAT_REFUND_URL = "https://api.mch.weixin.qq.com/secapi/pay/refund"

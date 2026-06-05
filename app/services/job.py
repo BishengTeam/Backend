@@ -1,8 +1,8 @@
 from sqlalchemy import select, func
 
-from app.core.database import get_db_ctx
-from app.core.exceptions import ConflictException, NotFoundException
-from app.models.job import Job, JobApplication
+from app.adapter.database import get_db_ctx
+from app.port.exceptions import ConflictException, NotFoundException
+from app.domain.certification.src.index import Job, JobApplication
 from app.schemas.common import PaginatedData
 from app.schemas.job import JobResponse
 

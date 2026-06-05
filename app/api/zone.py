@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from app.middleware.auth import get_current_user, get_current_user_optional
-from app.models.user import User
+from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, success
 from app.schemas.zone import (
     ActivityZoneResponse,

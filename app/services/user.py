@@ -1,13 +1,11 @@
 from sqlalchemy import select, update
 
-from app.core.database import get_db_ctx
-from app.core.exceptions import BusinessException, NotFoundException, ValidationException
-from app.core.redis import redis_get_safe
+from app.adapter.database import get_db_ctx
+from app.port.exceptions import BusinessException, NotFoundException, ValidationException
+from app.adapter.redis import redis_get_safe
 from app.integrations.wechat import WechatClient
-from app.models.deleted_openid import DeletedOpenid
-from app.models.order import Order
-from app.models.user import User
-from app.models.user_identity import UserIdentity
+from app.domain.user.src.index import DeletedOpenid, User, UserIdentity
+from app.domain.order.src.index import Order
 from app.schemas.user import (
     UserIdentityCreate,
     UserIdentityResponse,

@@ -5,9 +5,9 @@ from typing import Any
 
 from sqlalchemy import func, select
 
-from app.core.database import get_db_ctx
-from app.core.exceptions import BusinessException, NotFoundException, ValidationException
-from app.models.quiz import QuizCategory, QuizQuestion, QuizRecord
+from app.adapter.database import get_db_ctx
+from app.port.exceptions import BusinessException, NotFoundException, ValidationException
+from app.domain.community.src.index import QuizCategory, QuizQuestion, QuizRecord
 from app.schemas.admin_quiz import (
     AdminQuizCategoryCreate,
     AdminQuizCategoryUpdate,

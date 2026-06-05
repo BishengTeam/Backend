@@ -23,8 +23,8 @@ async def refresh_token(body: RefreshRequest) -> APIResponse[RefreshResponse]:
     return success(data=result)
 
 
-@router.post("/logout")
-async def logout(body: LogoutRequest):
+@router.post("/logout", response_model=APIResponse[None])
+async def logout(body: LogoutRequest) -> APIResponse[None]:
     """退出登录，删除 refresh_token"""
     await AuthService.logout(body.refresh_token)
     return success(message="已退出登录")

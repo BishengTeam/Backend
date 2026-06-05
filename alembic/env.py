@@ -12,7 +12,7 @@ if os.getenv("TEST_DATABASE_URL") or os.getenv("TEST_DATABASE_URL_SYNC"):
         os.environ.setdefault("DATABASE_URL_SYNC", os.environ["TEST_DATABASE_URL_SYNC"])
     os.environ.setdefault("JWT_SECRET", "test-secret-for-integration-testing-min-32-chars")
 
-from app.core.database import Base
+from app.adapter.database import Base
 
 # Import all models so Base.metadata knows about them
 # models/__init__.py is the single source of truth — it imports every model class
@@ -21,7 +21,7 @@ import app.models  # noqa: F401
 config = context.config
 
 # 优先从 pydantic Settings 获取已组装的 URL（含 URL 编码的密码），不在 env var 中
-from app.core.config import settings  # noqa: E402
+from app.port.config import settings  # noqa: E402
 
 database_url = (
     os.getenv("TEST_DATABASE_URL_SYNC")

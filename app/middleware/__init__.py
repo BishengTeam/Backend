@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 
-from app.core.exceptions import AppException
+from app.port.exceptions import AppException
 from app.middleware.cors import setup_cors
 from app.middleware.error_handler import (
     app_exception_handler,

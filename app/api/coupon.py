@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 
 from app.middleware.auth import get_current_user
-from app.models.user import User
+from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.coupon import CouponAssignRequest, CouponResponse, CouponVerifyRequest
 from app.services.coupon import CouponService
