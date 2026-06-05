@@ -99,6 +99,30 @@ class ActivityService:
             await db.refresh(reg)
             return reg
 
+    async def export_csv(self) -> str:
+        """导出所有活动报名为 CSV（管理端）"""
+        async with get_db_ctx() as db:
+            result = await db.execute(
+                select(ActivityRegistration).order_by(ActivityRegistration.id)
+            )
+            registrations = result.scalars().all()
+
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(["ID", "活动ID", "用户ID", "姓名", "电话", "备注", "报名时间"])
+            for reg in registrations:
+                writer.writerow([
+                    reg.id,
+                    reg.activity_id,
+                    reg.user_id,
+                    reg.name,
+                    reg.phone,
+                    reg.remark or "",
+                    reg.created_at.isoformat() if reg.created_at else "",
+                ])
+
+            return output.getvalue()
+
     async def export_my_registrations(self, *, user_id: int) -> str:
         async with get_db_ctx() as db:
             result = await db.execute(

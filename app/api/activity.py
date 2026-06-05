@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Path, Query
-from fastapi.responses import PlainTextResponse
 
 from app.middleware.auth import get_current_user
 from app.domain.user.src.index import User
@@ -64,21 +63,6 @@ async def enroll_activity(
         remark=remark,
     )
     return success(data=ActivityRegistrationResponse.model_validate(result))
-
-
-@router.get("/export", response_class=PlainTextResponse)
-async def export_registrations(
-    current_user: User = Depends(get_current_user),
-):
-    """导出活动报名 CSV"""
-    csv_content = await ActivityService().export_my_registrations(
-        user_id=current_user.id,
-    )
-    return PlainTextResponse(
-        content=csv_content,
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=my_activities.csv"},
-    )
 
 
 @router.post("/{activity_id}/remind", response_model=APIResponse[ActivityReminderResponse])

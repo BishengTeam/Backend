@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, Path, Query
-from fastapi.responses import PlainTextResponse
 
 from app.middleware.auth import get_current_user
 from app.domain.user.src.index import User
@@ -86,14 +85,3 @@ async def nisp_template() -> APIResponse[NispTemplateResponse]:
     return success(data=NispTemplateResponse(**data))
 
 
-@router.get("/export", response_class=PlainTextResponse)
-async def export_certifications(
-    current_user: User = Depends(get_current_user),
-) -> PlainTextResponse:
-    """认证报名导出 CSV"""
-    csv_content = await CertificationService().export_csv()
-    return PlainTextResponse(
-        content=csv_content,
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=certifications.csv"},
-    )

@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends
-from fastapi.responses import PlainTextResponse
 
 from app.middleware.auth import get_current_user
 from app.domain.user.src.index import User
@@ -22,23 +21,6 @@ async def get_competition_tracks():
     """获取所有不重复的赛道列表"""
     tracks = await CompetitionService().get_tracks()
     return success(data=TrackListResponse(tracks=tracks))
-
-
-@router.get("/export", response_class=PlainTextResponse)
-async def export_competition(
-    current_user: User = Depends(get_current_user),
-):
-    """导出当前用户的竞赛报名记录为 CSV"""
-    csv_content = await CompetitionService().export_my_registrations(
-        user_id=current_user.id
-    )
-    return PlainTextResponse(
-        content=csv_content,
-        media_type="text/csv",
-        headers={
-            "Content-Disposition": "attachment; filename=competition_export.csv"
-        },
-    )
 
 
 @router.post("/signup", response_model=APIResponse[CompetitionRegResponse])
