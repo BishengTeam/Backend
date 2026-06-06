@@ -31,28 +31,56 @@ def _safe_create_index(index_name, table, columns, **kw):
         pass
 
 
+def _has_constraint(table_name, constraint_name):
+    """检查约束是否存在"""
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text(
+            "SELECT 1 FROM pg_constraint WHERE conname = :name AND conrelid = :table::regclass"
+        ),
+        {"name": constraint_name, "table": table_name},
+    )
+    return result.fetchone() is not None
+
+
+def _has_index(index_name, table_name):
+    """检查索引是否存在"""
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text(
+            "SELECT 1 FROM pg_indexes WHERE indexname = :name AND tablename = :table"
+        ),
+        {"name": index_name, "table": table_name},
+    )
+    return result.fetchone() is not None
+
+
 def _safe_drop_constraint(constraint_name, table_name, **kw):
-    """幂等删除约束"""
-    try:
-        _safe_drop_constraint(constraint_name, table_name, **kw)
-    except Exception:
-        pass
+    """幂等删除约束 — 先检查再删除"""
+    if _has_constraint(table_name, constraint_name):
+        op.drop_constraint(constraint_name, table_name, **kw)
 
 
 def _safe_drop_index(index_name, **kw):
-    """幂等删除索引"""
-    try:
-        _safe_drop_index(index_name, **kw)
-    except Exception:
-        pass
+    """幂等删除索引 — 先检查再删除"""
+    table_name = kw.get('table_name', '')
+    if table_name and _has_index(index_name, table_name):
+        op.drop_index(index_name, **kw)
+    else:
+        try:
+            op.drop_index(index_name, **kw)
+        except Exception:
+            pass
 
 
 def _safe_alter_column(table, column, **kw):
-    """幂等修改列"""
+    """幂等修改列 — 简单 try/except（alter 不回滚事务? 用检查）"""
     try:
-        _safe_alter_column(table, column, **kw)
+        op.alter_column(table, column, **kw)
     except Exception:
-        pass
+        # alter column 失败也可能中止事务，回滚
+        op.get_bind().execute(sa.text("ROLLBACK"))
+        op.get_bind().execute(sa.text("BEGIN"))
 
 
 def upgrade() -> None:
