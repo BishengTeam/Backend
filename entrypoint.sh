@@ -2,6 +2,9 @@
 set -e
 
 echo "==> Running database migrations..."
+# 修复 DB 卷持久化导致的重复建表问题
+python3 /app/scripts/_stamp_db.py || true
+
 alembic upgrade head
 
 echo "==> Seeding default data..."
