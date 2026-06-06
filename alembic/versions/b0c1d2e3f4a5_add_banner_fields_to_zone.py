@@ -19,11 +19,24 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _add_column_safe(table, column):
+    """幂等添加列：如果列已存在则跳过"""
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    cols = [c['name'] for c in inspector.get_columns(table)]
+    if column.name not in cols:
+        op.add_column(table, column)
+
+
 def upgrade() -> None:
-    op.add_column('zone', sa.Column('is_banner', sa.Boolean(), nullable=False, server_default=sa.text('false')))
-    op.add_column('zone', sa.Column('start_time', sa.DateTime(timezone=True), nullable=True))
-    op.add_column('zone', sa.Column('end_time', sa.DateTime(timezone=True), nullable=True))
-    op.create_index(op.f('ix_zone_is_banner'), 'zone', ['is_banner'])
+    _add_column_safe('zone', sa.Column('is_banner', sa.Boolean(), nullable=False, server_default=sa.text('false')))
+    _add_column_safe('zone', sa.Column('start_time', sa.DateTime(timezone=True), nullable=True))
+    _add_column_safe('zone', sa.Column('end_time', sa.DateTime(timezone=True), nullable=True))
+    # index may already exist
+    try:
+        op.create_index(op.f('ix_zone_is_banner'), 'zone', ['is_banner'])
+    except Exception:
+        pass
 
 
 def downgrade() -> None:
