@@ -69,7 +69,29 @@ class ZoneService:
                 if zone_list:
                     zones[ztype] = zone_list
 
-            return HomeAggregationResponse(banners=banners, zones=zones)
+            # Top active courses
+            course_stmt = (
+                select(Course)
+                .where(Course.is_active == True)
+                .order_by(Course.id.desc())
+                .limit(HOME_ZONE_LIMIT)
+            )
+            course_result = await db.execute(course_stmt)
+            courses = [CourseBrief.model_validate(c) for c in course_result.scalars().all()]
+
+            # Top active activities
+            activity_stmt = (
+                select(Activity)
+                .where(Activity.is_active == True)
+                .order_by(Activity.id.desc())
+                .limit(HOME_ZONE_LIMIT)
+            )
+            activity_result = await db.execute(activity_stmt)
+            activities = [ActivityBrief.model_validate(a) for a in activity_result.scalars().all()]
+
+            return HomeAggregationResponse(
+                banners=banners, zones=zones, courses=courses, activities=activities
+            )
 
     # ── B-P0.2 认证专区 ───────────────────────────────────────────
 

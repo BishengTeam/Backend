@@ -91,6 +91,8 @@ class JobBrief(BaseModel):
 class HomeAggregationResponse(BaseModel):
     banners: list[BannerBrief] = Field(default_factory=list)
     zones: dict[str, list[ZoneSectionItem]] = Field(default_factory=dict)
+    courses: list[CourseBrief] = Field(default_factory=list)
+    activities: list[ActivityBrief] = Field(default_factory=list)
 
 
 class CertZoneResponse(BaseModel):
