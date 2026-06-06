@@ -1,6 +1,6 @@
 from app.domain.content.src.index import (
     Activity, ActivityRegistration, ActivityReminder,
-    Agreement, Banner, Ticket, Zone,
+    Agreement, Ticket, Zone,
 )
 from app.domain.certification.src.index import Certification, CompetitionReg, Course, CourseEnrollment, Job, JobApplication
 from app.domain.community.src.index import (
@@ -20,7 +20,6 @@ __all__ = [
     "ADMIN_ROLES",
     "AdminUser",
     "Agreement",
-    "Banner",
     "Certification",
     "Collection",
     "CompetitionReg",

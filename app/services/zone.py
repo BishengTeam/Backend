@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 from app.adapter.database import get_db_ctx
-from app.domain.content.src.index import Activity, Banner, Zone
+from app.domain.content.src.index import Activity, Zone
 from app.domain.certification.src.index import Certification, CompetitionReg, Course, Job
 from app.schemas.certification import CertificationResponse
 from app.schemas.zone import (
@@ -36,18 +36,28 @@ class ZoneService:
         async with get_db_ctx() as db:
             now = datetime.now(timezone.utc)
 
-            # Active banners within valid time range, sorted by sort
+            # Active banners: zones with is_banner=True and within valid time range
             banner_stmt = (
-                select(Banner)
+                select(Zone)
                 .where(
-                    Banner.is_active == True,
-                    (Banner.start_time == None) | (Banner.start_time <= now),
-                    (Banner.end_time == None) | (Banner.end_time >= now),
+                    Zone.is_active == True,
+                    Zone.is_banner == True,
+                    (Zone.start_time == None) | (Zone.start_time <= now),
+                    (Zone.end_time == None) | (Zone.end_time >= now),
                 )
-                .order_by(Banner.sort, Banner.id.desc())
+                .order_by(Zone.sort_order, Zone.id.desc())
             )
             banner_result = await db.execute(banner_stmt)
-            banners = [BannerBrief.model_validate(b) for b in banner_result.scalars().all()]
+            banners: list[BannerBrief] = []
+            for z in banner_result.scalars().all():
+                banners.append(
+                    BannerBrief(
+                        id=z.id,
+                        image_url=z.cover_url or "",
+                        jump_link=z.link_url,
+                        sort=z.sort_order,
+                    )
+                )
 
             # All zone types: top N active zones sorted by sort_order
             zones: dict[str, list[ZoneSectionItem]] = {}

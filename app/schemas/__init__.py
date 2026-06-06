@@ -91,7 +91,6 @@ from app.schemas.admin_agreement import (
     AdminAgreementListItem,
     AdminAgreementReview,
 )
-from app.schemas.admin_banner import BannerCreate, BannerListItem, BannerUpdate
 from app.schemas.admin_certification import AdminCertificationCreate, AdminCertificationUpdate
 from app.schemas.admin_coupon import AdminCouponBatchCreate, AdminCouponCreate, AdminCouponListItem
 from app.schemas.admin_course import AdminCourseCreate, AdminCourseListItem, AdminCourseUpdate

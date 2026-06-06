@@ -28,7 +28,6 @@ from app.services.cleanup import cleanup_loop
 # Admin services
 from app.services.admin_agreement import AdminAgreementService
 from app.services.admin_auth import AdminAuthService
-from app.services.admin_banner import AdminBannerService
 from app.services.admin_certification import AdminCertificationService
 from app.services.admin_competition import AdminCompetitionService
 from app.services.admin_coupon import AdminCouponService
@@ -72,7 +71,6 @@ __all__ = [
     # Admin
     "AdminAgreementService",
     "AdminAuthService",
-    "AdminBannerService",
     "AdminCertificationService",
     "AdminCompetitionService",
     "AdminCouponService",
