@@ -25,7 +25,16 @@ CSV_MAX_UPLOAD_SIZE = 5 * 1024 * 1024  # 5MB
 
 # ── Category routes ──
 
-@router.get(CATEGORY, response_model=APIResponse[list[QuizCategoryResponse]])
+@router.get(CATEGORY,
+    response_model=APIResponse[list[QuizCategoryResponse]],
+    summary="题库分类列表",
+    description="""
+管理后台 **题库管理** 页面使用。
+
+**页面路径**: `/admin/quiz`
+**使用场景**: 页面加载时获取所有题库分类，用于分类筛选和导航
+    """,
+)
 async def list_categories(
     _admin=Depends(require_permission("quiz:list")),
 ) -> APIResponse[list[QuizCategoryResponse]]:
@@ -35,7 +44,22 @@ async def list_categories(
 
 # ── Question routes ──
 
-@router.get(QUESTION, response_model=APIResponse[PaginatedData[AdminQuizQuestionResponse]])
+@router.get(QUESTION,
+    response_model=APIResponse[PaginatedData[AdminQuizQuestionResponse]],
+    summary="题目列表",
+    description="""
+管理后台 **题库管理** 页面使用。
+
+**页面路径**: `/admin/quiz`
+**使用场景**: 页面加载时按分类/题型分页获取题目列表
+**查询参数**:
+- `category_id`: 分类 ID
+- `question_type`: 题型（single_choice / multiple_choice / judge）
+- `page`: 页码
+- `page_size`: 每页条数
+**响应**: 分页题目数据
+    """,
+)
 async def list_questions(
     category_id: int | None = Query(None, ge=1, description="分类 ID"),
     question_type: str | None = Query(None, description="题型：single_choice / multiple_choice / judge"),
@@ -51,7 +75,16 @@ async def list_questions(
 
 # ── Category write routes ──
 
-@router.post(CATEGORY, response_model=APIResponse[QuizCategoryResponse])
+@router.post(CATEGORY,
+    response_model=APIResponse[QuizCategoryResponse],
+    summary="新增分类",
+    description="""
+管理后台 **题库管理** 页面使用。
+
+**页面路径**: `/admin/quiz`
+**使用场景**: 管理员点击新增分类按钮，在弹出的表单中创建新的题目分类
+    """,
+)
 async def create_category(
     body: AdminQuizCategoryCreate,
     _admin=Depends(require_permission("quiz:write")),
@@ -60,7 +93,16 @@ async def create_category(
     return success(data=result)
 
 
-@router.put(f"{CATEGORY}/{{category_id}}", response_model=APIResponse[QuizCategoryResponse])
+@router.put(f"{CATEGORY}/{{category_id}}",
+    response_model=APIResponse[QuizCategoryResponse],
+    summary="编辑分类",
+    description="""
+管理后台 **题库管理** 页面使用。
+
+**页面路径**: `/admin/quiz`
+**使用场景**: 管理员在分类列表中编辑已有分类的名称或排序信息
+    """,
+)
 async def update_category(
     body: AdminQuizCategoryUpdate,
     category_id: int = Path(..., ge=1),
@@ -70,7 +112,16 @@ async def update_category(
     return success(data=result)
 
 
-@router.delete(f"{CATEGORY}/{{category_id}}", response_model=APIResponse)
+@router.delete(f"{CATEGORY}/{{category_id}}",
+    response_model=APIResponse,
+    summary="删除分类",
+    description="""
+管理后台 **题库管理** 页面使用。
+
+**页面路径**: `/admin/quiz`
+**使用场景**: 管理员删除不再使用的题目分类
+    """,
+)
 async def delete_category(
     category_id: int = Path(..., ge=1),
     _admin=Depends(require_permission("quiz:write")),
@@ -81,7 +132,16 @@ async def delete_category(
 
 # ── Question routes ──
 
-@router.post(QUESTION, response_model=APIResponse[QuizQuestionResponse])
+@router.post(QUESTION,
+    response_model=APIResponse[QuizQuestionResponse],
+    summary="新增题目",
+    description="""
+管理后台 **题库管理** 页面使用。
+
+**页面路径**: `/admin/quiz`
+**使用场景**: 管理员在题目列表中点击新增按钮，创建一道新题目（支持单选、多选、判断）
+    """,
+)
 async def create_question(
     body: AdminQuizQuestionCreate,
     _admin=Depends(require_permission("quiz:write")),
@@ -90,7 +150,16 @@ async def create_question(
     return success(data=result)
 
 
-@router.put(f"{QUESTION}/{{question_id}}", response_model=APIResponse[QuizQuestionResponse])
+@router.put(f"{QUESTION}/{{question_id}}",
+    response_model=APIResponse[QuizQuestionResponse],
+    summary="编辑题目",
+    description="""
+管理后台 **题库管理** 页面使用。
+
+**页面路径**: `/admin/quiz`
+**使用场景**: 管理员点击题目行进入编辑态，修改题目题干、选项或正确答案
+    """,
+)
 async def update_question(
     body: AdminQuizQuestionUpdate,
     question_id: int = Path(..., ge=1),
@@ -100,7 +169,16 @@ async def update_question(
     return success(data=result)
 
 
-@router.delete(f"{QUESTION}/{{question_id}}", response_model=APIResponse)
+@router.delete(f"{QUESTION}/{{question_id}}",
+    response_model=APIResponse,
+    summary="删除题目",
+    description="""
+管理后台 **题库管理** 页面使用。
+
+**页面路径**: `/admin/quiz`
+**使用场景**: 管理员删除不需要的题目
+    """,
+)
 async def delete_question(
     question_id: int = Path(..., ge=1),
     _admin=Depends(require_permission("quiz:write")),
@@ -109,7 +187,16 @@ async def delete_question(
     return success(message="题目已删除")
 
 
-@router.post(f"{QUESTION}/batch-delete", response_model=APIResponse[int])
+@router.post(f"{QUESTION}/batch-delete",
+    response_model=APIResponse[int],
+    summary="批量删除题目",
+    description="""
+管理后台 **题库管理** 页面使用。
+
+**页面路径**: `/admin/quiz`
+**使用场景**: 管理员勾选多道题目后点击批量删除按钮
+    """,
+)
 async def batch_delete_questions(
     body: AdminBatchDeleteRequest,
     _admin=Depends(require_permission("quiz:write")),
@@ -120,7 +207,16 @@ async def batch_delete_questions(
 
 # ── Import route ──
 
-@router.post("/import", response_model=APIResponse)
+@router.post("/import",
+    response_model=APIResponse,
+    summary="CSV导入题目",
+    description="""
+管理后台 **题库管理** 页面使用。
+
+**页面路径**: `/admin/quiz`
+**使用场景**: 管理员上传 CSV 文件批量导入题目，支持自动创建缺失的分类
+    """,
+)
 async def import_questions(
     file: UploadFile = File(..., description="CSV 文件"),
     create_missing_categories: bool = Form(False, description="是否自动创建缺失的分类"),
@@ -135,7 +231,16 @@ async def import_questions(
     return success(data=result)
 
 
-@router.post("/import/json", response_model=APIResponse)
+@router.post("/import/json",
+    response_model=APIResponse,
+    summary="JSON导入题目",
+    description="""
+管理后台 **题库管理** 页面使用。
+
+**页面路径**: `/admin/quiz`
+**使用场景**: 管理员通过 JSON 格式批量导入题目数据
+    """,
+)
 async def import_questions_json(
     body: AdminQuizImportJsonRequest,
     _admin=Depends(require_permission("quiz:import")),
