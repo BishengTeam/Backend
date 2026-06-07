@@ -31,6 +31,9 @@ class AdminJobListItem(BaseModel):
     company: str
     location: str | None = None
     salary_range: str | None = None
+    description: str | None = None
+    requirements: str | None = None
+    contact_info: str | None = None
     is_active: bool
     created_at: datetime
     model_config = {"from_attributes": True}

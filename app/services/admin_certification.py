@@ -19,6 +19,7 @@ class AdminCertificationService:
                 base = base.where(
                     Certification.name.ilike(f"%{keyword}%")
                     | Certification.chinese_name.ilike(f"%{keyword}%")
+                    | Certification.code.ilike(f"%{keyword}%")
                 )
             count_stmt = select(func.count()).select_from(base.subquery())
             total = (await db.execute(count_stmt)).scalar() or 0

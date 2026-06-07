@@ -15,7 +15,7 @@ class AdminJobService:
         async with get_db_ctx() as db:
             base = select(Job)
             if keyword:
-                base = base.where(Job.title.ilike(f"%{keyword}%"))
+                base = base.where(Job.title.ilike(f"%{keyword}%") | Job.company.ilike(f"%{keyword}%"))
             count_stmt = select(func.count()).select_from(base.subquery())
             total = (await db.execute(count_stmt)).scalar() or 0
             stmt = base.order_by(Job.id.desc()).offset(
