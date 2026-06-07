@@ -10,7 +10,7 @@ from app.schemas.payment import (
 )
 from app.services.payment import PaymentService
 
-router = APIRouter(prefix="/payment", tags=["支付"])
+router = APIRouter(prefix="/payment", tags=["订单"])
 
 
 @router.post("/prepay",

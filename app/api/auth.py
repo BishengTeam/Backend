@@ -5,7 +5,7 @@ from app.schemas.common import APIResponse, success
 from app.schemas.user import LoginRequest, LoginResponse, LogoutRequest, RefreshRequest, RefreshResponse
 from app.services.auth import AuthService
 
-router = APIRouter(prefix="/auth", tags=["认证"])
+router = APIRouter(prefix="/auth", tags=["登录认证"])
 
 
 @router.post("/login",

@@ -6,7 +6,7 @@ from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.job import JobApplicationResponse, JobResponse
 from app.services.job import JobService
 
-router = APIRouter(prefix="/jobs", tags=["岗位"])
+router = APIRouter(prefix="/jobs", tags=["就业"])
 
 
 @router.get("",

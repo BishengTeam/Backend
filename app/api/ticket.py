@@ -8,7 +8,7 @@ from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.ticket import TicketCreateRequest, TicketDetail, TicketListItem
 from app.services.ticket import TicketService
 
-router = APIRouter(prefix="/tickets", tags=["工单"])
+router = APIRouter(prefix="/tickets", tags=["客服工单"])
 
 
 @router.post("",

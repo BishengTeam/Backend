@@ -6,7 +6,7 @@ from app.schemas.collection import CollectionCreate, CollectionResponse
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.services.collection import CollectionService
 
-router = APIRouter(prefix="/collections", tags=["收藏"])
+router = APIRouter(prefix="/collections", tags=["题库"])
 
 
 @router.get("",

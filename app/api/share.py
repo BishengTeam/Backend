@@ -6,7 +6,7 @@ from app.schemas.common import APIResponse, success
 from app.schemas.share import ShareCreateRequest, ShareCreateResponse, ShareResponse
 from app.services.share import ShareService
 
-router = APIRouter(prefix="/share", tags=["分享"])
+router = APIRouter(prefix="/share", tags=["系统"])
 
 
 @router.post("",

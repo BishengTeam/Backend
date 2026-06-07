@@ -7,7 +7,7 @@ from app.schemas.chat import ChatRequest, ChatResponse, QuickQuestionResponse
 from app.schemas.common import APIResponse, success
 from app.services.chat import ChatService
 
-router = APIRouter(prefix="/chat", tags=["客服"])
+router = APIRouter(prefix="/chat", tags=["客服工单"])
 
 quick_router = APIRouter()
 

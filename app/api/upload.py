@@ -10,8 +10,8 @@ from app.schemas.common import APIResponse, success
 from app.schemas.upload import UploadResponse
 from app.services.upload import UploadService
 
-upload_router = APIRouter(prefix="/upload", tags=["文件"])
-media_router = APIRouter(prefix="/media", tags=["文件"])
+upload_router = APIRouter(prefix="/upload", tags=["系统"])
+media_router = APIRouter(prefix="/media", tags=["系统"])
 
 
 @upload_router.post("",
