@@ -15,6 +15,19 @@ class AdminInfo(BaseModel):
 
     model_config = {"from_attributes": True}
 
+class DashboardResponse(BaseModel):
+    """管理后台数据看板响应"""
+    total_users: int
+    total_orders: int
+    recent_orders_30d: int
+    paid_orders: int
+    revenue_fen: int
+    recent_revenue_30d_fen: int
+    conversion_rate: float
+
+    model_config = {"from_attributes": True}
+
+
 ALL_PERMISSIONS = [
     "dashboard:view",
     "user:list",

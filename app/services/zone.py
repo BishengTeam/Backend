@@ -3,23 +3,26 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 from app.adapter.database import get_db_ctx
-from app.domain.content.src.index import Activity, Zone
-from app.domain.certification.src.index import CompetitionReg, Course
+from app.domain.content.src.index import Activity, Training, Zone
+from app.domain.certification.src.index import Certification, CompetitionReg, Course, Job
+from app.domain.content.src.model.banner import Banner
+from app.schemas.activity import ActivityResponse
+from app.schemas.admin_training import AdminTrainingListItem
+from app.schemas.certification import CertificationResponse
+from app.schemas.competition import CompetitionRegResponse
+from app.schemas.course import CourseListResponse
+from app.schemas.job import JobResponse
 from app.schemas.zone import (
-    ActivityBrief,
     BannerBrief,
-    CompetitionBrief,
-    CompetitionZoneResponse,
-    CourseBrief,
     HomeAggregationResponse,
     ZoneBrief,
-    ZoneSectionItem,
+    ZoneSectionData,
 )
 
 # Maximum items per zone_type in home aggregation
 HOME_ZONE_LIMIT = 10
 
-ALL_ZONE_TYPES = ("cert", "study", "competition", "activity", "employment")
+ALL_ZONE_TYPES = ("cert", "study", "competition", "activity", "employment", "training")
 
 
 class ZoneService:
@@ -30,31 +33,23 @@ class ZoneService:
         async with get_db_ctx() as db:
             now = datetime.now(timezone.utc)
 
-            # Active banners: zones with is_banner=True and within valid time range
+            # Active banners from Banner table, within valid time range
             banner_stmt = (
-                select(Zone)
+                select(Banner)
                 .where(
-                    Zone.is_active == True,
-                    Zone.is_banner == True,
-                    (Zone.start_time == None) | (Zone.start_time <= now),
-                    (Zone.end_time == None) | (Zone.end_time >= now),
+                    Banner.is_active == True,
+                    (Banner.start_time == None) | (Banner.start_time <= now),
+                    (Banner.end_time == None) | (Banner.end_time >= now),
                 )
-                .order_by(Zone.sort_order, Zone.id.desc())
+                .order_by(Banner.sort, Banner.id.desc())
             )
             banner_result = await db.execute(banner_stmt)
-            banners: list[BannerBrief] = []
-            for z in banner_result.scalars().all():
-                banners.append(
-                    BannerBrief(
-                        id=z.id,
-                        image_url=z.cover_url or "",
-                        jump_link=z.link_url,
-                        sort=z.sort_order,
-                    )
-                )
+            banners: list[BannerBrief] = [
+                BannerBrief.model_validate(b) for b in banner_result.scalars().all()
+            ]
 
             # All zone types: top N active zones sorted by sort_order
-            zones: dict[str, list[ZoneSectionItem]] = {}
+            zones: dict[str, list[ZoneBrief]] = {}
             for ztype in ALL_ZONE_TYPES:
                 zone_stmt = (
                     select(Zone)
@@ -67,7 +62,7 @@ class ZoneService:
                 )
                 zone_result = await db.execute(zone_stmt)
                 zone_list = [
-                    ZoneSectionItem.model_validate(z)
+                    ZoneBrief.model_validate(z)
                     for z in zone_result.scalars().all()
                 ]
                 if zone_list:
@@ -81,7 +76,7 @@ class ZoneService:
                 .limit(HOME_ZONE_LIMIT)
             )
             course_result = await db.execute(course_stmt)
-            courses = [CourseBrief.model_validate(c) for c in course_result.scalars().all()]
+            courses = [CourseListResponse.model_validate(c) for c in course_result.scalars().all()]
 
             # Top active activities
             activity_stmt = (
@@ -91,48 +86,66 @@ class ZoneService:
                 .limit(HOME_ZONE_LIMIT)
             )
             activity_result = await db.execute(activity_stmt)
-            activities = [ActivityBrief.model_validate(a) for a in activity_result.scalars().all()]
+            activities = [ActivityResponse.model_validate(a) for a in activity_result.scalars().all()]
 
-            return HomeAggregationResponse(
-                banners=banners, zones=zones, courses=courses, activities=activities
+            # Top active certifications
+            cert_stmt = (
+                select(Certification)
+                .where(Certification.is_active == True)
+                .order_by(Certification.id.desc())
+                .limit(HOME_ZONE_LIMIT)
             )
+            cert_result = await db.execute(cert_stmt)
+            certifications = [CertificationResponse.model_validate(c) for c in cert_result.scalars().all()]
 
-    # ── B-P0.4 竞赛专区 ───────────────────────────────────────────
-
-    async def get_competition_zone(
-        self, user_id: int | None = None
-    ) -> CompetitionZoneResponse:
-        async with get_db_ctx() as db:
-            zone_stmt = (
-                select(Zone)
-                .where(
-                    Zone.zone_type == "competition",
-                    Zone.is_active == True,
-                )
-                .order_by(Zone.sort_order, Zone.id.desc())
+            # Top active trainings
+            training_stmt = (
+                select(Training)
+                .where(Training.is_active == True)
+                .order_by(Training.id.desc())
+                .limit(HOME_ZONE_LIMIT)
             )
-            zone_result = await db.execute(zone_stmt)
-            zones = [ZoneBrief.model_validate(z) for z in zone_result.scalars().all()]
+            training_result = await db.execute(training_stmt)
+            trainings = [AdminTrainingListItem.model_validate(t) for t in training_result.scalars().all()]
 
-            competitions: list[CompetitionBrief] = []
-            if user_id is not None:
-                comp_stmt = (
-                    select(CompetitionReg)
-                    .where(CompetitionReg.user_id == user_id)
-                    .order_by(CompetitionReg.id.desc())
-                )
-            else:
-                # All competition registrations (public listing)
-                comp_stmt = (
-                    select(CompetitionReg)
-                    .order_by(CompetitionReg.id.desc())
-                )
+            # Top active competition registrations
+            comp_stmt = (
+                select(CompetitionReg)
+                .order_by(CompetitionReg.id.desc())
+                .limit(HOME_ZONE_LIMIT)
+            )
             comp_result = await db.execute(comp_stmt)
-            competitions = [
-                CompetitionBrief.model_validate(c)
-                for c in comp_result.scalars().all()
-            ]
+            competitions = [CompetitionRegResponse.model_validate(c) for c in comp_result.scalars().all()]
 
-            return CompetitionZoneResponse(zones=zones, competitions=competitions)
+            # Top active jobs
+            job_stmt = (
+                select(Job)
+                .where(Job.is_active == True)
+                .order_by(Job.id.desc())
+                .limit(HOME_ZONE_LIMIT)
+            )
+            job_result = await db.execute(job_stmt)
+            jobs = [JobResponse.model_validate(j) for j in job_result.scalars().all()]
 
+            # 将各专区业务数据收敛到 zones 字典内
+            zone_sections: dict[str, ZoneSectionData] = {}
+            for ztype in ALL_ZONE_TYPES:
+                section = ZoneSectionData(items=zones.get(ztype, []))
+                if ztype == "cert":
+                    section.certifications = certifications
+                elif ztype == "study":
+                    section.courses = courses
+                elif ztype == "competition":
+                    section.competitions = competitions
+                elif ztype == "activity":
+                    section.activities = activities
+                elif ztype == "employment":
+                    section.jobs = jobs
+                elif ztype == "training":
+                    section.trainings = trainings
+                if (section.items or section.courses or section.activities
+                        or section.certifications or section.trainings
+                        or section.competitions or section.jobs):
+                    zone_sections[ztype] = section
 
+            return HomeAggregationResponse(banners=banners, zones=zone_sections)
