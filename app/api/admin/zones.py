@@ -9,7 +9,7 @@ from app.services.admin_zone import AdminZoneService
 router = APIRouter(prefix="/zones", tags=["管理后台-专区内容"])
 
 
-@router.get("", response_model=APIResponse[PaginatedData[AdminZoneListItem]])
+@router.get("", response_model=APIResponse[PaginatedData[AdminZoneListItem]], summary="专区内容列表")
 async def list_zones(
     keyword: str | None = Query(None, description="按标题关键词模糊搜索"),
     zone_type: str | None = Query(None, description="按专区类型筛选"),
@@ -21,7 +21,7 @@ async def list_zones(
     return success(data=result)
 
 
-@router.post("", response_model=APIResponse[AdminZoneListItem])
+@router.post("", response_model=APIResponse[AdminZoneListItem], summary="新增专区内容")
 async def create_zone(
     body: AdminZoneCreate,
     _admin=Depends(require_permission("content:write")),
@@ -30,7 +30,7 @@ async def create_zone(
     return success(data=result)
 
 
-@router.put("/sort", response_model=APIResponse[int])
+@router.put("/sort", response_model=APIResponse[int], summary="更新专区排序")
 async def update_zones_sort(
     body: list[AdminZoneSortItem],
     _admin=Depends(require_permission("content:write")),
@@ -40,7 +40,7 @@ async def update_zones_sort(
     return success(data=count, message=f"已更新 {count} 个排序")
 
 
-@router.put("/{zone_id}", response_model=APIResponse[AdminZoneListItem])
+@router.put("/{zone_id}", response_model=APIResponse[AdminZoneListItem], summary="编辑专区内容")
 async def update_zone(
     body: AdminZoneUpdate,
     zone_id: int = Path(..., ge=1),
@@ -60,7 +60,7 @@ async def toggle_zone_status(
     return success(data=result)
 
 
-@router.delete("/{zone_id}", response_model=APIResponse)
+@router.delete("/{zone_id}", response_model=APIResponse, summary="下架专区内容")
 async def delete_zone(
     zone_id: int = Path(..., ge=1),
     _admin=Depends(require_permission("content:write")),
@@ -69,7 +69,7 @@ async def delete_zone(
     return success(message="专区内容已下架")
 
 
-@router.post("/batch-delete", response_model=APIResponse[int])
+@router.post("/batch-delete", response_model=APIResponse[int], summary="批量下架专区内容")
 async def batch_delete_zones(
     body: AdminBatchDeleteRequest,
     _admin=Depends(require_permission("content:write")),
