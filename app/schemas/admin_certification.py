@@ -1,4 +1,19 @@
+from datetime import datetime
+
 from pydantic import BaseModel, Field
+
+
+class AdminCertificationListItem(BaseModel):
+    id: int
+    name: str
+    chinese_name: str
+    code: str
+    vendor: str
+    requires_xuexin: bool
+    pay_first: bool
+    is_active: bool
+    created_at: datetime
+    model_config = {"from_attributes": True}
 
 
 class AdminCertificationCreate(BaseModel):
