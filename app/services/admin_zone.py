@@ -25,12 +25,14 @@ class AdminZoneService:
     )
 
     async def list_zones(
-        self, keyword: str | None, page: int, page_size: int
+        self, keyword: str | None, zone_type: str | None, page: int, page_size: int
     ) -> PaginatedData[AdminZoneListItem]:
         async with get_db_ctx() as db:
             base = select(*self._list_columns)
             if keyword:
                 base = base.where(Zone.title.ilike(f"%{keyword}%"))
+            if zone_type:
+                base = base.where(Zone.zone_type == zone_type)
             count_stmt = select(func.count()).select_from(base.subquery())
             total = (await db.execute(count_stmt)).scalar() or 0
             stmt = base.order_by(Zone.zone_type, Zone.sort_order, Zone.id.desc()).offset(

@@ -12,11 +12,12 @@ router = APIRouter(prefix="/zones", tags=["管理后台-专区内容"])
 @router.get("", response_model=APIResponse[PaginatedData[AdminZoneListItem]])
 async def list_zones(
     keyword: str | None = Query(None, description="按标题关键词模糊搜索"),
+    zone_type: str | None = Query(None, description="按专区类型筛选"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     _admin=Depends(require_permission("content:write")),
 ) -> APIResponse[PaginatedData[AdminZoneListItem]]:
-    result = await AdminZoneService().list_zones(keyword, page, page_size)
+    result = await AdminZoneService().list_zones(keyword, zone_type, page, page_size)
     return success(data=result)
 
 
