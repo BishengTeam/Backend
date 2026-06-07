@@ -15,6 +15,7 @@ router = APIRouter(prefix="/upload", tags=["管理后台-文件上传"])
 管理后台 **各管理页面** 的 ImageUpload 组件使用。
 
 **页面路径**: `/admin/*`
+
 **使用场景**: 管理员在题库管理、商品管理等页面上传封面图或附件，返回文件访问 URL
     """,
 )

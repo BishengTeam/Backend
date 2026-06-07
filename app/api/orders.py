@@ -22,10 +22,12 @@ router = APIRouter(prefix="/orders", tags=["订单"])
 小程序 **订单** 页面使用。
 
 **使用场景**: 用户下单并锁定库存
+
 **请求体**:
 - `product_type`: 商品类型
 - `product_id`: 商品 ID
 - `quantity`: 数量
+
 **认证**: 需登录
     """,
 )
@@ -45,11 +47,14 @@ async def create_order(
 小程序 **订单** 页面使用。
 
 **使用场景**: 查看当前用户的订单列表
+
 **查询参数**:
 - `status`: 按状态筛选（pending / paid / completed / refunded / closed）
 - `page`: 页码
 - `page_size`: 每页数量
+
 **响应**: 订单列表，含金额、状态、时间
+
 **认证**: 需登录
     """,
 )
@@ -74,8 +79,10 @@ async def list_orders(
 小程序 **订单详情** 页面使用。
 
 **使用场景**: 查看单个订单的详细信息
+
 **路径参数**:
 - `order_id`: 订单 ID
+
 **认证**: 需登录
     """,
 )

@@ -18,6 +18,7 @@ router = APIRouter(prefix="/auth", tags=["管理后台-认证"])
 管理后台 **登录后** 使用。
 
 **页面路径**: `/admin/login`
+
 **使用场景**: 前端页面刷新或登录后恢复管理员状态，获取当前管理员信息和权限列表
     """,
 )
@@ -37,6 +38,7 @@ async def me(request: Request, admin=Depends(get_current_admin)):
 管理后台 **登录页** 使用。
 
 **页面路径**: `/admin/login`
+
 **使用场景**: 管理员输入用户名密码登录后台管理系统
     """,
 )
@@ -53,6 +55,7 @@ async def login(request: Request, body: AdminLoginRequest) -> APIResponse[AdminL
 管理后台 **全局** 使用。
 
 **页面路径**: `/admin/login`
+
 **使用场景**: 管理员点击退出登录，将当前 token 加入撤销黑名单
     """,
 )
