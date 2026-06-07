@@ -93,6 +93,7 @@ from app.schemas.admin_agreement import (
 )
 from app.schemas.admin_certification import AdminCertificationCreate, AdminCertificationListItem, AdminCertificationUpdate
 from app.schemas.admin_activity import AdminActivityCreate, AdminActivityListItem, AdminActivityUpdate
+from app.schemas.admin_training import AdminTrainingCreate, AdminTrainingListItem, AdminTrainingUpdate
 from app.schemas.admin_job import AdminJobCreate, AdminJobListItem, AdminJobUpdate
 from app.schemas.admin_coupon import AdminCouponBatchCreate, AdminCouponCreate, AdminCouponListItem
 from app.schemas.admin_course import AdminCourseCreate, AdminCourseListItem, AdminCourseUpdate

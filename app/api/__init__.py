@@ -17,6 +17,7 @@ from app.api.quiz import router as quiz_router
 from app.api.share import router as share_router
 from app.api.system import router as system_router
 from app.api.ticket import router as ticket_router
+from app.api.training import router as training_router
 from app.api.upload import media_router, upload_router
 from app.api.user import router as user_router
 from app.api.zone import router as zone_router
@@ -42,5 +43,6 @@ router.include_router(coupon_router)
 router.include_router(competition_router)
 router.include_router(job_router)
 router.include_router(share_router)
+router.include_router(training_router)
 router.include_router(upload_router)
 router.include_router(media_router)
