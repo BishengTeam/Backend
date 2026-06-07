@@ -36,8 +36,11 @@ class AdminCourseListItem(BaseModel):
     category: str
     description: str | None = None
     cover_url: str | None = None
+    video_url: str | None = None
     price: int
+    batches: Any | None = None
     teacher_name: str | None = None
+    teacher_contact: str | None = None
     is_active: bool
     created_at: datetime
 

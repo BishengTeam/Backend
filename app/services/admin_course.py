@@ -15,8 +15,11 @@ class AdminCourseService:
         Course.category,
         Course.description,
         Course.cover_url,
+        Course.video_url,
         Course.price,
+        Course.batches,
         Course.teacher_name,
+        Course.teacher_contact,
         Course.is_active,
         Course.created_at,
     )
