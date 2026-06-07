@@ -4,29 +4,29 @@ from pydantic import BaseModel, Field
 
 
 class AdminTrainingCreate(BaseModel):
-    title: str = Field(..., min_length=1, max_length=256)
-    description: str | None = None
-    cover_url: str | None = Field(None, max_length=512)
-    location: str | None = Field(None, max_length=256)
-    start_time: datetime | None = None
-    end_time: datetime | None = None
-    max_participants: int = Field(0, ge=0)
-    cert_type: str | None = Field(None, max_length=64)
-    price: int = Field(0, ge=0)
-    is_active: bool = True
+    title: str = Field(..., min_length=1, max_length=256, description="培训标题")
+    description: str | None = Field(None, description="培训描述")
+    cover_url: str | None = Field(None, max_length=512, description="封面图片URL")
+    location: str | None = Field(None, max_length=256, description="培训地点")
+    start_time: datetime | None = Field(None, description="开始时间")
+    end_time: datetime | None = Field(None, description="结束时间")
+    max_participants: int = Field(0, ge=0, description="最大参与人数")
+    cert_type: str | None = Field(None, max_length=64, description="关联认证类型")
+    price: int = Field(0, ge=0, description="培训费用（分）")
+    is_active: bool = Field(True, description="是否上架")
 
 
 class AdminTrainingUpdate(BaseModel):
-    title: str | None = Field(None, min_length=1, max_length=256)
-    description: str | None = None
-    cover_url: str | None = Field(None, max_length=512)
-    location: str | None = Field(None, max_length=256)
-    start_time: datetime | None = None
-    end_time: datetime | None = None
-    max_participants: int | None = Field(None, ge=0)
-    cert_type: str | None = Field(None, max_length=64)
-    price: int | None = Field(None, ge=0)
-    is_active: bool | None = None
+    title: str | None = Field(None, min_length=1, max_length=256, description="培训标题")
+    description: str | None = Field(None, description="培训描述")
+    cover_url: str | None = Field(None, max_length=512, description="封面图片URL")
+    location: str | None = Field(None, max_length=256, description="培训地点")
+    start_time: datetime | None = Field(None, description="开始时间")
+    end_time: datetime | None = Field(None, description="结束时间")
+    max_participants: int | None = Field(None, ge=0, description="最大参与人数")
+    cert_type: str | None = Field(None, max_length=64, description="关联认证类型")
+    price: int | None = Field(None, ge=0, description="培训费用（分）")
+    is_active: bool | None = Field(None, description="是否上架")
 
 
 class AdminTrainingListItem(BaseModel):

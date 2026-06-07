@@ -13,11 +13,12 @@ router = APIRouter(prefix="/certifications", tags=["管理后台-认证管理"])
 
 @router.get("", response_model=APIResponse[PaginatedData[AdminCertificationListItem]])
 async def list_certifications(
-    keyword: str | None = Query(None),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    keyword: str | None = Query(None, description="按名称关键词模糊搜索"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     _admin=Depends(require_permission("content:list")),
 ):
+    """分页查询认证类型列表，支持按名称关键词模糊搜索"""
     result = await AdminCertificationService().list_certifications(keyword, page, page_size)
     return success(data=result)
 
@@ -27,6 +28,7 @@ async def create_certification(
     body: AdminCertificationCreate,
     _admin=Depends(require_permission("content:write")),
 ) -> APIResponse[CertificationResponse]:
+    """创建新认证类型"""
     result = await AdminCertificationService().create(body)
     return success(data=result)
 
@@ -37,15 +39,17 @@ async def update_certification(
     cert_id: int = Path(..., description="认证类型 ID"),
     _admin=Depends(require_permission("content:write")),
 ) -> APIResponse[CertificationResponse]:
+    """更新指定认证类型信息"""
     result = await AdminCertificationService().update(cert_id, body)
     return success(data=result)
 
 
 @router.delete("/{cert_id}", response_model=APIResponse)
 async def delete_certification(
-    cert_id: int = Path(...),
+    cert_id: int = Path(..., description="认证类型 ID"),
     _admin=Depends(require_permission("content:write")),
 ):
+    """下架指定认证类型"""
     await AdminCertificationService().deactivate(cert_id)
     return success(message="认证已下架")
 
