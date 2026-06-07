@@ -14,7 +14,21 @@ upload_router = APIRouter(prefix="/upload", tags=["文件"])
 media_router = APIRouter(prefix="/media", tags=["文件"])
 
 
-@upload_router.post("", response_model=APIResponse[UploadResponse])
+@upload_router.post("",
+    response_model=APIResponse[UploadResponse],
+    summary="上传文件",
+    description="""
+小程序 **文件上传** 功能使用。
+
+**使用场景**: 用户上传图片、文档等文件
+
+**请求体**: multipart/form-data，字段 `file`
+
+**响应**: 文件 ID 和访问 URL
+
+**认证**: 需登录
+    """,
+)
 async def upload(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
@@ -24,7 +38,21 @@ async def upload(
     return success(data=UploadResponse(**result))
 
 
-@media_router.get("/{file_id}")
+@media_router.get("/{file_id}",
+    summary="访问文件",
+    description="""
+文件访问接口。
+
+**使用场景**: 通过文件 ID 直接访问或下载文件
+
+**路径参数**:
+- `file_id`: 文件 ID（含扩展名）
+
+**响应**: 文件二进制流，自动推断 MIME 类型
+
+**认证**: 无需登录
+    """,
+)
 async def get_file(file_id: str):
     """访问/下载文件 — 无需登录"""
     if not UploadService.file_exists(file_id):

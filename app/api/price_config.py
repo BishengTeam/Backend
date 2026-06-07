@@ -7,7 +7,23 @@ from app.services.price_config import PriceConfigService
 router = APIRouter(prefix="/prices", tags=["价格配置"])
 
 
-@router.get("", response_model=APIResponse[list[PriceResponse]])
+@router.get("",
+    response_model=APIResponse[list[PriceResponse]],
+    summary="价格配置列表",
+    description="""
+小程序 **价格** 相关页面使用。
+
+**使用场景**: 根据认证类型和用户类型获取价格配置列表
+
+**查询参数**:
+- `cert_type`: 认证类型筛选
+- `user_type`: 用户类型筛选
+
+**响应**: 符合条件的价格配置列表
+
+**认证**: 无需登录
+    """,
+)
 async def list_prices(
     cert_type: str | None = Query(None),
     user_type: str | None = Query(None),

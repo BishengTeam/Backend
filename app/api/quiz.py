@@ -49,7 +49,23 @@ async def list_questions(
     return success(data=result)
 
 
-@router.post("/submit", response_model=APIResponse[QuizSubmitResponse])
+@router.post("/submit",
+    response_model=APIResponse[QuizSubmitResponse],
+    summary="提交答题",
+    description="""
+小程序 **题库** 页面使用。
+
+**使用场景**: 用户提交一道题的答案，返回判题结果和解析
+
+**请求体**:
+- `question_id`: 题目 ID
+- `answer`: 用户答案
+
+**响应**: 判题结果（正确/错误）、正确答案、解析
+
+**认证**: 需登录
+    """,
+)
 async def submit_answer(
     body: QuizSubmitRequest,
     current_user: User = Depends(get_current_user),
@@ -59,7 +75,23 @@ async def submit_answer(
     return success(data=result)
 
 
-@router.get("/wrong-book", response_model=APIResponse[PaginatedData[QuizRecordQuestionResponse]])
+@router.get("/wrong-book",
+    response_model=APIResponse[PaginatedData[QuizRecordQuestionResponse]],
+    summary="错题本列表",
+    description="""
+小程序 **题库** 页面使用。
+
+**使用场景**: 查看当前用户的错题本，支持分页
+
+**查询参数**:
+- `page`: 页码
+- `page_size`: 每页数量
+
+**响应**: 分页错题记录，含题目详情
+
+**认证**: 需登录
+    """,
+)
 async def list_wrong_book(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Page size"),
