@@ -9,7 +9,16 @@ from sqlalchemy import func, select
 router = APIRouter(prefix="/training", tags=["培训"])
 
 
-@router.get("", response_model=APIResponse[PaginatedData[AdminTrainingListItem]])
+@router.get("",
+    response_model=APIResponse[PaginatedData[AdminTrainingListItem]],
+    summary="培训列表",
+    description="""
+小程序 **培训专区** 页面使用。
+
+**使用场景**: 加载已上架的培训列表
+**认证**: 无需登录
+    """,
+)
 async def list_trainings(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(10, ge=1, le=100, description="每页数量"),

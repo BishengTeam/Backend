@@ -16,7 +16,16 @@ from app.services.activity import ActivityService
 router = APIRouter(prefix="/activities", tags=["活动"])
 
 
-@router.get("", response_model=APIResponse[PaginatedData[ActivityResponse]])
+@router.get("",
+    response_model=APIResponse[PaginatedData[ActivityResponse]],
+    summary="活动列表",
+    description="""
+小程序 **活动专区** 页面使用。
+
+**使用场景**: 加载进行中的活动列表
+**认证**: 无需登录
+    """,
+)
 async def list_activities(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
@@ -29,7 +38,20 @@ async def list_activities(
     return success(data=result)
 
 
-@router.post("/register", response_model=APIResponse[ActivityRegistrationResponse])
+@router.post("/register",
+    response_model=APIResponse[ActivityRegistrationResponse],
+    summary="活动报名",
+    description="""
+小程序 **活动详情** 页面使用。
+
+**使用场景**: 用户提交活动报名信息
+**请求体**:
+- `activity_id`: 活动 ID
+- `name`: 报名人姓名
+- `phone`: 联系电话
+**认证**: 需登录
+    """,
+)
 async def register_activity(
     body: ActivityRegisterRequest,
     current_user: User = Depends(get_current_user),
@@ -45,7 +67,18 @@ async def register_activity(
     return success(data=result)
 
 
-@router.post("/{activity_id}/enroll", response_model=APIResponse[ActivityRegistrationResponse])
+@router.post("/{activity_id}/enroll",
+    response_model=APIResponse[ActivityRegistrationResponse],
+    summary="活动报名(enroll别名)",
+    description="""
+小程序 **活动详情** 页面使用。
+
+**使用场景**: 活动报名（兼容旧前端路径 `{id}/enroll`）
+**路径参数**:
+- `activity_id`: 活动 ID
+**认证**: 需登录
+    """,
+)
 async def enroll_activity(
     activity_id: int = Path(..., ge=1, description="活动 ID"),
     body: ActivityRegisterRequest | None = None,
@@ -65,7 +98,18 @@ async def enroll_activity(
     return success(data=ActivityRegistrationResponse.model_validate(result))
 
 
-@router.post("/{activity_id}/remind", response_model=APIResponse[ActivityReminderResponse])
+@router.post("/{activity_id}/remind",
+    response_model=APIResponse[ActivityReminderResponse],
+    summary="活动提醒",
+    description="""
+小程序 **活动详情** 页面使用。
+
+**使用场景**: 用户设置活动开始提醒
+**路径参数**:
+- `activity_id`: 活动 ID
+**认证**: 需登录
+    """,
+)
 async def remind_activity(
     activity_id: int = Path(..., ge=1, description="活动 ID"),
     current_user: User = Depends(get_current_user),

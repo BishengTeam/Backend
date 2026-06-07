@@ -15,7 +15,20 @@ from app.services.order import OrderService
 router = APIRouter(prefix="/orders", tags=["订单"])
 
 
-@router.post("", response_model=APIResponse[OrderResponse])
+@router.post("",
+    response_model=APIResponse[OrderResponse],
+    summary="创建订单",
+    description="""
+小程序 **订单** 页面使用。
+
+**使用场景**: 用户下单并锁定库存
+**请求体**:
+- `product_type`: 商品类型
+- `product_id`: 商品 ID
+- `quantity`: 数量
+**认证**: 需登录
+    """,
+)
 async def create_order(
     body: OrderCreate,
     current_user: User = Depends(require_identity),
@@ -25,7 +38,21 @@ async def create_order(
     return success(data=result)
 
 
-@router.get("", response_model=APIResponse[PaginatedData[OrderResponse]])
+@router.get("",
+    response_model=APIResponse[PaginatedData[OrderResponse]],
+    summary="订单列表",
+    description="""
+小程序 **订单** 页面使用。
+
+**使用场景**: 查看当前用户的订单列表
+**查询参数**:
+- `status`: 按状态筛选（pending / paid / completed / refunded / closed）
+- `page`: 页码
+- `page_size`: 每页数量
+**响应**: 订单列表，含金额、状态、时间
+**认证**: 需登录
+    """,
+)
 async def list_orders(
     status: OrderStatus | None = Query(
         None, description="按状态筛选：pending / paid / completed / refunded / closed"
@@ -40,7 +67,18 @@ async def list_orders(
     return success(data=result)
 
 
-@router.get("/{order_id}", response_model=APIResponse[OrderDetailResponse])
+@router.get("/{order_id}",
+    response_model=APIResponse[OrderDetailResponse],
+    summary="订单详情",
+    description="""
+小程序 **订单详情** 页面使用。
+
+**使用场景**: 查看单个订单的详细信息
+**路径参数**:
+- `order_id`: 订单 ID
+**认证**: 需登录
+    """,
+)
 async def get_order(
     order_id: int = Path(..., description="订单 ID"),
     current_user: User = Depends(get_current_user),
