@@ -24,9 +24,10 @@ class CertificationFilter(BaseModel):
 
 
 class CertificationDetailResponse(CertificationResponse):
-    """认证详情，继承列表字段 + 时间戳"""
+    """认证详情，继承列表字段 + 时间戳 + 上架状态"""
     created_at: datetime
     updated_at: datetime
+    is_active: bool
 
 
 # ── P2 深信服/NISP ──────────────────────────────────────────────

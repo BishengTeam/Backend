@@ -86,5 +86,27 @@ class AdminUserStatusToggle(BaseModel):
     is_active: bool
 
 
+class AdminUserOrderBrief(BaseModel):
+    """管理端用户订单摘要（用户详情页子资源）"""
+    id: int
+    cert_type: str
+    candidate_name: str
+    price: int
+    status: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AdminUserConversationBrief(BaseModel):
+    """管理端用户对话摘要（用户详情页子资源）"""
+    id: int
+    session_id: str
+    backend_type: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class AdminBatchDeleteRequest(BaseModel):
     ids: list[int] = Field(..., min_length=1)

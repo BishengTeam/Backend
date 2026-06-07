@@ -6,17 +6,27 @@
 """
 
 import asyncio
+import os
 import sys
 from datetime import datetime, timedelta, timezone
+
+# 确保 Backend 项目根目录在 sys.path 中
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+# 注入缺失的环境变量，避免 Settings() 初始化失败。
+os.environ.setdefault("JWT_SECRET", "seed-script-placeholder-do-not-use-in-prod")
 
 from sqlalchemy import select, text
 
 from app.adapter.database import async_session_factory
 from app.domain.user.src.index import AdminUser, PointsHistory, User, UserIdentity, UserPoints
-from app.domain.content.src.index import Banner, Zone
-from app.domain.certification.src.index import Certification, Course, CourseEnrollment
+from app.domain.content.src.index import Activity, Training, Zone
+from app.domain.content.src.model.banner import Banner
+from app.domain.certification.src.index import Certification, Course, CourseEnrollment, Job
 from app.domain.order.src.index import Coupon, Inventory, Order, PriceConfig, UserCoupon
-from app.domain.community.src.index import QuickQuestion
+from app.domain.community.src.index import QuickQuestion, QuizQuestion
 
 # ── 测试用户定义 ──────────────────────────────────────────────
 TEST_USERS = [
@@ -71,7 +81,10 @@ async def clean_test_data(db):
         "user_points",
         "user_identity",
         "user_coupon",
+        "activity_registration",
+        "activity_reminder",
         "course_enrollment",
+        "job_application",
         '"order"',
         "ticket",
         "agreement",
@@ -79,6 +92,8 @@ async def clean_test_data(db):
         "quiz_checkin",
         "competition_reg",
         "conversation",
+        "collection",
+        "share",
     ]
     if user_ids:
         for table in user_dependent_tables:
@@ -86,15 +101,23 @@ async def clean_test_data(db):
         await db.execute(text('DELETE FROM "user" WHERE id = ANY(:ids)'), {"ids": user_ids})
 
     # 3. 删除全局测试数据（按依赖顺序）
+    await db.execute(text("DELETE FROM activity_reminder"))
+    await db.execute(text("DELETE FROM activity_registration"))
     await db.execute(text("DELETE FROM inventory_record"))
     await db.execute(text("DELETE FROM inventory"))
     await db.execute(text("DELETE FROM user_coupon"))  # 可能还有残留
     await db.execute(text("DELETE FROM coupon"))
     await db.execute(text("DELETE FROM course_enrollment"))
     await db.execute(text("DELETE FROM course"))
+    await db.execute(text("DELETE FROM job_application"))
+    await db.execute(text("DELETE FROM job"))
+    await db.execute(text("DELETE FROM activity"))
+    await db.execute(text("DELETE FROM training"))
     await db.execute(text("DELETE FROM banner"))
     await db.execute(text("DELETE FROM zone"))
+    await db.execute(text("DELETE FROM quiz_question"))
     await db.execute(text("DELETE FROM quick_question"))
+    await db.execute(text("DELETE FROM deleted_openid"))
     await db.commit()
     print("  🧹 测试数据已清理")
 
@@ -308,14 +331,139 @@ async def seed_banners(db):
 async def seed_zones(db):
     """4 个 Zone，不同 zone_type。"""
     zones = [
-        Zone(zone_type="certification", title="认证考试专区", description="H3C / 深信服 / NISP 认证", sort_order=1),
-        Zone(zone_type="course", title="精品课程", description="名师授课，系统学习", sort_order=2),
+        Zone(zone_type="cert", title="认证考试专区", description="H3C / 深信服 / NISP 认证", sort_order=1),
+        Zone(zone_type="study", title="精品课程", description="名师授课，系统学习", sort_order=2),
         Zone(zone_type="competition", title="竞赛报名", description="全国职业技能大赛", sort_order=3),
         Zone(zone_type="activity", title="限时活动", description="优惠券发放，积分兑换", sort_order=4),
+        Zone(zone_type="employment", title="就业专区", description="最新岗位推荐", sort_order=5),
+        Zone(zone_type="training", title="培训专区", description="技能培训课程", sort_order=6),
     ]
     db.add_all(zones)
     await db.commit()
     print(f"  ✓ Zone ({len(zones)} 个)")
+
+
+async def seed_activities(db, user_map: dict[str, int]):
+    """3 个活动 + 2 条报名记录。"""
+    activities = [
+        Activity(title="H3C 认证线下交流会", description="H3C 官方认证讲师现场答疑",
+                 location="北京海淀区", start_time=NOW + timedelta(days=7),
+                 end_time=NOW + timedelta(days=7, hours=3), max_participants=50),
+        Activity(title="深信服安全技术沙龙", description="深信服安全专家分享最新安全趋势",
+                 location="上海浦东新区", start_time=NOW + timedelta(days=14),
+                 end_time=NOW + timedelta(days=14, hours=4), max_participants=80),
+        Activity(title="已结束的网络工程讲座", description="往期活动",
+                 location="深圳南山区", start_time=NOW - timedelta(days=30),
+                 end_time=NOW - timedelta(days=30, hours=2), max_participants=30, is_active=False),
+    ]
+    db.add_all(activities)
+    await db.flush()
+
+    from app.domain.content.src.index import ActivityRegistration
+    db.add(ActivityRegistration(activity_id=activities[0].id, user_id=user_map["test_openid_user_001"], name="张三", phone="13800000001"))
+    db.add(ActivityRegistration(activity_id=activities[1].id, user_id=user_map["test_openid_user_002"], name="李四", phone="13800000002"))
+    await db.commit()
+    print(f"  ✓ 活动 ({len(activities)} 个 + 2 条报名)")
+
+
+async def seed_trainings(db):
+    """2 个培训。"""
+    trainings = [
+        Training(title="H3C 路由交换实训", description="H3C NE 认证实训课程",
+                 location="北京", start_time=NOW + timedelta(days=10),
+                 end_time=NOW + timedelta(days=15), max_participants=30,
+                 cert_type="H3C-NE", price=280000),
+        Training(title="NISP 一级考前集训", description="NISP 一级认证考前集中培训",
+                 location="线上", start_time=NOW + timedelta(days=20),
+                 end_time=NOW + timedelta(days=22), max_participants=100,
+                 cert_type="NISP-1", price=59800),
+    ]
+    db.add_all(trainings)
+    await db.commit()
+    print(f"  ✓ 培训 ({len(trainings)} 个)")
+
+
+async def seed_jobs(db):
+    """3 个岗位。"""
+    jobs = [
+        Job(title="网络工程师", company="新华三集团", location="北京",
+            salary_range="15K-25K", description="负责网络设备配置与维护",
+            requirements="H3C NE 及以上认证", contact_info="hr@h3c.com"),
+        Job(title="网络安全工程师", company="深信服科技", location="深圳",
+            salary_range="20K-35K", description="负责安全产品部署与运维",
+            requirements="深信服认证优先", contact_info="jobs@sangfor.com"),
+        Job(title="已过期的实习岗位", company="某小型企业", location="武汉",
+            salary_range="3K-5K", description="网络运维实习",
+            requirements="在校学生", contact_info="hr@example.com", is_active=False),
+    ]
+    db.add_all(jobs)
+    await db.commit()
+    print(f"  ✓ 岗位 ({len(jobs)} 个)")
+
+
+async def seed_quiz_questions(db):
+    """为每个题库子分类写入题目。"""
+    from app.domain.community.src.index import QuizCategory
+
+    result = await db.execute(select(QuizCategory).where(QuizCategory.parent_id.isnot(None)))
+    sub_cats = result.scalars().all()
+    if not sub_cats:
+        print("  ⚠ 无子分类，跳过题目创建")
+        return
+
+    # 按子分类分别出题
+    question_bank = {
+        "网络基础": [
+            ("single_choice", "OSPF 协议的默认管理距离是多少？",
+             {"A": "90", "B": "110", "C": "120", "D": "1"}, "B", "OSPF 默认管理距离为 110"),
+            ("multiple_choice", "以下哪些是私有 IP 地址？",
+             {"A": "10.0.0.1", "B": "172.16.0.1", "C": "192.168.0.1", "D": "8.8.8.8"}, "A,B,C", "10.x、172.16-31.x、192.168.x 是私有地址"),
+            ("judge", "TCP 是面向连接的协议。",
+             {"A": "正确", "B": "错误"}, "A", "TCP 通过三次握手建立连接"),
+        ],
+        "路由协议": [
+            ("single_choice", "BGP 使用的端口号是？",
+             {"A": "53", "B": "179", "C": "520", "D": "80"}, "B", "BGP 使用 TCP 179 端口"),
+            ("multiple_choice", "以下哪些属于链路状态路由协议？",
+             {"A": "OSPF", "B": "RIP", "C": "IS-IS", "D": "EIGRP"}, "A,C", "OSPF 和 IS-IS 是链路状态协议"),
+            ("judge", "RIP 协议的收敛速度比 OSPF 快。",
+             {"A": "正确", "B": "错误"}, "B", "OSPF 收敛速度快于 RIP"),
+        ],
+        "安全基础": [
+            ("single_choice", "以下哪种攻击属于 DDoS 攻击？",
+             {"A": "SQL 注入", "B": "SYN Flood", "C": "XSS 跨站", "D": "CSRF"}, "B", "SYN Flood 是典型的 DDoS 攻击方式"),
+            ("multiple_choice", "以下哪些属于对称加密算法？",
+             {"A": "AES", "B": "RSA", "C": "DES", "D": "ECC"}, "A,C", "AES 和 DES 为对称加密，RSA/ECC 为非对称"),
+            ("judge", "防火墙可以完全阻止所有网络攻击。",
+             {"A": "正确", "B": "错误"}, "B", "防火墙是重要防线但无法阻止所有攻击"),
+        ],
+        "防火墙": [
+            ("single_choice", "iptables 中，DROP 和 REJECT 的区别是？",
+             {"A": "无区别", "B": "DROP 静默丢弃 REJECT 返回拒绝信息", "C": "REJECT 静默丢弃 DROP 返回信息", "D": "DROP 仅限 TCP"}, "B", "DROP 无响应，REJECT 返回 ICMP 拒绝"),
+            ("multiple_choice", "深信服下一代防火墙支持哪些功能？",
+             {"A": "IPS 入侵防御", "B": "WAF Web 防护", "C": "VPN 接入", "D": "数据备份"}, "A,B,C", "数据备份不属于防火墙核心功能"),
+            ("judge", "状态检测防火墙比包过滤防火墙更安全。",
+             {"A": "正确", "B": "错误"}, "A", "状态检测能跟踪连接状态，安全性更高"),
+        ],
+    }
+
+    total = 0
+    for cat in sub_cats:
+        cat_name = cat.name
+        if cat_name not in question_bank:
+            continue
+        for qtype, text, opts, answer, expl in question_bank[cat_name]:
+            db.add(QuizQuestion(
+                category_id=cat.id,
+                question_type=qtype,
+                question_text=text,
+                options=opts,
+                correct_answer=answer,
+                explanation=expl,
+            ))
+            total += 1
+    await db.commit()
+    print(f"  ✓ 题库题目 ({total} 道)")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -483,9 +631,13 @@ async def main():
         await seed_coupons_and_user_coupons(db, user_map)
         await seed_banners(db)
         await seed_zones(db)
+        await seed_activities(db, user_map)
+        await seed_trainings(db)
+        await seed_jobs(db)
 
         # 第 4 层
         await seed_orders(db, user_map)
+        await seed_quiz_questions(db)
         await seed_extra_points_history(db, user_map)
         await seed_quick_questions(db)
 

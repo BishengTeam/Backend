@@ -9,7 +9,7 @@ from app.domain.order.src.index import PriceConfig
 from app.domain.community.src.index import QuizCategory
 
 
-async def seed_price_configs():
+async def _seed_price_configs(db):
     records = [
         PriceConfig(cert_type="H3C", user_type="student", price=380000),
         PriceConfig(cert_type="H3C", user_type="enterprise", price=480000),
@@ -18,12 +18,11 @@ async def seed_price_configs():
         PriceConfig(cert_type="NISP", user_type="student", price=69800),
         PriceConfig(cert_type="NISP", user_type="enterprise", price=69800),
     ]
-    async with async_session_factory() as db:
-        async with db.begin():
-            db.add_all(records)
+    db.add_all(records)
+    print("  ✓ 价格配置 (6 条)")
 
 
-async def seed_certifications():
+async def _seed_certifications(db):
     records = [
         Certification(
             name="h3c_ne",
@@ -58,46 +57,58 @@ async def seed_certifications():
             pay_first=False,
         ),
     ]
-    async with async_session_factory() as db:
-        async with db.begin():
-            db.add_all(records)
+    db.add_all(records)
+    print("  ✓ 认证信息 (4 条)")
 
 
-async def seed_quiz_categories():
+async def _seed_quiz_categories(db):
     parent = QuizCategory(name="H3C 网络工程师", description="H3C 认证题库")
     parent2 = QuizCategory(name="深信服网络安全", description="深信服认证题库")
     children = [
-        QuizCategory(name="网络基础", parent_id=None, description="网络基础知识"),  # parent set below
-        QuizCategory(name="路由协议", parent_id=None, description="路由协议相关"),
-        QuizCategory(name="安全基础", parent_id=None, description="安全基础知识"),
-        QuizCategory(name="防火墙", parent_id=None, description="防火墙相关"),
+        QuizCategory(name="网络基础", description="网络基础知识"),
+        QuizCategory(name="路由协议", description="路由协议相关"),
+        QuizCategory(name="安全基础", description="安全基础知识"),
+        QuizCategory(name="防火墙", description="防火墙相关"),
     ]
-    async with async_session_factory() as db:
-        async with db.begin():
-            db.add_all([parent, parent2])
-            await db.flush()
-            children[0].parent_id = parent.id
-            children[1].parent_id = parent.id
-            children[2].parent_id = parent2.id
-            children[3].parent_id = parent2.id
-            db.add_all(children)
+    db.add_all([parent, parent2])
+    await db.flush()
+    children[0].parent_id = parent.id
+    children[1].parent_id = parent.id
+    children[2].parent_id = parent2.id
+    children[3].parent_id = parent2.id
+    db.add_all(children)
+    print("  ✓ 题库分类 (4 个父类 + 4 个子类)")
 
 
 async def main():
+    results = []
     async with async_session_factory() as db:
-        existing = (await db.execute(select(PriceConfig).limit(1))).first()
-        if existing:
-            print("种子数据已存在，跳过。")
-            return
+        async with db.begin():
+            has_price = (await db.execute(select(PriceConfig).limit(1))).first()
+            if not has_price:
+                await _seed_price_configs(db)
+                results.append("价格配置")
+            else:
+                print("价格配置已存在，跳过。")
 
-    print("初始化种子数据...")
-    await seed_certifications()
-    print("  ✓ 认证信息 (4 条)")
-    await seed_price_configs()
-    print("  ✓ 价格配置 (6 条)")
-    await seed_quiz_categories()
-    print("  ✓ 题库分类 (4 条)")
-    print("种子数据初始化完成。")
+            has_cert = (await db.execute(select(Certification).limit(1))).first()
+            if not has_cert:
+                await _seed_certifications(db)
+                results.append("认证信息")
+            else:
+                print("认证信息已存在，跳过。")
+
+            has_quiz = (await db.execute(select(QuizCategory).limit(1))).first()
+            if not has_quiz:
+                await _seed_quiz_categories(db)
+                results.append("题库分类")
+            else:
+                print("题库分类已存在，跳过。")
+
+    if results:
+        print(f"种子数据初始化完成: {', '.join(results)}")
+    else:
+        print("种子数据已存在，跳过。")
 
 
 if __name__ == "__main__":

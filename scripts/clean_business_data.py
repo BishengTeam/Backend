@@ -1,0 +1,158 @@
+"""清空所有业务数据，保留核心配置。
+
+运行方式（从仓库根目录）：
+    python scripts/clean_business_data.py          # 预览模式（不执行）
+    python scripts/clean_business_data.py --run    # 执行删除
+
+保留的表：
+    admin_user       — 管理员账号
+    price_config     — 价格配置
+    quick_question   — 快捷问题
+    alembic_version  — 迁移版本（SQLAlchemy 内部表）
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import sys
+from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+# 注入缺失的环境变量，避免 Settings() 初始化失败。
+# 此脚本只需要数据库连接，不需要 JWT / 微信等业务配置。
+os.environ.setdefault("JWT_SECRET", "clean-script-placeholder-do-not-use-in-prod")
+
+
+# ── 保留表清单 ────────────────────────────────────────────────────
+KEEP_TABLES = frozenset({
+    "admin_user",
+    "price_config",
+    "quick_question",
+    "alembic_version",
+})
+
+# ── 删除顺序（外键依赖的拓扑排序 — 子表先删，父表后删）─────────
+# 关键依赖：
+#   inventory_record → order + inventory  （循环引用的一端）
+#   order            → user + inventory
+#   inventory        → 无 FK
+#   user             ← 几乎所有表引用
+
+DELETE_ORDER = [
+    # ── 第 1 批：引用 user 的叶子表 ──
+    "activity_reminder",
+    "activity_registration",
+    "agreement",
+    "collection",
+    "competition_reg",
+    "conversation",
+    "course_enrollment",
+    "deleted_openid",
+    "job_application",
+    "points_history",
+    "quiz_checkin",
+    "quiz_record",
+    "share",
+    "ticket",
+    "user_coupon",
+    "user_identity",
+    "user_points",
+
+    # ── 第 2 批：inventory_record（解除 order ↔ inventory 循环引用）──
+    "inventory_record",
+
+    # ── 第 3 批：order（引用 user + inventory）──
+    "order",
+
+    # ── 第 4 批：独立业务父表 ──
+    "activity",
+    "banner",
+    "certification",
+    "coupon",
+    "course",
+    "inventory",
+    "job",
+    "quiz_question",    # 子表 quiz_record 已在第 1 批清空
+    "training",
+    "zone",
+    "quiz_category",    # 子表 quiz_question 已清空
+
+    # ── 第 5 批：user（所有引用已解除）──
+    "user",
+]
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="清空所有业务数据，保留核心配置表。",
+    )
+    parser.add_argument(
+        "--run",
+        action="store_true",
+        help="执行删除。不加此参数为预览模式。",
+    )
+    return parser
+
+
+async def _preview(db, tables: list[str]) -> dict[str, int]:
+    """预览各表行数。"""
+    from sqlalchemy import text
+
+    counts: dict[str, int] = {}
+    print("预览模式 — 各表当前行数：\n")
+    for t in tables:
+        result = await db.execute(text(f"SELECT COUNT(*) FROM \"{t}\""))
+        count = result.scalar() or 0
+        counts[t] = count
+        marker = " ← 保留" if t in KEEP_TABLES else ""
+        print(f"  {t:28s} {count:>6d} 行{marker}")
+    return counts
+
+
+async def _execute(db, tables: list[str]) -> dict[str, int]:
+    """执行删除。"""
+    from sqlalchemy import text
+
+    deleted: dict[str, int] = {}
+    for t in tables:
+        if t in KEEP_TABLES:
+            continue
+        result = await db.execute(text(f"DELETE FROM \"{t}\""))
+        deleted[t] = result.rowcount
+        print(f"  ✅ {t:28s} 已删除 {result.rowcount:>6d} 行")
+    await db.commit()
+    return deleted
+
+
+async def run(args: argparse.Namespace) -> int:
+    from app.adapter.database import get_db_ctx
+
+    all_tables = list(KEEP_TABLES) + DELETE_ORDER
+
+    async with get_db_ctx() as db:
+        if not args.run:
+            await _preview(db, all_tables)
+            print("\n以上为预览。确认无误后加 --run 执行删除。")
+            return 0
+
+        print("执行删除...\n")
+        deleted = await _execute(db, DELETE_ORDER)
+
+    total = sum(deleted.values())
+    print(f"\n完成：{len(deleted)} 个表，共删除 {total} 行。")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    asyncio.run(run(args))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

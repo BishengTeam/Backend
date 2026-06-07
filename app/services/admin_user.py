@@ -5,7 +5,13 @@ from app.port.exceptions import NotFoundException
 from app.domain.community.src.index import Conversation
 from app.domain.order.src.index import Order
 from app.domain.user.src.index import User
-from app.schemas.admin import AdminUserFilter, AdminUserListItem, AdminUserUpdate
+from app.schemas.admin import (
+    AdminUserConversationBrief,
+    AdminUserFilter,
+    AdminUserListItem,
+    AdminUserOrderBrief,
+    AdminUserUpdate,
+)
 from app.schemas.common import PaginatedData
 
 
@@ -75,27 +81,16 @@ class AdminUserService:
             await db.commit()
             return len(users)
 
-    async def get_user_orders(self, user_id: int) -> list[dict]:
+    async def get_user_orders(self, user_id: int) -> list[AdminUserOrderBrief]:
         async with get_db_ctx() as db:
             user = await db.get(User, user_id)
             if user is None:
                 raise NotFoundException("用户")
             stmt = select(Order).where(Order.user_id == user_id).order_by(Order.id.desc())
             result = await db.execute(stmt)
-            orders = result.scalars().all()
-            return [
-                {
-                    "id": o.id,
-                    "cert_type": o.cert_type,
-                    "candidate_name": o.candidate_name,
-                    "price": o.price,
-                    "status": o.status,
-                    "created_at": o.created_at,
-                }
-                for o in orders
-            ]
+            return [AdminUserOrderBrief.model_validate(o) for o in result.scalars().all()]
 
-    async def get_user_conversations(self, user_id: int) -> list[dict]:
+    async def get_user_conversations(self, user_id: int) -> list[AdminUserConversationBrief]:
         async with get_db_ctx() as db:
             user = await db.get(User, user_id)
             if user is None:
@@ -106,16 +101,7 @@ class AdminUserService:
                 .order_by(Conversation.id.desc())
             )
             result = await db.execute(stmt)
-            conversations = result.scalars().all()
-            return [
-                {
-                    "id": c.id,
-                    "session_id": c.session_id,
-                    "backend_type": c.backend_type,
-                    "created_at": c.created_at,
-                }
-                for c in conversations
-            ]
+            return [AdminUserConversationBrief.model_validate(c) for c in result.scalars().all()]
 
     async def export_users(self, filters: AdminUserFilter | None) -> str:
         import csv

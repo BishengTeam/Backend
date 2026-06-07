@@ -30,7 +30,7 @@ _ENTITY_QUERIES: dict[str, tuple] = {
     "courses":         (Course,         CourseListResponse,        True),
     "activities":      (Activity,       ActivityResponse,          True),
     "certifications":  (Certification,  CertificationResponse,     True),
-    "trainings":       (Training,       AdminTrainingListItem,     True),
+    "trainings":       (Training,       AdminTrainingListItem,          True),
     "competitions":    (CompetitionReg, CompetitionRegResponse,    False),
     "jobs":            (Job,            JobResponse,               True),
 }

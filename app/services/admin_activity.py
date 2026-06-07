@@ -12,6 +12,7 @@ class AdminActivityService:
     _list_columns = (
         Activity.id,
         Activity.title,
+        Activity.description,
         Activity.cover_url,
         Activity.location,
         Activity.start_time,

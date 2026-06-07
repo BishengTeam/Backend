@@ -5,7 +5,15 @@ from fastapi.responses import Response
 
 from app.middleware.auth import require_permission
 from app.middleware.rate_limit import limiter
-from app.schemas.admin import AdminBatchDeleteRequest, AdminUserFilter, AdminUserListItem, AdminUserStatusToggle, AdminUserUpdate
+from app.schemas.admin import (
+    AdminBatchDeleteRequest,
+    AdminUserConversationBrief,
+    AdminUserFilter,
+    AdminUserListItem,
+    AdminUserOrderBrief,
+    AdminUserStatusToggle,
+    AdminUserUpdate,
+)
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.services.admin_user import AdminUserService
 
@@ -156,7 +164,7 @@ async def batch_delete_users(
 
 
 @router.get("/{user_id}/orders",
-    response_model=APIResponse[list[dict]],
+    response_model=APIResponse[list[AdminUserOrderBrief]],
     summary="用户订单列表",
     description="""
 管理后台 **用户管理** 页面使用。
@@ -175,7 +183,7 @@ async def get_user_orders(
 
 
 @router.get("/{user_id}/conversations",
-    response_model=APIResponse[list[dict]],
+    response_model=APIResponse[list[AdminUserConversationBrief]],
     summary="用户对话记录",
     description="""
 管理后台 **用户管理** 页面使用。

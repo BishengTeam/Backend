@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.schemas.activity import ActivityResponse
+
 
 class AdminActivityCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=256, description="活动标题")
@@ -25,15 +27,5 @@ class AdminActivityUpdate(BaseModel):
     is_active: bool | None = Field(None, description="是否上架")
 
 
-class AdminActivityListItem(BaseModel):
-    id: int
-    title: str
-    cover_url: str | None = None
-    location: str | None = None
-    start_time: datetime | None = None
-    end_time: datetime | None = None
-    max_participants: int
-    is_active: bool
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
+class AdminActivityListItem(ActivityResponse):
+    """管理端活动列表项 — 字段与 ActivityResponse 完全一致，通过继承复用"""

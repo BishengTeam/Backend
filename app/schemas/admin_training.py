@@ -32,6 +32,7 @@ class AdminTrainingUpdate(BaseModel):
 class AdminTrainingListItem(BaseModel):
     id: int
     title: str
+    description: str | None = None
     cover_url: str | None = None
     location: str | None = None
     start_time: datetime | None = None
@@ -43,3 +44,8 @@ class AdminTrainingListItem(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+TrainingListItem = AdminTrainingListItem
+# TrainingListItem 是 AdminTrainingListItem 的别名，供用户端和聚合端使用。
+# 消除「Admin* Schema 被用户端接口引用」的命名不对称。

@@ -5,7 +5,7 @@ import secrets
 
 from sqlalchemy import select
 
-from app.core.database import async_session_factory
+from app.adapter.database import async_session_factory
 from app.domain.user.src.index import AdminUser
 
 SALT_LENGTH = 32

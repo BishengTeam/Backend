@@ -24,6 +24,10 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
+# 注入缺失的环境变量，避免 Settings() 初始化失败。
+# 脚本只需要数据库连接，不需要 JWT / 微信等业务配置。
+os.environ.setdefault("JWT_SECRET", "seed-script-placeholder-do-not-use-in-prod")
+
 
 def print_step(msg: str):
     print(f"\n{'─' * 60}")
