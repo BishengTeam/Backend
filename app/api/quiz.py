@@ -21,27 +21,55 @@ from app.schemas.quiz import (
 )
 from app.services.quiz import QuizService
 
-router = APIRouter(prefix="/quiz", tags=["\u9898\u5e93"])
+router = APIRouter(prefix="/quiz", tags=["题库"])
 
 
-@router.get("/categories", response_model=APIResponse[list[QuizCategoryTreeResponse]])
+@router.get("/categories",
+    response_model=APIResponse[list[QuizCategoryTreeResponse]],
+    summary="题库分类树",
+    description="""
+小程序 **题库** 页面使用。
+
+**使用场景**: 获取题库分类的树形结构，用于分类导航和筛选题库
+
+**响应**: 分类树列表，每项含分类 ID、名称和子分类
+
+**认证**: 可选登录
+    """,
+)
 async def list_categories() -> APIResponse[list[QuizCategoryTreeResponse]]:
-    """List quiz categories as a tree."""
     result = await QuizService().list_categories()
     return success(data=result)
 
 
-@router.get("/questions", response_model=APIResponse[PaginatedData[QuizQuestionResponse]])
+@router.get("/questions",
+    response_model=APIResponse[PaginatedData[QuizQuestionResponse]],
+    summary="题目列表",
+    description="""
+小程序 **题库** 页面使用。
+
+**使用场景**: 按分类和题型加载题目列表，支持分页
+
+**查询参数**:
+- `category_id`: 分类 ID（可选）
+- `question_type`: 题型筛选：single_choice / multiple_choice / judge
+- `page`: 页码，从 1 开始
+- `page_size`: 每页条数，默认 20，最大 100
+
+**响应**: 分页题目数据，含题干、选项、正确答案
+
+**认证**: 可选登录
+    """,
+)
 async def list_questions(
-    category_id: int | None = Query(None, ge=1, description="Category ID"),
+    category_id: int | None = Query(None, ge=1, description="分类 ID"),
     question_type: QuizQuestionType | None = Query(
         None,
-        description="Question type: single_choice / multiple_choice / judge",
+        description="题型：single_choice / multiple_choice / judge",
     ),
-    page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(20, ge=1, le=100, description="Page size"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
 ) -> APIResponse[PaginatedData[QuizQuestionResponse]]:
-    """List quiz questions."""
     result = await QuizService().list_questions(
         category_id=category_id, question_type=question_type,
         page=page, page_size=page_size,
@@ -70,7 +98,6 @@ async def submit_answer(
     body: QuizSubmitRequest,
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[QuizSubmitResponse]:
-    """Submit an answer."""
     result = await QuizService().submit_answer(current_user.id, body)
     return success(data=result)
 
@@ -84,8 +111,8 @@ async def submit_answer(
 **使用场景**: 查看当前用户的错题本，支持分页
 
 **查询参数**:
-- `page`: 页码
-- `page_size`: 每页数量
+- `page`: 页码，从 1 开始
+- `page_size`: 每页条数，默认 20，最大 100
 
 **响应**: 分页错题记录，含题目详情
 
@@ -93,80 +120,175 @@ async def submit_answer(
     """,
 )
 async def list_wrong_book(
-    page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(20, ge=1, le=100, description="Page size"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[PaginatedData[QuizRecordQuestionResponse]]:
-    """Quiz record list."""
     result = await QuizService().list_wrong_book(current_user.id, page=page, page_size=page_size)
     return success(data=result)
 
 
-@router.post("/wrong-book", response_model=APIResponse[QuizWrongBookResponse])
+@router.post("/wrong-book",
+    response_model=APIResponse[QuizWrongBookResponse],
+    summary="加入错题本",
+    description="""
+小程序 **题库** 页面使用。
+
+**使用场景**: 用户答题错误后，系统自动或手动将错题加入错题本
+
+**请求体**:
+- `question_id`: 题目 ID
+
+**响应**: 错题记录
+
+**认证**: 需登录
+    """,
+)
 async def add_wrong_question(
     body: QuizWrongBookRequest,
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[QuizWrongBookResponse]:
-    """Add a question to the wrong-book."""
     result = await QuizService().add_wrong_question(current_user.id, body)
     return success(data=result)
 
 
-@router.delete("/wrong-book/{id}", response_model=APIResponse[QuizWrongBookResponse])
+@router.delete("/wrong-book/{id}",
+    response_model=APIResponse[QuizWrongBookResponse],
+    summary="移除错题",
+    description="""
+小程序 **题库** 页面使用。
+
+**使用场景**: 用户从错题本中移除某道错题
+
+**路径参数**:
+- `id`: 错题记录 ID
+
+**响应**: 删除结果
+
+**认证**: 需登录
+    """,
+)
 async def remove_wrong_question(
-    id: int = Path(..., ge=1, description="Quiz record ID"),
+    id: int = Path(..., ge=1, description="错题记录 ID"),
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[QuizWrongBookResponse]:
-    """Remove a question from the wrong-book."""
     result = await QuizService().remove_wrong_question(current_user.id, record_id=id)
     return success(data=result)
 
 
-@router.get("/collections", response_model=APIResponse[PaginatedData[QuizRecordQuestionResponse]])
+@router.get("/collections",
+    response_model=APIResponse[PaginatedData[QuizRecordQuestionResponse]],
+    summary="收藏列表",
+    description="""
+小程序 **题库** 页面使用。
+
+**使用场景**: 查看当前用户收藏的题目列表，支持分页
+
+**查询参数**:
+- `page`: 页码，从 1 开始
+- `page_size`: 每页条数，默认 20，最大 100
+
+**响应**: 分页收藏记录，含题目详情
+
+**认证**: 需登录
+    """,
+)
 async def list_collections(
-    page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(20, ge=1, le=100, description="Page size"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[PaginatedData[QuizRecordQuestionResponse]]:
-    """List collected questions."""
     result = await QuizService().list_collections(current_user.id, page=page, page_size=page_size)
     return success(data=result)
 
 
-@router.post("/collections", response_model=APIResponse[QuizCollectionResponse])
+@router.post("/collections",
+    response_model=APIResponse[QuizCollectionResponse],
+    summary="收藏题目",
+    description="""
+小程序 **题库** 页面使用。
+
+**使用场景**: 用户收藏一道题目，方便后续复习
+
+**请求体**:
+- `question_id`: 题目 ID
+
+**响应**: 收藏记录
+
+**认证**: 需登录
+    """,
+)
 async def add_collection(
     body: QuizCollectionRequest,
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[QuizCollectionResponse]:
-    """Add a question to collections."""
     result = await QuizService().add_collection(current_user.id, body)
     return success(data=result)
 
 
-@router.delete("/collections/{id}", response_model=APIResponse[QuizCollectionResponse])
+@router.delete("/collections/{id}",
+    response_model=APIResponse[QuizCollectionResponse],
+    summary="取消收藏",
+    description="""
+小程序 **题库** 页面使用。
+
+**使用场景**: 用户取消收藏某道题目
+
+**路径参数**:
+- `id`: 收藏记录 ID
+
+**响应**: 删除结果
+
+**认证**: 需登录
+    """,
+)
 async def remove_collection(
-    id: int = Path(..., ge=1, description="Quiz record ID"),
+    id: int = Path(..., ge=1, description="收藏记录 ID"),
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[QuizCollectionResponse]:
-    """Remove a question from collections."""
     result = await QuizService().remove_collection(current_user.id, record_id=id)
     return success(data=result)
 
 
-@router.get("/checkin", response_model=APIResponse[QuizCheckinResponse])
+@router.get("/checkin",
+    response_model=APIResponse[QuizCheckinResponse],
+    summary="签到状态",
+    description="""
+小程序 **题库** 页面使用。
+
+**使用场景**: 查看当前用户今日签到状态和连续签到天数
+
+**响应**: 签到状态，含今日是否已签到、连续签到天数
+
+**认证**: 需登录
+    """,
+)
 async def get_checkin_status(
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[QuizCheckinResponse]:
-    """Get check-in status."""
     result = await QuizService().get_checkin_status(current_user.id)
     return success(data=result)
 
 
-@router.post("/checkin", response_model=APIResponse[QuizCheckinResponse])
+@router.post("/checkin",
+    response_model=APIResponse[QuizCheckinResponse],
+    summary="执行签到",
+    description="""
+小程序 **题库** 页面使用。
+
+**使用场景**: 用户点击签到按钮，完成每日签到
+
+**请求体**:
+- `date`: 签到日期（通常为当日）
+
+**响应**: 签到结果，含连续签到天数
+
+**认证**: 需登录
+    """,
+)
 async def checkin(
     body: QuizCheckinRequest,
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[QuizCheckinResponse]:
-    """Create today's check-in."""
     result = await QuizService().checkin(current_user.id, body)
     return success(data=result)

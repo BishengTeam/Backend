@@ -54,7 +54,7 @@ app.include_router(admin_router)
 app.include_router(agreement_router)
 
 
-@app.get("/health")
+@app.get("/health", summary="健康检查", description="服务健康检查，验证数据库和 Redis 连接状态。由 K8s liveness probe 或负载均衡器掉线检测使用。")
 async def health():
     db_ok = await _check_db()
     redis_ok = await _check_redis()
@@ -72,7 +72,7 @@ async def health():
     }
 
 
-@app.get("/ready")
+@app.get("/ready", summary="就绪检查", description="服务就绪探针。由 K8s readiness probe 使用，返回就绪状态。")
 async def ready():
     return {"status": "ready"}
 

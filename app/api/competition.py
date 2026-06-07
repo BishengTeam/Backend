@@ -9,9 +9,18 @@ from app.services.competition import CompetitionService
 router = APIRouter(prefix="/competition", tags=["竞赛"])
 
 
-@router.get("/stats", response_model=APIResponse[list[CompetitionStatsItem]])
+@router.get("/stats",
+    response_model=APIResponse[list[CompetitionStatsItem]],
+    summary="竞赛统计",
+    description="""
+小程序 **竞赛** 页面使用。
+
+**使用场景**: 按学校维度统计竞赛报名人数，展示排行榜
+**响应**: 学校统计数据列表，按报名人数降序排列
+**认证**: 无需登录
+    """,
+)
 async def get_competition_stats():
-    """按学校统计竞赛报名人数，按 count 降序排列"""
     stats = await CompetitionService().get_school_stats()
     return success(data=stats)
 

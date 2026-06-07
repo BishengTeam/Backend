@@ -95,7 +95,21 @@ async def verify_coupon(
     return success(data=result)
 
 
-@router.post("/validate", response_model=APIResponse[CouponResponse])
+@router.post("/validate",
+    response_model=APIResponse[CouponResponse],
+    summary="核销优惠券(别名)",
+    description="""
+小程序 **下单/支付** 页面使用。
+
+**使用场景**: 核销优惠券的别名接口（兼容旧前端路径 `/validate`）。功能同 `/api/coupons/verify`
+
+**请求体**:
+- `coupon_id`: 优惠券 ID
+- `order_amount`: 订单金额
+**响应**: 核销结果
+**认证**: 需登录
+    """,
+)
 async def validate_coupon(
     body: CouponVerifyRequest,
     current_user: User = Depends(get_current_user),
