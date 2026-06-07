@@ -15,6 +15,7 @@ from app.schemas.job import JobResponse
 from app.schemas.zone import (
     BannerBrief,
     HomeAggregationResponse,
+    ZONE_ENTITY_MAP,
     ZoneBrief,
     ZoneSectionData,
 )
@@ -23,6 +24,16 @@ from app.schemas.zone import (
 HOME_ZONE_LIMIT = 10
 
 ALL_ZONE_TYPES = ("cert", "study", "competition", "activity", "employment", "training")
+
+# Entity query config: (model_class, response_schema, has_is_active_filter)
+_ENTITY_QUERIES: dict[str, tuple] = {
+    "courses":         (Course,         CourseListResponse,        True),
+    "activities":      (Activity,       ActivityResponse,          True),
+    "certifications":  (Certification,  CertificationResponse,     True),
+    "trainings":       (Training,       AdminTrainingListItem,     True),
+    "competitions":    (CompetitionReg, CompetitionRegResponse,    False),
+    "jobs":            (Job,            JobResponse,               True),
+}
 
 
 class ZoneService:
@@ -33,7 +44,7 @@ class ZoneService:
         async with get_db_ctx() as db:
             now = datetime.now(timezone.utc)
 
-            # Active banners from Banner table, within valid time range
+            # ── Banners ──────────────────────────────────────────
             banner_stmt = (
                 select(Banner)
                 .where(
@@ -44,19 +55,16 @@ class ZoneService:
                 .order_by(Banner.sort, Banner.id.desc())
             )
             banner_result = await db.execute(banner_stmt)
-            banners: list[BannerBrief] = [
+            banners = [
                 BannerBrief.model_validate(b) for b in banner_result.scalars().all()
             ]
 
-            # All zone types: top N active zones sorted by sort_order
+            # ── Zone cards ───────────────────────────────────────
             zones: dict[str, list[ZoneBrief]] = {}
             for ztype in ALL_ZONE_TYPES:
                 zone_stmt = (
                     select(Zone)
-                    .where(
-                        Zone.zone_type == ztype,
-                        Zone.is_active == True,
-                    )
+                    .where(Zone.zone_type == ztype, Zone.is_active == True)
                     .order_by(Zone.sort_order, Zone.id.desc())
                     .limit(HOME_ZONE_LIMIT)
                 )
@@ -68,84 +76,27 @@ class ZoneService:
                 if zone_list:
                     zones[ztype] = zone_list
 
-            # Top active courses
-            course_stmt = (
-                select(Course)
-                .where(Course.is_active == True)
-                .order_by(Course.id.desc())
-                .limit(HOME_ZONE_LIMIT)
-            )
-            course_result = await db.execute(course_stmt)
-            courses = [CourseListResponse.model_validate(c) for c in course_result.scalars().all()]
+            # ── Entity data ──────────────────────────────────────
+            entity_data: dict[str, list] = {}
+            for field_name, (model_cls, schema_cls, active_filter) in _ENTITY_QUERIES.items():
+                stmt = select(model_cls)
+                if active_filter:
+                    stmt = stmt.where(model_cls.is_active == True)
+                stmt = stmt.order_by(model_cls.id.desc()).limit(HOME_ZONE_LIMIT)
+                result = await db.execute(stmt)
+                entity_data[field_name] = [
+                    schema_cls.model_validate(obj)
+                    for obj in result.scalars().all()
+                ]
 
-            # Top active activities
-            activity_stmt = (
-                select(Activity)
-                .where(Activity.is_active == True)
-                .order_by(Activity.id.desc())
-                .limit(HOME_ZONE_LIMIT)
-            )
-            activity_result = await db.execute(activity_stmt)
-            activities = [ActivityResponse.model_validate(a) for a in activity_result.scalars().all()]
-
-            # Top active certifications
-            cert_stmt = (
-                select(Certification)
-                .where(Certification.is_active == True)
-                .order_by(Certification.id.desc())
-                .limit(HOME_ZONE_LIMIT)
-            )
-            cert_result = await db.execute(cert_stmt)
-            certifications = [CertificationResponse.model_validate(c) for c in cert_result.scalars().all()]
-
-            # Top active trainings
-            training_stmt = (
-                select(Training)
-                .where(Training.is_active == True)
-                .order_by(Training.id.desc())
-                .limit(HOME_ZONE_LIMIT)
-            )
-            training_result = await db.execute(training_stmt)
-            trainings = [AdminTrainingListItem.model_validate(t) for t in training_result.scalars().all()]
-
-            # Top active competition registrations
-            comp_stmt = (
-                select(CompetitionReg)
-                .order_by(CompetitionReg.id.desc())
-                .limit(HOME_ZONE_LIMIT)
-            )
-            comp_result = await db.execute(comp_stmt)
-            competitions = [CompetitionRegResponse.model_validate(c) for c in comp_result.scalars().all()]
-
-            # Top active jobs
-            job_stmt = (
-                select(Job)
-                .where(Job.is_active == True)
-                .order_by(Job.id.desc())
-                .limit(HOME_ZONE_LIMIT)
-            )
-            job_result = await db.execute(job_stmt)
-            jobs = [JobResponse.model_validate(j) for j in job_result.scalars().all()]
-
-            # 将各专区业务数据收敛到 zones 字典内
+            # ── Build zone sections ──────────────────────────────
             zone_sections: dict[str, ZoneSectionData] = {}
             for ztype in ALL_ZONE_TYPES:
-                section = ZoneSectionData(items=zones.get(ztype, []))
-                if ztype == "cert":
-                    section.certifications = certifications
-                elif ztype == "study":
-                    section.courses = courses
-                elif ztype == "competition":
-                    section.competitions = competitions
-                elif ztype == "activity":
-                    section.activities = activities
-                elif ztype == "employment":
-                    section.jobs = jobs
-                elif ztype == "training":
-                    section.trainings = trainings
-                if (section.items or section.courses or section.activities
-                        or section.certifications or section.trainings
-                        or section.competitions or section.jobs):
-                    zone_sections[ztype] = section
+                section_kwargs: dict = {"items": zones.get(ztype, [])}
+                field_name = ZONE_ENTITY_MAP.get(ztype)
+                if field_name and entity_data.get(field_name):
+                    section_kwargs[field_name] = entity_data[field_name]
+                if any(section_kwargs.values()):
+                    zone_sections[ztype] = ZoneSectionData(**section_kwargs)
 
             return HomeAggregationResponse(banners=banners, zones=zone_sections)

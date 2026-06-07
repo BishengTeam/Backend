@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
 
 from app.schemas.activity import ActivityResponse
 from app.schemas.admin_training import AdminTrainingListItem
@@ -8,6 +8,21 @@ from app.schemas.certification import CertificationResponse
 from app.schemas.competition import CompetitionRegResponse
 from app.schemas.course import CourseListResponse
 from app.schemas.job import JobResponse
+
+
+# ── zone_type → entity field mapping ──────────────────────────────
+# Drives entity assignment in ZoneService.get_home_aggregation.
+# Each zone_type maps to the ZoneSectionData field that carries its
+# associated entity list.
+
+ZONE_ENTITY_MAP: dict[str, str] = {
+    "cert":        "certifications",
+    "study":       "courses",
+    "competition": "competitions",
+    "activity":    "activities",
+    "employment":  "jobs",
+    "training":    "trainings",
+}
 
 
 # ── Shared briefs ──────────────────────────────────────────────────
@@ -36,7 +51,11 @@ class ZoneBrief(BaseModel):
 # ── Response models ───────────────────────────────────────────────
 
 class ZoneSectionData(BaseModel):
-    """专区聚合数据：Zone 入口卡片 + 该专区的业务数据"""
+    """专区聚合数据：Zone 入口卡片 + 该专区的业务数据
+
+    实体字段按 zone_type 就近归属（例如 study → courses）。
+    未赋值的实体字段在序列化时自动剔除，不会出现在响应 JSON 中。
+    """
     items: list[ZoneBrief] = Field(default_factory=list)
     courses: list[CourseListResponse] | None = None
     activities: list[ActivityResponse] | None = None
@@ -44,6 +63,12 @@ class ZoneSectionData(BaseModel):
     trainings: list[AdminTrainingListItem] | None = None
     competitions: list[CompetitionRegResponse] | None = None
     jobs: list[JobResponse] | None = None
+
+    @model_serializer(mode='wrap')
+    def _compact(self, handler, info):
+        """剔除值为 None 的字段，只保留有数据的部分。"""
+        result = handler(self)
+        return {k: v for k, v in result.items() if v is not None}
 
 
 class HomeAggregationResponse(BaseModel):
