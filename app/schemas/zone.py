@@ -2,8 +2,6 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.schemas.certification import CertificationResponse
-
 
 # ── Shared briefs ──────────────────────────────────────────────────
 
@@ -95,26 +93,6 @@ class HomeAggregationResponse(BaseModel):
     activities: list[ActivityBrief] = Field(default_factory=list)
 
 
-class CertZoneResponse(BaseModel):
-    zones: list[ZoneBrief] = Field(default_factory=list)
-    certifications: list[CertificationResponse] = Field(default_factory=list)
-
-
-class StudyZoneResponse(BaseModel):
-    zones: list[ZoneBrief] = Field(default_factory=list)
-    courses: list[CourseBrief] = Field(default_factory=list)
-
-
 class CompetitionZoneResponse(BaseModel):
     zones: list[ZoneBrief] = Field(default_factory=list)
     competitions: list[CompetitionBrief] = Field(default_factory=list)
-
-
-class ActivityZoneResponse(BaseModel):
-    zones: list[ZoneBrief] = Field(default_factory=list)
-    activities: list[ActivityBrief] = Field(default_factory=list)
-
-
-class EmploymentZoneResponse(BaseModel):
-    zones: list[ZoneBrief] = Field(default_factory=list)
-    jobs: list[JobBrief] = Field(default_factory=list)
