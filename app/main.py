@@ -72,7 +72,7 @@ async def health():
     }
 
 
-@app.get("/ready", summary="就绪检查", description="服务就绪探针。由 K8s readiness probe 使用，返回就绪状态。")
+@app.get("/ready", summary="就绪检查", description="服务就绪探针，检查服务是否可以接收流量。由 K8s readiness probe 使用，返回就绪状态。")
 async def ready():
     return {"status": "ready"}
 
