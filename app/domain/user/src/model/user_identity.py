@@ -14,7 +14,7 @@ class UserIdentity(Base, TimestampMixin):
     id_card_front_oss: Mapped[str | None] = mapped_column(String(512))
     id_card_back_oss: Mapped[str | None] = mapped_column(String(512))
     student_card_oss: Mapped[str | None] = mapped_column(String(512))
-    status: Mapped[str] = mapped_column(String(16), default="verified", server_default="verified", index=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending", index=True)
     edit_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     verified_at: Mapped[str | None] = mapped_column(String(30))
     email: Mapped[str | None] = mapped_column(String(128), nullable=True)

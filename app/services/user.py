@@ -1,9 +1,12 @@
+from datetime import datetime, timezone
+
 from sqlalchemy import select, update
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import BusinessException, NotFoundException, ValidationException
 from app.adapter.redis import redis_get_safe
 from app.integrations.wechat import WechatClient
+from app.integrations.identity_verify import IdentityVerifyError, verify_real_name
 from app.domain.user.src.index import DeletedOpenid, User, UserIdentity
 from app.domain.order.src.index import Order
 from app.schemas.user import (
@@ -53,6 +56,25 @@ class UserService:
             raise ValidationException(error)
         if data.user_type == "student" and not data.student_card_oss:
             raise ValidationException("学生用户必须上传学生证")
+
+        # 核验姓名+身份证号（仅当 provider 不为 none 时调用）
+        verify_passed: bool | None = None
+        try:
+            verify_passed = await verify_real_name(data.real_name, data.id_card_number)
+        except IdentityVerifyError:
+            pass  # 核验服务不可用，降级为未核验
+
+        # 确定 status: verified / rejected / pending
+        if verify_passed is True:
+            identity_status = "verified"
+            verified_at = datetime.now(timezone.utc).isoformat()
+        elif verify_passed is False:
+            identity_status = "rejected"
+            verified_at = None
+        else:
+            identity_status = "pending"  # 未核验或核验服务不可用
+            verified_at = None
+
         async with get_db_ctx() as db:
             user = await db.get(User, user_id)
             if user is None or not user.is_active:
@@ -71,11 +93,18 @@ class UserService:
                 existing.id_card_front_oss = data.id_card_front_oss
                 existing.id_card_back_oss = data.id_card_back_oss
                 existing.student_card_oss = data.student_card_oss
+                existing.status = identity_status
+                existing.verified_at = verified_at
                 existing.edit_count += 1
                 await db.commit()
                 await db.refresh(existing)
                 return _mask_identity(existing)
-            identity = UserIdentity(user_id=user_id, **data.model_dump())
+            identity = UserIdentity(
+                user_id=user_id,
+                status=identity_status,
+                verified_at=verified_at,
+                **data.model_dump(),
+            )
             db.add(identity)
             await db.commit()
             await db.refresh(identity)
@@ -115,6 +144,38 @@ class UserService:
                 idn = identity.id_card_number
                 id_card = idn[:4] + "**********" + idn[-4:] if len(idn) == 18 else "****"
 
+            # ── 报名预填扩展字段（仅已实名时返回）──
+            phone_raw = None
+            id_card_raw = None
+            pinyin_str = None
+            first_name = None
+            last_name = None
+            age = None
+
+            if identity and identity.status == "verified":
+                phone_raw = user.phone
+                if identity.id_card_number and len(identity.id_card_number) == 18:
+                    id_card_raw = identity.id_card_number
+                    try:
+                        birth = identity.id_card_number[6:14]
+                        birth_date = datetime.strptime(birth, "%Y%m%d").replace(tzinfo=timezone.utc)
+                        today = datetime.now(timezone.utc)
+                        age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+                    except (ValueError, IndexError):
+                        pass
+                if identity.real_name:
+                    try:
+                        from app.services.certification import CertificationService
+                        pinyin_str = CertificationService.convert_to_pinyin(identity.real_name)
+                        parts = pinyin_str.split()
+                        if len(parts) >= 2:
+                            last_name = parts[0]
+                            first_name = " ".join(parts[1:])
+                        else:
+                            last_name = pinyin_str
+                    except Exception:
+                        pass
+
             return UserProfileDetail(
                 id=user.id,
                 openid=user.openid,
@@ -130,6 +191,12 @@ class UserService:
                 organization=identity.organization if identity else None,
                 identity_status=identity.status if identity else None,
                 created_at=user.created_at.isoformat() if user.created_at else "",
+                phone_raw=phone_raw,
+                id_card_raw=id_card_raw,
+                pinyin=pinyin_str,
+                first_name=first_name,
+                last_name=last_name,
+                age=age,
             )
 
     async def update_profile(self, user_id: int, data: "UserProfileUpdate") -> "UserProfileDetail":
@@ -178,9 +245,23 @@ class UserService:
     async def decrypt_phone(self, user_id: int, encrypted_data: str, iv: str) -> str:
         session_key = await redis_get_safe(f"{SESSION_KEY_PREFIX}{user_id}")
         if not session_key:
-            raise BusinessException("session_key 已过期，请重新登录")
-        phone = WechatClient.decrypt_phone(encrypted_data, iv, session_key)
+            raise BusinessException("登录凭证已过期，请重新登录后再绑定手机号")
+
+        try:
+            phone = WechatClient.decrypt_phone(encrypted_data, iv, session_key)
+        except Exception as e:
+            raise BusinessException(f"手机号解密失败，请重新授权: {e}") from e
+
         async with get_db_ctx() as db:
+            # 检查手机号是否已被其他用户绑定
+            existing = (
+                await db.execute(
+                    select(User).where(User.phone == phone, User.id != user_id, User.is_active == True)
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                raise BusinessException("该手机号已被其他用户绑定")
+
             user = await db.get(User, user_id)
             if user is None:
                 raise NotFoundException("用户")

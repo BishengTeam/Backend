@@ -82,6 +82,16 @@ class Settings(BaseSettings):
     DIFY_API_BASE: str = ""
     DIFY_API_KEY: str = ""
 
+    # 实名核验: none(仅格式校验) / aliyun / tencent
+    IDENTITY_VERIFY_PROVIDER: str = "none"
+    # 阿里云 身份证实名认证
+    ALIYUN_ACCESS_KEY_ID: str = ""
+    ALIYUN_ACCESS_KEY_SECRET: str = ""
+    ALIYUN_VERIFY_APP_CODE: str = ""  # 云市场 AppCode
+    # 腾讯云 实名认证
+    TENCENT_SECRET_ID: str = ""
+    TENCENT_SECRET_KEY: str = ""
+
     LOGIN_POSTER_URL: str | None = None
 
     CORS_ORIGINS: list[str] = []

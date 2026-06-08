@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import BusinessException, NotFoundException
 from app.domain.content.src.index import Activity, ActivityRegistration, ActivityReminder
+from app.schemas.activity import ActivityResponse
 from app.schemas.common import PaginatedData
 
 
@@ -17,7 +18,7 @@ class ActivityService:
         *,
         page: int = 1,
         page_size: int = 20,
-    ) -> PaginatedData:
+    ) -> PaginatedData[ActivityResponse]:
         now = datetime.now(timezone.utc)
         stmt = select(Activity).where(
             Activity.is_active == True,
@@ -39,8 +40,8 @@ class ActivityService:
                 )
             ).scalars().all()
 
-        return PaginatedData(
-            items=list(activities),
+        return PaginatedData[ActivityResponse](
+            items=[ActivityResponse.model_validate(a) for a in activities],
             total=total,
             page=page,
             page_size=page_size,

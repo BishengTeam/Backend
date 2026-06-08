@@ -82,6 +82,16 @@ class UserProfileDetail(BaseModel):
     identity_status: str | None = None
     created_at: datetime | str
 
+    # ── 报名预填扩展字段（仅已实名时返回）──
+    phone_raw: str | None = None          # 明文手机号
+    id_card_raw: str | None = None        # 明文身份证号
+    pinyin: str | None = None             # 姓名拼音，如 "zhang san"
+    first_name: str | None = None         # 名（拼音）
+    last_name: str | None = None          # 姓（拼音）
+    age: int | None = None                # 年龄（从身份证号推算）
+    country: str = "CN"                   # 国家
+    language: str = "Chinese"             # 语言
+
     model_config = {"from_attributes": True}
 
 
