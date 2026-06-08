@@ -31,6 +31,8 @@ class BannerBrief(BaseModel):
     id: int
     image_url: str
     jump_link: str | None = None
+    target_type: str | None = None
+    target_id: int | None = None
     sort: int
 
     model_config = {"from_attributes": True}

@@ -1,6 +1,6 @@
-from datetime import date
+from datetime import date, datetime, timezone
 
-from sqlalchemy import String, Integer, Boolean, JSON, Date, ForeignKey
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, Date, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.adapter.database import Base, TimestampMixin
@@ -43,3 +43,20 @@ class QuizCheckin(Base, TimestampMixin):
     checkin_date: Mapped[date] = mapped_column(Date, nullable=False)
     questions_completed: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     consecutive_days: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class QuizExam(Base, TimestampMixin):
+    __tablename__ = "quiz_exam"
+
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("user.id"), nullable=False, index=True)
+    question_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False)
+    answers: Mapped[dict | None] = mapped_column(JSON)
+    total: Mapped[int] = mapped_column(Integer, nullable=False)
+    correct_count: Mapped[int | None] = mapped_column(Integer)
+    wrong_count: Mapped[int | None] = mapped_column(Integer)
+    score: Mapped[float | None] = mapped_column(Float)
+    elapsed_seconds: Mapped[int | None] = mapped_column(Integer)
+    duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(16), default="in_progress", server_default="in_progress")

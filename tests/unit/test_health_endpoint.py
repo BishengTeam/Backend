@@ -15,6 +15,8 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
+import app.main  # noqa: F401  ensure app.main is importable for patching
+
 
 # ---------------------------------------------------------------------------
 # four-state matrix

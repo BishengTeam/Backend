@@ -144,7 +144,7 @@ class UserService:
                 idn = identity.id_card_number
                 id_card = idn[:4] + "**********" + idn[-4:] if len(idn) == 18 else "****"
 
-            # ── 报名预填扩展字段（仅已实名时返回）──
+            # ── 报名预填扩展字段 ──
             phone_raw = None
             id_card_raw = None
             pinyin_str = None
@@ -152,10 +152,15 @@ class UserService:
             last_name = None
             age = None
 
-            if identity and identity.status == "verified":
-                phone_raw = user.phone
+            if identity:
+                # 敏感字段仅 verified 后返回
+                if identity.status == "verified":
+                    phone_raw = user.phone
+                    if identity.id_card_number and len(identity.id_card_number) == 18:
+                        id_card_raw = identity.id_card_number
+
+                # 衍生字段 pending 即可计算
                 if identity.id_card_number and len(identity.id_card_number) == 18:
-                    id_card_raw = identity.id_card_number
                     try:
                         birth = identity.id_card_number[6:14]
                         birth_date = datetime.strptime(birth, "%Y%m%d").replace(tzinfo=timezone.utc)

@@ -2,6 +2,7 @@
 
 from app.domain.content.src.model.activity import Activity, ActivityRegistration, ActivityReminder
 from app.domain.content.src.model.agreement import Agreement
+from app.domain.content.src.model.banner import Banner
 from app.domain.content.src.model.ticket import Ticket
 from app.domain.content.src.model.training import Training
 from app.domain.content.src.model.zone import Zone
@@ -11,6 +12,7 @@ __all__ = [
     "ActivityRegistration",
     "ActivityReminder",
     "Agreement",
+    "Banner",
     "Ticket",
     "Training",
     "Zone",

@@ -11,6 +11,8 @@ from app.schemas.quiz import (
     QuizCheckinResponse,
     QuizCollectionRequest,
     QuizCollectionResponse,
+    QuizExamStartRequest,
+    QuizExamSubmitRequest,
     QuizQuestionResponse,
     QuizQuestionType,
     QuizRecordQuestionResponse,
@@ -291,4 +293,107 @@ async def checkin(
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[QuizCheckinResponse]:
     result = await QuizService().checkin(current_user.id, body)
+    return success(data=result)
+
+
+# ── 练习统计 ──────────────────────────────────────────────────
+
+@router.get("/stats",
+    response_model=APIResponse,
+    summary="练习统计",
+)
+async def get_stats(
+    current_user: User = Depends(get_current_user),
+):
+    result = await QuizService().get_stats(current_user.id)
+    return success(data=result)
+
+
+# ── 模拟考试 ──────────────────────────────────────────────────
+
+@router.post("/exam/start",
+    response_model=APIResponse,
+    summary="开始模拟考试",
+)
+async def start_exam(
+    body: QuizExamStartRequest,
+    current_user: User = Depends(get_current_user),
+):
+    result = await QuizService().start_exam(current_user.id, body)
+    return success(data=result)
+
+
+@router.post("/exam/submit",
+    response_model=APIResponse,
+    summary="提交模拟考试",
+)
+async def submit_exam(
+    body: QuizExamSubmitRequest,
+    current_user: User = Depends(get_current_user),
+):
+    result = await QuizService().submit_exam(current_user.id, body)
+    return success(data=result)
+
+
+@router.get("/exam/history",
+    response_model=APIResponse,
+    summary="考试记录",
+)
+async def list_exams(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+):
+    result = await QuizService().list_exams(current_user.id, page, page_size)
+    return success(data=result)
+
+
+@router.get("/exam/current",
+    response_model=APIResponse,
+    summary="当前考试（断点续考）",
+)
+async def get_current_exam(
+    current_user: User = Depends(get_current_user),
+):
+    result = await QuizService().get_current_exam(current_user.id)
+    return success(data=result)
+
+
+@router.get("/exam/{exam_id}",
+    response_model=APIResponse,
+    summary="考试详情",
+)
+async def get_exam(
+    exam_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+):
+    result = await QuizService().get_exam(current_user.id, exam_id)
+    return success(data=result)
+
+
+# ── 分类进度 ──────────────────────────────────────────────────
+
+@router.get("/progress",
+    response_model=APIResponse,
+    summary="分类维度进度",
+)
+async def get_progress(
+    category_id: int | None = Query(None, ge=1),
+    current_user: User = Depends(get_current_user),
+):
+    result = await QuizService().get_progress(current_user.id, category_id)
+    return success(data=result)
+
+
+# ── 近期记录 ──────────────────────────────────────────────────
+
+@router.get("/recent",
+    response_model=APIResponse,
+    summary="近期答题记录",
+)
+async def get_recent(
+    limit: int = Query(10, ge=1, le=50),
+    current_user: User = Depends(get_current_user),
+):
+    result = await QuizService().get_recent(current_user.id, limit)
     return success(data=result)
