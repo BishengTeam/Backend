@@ -7,6 +7,7 @@ from app.middleware.auth import require_permission
 from app.middleware.rate_limit import limiter
 from app.schemas.admin import (
     AdminBatchDeleteRequest,
+    AdminIdentityReview,
     AdminUserConversationBrief,
     AdminUserFilter,
     AdminUserListItem,
@@ -15,6 +16,7 @@ from app.schemas.admin import (
     AdminUserUpdate,
 )
 from app.schemas.common import APIResponse, PaginatedData, success
+from app.schemas.user import UserIdentityResponse, UserProfileDetail
 from app.services.admin_user import AdminUserService
 
 router = APIRouter(prefix="/users", tags=["管理后台-用户管理"])
@@ -198,4 +200,84 @@ async def get_user_conversations(
     _admin=Depends(require_permission("user:list")),
 ):
     result = await AdminUserService().get_user_conversations(user_id)
+    return success(data=result)
+
+
+@router.put("/{user_id}/identity/review",
+    response_model=APIResponse[dict],
+    summary="审核实名认证",
+    description="""
+管理后台 **用户管理** 页面使用。
+
+**页面路径**: `/admin/users`
+
+**使用场景**: 管理员审核用户的实名认证信息，通过或驳回。
+
+**路径参数**:
+- `user_id`: 用户 ID
+
+**请求体**:
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| status | str | ✅ | `verified` 通过 / `rejected` 驳回 |
+| comment | str | 否 | 审核备注 |
+
+**认证**: 需 `user:write` 权限
+    """,
+)
+async def review_identity(
+    body: AdminIdentityReview,
+    user_id: int = Path(..., description="用户 ID"),
+    _admin=Depends(require_permission("user:write")),
+):
+    result = await AdminUserService().review_identity(user_id, body)
+    return success(data=result)
+
+
+@router.get("/{user_id}/profile",
+    response_model=APIResponse[UserProfileDetail],
+    summary="用户完整个人资料",
+    description="""
+管理后台 **用户管理** 页面使用。
+
+**页面路径**: `/admin/users`
+
+**使用场景**: 管理员在用户详情抽屉中查看该用户的完整个人资料，包括性别、学历、学校、专业、单位、邮箱以及脱敏后的手机号/身份证号。
+
+**路径参数**:
+- `user_id`: 用户 ID
+
+**认证**: 需 `user:list` 权限
+    """,
+)
+async def get_user_profile(
+    user_id: int = Path(..., description="用户 ID"),
+    _admin=Depends(require_permission("user:list")),
+) -> APIResponse[UserProfileDetail]:
+    result = await AdminUserService().get_user_profile(user_id)
+    return success(data=result)
+
+
+@router.get("/{user_id}/identity",
+    response_model=APIResponse[UserIdentityResponse],
+    summary="用户实名认证详情",
+    description="""
+管理后台 **用户管理** 页面使用。
+
+**页面路径**: `/admin/users`
+
+**使用场景**: 管理员在用户详情抽屉中查看该用户的实名认证信息，包括认证类型、真实姓名、明文身份证号、证件照以及审核状态。
+
+**路径参数**:
+- `user_id`: 用户 ID
+
+**认证**: 需 `user:list` 权限
+    """,
+)
+async def get_user_identity(
+    user_id: int = Path(..., description="用户 ID"),
+    _admin=Depends(require_permission("user:list")),
+) -> APIResponse[UserIdentityResponse]:
+    result = await AdminUserService().get_user_identity(user_id)
     return success(data=result)

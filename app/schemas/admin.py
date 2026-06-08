@@ -86,6 +86,11 @@ class AdminUserStatusToggle(BaseModel):
     is_active: bool
 
 
+class AdminIdentityReview(BaseModel):
+    status: str = Field(..., description="审核结果: verified / rejected")
+    comment: str | None = Field(None, max_length=256, description="审核备注")
+
+
 class AdminUserOrderBrief(BaseModel):
     """管理端用户订单摘要（用户详情页子资源）"""
     id: int
@@ -102,7 +107,7 @@ class AdminUserConversationBrief(BaseModel):
     """管理端用户对话摘要（用户详情页子资源）"""
     id: int
     session_id: str
-    backend_type: str
+    title: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

@@ -1,11 +1,14 @@
+from datetime import datetime, timezone
+
 from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
-from app.port.exceptions import NotFoundException
+from app.port.exceptions import NotFoundException, ValidationException
 from app.domain.community.src.index import Conversation
 from app.domain.order.src.index import Order
-from app.domain.user.src.index import User
+from app.domain.user.src.index import User, UserIdentity
 from app.schemas.admin import (
+    AdminIdentityReview,
     AdminUserConversationBrief,
     AdminUserFilter,
     AdminUserListItem,
@@ -127,3 +130,56 @@ class AdminUserService:
             for u in users:
                 writer.writerow([u.id, u.openid, u.phone or "", u.is_active, u.created_at])
             return output.getvalue()
+
+    async def review_identity(self, user_id: int, data: AdminIdentityReview) -> dict:
+        """审核用户实名认证"""
+        if data.status not in ("verified", "rejected"):
+            raise ValidationException("status 必须为 verified 或 rejected")
+
+        async with get_db_ctx() as db:
+            identity = (
+                await db.execute(
+                    select(UserIdentity).where(UserIdentity.user_id == user_id)
+                )
+            ).scalar_one_or_none()
+            if identity is None:
+                raise NotFoundException("实名认证信息")
+
+            identity.status = data.status
+            if data.status == "verified":
+                identity.verified_at = datetime.now(timezone.utc).isoformat()
+            else:
+                identity.verified_at = None
+            await db.commit()
+
+        return {"user_id": user_id, "status": data.status, "comment": data.comment}
+
+    async def get_user_profile(self, user_id: int) -> "UserProfileDetail":
+        """管理员查看任一用户的完整个人资料"""
+        from app.services.user import UserService
+        return await UserService().get_profile(user_id)
+
+    async def get_user_identity(self, user_id: int) -> "UserIdentityResponse":
+        """管理员查看任一用户的实名认证详情（身份证号不脱敏）"""
+        from app.schemas.user import UserIdentityResponse
+
+        async with get_db_ctx() as db:
+            identity = (
+                await db.execute(
+                    select(UserIdentity).where(UserIdentity.user_id == user_id)
+                )
+            ).scalar_one_or_none()
+            if identity is None:
+                raise NotFoundException("实名认证信息")
+
+            return UserIdentityResponse(
+                user_type=identity.user_type,
+                real_name=identity.real_name,
+                id_card_number=identity.id_card_number,  # 管理端不脱敏
+                id_card_front_oss=identity.id_card_front_oss,
+                id_card_back_oss=identity.id_card_back_oss,
+                student_card_oss=identity.student_card_oss,
+                status=identity.status,
+                verified_at=identity.verified_at,
+                created_at=identity.created_at.isoformat() if identity.created_at else "",
+            )
