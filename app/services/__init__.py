@@ -9,7 +9,7 @@ from app.services.payment import PaymentService
 from app.services.points import PointsService
 from app.services.price_config import PriceConfigService
 from app.services.quiz import QuizService
-from app.services.user import UserService, _mask_identity
+from app.services.user import UserService
 
 # Domain order re-exports
 from app.domain.order.src.index import (
@@ -65,8 +65,7 @@ __all__ = [
     "lock_certification_inventory",
     "release_inventory_lock",
     # User helpers
-    "_mask_identity",
-    # Cleanup
+    # Cleanup,
     "cleanup_loop",
     # Admin
     "AdminAgreementService",

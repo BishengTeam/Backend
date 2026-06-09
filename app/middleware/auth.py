@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapter.database import get_db
 from app.port.exceptions import AppException, BusinessException, ForbiddenException, UnauthorizedException
 from app.adapter.security import decode_access_token, is_token_revoked
-from app.domain.user.src.index import AdminUser, User, UserIdentity
+from app.domain.user.src.index import AdminUser, User, UserRealname
 from app.policy.permissions import ROLE_PERMISSIONS
 
 
@@ -82,9 +82,9 @@ async def require_identity(
     user_id = current_user.id
     identity = (
         await db.execute(
-            select(UserIdentity).where(
-                UserIdentity.user_id == user_id,
-                UserIdentity.status == "verified",
+            select(UserRealname).where(
+                UserRealname.user_id == user_id,
+                UserRealname.status == "verified",
             )
         )
     ).scalar_one_or_none()

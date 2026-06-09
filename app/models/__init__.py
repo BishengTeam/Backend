@@ -10,7 +10,7 @@ from app.domain.community.src.index import (
 from app.domain.order.src.index import Coupon, Inventory, InventoryRecord, Order, PriceConfig, UserCoupon
 from app.domain.user.src.index import (
     AdminUser, DeletedOpenid, PointsHistory,
-    User, UserIdentity, UserPoints, ADMIN_ROLES,
+    User, UserEnterprise, UserPoints, UserProfile, UserRealname, UserStudent, ADMIN_ROLES,
 )
 
 __all__ = [
@@ -43,8 +43,11 @@ __all__ = [
     "Share",
     "Ticket",
     "User",
+    "UserEnterprise",
+    "UserProfile",
+    "UserRealname",
+    "UserStudent",
     "UserCoupon",
-    "UserIdentity",
     "UserPoints",
     "Zone",
 ]

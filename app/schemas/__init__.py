@@ -3,15 +3,22 @@ from app.schemas.common import APIResponse, PaginatedData, PaginatedResponse
 
 # User-facing schemas
 from app.schemas.user import (
+    EnterpriseResponse,
+    EnterpriseSubmit,
     LoginRequest,
     LoginResponse,
     LogoutRequest,
     PhoneDecryptRequest,
+    RealnameResponse,
+    RealnameSubmit,
     RefreshRequest,
     RefreshResponse,
-    UserIdentityCreate,
-    UserIdentityResponse,
+    StudentResponse,
+    StudentSubmit,
     UserProfile,
+    UserProfileDetail,
+    UserProfileUpdate,
+    UserUnbindRequest,
 )
 
 # Certification schemas
@@ -79,12 +86,13 @@ from app.schemas.system import PosterResponse
 # Admin schemas
 from app.schemas.admin import (
     AdminBatchDeleteRequest,
+    AdminIdentityReview,
     AdminInfo,
     AdminLoginRequest,
     AdminLoginResponse,
+    AdminProfileUpdate,
     AdminUserFilter,
     AdminUserListItem,
-    AdminUserUpdate,
 )
 from app.schemas.admin_agreement import (
     AdminAgreementCreate,

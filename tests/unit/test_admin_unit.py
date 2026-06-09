@@ -371,14 +371,5 @@ class AdminRouterRegistrationTest(unittest.TestCase):
         self.assertTrue(hasattr(banner_mod, "router"))
 
 
-class AdminUserModelTests(unittest.TestCase):
-    """Verify is_deleted field on User model."""
-
-    def test_user_model_has_is_deleted(self):
-        model = importlib.import_module("app.models.user")
-        user = model.User
-        self.assertTrue(hasattr(user, "is_deleted"))
-
-
 if __name__ == "__main__":
     unittest.main()

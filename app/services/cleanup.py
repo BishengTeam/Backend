@@ -8,7 +8,7 @@ from app.domain.content.src.index import ActivityRegistration, Agreement, Ticket
 from app.domain.community.src.index import Collection, Conversation, Share
 from app.domain.certification.src.index import CompetitionReg, CourseEnrollment
 from app.domain.order.src.index import InventoryRecord, Order, UserCoupon
-from app.domain.user.src.index import DeletedOpenid, PointsHistory, User, UserIdentity, UserPoints
+from app.domain.user.src.index import DeletedOpenid, PointsHistory, User, UserProfile, UserRealname, UserStudent, UserEnterprise, UserPoints
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,10 @@ async def _cleanup_expired_accounts():
         for model in [
             PointsHistory,
             UserPoints,
-            UserIdentity,
+            UserRealname,
+            UserStudent,
+            UserEnterprise,
+            UserProfile,
             UserCoupon,
             Collection,
             Conversation,

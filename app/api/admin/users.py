@@ -8,15 +8,20 @@ from app.middleware.rate_limit import limiter
 from app.schemas.admin import (
     AdminBatchDeleteRequest,
     AdminIdentityReview,
+    AdminProfileUpdate,
     AdminUserConversationBrief,
     AdminUserFilter,
     AdminUserListItem,
     AdminUserOrderBrief,
     AdminUserStatusToggle,
-    AdminUserUpdate,
 )
 from app.schemas.common import APIResponse, PaginatedData, success
-from app.schemas.user import UserIdentityResponse, UserProfileDetail
+from app.schemas.user import (
+    EnterpriseResponse,
+    RealnameAdminResponse,
+    StudentResponse,
+    UserProfileDetail,
+)
 from app.services.admin_user import AdminUserService
 
 router = APIRouter(prefix="/users", tags=["管理后台-用户管理"])
@@ -81,7 +86,7 @@ async def export_users(
 ):
     has_filters = openid or phone or created_at_start or created_at_end
     filters = AdminUserFilter(openid=openid, phone=phone, created_at_start=created_at_start, created_at_end=created_at_end) if has_filters else None
-    csv_content = await AdminUserService().export_users(filters)
+    csv_content = await AdminUserService().import_users_csv(filters)
     return Response(content=csv_content, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=users.csv"})
 
 
@@ -101,26 +106,6 @@ async def get_user(
     _admin=Depends(require_permission("user:list")),
 ) -> APIResponse[AdminUserListItem]:
     result = await AdminUserService().get_user(user_id)
-    return success(data=result)
-
-
-@router.put("/{user_id}",
-    response_model=APIResponse[AdminUserListItem],
-    summary="编辑用户信息",
-    description="""
-管理后台 **用户管理** 页面使用。
-
-**页面路径**: `/admin/users`
-
-**使用场景**: 管理员在用户详情抽屉中编辑用户信息并保存
-    """,
-)
-async def update_user(
-    body: AdminUserUpdate,
-    user_id: int = Path(..., description="用户 ID"),
-    _admin=Depends(require_permission("user:list")),
-) -> APIResponse[AdminUserListItem]:
-    result = await AdminUserService().update_user(user_id, body)
     return success(data=result)
 
 
@@ -235,6 +220,19 @@ async def review_identity(
     return success(data=result)
 
 
+@router.put("/{user_id}/profile",
+    response_model=APIResponse[UserProfileDetail],
+    summary="编辑用户资料（管理端可直接修改任意数据）",
+)
+async def update_user_profile(
+    body: AdminProfileUpdate,
+    user_id: int = Path(..., description="用户 ID"),
+    _admin=Depends(require_permission("user:write")),
+) -> APIResponse[UserProfileDetail]:
+    result = await AdminUserService().update_user_profile(user_id, body)
+    return success(data=result)
+
+
 @router.get("/{user_id}/profile",
     response_model=APIResponse[UserProfileDetail],
     summary="用户完整个人资料",
@@ -258,9 +256,8 @@ async def get_user_profile(
     result = await AdminUserService().get_user_profile(user_id)
     return success(data=result)
 
-
 @router.get("/{user_id}/identity",
-    response_model=APIResponse[UserIdentityResponse],
+    response_model=APIResponse[RealnameAdminResponse],
     summary="用户实名认证详情",
     description="""
 管理后台 **用户管理** 页面使用。
@@ -278,6 +275,60 @@ async def get_user_profile(
 async def get_user_identity(
     user_id: int = Path(..., description="用户 ID"),
     _admin=Depends(require_permission("user:list")),
-) -> APIResponse[UserIdentityResponse]:
+) -> APIResponse[RealnameAdminResponse]:
     result = await AdminUserService().get_user_identity(user_id)
+    return success(data=result)
+
+
+# ── Level 2: 学生信息 ──
+
+@router.get("/{user_id}/student",
+    response_model=APIResponse[StudentResponse],
+    summary="用户学生信息",
+)
+async def get_user_student(
+    user_id: int = Path(..., description="用户 ID"),
+    _admin=Depends(require_permission("user:list")),
+) -> APIResponse[StudentResponse]:
+    result = await AdminUserService().get_user_student(user_id)
+    return success(data=result)
+
+
+@router.put("/{user_id}/student/review",
+    response_model=APIResponse[dict],
+    summary="审核学生信息",
+)
+async def review_student(
+    body: AdminIdentityReview,
+    user_id: int = Path(..., description="用户 ID"),
+    _admin=Depends(require_permission("user:write")),
+):
+    result = await AdminUserService().review_student(user_id, body)
+    return success(data=result)
+
+
+# ── Level 2: 企业信息 ──
+
+@router.get("/{user_id}/enterprise",
+    response_model=APIResponse[EnterpriseResponse],
+    summary="用户企业信息",
+)
+async def get_user_enterprise(
+    user_id: int = Path(..., description="用户 ID"),
+    _admin=Depends(require_permission("user:list")),
+) -> APIResponse[EnterpriseResponse]:
+    result = await AdminUserService().get_user_enterprise(user_id)
+    return success(data=result)
+
+
+@router.put("/{user_id}/enterprise/review",
+    response_model=APIResponse[dict],
+    summary="审核企业信息",
+)
+async def review_enterprise(
+    body: AdminIdentityReview,
+    user_id: int = Path(..., description="用户 ID"),
+    _admin=Depends(require_permission("user:write")),
+):
+    result = await AdminUserService().review_enterprise(user_id, body)
     return success(data=result)

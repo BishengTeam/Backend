@@ -16,7 +16,7 @@ from app.domain.order.src.index import (
     validate_extra_data,
 )
 from app.domain.certification.src.index import Certification
-from app.domain.user.src.index import UserIdentity
+from app.domain.user.src.index import UserRealname
 from app.schemas.common import PaginatedData
 from app.schemas.order import OrderCreate, OrderDetailResponse, OrderFilter, OrderResponse
 
@@ -38,9 +38,9 @@ class OrderService:
                     raise BusinessException("认证类型不存在或已下架")
                 identity = (
                     await db.execute(
-                        select(UserIdentity).where(
-                            UserIdentity.user_id == user_id,
-                            UserIdentity.status == "verified",
+                        select(UserRealname).where(
+                            UserRealname.user_id == user_id,
+                            UserRealname.status == "verified",
                         )
                     )
                 ).scalar_one_or_none()

@@ -1,171 +1,133 @@
 from fastapi import APIRouter, Depends
 
 from app.middleware.auth import get_current_user
-from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, success
 from app.schemas.user import (
+    EnterpriseResponse,
+    EnterpriseSubmit,
+    LoginResponse,
+    LogoutRequest,
     PhoneDecryptRequest,
-    UserIdentityCreate,
-    UserIdentityResponse,
+    RealnameResponse,
+    RealnameSubmit,
+    StudentResponse,
+    StudentSubmit,
     UserProfileDetail,
     UserProfileUpdate,
     UserUnbindRequest,
 )
 from app.services.user import UserService
 
-router = APIRouter(prefix="/user", tags=["用户"])
+router = APIRouter(prefix="/user", tags=["用户端-用户信息"])
 
 
-@router.delete("/account",
-    response_model=APIResponse,
-    summary="注销账号",
-    description="""
-小程序 **个人中心** 页面使用。
-
-**使用场景**: 用户在设置中选择注销账号，永久删除账号及关联数据
-
-**关联页面**: 设置 → 账号安全 → 注销账号
-
-**认证**: 需登录
-    """,
-)
-async def delete_account(current_user: User = Depends(get_current_user)):
-    """注销账号"""
-    await UserService().delete_account(current_user.id)
-    return success(message="账号已注销")
-
-
-@router.post("/phone/decrypt",
-    response_model=APIResponse,
-    summary="解密手机号",
-    description="""
-小程序 **登录/绑定手机号** 页面使用。
-
-**使用场景**: 用户授权微信手机号后，将加密数据解密为明文手机号并绑定到当前账号
-
-**请求体**:
-- `encrypted_data`: 微信加密数据
-- `iv`: 加密初始向量
-
-**认证**: 需登录
-    """,
-)
-async def decrypt_phone(
-    body: PhoneDecryptRequest,
-    current_user: User = Depends(get_current_user),
-):
-    """解密微信手机号"""
-    phone = await UserService().decrypt_phone(
-        current_user.id, body.encrypted_data, body.iv
-    )
-    return success(data={"phone": phone})
-
-
-@router.post("/identity",
-    response_model=APIResponse[UserIdentityResponse],
-    summary="提交实名认证",
-    description="""
-小程序 **实名认证** 页面使用。
-
-**使用场景**: 用户提交姓名和身份证号进行实名认证，认证通过后方可参与竞赛报名等需要实名的操作
-
-**关联页面**: 个人中心 → 实名认证
-
-**认证**: 需登录
-    """,
-)
-async def submit_identity(
-    body: UserIdentityCreate,
-    current_user: User = Depends(get_current_user),
-) -> APIResponse[UserIdentityResponse]:
-    """提交实名认证信息"""
-    result = await UserService().submit_identity(current_user.id, body)
-    return success(data=result)
-
-
-@router.get("/identity",
-    response_model=APIResponse[UserIdentityResponse],
-    summary="查询实名认证状态",
-    description="""
-小程序 **实名认证** 页面使用。
-
-**使用场景**: 页面加载时查询当前用户的实名认证状态和认证信息
-
-**关联页面**: 个人中心 → 实名认证
-
-**认证**: 需登录
-    """,
-)
-async def get_identity(
-    current_user: User = Depends(get_current_user),
-) -> APIResponse[UserIdentityResponse]:
-    """查询实名认证状态"""
-    result = await UserService().get_identity(current_user.id)
-    return success(data=result)
-
+# ═══════ Level 1: 基础资料 ═══════
 
 @router.get("/profile",
     response_model=APIResponse[UserProfileDetail],
     summary="获取个人信息",
-    description="""
-小程序 **个人中心** 页面使用。
-
-**使用场景**: 页面加载时获取当前用户的个人资料信息
-
-**关联页面**: 个人中心 → 个人信息
-
-**认证**: 需登录
-    """,
 )
-async def get_profile(
-    current_user: User = Depends(get_current_user),
-) -> APIResponse[UserProfileDetail]:
-    """获取用户个人信息"""
+async def get_profile(current_user=Depends(get_current_user)):
     result = await UserService().get_profile(current_user.id)
     return success(data=result)
 
 
 @router.put("/profile",
     response_model=APIResponse[UserProfileDetail],
-    summary="编辑个人信息",
-    description="""
-小程序 **个人中心** 页面使用。
-
-**使用场景**: 用户编辑个人信息，可重新绑定手机号
-
-**关联页面**: 个人中心 → 个人信息 → 编辑
-
-**认证**: 需登录
-    """,
+    summary="编辑个人信息（Level 1：无需审核）",
 )
 async def update_profile(
     body: UserProfileUpdate,
-    current_user: User = Depends(get_current_user),
-) -> APIResponse[UserProfileDetail]:
-    """编辑个人信息（重新绑定手机号）"""
+    current_user=Depends(get_current_user),
+):
     result = await UserService().update_profile(current_user.id, body)
     return success(data=result)
+
+
+@router.post("/phone/decrypt",
+    response_model=APIResponse,
+    summary="解密手机号",
+)
+async def decrypt_phone(body: PhoneDecryptRequest, current_user=Depends(get_current_user)):
+    phone = await UserService().decrypt_phone(
+        current_user.id, body.encrypted_data, body.iv
+    )
+    return success(data={"phone": phone}, message="手机号解密成功")
 
 
 @router.post("/unbind",
     response_model=APIResponse,
     summary="解绑账号",
-    description="""
-小程序 **账号安全** 页面使用。
-
-**使用场景**: 用户解绑手机号或微信绑定
-
-**请求体**: 解绑类型（phone / wechat）
-
-**关联页面**: 个人中心 → 设置 → 账号安全
-
-**认证**: 需登录
-    """,
 )
-async def unbind(
-    body: UserUnbindRequest,
-    current_user: User = Depends(get_current_user),
-) -> APIResponse:
-    """解绑手机号/微信"""
+async def unbind(body: UserUnbindRequest, current_user=Depends(get_current_user)):
     await UserService().unbind(current_user.id, body.type)
     return success(message="解绑成功")
+
+
+# ═══════ Level 2: 实名认证 ═══════
+
+@router.post("/identity",
+    response_model=APIResponse[RealnameResponse],
+    summary="提交实名认证（Level 2：需审核）",
+)
+async def submit_identity(
+    body: RealnameSubmit,
+    current_user=Depends(get_current_user),
+):
+    result = await UserService().submit_realname(current_user.id, body)
+    return success(data=result)
+
+
+@router.get("/identity",
+    response_model=APIResponse[RealnameResponse],
+    summary="查看实名认证信息",
+)
+async def get_identity(current_user=Depends(get_current_user)):
+    result = await UserService().get_realname(current_user.id)
+    return success(data=result)
+
+
+# ═══════ Level 2: 学生信息 ═══════
+
+@router.post("/student",
+    response_model=APIResponse[StudentResponse],
+    summary="提交学生信息（Level 2：需审核）",
+)
+async def submit_student(
+    body: StudentSubmit,
+    current_user=Depends(get_current_user),
+):
+    result = await UserService().submit_student(current_user.id, body)
+    return success(data=result)
+
+
+@router.get("/student",
+    response_model=APIResponse[StudentResponse],
+    summary="查看学生信息",
+)
+async def get_student(current_user=Depends(get_current_user)):
+    result = await UserService().get_student(current_user.id)
+    return success(data=result)
+
+
+# ═══════ Level 2: 企业信息 ═══════
+
+@router.post("/enterprise",
+    response_model=APIResponse[EnterpriseResponse],
+    summary="提交企业信息（Level 2：需审核）",
+)
+async def submit_enterprise(
+    body: EnterpriseSubmit,
+    current_user=Depends(get_current_user),
+):
+    result = await UserService().submit_enterprise(current_user.id, body)
+    return success(data=result)
+
+
+@router.get("/enterprise",
+    response_model=APIResponse[EnterpriseResponse],
+    summary="查看企业信息",
+)
+async def get_enterprise(current_user=Depends(get_current_user)):
+    result = await UserService().get_enterprise(current_user.id)
+    return success(data=result)

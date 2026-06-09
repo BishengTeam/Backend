@@ -21,7 +21,7 @@ os.environ.setdefault("JWT_SECRET", "seed-script-placeholder-do-not-use-in-prod"
 from sqlalchemy import select, text
 
 from app.adapter.database import async_session_factory
-from app.domain.user.src.index import AdminUser, PointsHistory, User, UserIdentity, UserPoints
+from app.domain.user.src.index import AdminUser, PointsHistory, User, UserProfile, UserRealname, UserStudent, UserEnterprise, UserPoints
 from app.domain.content.src.index import Activity, Training, Zone
 from app.domain.content.src.model.banner import Banner
 from app.domain.certification.src.index import Certification, Course, CourseEnrollment, Job
@@ -140,13 +140,18 @@ async def seed_users(db) -> dict[str, int]:
 
 
 async def seed_user_identities(db, user_map: dict[str, int]):
-    """为有实名信息的用户创建 UserIdentity。"""
+    """为有实名信息的用户创建 UserRealname / UserProfile，并为学生用户创建 UserStudent。"""
     count = 0
     for u in TEST_USERS:
+        uid = user_map[u["openid"]]
+
+        # 创建 UserProfile
+        db.add(UserProfile(user_id=uid))
+
         if u["identity"] is None:
             continue
-        ident = UserIdentity(
-            user_id=user_map[u["openid"]],
+        ident = UserRealname(
+            user_id=uid,
             user_type=u["identity"]["user_type"],
             real_name=u["identity"]["real_name"],
             id_card_number=u["identity"]["id_card_number"],
@@ -154,6 +159,19 @@ async def seed_user_identities(db, user_map: dict[str, int]):
             verified_at=NOW.replace(microsecond=0).isoformat(),
         )
         db.add(ident)
+
+        # 学生用户额外创建 UserStudent
+        if u["identity"]["user_type"] == "student":
+            db.add(UserStudent(
+                user_id=uid,
+                education="本科",
+                school="测试大学",
+                major="计算机科学",
+                student_card_oss="oss://student_card_test.jpg",
+                status="verified",
+                verified_at=NOW.replace(microsecond=0).isoformat(),
+            ))
+
         count += 1
     await db.commit()
     print(f"  ✓ 实名认证 ({count} 条)")

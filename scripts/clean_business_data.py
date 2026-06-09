@@ -60,7 +60,10 @@ DELETE_ORDER = [
     "share",
     "ticket",
     "user_coupon",
-    "user_identity",
+    "user_profile",
+    "user_realname",
+    "user_student",
+    "user_enterprise",
     "user_points",
 
     # ── 第 2 批：inventory_record（解除 order ↔ inventory 循环引用）──

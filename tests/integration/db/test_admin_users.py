@@ -93,7 +93,7 @@ async def test_context(monkeypatch):
 
 
 async def test_batch_delete_soft_deletes_users(test_context):
-    """Create 3 users, batch-delete them, verify is_deleted=True."""
+    """Create 3 users, batch-delete them, verify is_active=False."""
     from app.domain.user.src.index import User
     from app.services.admin_user import AdminUserService
 
@@ -116,11 +116,11 @@ async def test_batch_delete_soft_deletes_users(test_context):
     count = await AdminUserService().batch_delete(user_ids)
     assert count == 3, f"Expected 3 deleted, got {count}"
 
-    # Verify each user is now soft-deleted
+    # Verify each user is now inactive
     async with factory() as db:
         for uid in user_ids:
             user = (await db.execute(select(User).where(User.id == uid))).scalar_one()
-            assert user.is_deleted is True, f"User {uid} should be soft-deleted"
+            assert user.is_active is False, f"User {uid} should be inactive after delete"
 
 
 # ---------------------------------------------------------------------------
