@@ -6,7 +6,7 @@ from app.port.exceptions import UnauthorizedException
 from app.adapter.redis import redis_client, redis_get_safe, redis_setex_safe, redis_getdel_safe
 from app.adapter.security import create_access_token, create_refresh_token, decode_access_token
 from app.integrations.wechat import WechatClient
-from app.domain.user.src.index import DeletedOpenid, User, UserProfile
+from app.domain.user.src.index import DeletedOpenid, User, UserProfile as DomainUserProfile
 from app.schemas.user import LoginResponse, RefreshResponse, UserProfile
 
 REFRESH_TOKEN_PREFIX = "refresh_token:"
@@ -34,7 +34,7 @@ class AuthService:
                 user = User(openid=openid)
                 db.add(user)
                 await db.flush()
-                db.add(UserProfile(user_id=user.id))
+                db.add(DomainUserProfile(user_id=user.id))
                 await db.commit()
             elif not user.is_active:
                 raise UnauthorizedException("账号已注销，如需恢复请联系客服")
@@ -42,11 +42,11 @@ class AuthService:
                 # 存量用户可能缺 UserProfile，补建空记录
                 existing = (
                     await db.execute(
-                        select(UserProfile).where(UserProfile.user_id == user.id)
+                        select(DomainUserProfile).where(DomainUserProfile.user_id == user.id)
                     )
                 ).scalar_one_or_none()
                 if existing is None:
-                    db.add(UserProfile(user_id=user.id))
+                    db.add(DomainUserProfile(user_id=user.id))
                     await db.commit()
             access_token = create_access_token(user.id, user.openid)
             refresh_token = create_refresh_token()
