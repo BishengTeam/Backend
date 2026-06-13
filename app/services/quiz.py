@@ -266,7 +266,21 @@ class QuizService:
         async with get_db_ctx() as db:
             await self._require_user(db, user_id)
             today_record = await self._get_checkin(db, user_id, today_)
+
             if today_record is not None:
+                # 自动统计当天实际答题数量，同步更新 questions_completed 为最新值
+                completed = (
+                    await db.execute(
+                        select(func.count()).select_from(QuizRecord).where(
+                            QuizRecord.user_id == user_id,
+                            func.date(QuizRecord.created_at) == today_,
+                        )
+                    )
+                ).scalar() or 0
+                if today_record.questions_completed != completed:
+                    today_record.questions_completed = completed
+                    await db.commit()
+                    await db.refresh(today_record)
                 return checkin_payload(
                     today_record,
                     target_date=today_,
@@ -303,17 +317,29 @@ class QuizService:
         questions_completed: int | None = None,
     ) -> dict[str, Any]:
         user_id = require_positive_int(user_id, "user_id")
-        completed = read_field(data, "questions_completed", questions_completed)
-        completed = 0 if completed is None else completed
-        if not isinstance(completed, int) or completed < 0:
-            raise ValidationException("questions_completed 必须为非负整数")
 
         today_ = today()
         yesterday = today_ - timedelta(days=1)
         async with get_db_ctx() as db:
             await self._require_user(db, user_id)
             today_record = await self._get_checkin(db, user_id, today_)
+
+            # 自动统计当天实际答题数量（已签到和新建都需要）
+            completed = (
+                await db.execute(
+                    select(func.count()).select_from(QuizRecord).where(
+                        QuizRecord.user_id == user_id,
+                        func.date(QuizRecord.created_at) == today_,
+                    )
+                )
+            ).scalar() or 0
+
             if today_record is not None:
+                # 已签到时同步更新 questions_completed 为最新值
+                if today_record.questions_completed != completed:
+                    today_record.questions_completed = completed
+                    await db.commit()
+                    await db.refresh(today_record)
                 return checkin_payload(
                     today_record,
                     target_date=today_,
@@ -323,6 +349,7 @@ class QuizService:
 
             yesterday_record = await self._get_checkin(db, user_id, yesterday)
             consecutive_days = (yesterday_record.consecutive_days + 1) if yesterday_record else 1
+
             record = QuizCheckin(
                 user_id=user_id,
                 checkin_date=today_,
@@ -344,6 +371,61 @@ class QuizService:
                 checked_in=True,
                 consecutive_days=record.consecutive_days,
             )
+
+    async def get_checkin_calendar(self, user_id: int, days: int = 30) -> list[dict[str, Any]]:
+        """获取近 N 天的签到日历记录（含已签到和未签到的每一天）。"""
+        user_id = require_positive_int(user_id, "user_id")
+        if days < 1:
+            days = 30
+        start_date = today() - timedelta(days=days - 1)
+        end_date = today()
+
+        async with get_db_ctx() as db:
+            await self._require_user(db, user_id)
+            records = (
+                await db.execute(
+                    select(QuizCheckin)
+                    .where(
+                        QuizCheckin.user_id == user_id,
+                        QuizCheckin.checkin_date >= start_date,
+                    )
+                    .order_by(QuizCheckin.checkin_date.asc())
+                )
+            ).scalars().all()
+
+            # 查询今日实时答题数量（用于覆盖可能过时的 questions_completed）
+            today_count = (
+                await db.execute(
+                    select(func.count()).select_from(QuizRecord).where(
+                        QuizRecord.user_id == user_id,
+                        func.date(QuizRecord.created_at) == end_date,
+                    )
+                )
+            ).scalar() or 0
+
+        records_by_date = {r.checkin_date: r for r in records}
+        result: list[dict[str, Any]] = []
+        current = start_date
+        while current <= end_date:
+            record = records_by_date.get(current)
+            if record is not None:
+                result.append(checkin_payload(
+                    record, target_date=current,
+                    checked_in=True, consecutive_days=record.consecutive_days,
+                ))
+            else:
+                result.append(checkin_payload(
+                    None, target_date=current,
+                    checked_in=False, consecutive_days=0,
+                ))
+            current += timedelta(days=1)
+
+        # 今日已签到记录使用实时答题数量
+        today_entry = result[-1] if result else None
+        if today_entry and today_entry.get("checked_in"):
+            today_entry["questions_completed"] = today_count
+
+        return result
 
     async def _require_user(self, db: AsyncSession, user_id: int) -> User:
         user = await db.get(User, user_id)

@@ -1,4 +1,4 @@
-﻿"""add quiz constraints
+"""add quiz constraints
 
 Revision ID: c2d3e4f5a6b7
 Revises: b1c2d3e4f5a6

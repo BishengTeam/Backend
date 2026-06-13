@@ -296,6 +296,30 @@ async def checkin(
     return success(data=result)
 
 
+@router.get("/checkin/calendar",
+    response_model=APIResponse[list[QuizCheckinResponse]],
+    summary="签到日历",
+    description="""
+小程序 **打卡日历** 页面使用。
+
+**使用场景**: 获取近 N 天（默认 30 天）的每日签到状态，用于日历展示
+
+**查询参数**:
+- `days`: 返回天数（默认 30，最大 365）
+
+**响应**: 每日签到状态列表，含是否已签到、连续签到天数
+
+**认证**: 需登录
+    """,
+)
+async def get_checkin_calendar(
+    days: int = Query(30, ge=1, le=365, description="返回天数"),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[list[QuizCheckinResponse]]:
+    result = await QuizService().get_checkin_calendar(current_user.id, days)
+    return success(data=result)
+
+
 # ── 练习统计 ──────────────────────────────────────────────────
 
 @router.get("/stats",

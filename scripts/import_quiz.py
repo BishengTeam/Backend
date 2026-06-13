@@ -1,4 +1,4 @@
-﻿"""Import quiz categories and questions from CSV files.
+"""Import quiz categories and questions from CSV files.
 
 Usage examples:
     python scripts/import_quiz.py --categories categories.csv
