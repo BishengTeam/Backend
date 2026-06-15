@@ -317,7 +317,7 @@ async def seed_banners(db):
     """3 个 Banner：生效中 / 未开始 / 已过期。"""
     banners = [
         Banner(
-            image_url="https://example.com/banner/active.jpg",
+            image_url="https://placehold.co/800x400/1677FF/FFFFFF?text=Active+Banner",
             jump_link="/pages/active/index",
             sort=1,
             start_time=NOW - timedelta(days=7),
@@ -325,7 +325,7 @@ async def seed_banners(db):
             is_active=True,
         ),
         Banner(
-            image_url="https://example.com/banner/upcoming.jpg",
+            image_url="https://placehold.co/800x400/722ED1/FFFFFF?text=Upcoming+Banner",
             jump_link="/pages/upcoming/index",
             sort=2,
             start_time=NOW + timedelta(days=7),
@@ -333,7 +333,7 @@ async def seed_banners(db):
             is_active=True,
         ),
         Banner(
-            image_url="https://example.com/banner/expired.jpg",
+            image_url="https://placehold.co/800x400/999999/FFFFFF?text=Expired+Banner",
             jump_link="/pages/expired/index",
             sort=3,
             start_time=NOW - timedelta(days=30),

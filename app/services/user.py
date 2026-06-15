@@ -127,7 +127,7 @@ class UserService:
                     _mask_id_card(realname.id_card_number) if realname and not is_admin
                     else (realname.id_card_number if realname else None)
                 ),
-                id_card_raw=realname.id_card_number if realname and is_admin else None,
+                id_card_raw=realname.id_card_number if realname and (is_admin or realname.status == 'verified') else None,
                 id_card_front_oss=realname.id_card_front_oss if realname else None,
                 id_card_back_oss=realname.id_card_back_oss if realname else None,
                 gender=realname.gender if realname else None,
