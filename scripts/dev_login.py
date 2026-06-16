@@ -16,8 +16,8 @@ import sys
 
 from sqlalchemy import select
 
-from app.core.database import async_session_factory
-from app.core.security import create_access_token, create_admin_access_token
+from app.adapter.database import async_session_factory
+from app.adapter.security import create_access_token, create_admin_access_token
 from app.domain.user.src.index import AdminUser, User
 
 
