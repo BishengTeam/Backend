@@ -28,8 +28,8 @@ class AdminOrderService:
             if filters:
                 if filters.status:
                     base = base.where(Order.status == filters.status)
-                if filters.cert_type:
-                    base = base.where(Order.cert_type == filters.cert_type)
+                if filters.product_type:
+                    base = base.where(Order.product_type == filters.product_type)
                 if filters.phone:
                     base = base.where(Order.candidate_phone == filters.phone)
             if start_time:
@@ -53,6 +53,56 @@ class AdminOrderService:
             order = await db.get(Order, order_id)
             if order is None:
                 raise NotFoundException("订单")
+            return OrderDetailResponse.model_validate(order)
+
+    async def review_order(self, order_id: int, data: "AdminOrderReview") -> OrderDetailResponse:
+        from app.schemas.admin import AdminOrderReview
+
+        if data.action == "reject_registration" and not data.comment:
+            raise BusinessException("驳回报名信息时需填写理由")
+        if data.action == "reject_and_refund" and not data.comment:
+            raise BusinessException("驳回并退款时需填写理由")
+
+        async with get_db_ctx() as db:
+            order = await db.get(Order, order_id)
+            if order is None:
+                raise NotFoundException("订单")
+            if order.status != "paid":
+                raise BusinessException("仅已支付订单可审核")
+
+            if data.action == "approve":
+                apply_order_status_transition(order, "completed")
+            elif data.action == "reject_registration":
+                # 保持 paid 状态，驳回理由写入 extra_data
+                extra = dict(order.extra_data) if order.extra_data else {}
+                extra["_reject_comment"] = data.comment
+                order.extra_data = extra
+            elif data.action == "reject_and_refund":
+                apply_order_status_transition(order, "refunded")
+                # 尝试微信退款
+                wechat_pay = WechatPayClient()
+                if wechat_pay._is_configured() and order.transaction_id:
+                    import uuid
+                    out_refund_no = f"RF{order.out_trade_no or order.id}{uuid.uuid4().hex[:8]}"
+                    try:
+                        await wechat_pay.refund(
+                            out_trade_no=order.out_trade_no,
+                            out_refund_no=out_refund_no,
+                            total_fee=order.price,
+                            refund_fee=order.price,
+                        )
+                    except ThirdPartyException:
+                        raise
+                else:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "微信支付未配置，订单 %s 仅本地标记退款", order_id
+                    )
+                from app.domain.order.src.index import release_inventory_lock
+                await release_inventory_lock(db, order, reason="review_reject_refund")
+
+            await db.commit()
+            await db.refresh(order)
             return OrderDetailResponse.model_validate(order)
 
     async def refund_order(self, order_id: int) -> OrderDetailResponse:
@@ -129,8 +179,8 @@ class AdminOrderService:
             if filters:
                 if filters.status:
                     base = base.where(Order.status == filters.status)
-                if filters.cert_type:
-                    base = base.where(Order.cert_type == filters.cert_type)
+                if filters.product_type:
+                    base = base.where(Order.product_type == filters.product_type)
                 if filters.phone:
                     base = base.where(Order.candidate_phone == filters.phone)
             if start_time:
@@ -150,12 +200,12 @@ class AdminOrderService:
             extra_headers = sorted(all_keys)
 
             writer.writerow(
-                ["ID", "UserID", "CertType", "CandidateName", "CandidatePhone",
+                ["ID", "UserID", "ProductType", "CandidateName", "CandidatePhone",
                  "Price", "Status", "CreatedAt"]
                 + extra_headers
             )
             for o in orders:
-                row = [o.id, o.user_id, o.cert_type, o.candidate_name,
+                row = [o.id, o.user_id, o.product_type, o.candidate_name,
                        o.candidate_phone, o.price, o.status, str(o.created_at)]
                 for k in extra_headers:
                     row.append(str(o.extra_data.get(k, "")) if o.extra_data else "")

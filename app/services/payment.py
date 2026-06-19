@@ -105,7 +105,7 @@ class PaymentService:
                 order.out_trade_no = str(order.id)
             prepay_order_id = order.id
             prepay_out_trade_no = order.out_trade_no
-            prepay_body = f"{order.cert_type} 认证报名服务费"
+            prepay_body = f"{order.product_type} 订单服务费"
             prepay_total_fee = order.price
             user_openid = user.openid
             await db.commit()
@@ -202,7 +202,9 @@ class PaymentService:
                 if order.status == "pending":
                     order.transaction_id = data.transaction_id
                     order.paid_at = data.paid_at or self._now()
-                    processed = apply_order_status_transition(order, "paid")
+                    # 课程购买自动完成，认证报名等待审核
+                    target_status = "completed" if order.order_kind == "course" else "paid"
+                    processed = apply_order_status_transition(order, target_status)
                     await self._confirm_inventory_sale(db, order)
                 elif order.status in {"paid", "completed"}:
                     if not order.transaction_id:

@@ -1,14 +1,14 @@
 """订单业务规则：状态转换矩阵、报名数据校验、支付超时配置。"""
 
 ORDER_STATUS_TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"paid", "closed"},
+    "pending": {"paid", "closed", "completed"},
     "paid": {"completed", "refunded"},
     "completed": {"refunded"},
     "refunded": set(),
     "closed": set(),
 }
 
-ORDER_PAYMENT_EXPIRE_MINUTES = 30
+ORDER_PAYMENT_EXPIRE_MINUTES = 1440
 
 EXTRA_DATA_SCHEMA: dict[str, list[str]] = {
     "H3C-NE": ["gender", "education", "organization", "country", "language",

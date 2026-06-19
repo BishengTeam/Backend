@@ -17,12 +17,13 @@ class Order(Base, TimestampMixin):
     )
 
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("user.id"), nullable=False, index=True)
+    order_kind: Mapped[str] = mapped_column(String(32), nullable=False, server_default="certification", index=True)
+    product_type: Mapped[str] = mapped_column(String(64), nullable=False)
     inventory_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("inventory.id"), nullable=True, index=True
     )
-    cert_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    candidate_name: Mapped[str] = mapped_column(String(64), nullable=False)
-    candidate_phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    candidate_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    candidate_phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
     candidate_idcard: Mapped[str | None] = mapped_column(String(20))
     price: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending", index=True)
@@ -32,5 +33,5 @@ class Order(Base, TimestampMixin):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     close_reason: Mapped[str | None] = mapped_column(String(128))
-    extra_data: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="按 cert_type 存的差异化报名数据")
+    extra_data: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="按 product_type 存的差异化报名数据")
     attachments: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="上传材料 URL 列表")

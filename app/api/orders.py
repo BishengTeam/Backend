@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Path, Query
 
-from app.middleware.auth import get_current_user, require_identity
+from app.middleware.auth import get_current_user
 from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.order import (
@@ -21,19 +21,20 @@ router = APIRouter(prefix="/orders", tags=["订单"])
     description="""
 小程序 **订单** 页面使用。
 
-**使用场景**: 用户下单并锁定库存
+**使用场景**: 用户下单（认证报名锁定库存，课程购买直接创建）
 
 **请求体**:
-- `product_type`: 商品类型
-- `product_id`: 商品 ID
-- `quantity`: 数量
+- `order_kind`: 订单类型 certification / course
+- `product_type`: 商品类型代码
+- `candidate_*`: 考生信息（认证报名时必填）
+- `extra_data`: 差异化数据
 
 **认证**: 需登录
     """,
 )
 async def create_order(
     body: OrderCreate,
-    current_user: User = Depends(require_identity),
+    current_user: User = Depends(get_current_user),
 ) -> APIResponse[OrderResponse]:
     """创建订单并锁定库存"""
     result = await OrderService().create_order(current_user.id, body)

@@ -10,16 +10,19 @@ OrderStatus = Literal["pending", "paid", "completed", "refunded", "closed"]
 
 
 class OrderCreate(BaseModel):
-    cert_type: str = Field(..., min_length=1, max_length=64, description="认证类型代码，如 H3C-NE")
-    candidate_name: str = Field(..., min_length=1, max_length=64, description="考生姓名")
-    candidate_phone: str = Field(..., min_length=1, max_length=20, description="考生手机号")
+    order_kind: str = Field(..., min_length=1, max_length=32, description="订单类型：certification / course")
+    product_type: str = Field(..., min_length=1, max_length=64, description="商品类型代码，如 H3C-NE")
+    candidate_name: str | None = Field(None, max_length=64, description="考生姓名（认证报名时必填）")
+    candidate_phone: str | None = Field(None, max_length=20, description="考生手机号（认证报名时必填）")
     candidate_idcard: str | None = Field(None, max_length=20, description="考生身份证号")
-    extra_data: dict | None = Field(None, description="差异化报名数据，键名取决于 cert_type")
+    extra_data: dict | None = Field(None, description="差异化报名数据，键名取决于 product_type")
     attachments: list[str] | None = Field(None, description="上传材料 URL 列表")
 
     @field_validator("candidate_phone")
     @classmethod
-    def validate_phone(cls, v: str) -> str:
+    def validate_phone(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
         if not re.fullmatch(r"1[3-9]\d{9}", v):
             raise ValueError("手机号格式不正确")
         return v
@@ -44,9 +47,10 @@ class OrderCreate(BaseModel):
 
 class OrderResponse(BaseModel):
     id: int
-    cert_type: str = Field(..., description="认证类型代码")
-    candidate_name: str = Field(..., description="考生姓名")
-    candidate_phone: str = Field(..., description="考生手机号")
+    order_kind: str = Field(..., description="订单类型")
+    product_type: str = Field(..., description="商品类型代码")
+    candidate_name: str | None = Field(None, description="考生姓名")
+    candidate_phone: str | None = Field(None, description="考生手机号")
     candidate_idcard: str | None = Field(None, description="考生身份证号")
     price: int = Field(..., description="订单金额，单位为分")
     status: OrderStatus = Field(..., description="订单状态：pending / paid / completed / refunded / closed")
@@ -64,9 +68,10 @@ class OrderResponse(BaseModel):
 
 class OrderDetailResponse(BaseModel):
     id: int
-    cert_type: str = Field(..., description="认证类型代码")
-    candidate_name: str = Field(..., description="考生姓名")
-    candidate_phone: str = Field(..., description="考生手机号")
+    order_kind: str = Field(..., description="订单类型")
+    product_type: str = Field(..., description="商品类型代码")
+    candidate_name: str | None = Field(None, description="考生姓名")
+    candidate_phone: str | None = Field(None, description="考生手机号")
     candidate_idcard: str | None = Field(None, description="考生身份证号")
     price: int = Field(..., description="订单金额，单位为分")
     status: OrderStatus = Field(..., description="订单状态：pending / paid / completed / refunded / closed")
@@ -87,5 +92,5 @@ class OrderDetailResponse(BaseModel):
 
 class OrderFilter(BaseModel):
     status: OrderStatus | None = Field(None, description="按状态筛选：pending / paid / completed / refunded / closed")
-    cert_type: str | None = Field(None, description="按认证类型筛选")
+    product_type: str | None = Field(None, description="按商品类型筛选")
     phone: str | None = Field(None, description="按考生手机号筛选")

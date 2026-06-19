@@ -5,6 +5,7 @@ from fastapi.responses import Response
 
 from app.middleware.auth import require_permission
 from app.middleware.rate_limit import limiter
+from app.schemas.admin import AdminOrderReview
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.order import OrderDetailResponse, OrderFilter, OrderResponse, OrderStatus
 from app.services.admin_order import AdminOrderService
@@ -24,7 +25,7 @@ router = APIRouter(prefix="/orders", tags=["管理后台-订单管理"])
 
 **查询参数**:
 - `status`: 按状态筛选：pending / paid / completed / refunded / closed
-- `cert_type`: 按认证类型筛选
+- `product_type`: 按商品类型筛选
 - `phone`: 按考生手机号筛选
 - `start_time`: 创建时间起，ISO 8601
 - `end_time`: 创建时间止，ISO 8601
@@ -38,7 +39,7 @@ async def list_orders(
     status: OrderStatus | None = Query(
         None, description="按状态筛选：pending / paid / completed / refunded / closed"
     ),
-    cert_type: str | None = Query(None, description="按认证类型筛选"),
+    product_type: str | None = Query(None, description="按商品类型筛选"),
     phone: str | None = Query(None, description="按考生手机号筛选"),
     start_time: datetime | None = Query(None, description="创建时间起，ISO 8601"),
     end_time: datetime | None = Query(None, description="创建时间止，ISO 8601"),
@@ -46,7 +47,7 @@ async def list_orders(
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     _admin=Depends(require_permission("order:list")),
 ) -> APIResponse[PaginatedData[OrderResponse]]:
-    filters = OrderFilter(status=status, cert_type=cert_type, phone=phone) if (status or cert_type or phone) else None
+    filters = OrderFilter(status=status, product_type=product_type, phone=phone) if (status or product_type or phone) else None
     result = await AdminOrderService().list_orders(filters, start_time, end_time, page, page_size)
     return success(data=result)
 
@@ -63,7 +64,7 @@ async def list_orders(
 
 **查询参数**:
 - `status`: 按状态筛选
-- `cert_type`: 按认证类型筛选
+- `product_type`: 按商品类型筛选
 - `phone`: 按考生手机号筛选
 - `start_time`: 创建时间起，ISO 8601
 - `end_time`: 创建时间止，ISO 8601
@@ -73,13 +74,13 @@ async def list_orders(
 )
 async def export_orders(
     status: OrderStatus | None = Query(None, description="按状态筛选"),
-    cert_type: str | None = Query(None, description="按认证类型筛选"),
+    product_type: str | None = Query(None, description="按商品类型筛选"),
     phone: str | None = Query(None, description="按考生手机号筛选"),
     start_time: datetime | None = Query(None, description="创建时间起，ISO 8601"),
     end_time: datetime | None = Query(None, description="创建时间止，ISO 8601"),
     _admin=Depends(require_permission("order:list")),
 ):
-    filters = OrderFilter(status=status, cert_type=cert_type, phone=phone) if (status or cert_type or phone) else None
+    filters = OrderFilter(status=status, product_type=product_type, phone=phone) if (status or product_type or phone) else None
     csv_content = await AdminOrderService().export_orders(filters, start_time, end_time)
     return Response(content=csv_content, media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=orders.csv"})
@@ -130,6 +131,33 @@ async def get_order(
     _admin=Depends(require_permission("order:list")),
 ) -> APIResponse[OrderDetailResponse]:
     result = await AdminOrderService().get_order(order_id)
+    return success(data=result)
+
+
+@router.put("/{order_id}/review",
+    response_model=APIResponse[OrderDetailResponse],
+    summary="审核订单",
+    description="""
+管理后台 **订单管理** 页面使用。
+
+**使用场景**: 对已支付的认证报名订单进行审核
+
+**路径参数**:
+- `order_id`: 订单 ID
+
+**请求体**:
+- `action`: approve / reject_registration / reject_and_refund
+- `comment`: 审核备注（驳回时必填）
+
+**认证**: 需 `order:write` 权限
+    """,
+)
+async def review_order(
+    body: AdminOrderReview,
+    order_id: int = Path(..., description="订单 ID"),
+    _admin=Depends(require_permission("order:write")),
+) -> APIResponse[OrderDetailResponse]:
+    result = await AdminOrderService().review_order(order_id, body)
     return success(data=result)
 
 

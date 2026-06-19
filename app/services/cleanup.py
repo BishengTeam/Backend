@@ -22,7 +22,18 @@ async def cleanup_loop():
             await _cleanup_expired_accounts()
         except Exception:
             logger.exception("定时清理账号失败")
+        try:
+            await _close_expired_orders()
+        except Exception:
+            logger.exception("定时关闭过期订单失败")
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+
+
+async def _close_expired_orders():
+    from app.services.order_timeout import OrderTimeoutCloseService
+    result = await OrderTimeoutCloseService().close_expired_pending_orders()
+    if result.closed > 0:
+        logger.info("关闭过期订单: %d 笔", result.closed)
 
 
 async def _cleanup_expired_accounts():

@@ -111,6 +111,13 @@ class AdminIdentityReview(BaseModel):
     comment: str | None = Field(None, max_length=256, description="审核备注")
 
 
+class AdminOrderReview(BaseModel):
+    action: Literal["approve", "reject_registration", "reject_and_refund"] = Field(
+        ..., description="审核动作: approve / reject_registration / reject_and_refund"
+    )
+    comment: str | None = Field(None, max_length=256, description="审核备注（驳回时必填）")
+
+
 class AdminUserOrderBrief(BaseModel):
     """管理端用户订单摘要（用户详情页子资源）"""
     id: int
