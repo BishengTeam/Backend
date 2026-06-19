@@ -3,6 +3,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.openapi.utils import get_openapi
 from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import text
 
@@ -44,7 +45,40 @@ app = FastAPI(
     title=settings.APP_NAME,
     version="0.1.0",
     lifespan=lifespan,
+    swagger_ui_parameters={"persistAuthorization": True},
 )
+
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=settings.APP_NAME,
+        version="0.1.0",
+        routes=app.routes,
+    )
+    schema["components"]["securitySchemes"] = {
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+        }
+    }
+    # 为有 Authorization header 的接口：移除参数区文本框，改用全局 security 方案
+    for path_item in schema.get("paths", {}).values():
+        for operation in path_item.values():
+            params = operation.get("parameters", [])
+            auth_params = [p for p in params if p.get("name", "").lower() == "authorization"]
+            if auth_params:
+                # 移除参数区的 authorization 文本框
+                operation["parameters"] = [p for p in params if p not in auth_params]
+                # 添加到全局 security 方案
+                operation.setdefault("security", []).append({"BearerAuth": []})
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = custom_openapi
 
 setup_middleware(app)
 app.state.limiter = limiter
