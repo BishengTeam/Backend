@@ -52,12 +52,15 @@ async def list_users(
     phone: str | None = Query(None, description="按手机号精确筛选"),
     created_at_start: datetime | None = Query(None, description="创建时间起，ISO 8601"),
     created_at_end: datetime | None = Query(None, description="创建时间止，ISO 8601"),
+    identity_status: str | None = Query(None, description="按实名状态筛选：pending / verified / rejected"),
+    student_status: str | None = Query(None, description="按学生状态筛选：pending / verified / rejected"),
+    enterprise_status: str | None = Query(None, description="按企业状态筛选：pending / verified / rejected"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     _admin=Depends(require_permission("user:list")),
 ) -> APIResponse[PaginatedData[AdminUserListItem]]:
-    has_filters = openid or phone or created_at_start or created_at_end
-    filters = AdminUserFilter(openid=openid, phone=phone, created_at_start=created_at_start, created_at_end=created_at_end) if has_filters else None
+    has_filters = openid or phone or created_at_start or created_at_end or identity_status or student_status or enterprise_status
+    filters = AdminUserFilter(openid=openid, phone=phone, created_at_start=created_at_start, created_at_end=created_at_end, identity_status=identity_status, student_status=student_status, enterprise_status=enterprise_status) if has_filters else None
     result = await AdminUserService().list_users(filters, page, page_size)
     return success(data=result)
 

@@ -55,6 +55,12 @@ class AdminUserService:
                     base = base.where(User.created_at >= filters.created_at_start)
                 if filters.created_at_end:
                     base = base.where(User.created_at <= filters.created_at_end)
+                if filters.identity_status:
+                    base = base.where(UserRealname.status == filters.identity_status)
+                if filters.student_status:
+                    base = base.where(UserStudent.status == filters.student_status)
+                if filters.enterprise_status:
+                    base = base.where(UserEnterprise.status == filters.enterprise_status)
             count_stmt = select(func.count()).select_from(base.subquery())
             total = (await db.execute(count_stmt)).scalar() or 0
             stmt = base.order_by(User.id.desc()).offset((page - 1) * page_size).limit(page_size)
@@ -83,6 +89,9 @@ class AdminUserService:
 
         async with get_db_ctx() as db:
             base = select(User)
+            need_realname = False
+            need_student = False
+            need_enterprise = False
             if filters:
                 if filters.openid:
                     base = base.where(User.openid == filters.openid)
@@ -92,6 +101,18 @@ class AdminUserService:
                     base = base.where(User.created_at >= filters.created_at_start)
                 if filters.created_at_end:
                     base = base.where(User.created_at <= filters.created_at_end)
+                if filters.identity_status:
+                    base = base.outerjoin(UserRealname, UserRealname.user_id == User.id)
+                    base = base.where(UserRealname.status == filters.identity_status)
+                    need_realname = True
+                if filters.student_status:
+                    if not need_realname:
+                        base = base.outerjoin(UserRealname, UserRealname.user_id == User.id)
+                    base = base.outerjoin(UserStudent, UserStudent.user_id == User.id)
+                    base = base.where(UserStudent.status == filters.student_status)
+                if filters.enterprise_status:
+                    base = base.outerjoin(UserEnterprise, UserEnterprise.user_id == User.id)
+                    base = base.where(UserEnterprise.status == filters.enterprise_status)
             stmt = base.order_by(User.id.desc())
             result = await db.execute(stmt)
             users = result.scalars().all()

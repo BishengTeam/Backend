@@ -67,6 +67,9 @@ class AdminUserFilter(BaseModel):
     phone: str | None = None
     created_at_start: datetime | None = None
     created_at_end: datetime | None = None
+    identity_status: str | None = None
+    student_status: str | None = None
+    enterprise_status: str | None = None
 
 
 class AdminUserListItem(BaseModel):
