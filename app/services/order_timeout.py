@@ -62,7 +62,10 @@ class OrderTimeoutCloseService:
                     now=closed_at,
                     close_reason=close_reason,
                 ):
-                    await release_inventory_lock(db, order, reason=close_reason)
+                    try:
+                        await release_inventory_lock(db, order, reason=close_reason)
+                    except Exception:
+                        pass  # 库存锁已释放或不存在，不影响关单
                     closed_order_ids.append(order.id)
 
             if closed_order_ids:
