@@ -180,7 +180,7 @@ class AdminUserService:
                 profile = UserProfile(user_id=user_id)
                 db.add(profile)
 
-            for key in ("nickname", "email"):
+            for key in ("nickname", "email", "province", "city", "address"):
                 if key in update_data:
                     setattr(profile, key, update_data.pop(key))
             if "phone" in update_data:
@@ -190,8 +190,11 @@ class AdminUserService:
             realname = (await db.execute(
                 select(UserRealname).where(UserRealname.user_id == user_id)
             )).scalar_one_or_none()
-            realname_keys = ("user_type", "real_name", "id_card_number",
-                             "id_card_front_oss", "id_card_back_oss")
+            realname_keys = ("user_type", "last_name_zh", "first_name_zh",
+                             "last_name_en", "first_name_en",
+                             "real_name", "id_card_number",
+                             "id_card_front_oss", "id_card_back_oss", "avatar_oss",
+                             "political_status", "ethnicity")
             # 过滤非空值：只处理非空字符串的字段
             realname_updates = {k: update_data[k] for k in realname_keys
                                 if k in update_data and update_data[k] not in (None, "")}
@@ -226,7 +229,8 @@ class AdminUserService:
                     realname.status = update_data.pop("identity_status")
 
             # Level 2: user_student
-            student_keys = ("education", "school", "major", "student_card_oss")
+            student_keys = ("education", "school", "major", "student_card_oss",
+                            "enrollment_pdf_oss", "degree_cert_oss")
             # 过滤非空值
             student_updates = {k: update_data[k] for k in student_keys
                                if k in update_data and update_data[k] not in (None, "")}
@@ -305,13 +309,22 @@ class AdminUserService:
 
             return RealnameAdminResponse(
                 user_type=realname.user_type,
+                last_name_zh=realname.last_name_zh,
+                first_name_zh=realname.first_name_zh,
+                last_name_en=realname.last_name_en,
+                first_name_en=realname.first_name_en,
                 real_name=realname.real_name,
                 id_card_number=realname.id_card_number,
                 id_card_front_oss=realname.id_card_front_oss,
                 id_card_back_oss=realname.id_card_back_oss,
+                avatar_oss=realname.avatar_oss,
+                birth_date=realname.birth_date,
                 gender=realname.gender,
                 age=realname.age,
                 census_register=realname.census_register,
+                zip_code=realname.zip_code,
+                political_status=realname.political_status,
+                ethnicity=realname.ethnicity,
                 status=realname.status,
                 verified_at=realname.verified_at,
             )
@@ -331,6 +344,8 @@ class AdminUserService:
                 school=student.school,
                 major=student.major,
                 student_card_oss=student.student_card_oss,
+                enrollment_pdf_oss=student.enrollment_pdf_oss,
+                degree_cert_oss=student.degree_cert_oss,
                 status=student.status,
                 verified_at=student.verified_at,
             )

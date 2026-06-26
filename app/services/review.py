@@ -33,7 +33,9 @@ class ReviewService:
 
         model, id_attr, _status_attr = config
         async with get_db_ctx() as db:
-            target = await db.get(model, data.target_id)
+            target = (await db.execute(
+                select(model).where(getattr(model, id_attr) == data.target_id)
+            )).scalar_one_or_none()
             if target is None:
                 raise NotFoundException(f"{data.target_type} 对象")
 

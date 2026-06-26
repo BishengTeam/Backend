@@ -12,12 +12,14 @@ from app.domain.user.src.index import (
     DeletedOpenid, User, UserProfile, UserRealname, UserStudent, UserEnterprise,
 )
 from app.domain.order.src.index import Order
+from app.domain.community.src.index import Conversation
+from app.domain.review.src.index import Review
 from app.utils.validators import validate_id_card
 from app.utils.census import resolve_census
 
 SESSION_KEY_PREFIX = "session_key:"
-MAX_LEVEL2_EDITS = 5
-LEVEL2_RESET_DAYS = 30
+MAX_LEVEL2_EDITS = 10
+LEVEL2_RESET_HOURS = 24  # 1 天 = 24 小时
 
 
 # ── 帮助函数 ──
@@ -64,20 +66,59 @@ def _mask_phone(phone: str | None) -> str | None:
     return phone[:3] + "****" + phone[-4:]
 
 
-async def _check_level2_edit_limit(user: User) -> None:
-    """检查 Level-2 修改次数限制。超过 5 次且未满 30 天则拒绝。"""
+async def _get_reject_reason(target_type: str, user_id: int) -> str | None:
+    """查询该用户指定类型的最新驳回理由"""
+    async with get_db_ctx() as db:
+        result = await db.execute(
+            select(Review.comment).where(
+                Review.target_type == target_type,
+                Review.target_id == user_id,
+                Review.action == "reject",
+            ).order_by(Review.id.desc()).limit(1)
+        )
+        row = result.one_or_none()
+        return row[0] if row else None
+
+
+async def _check_level2_edit_limit(user):
+    """检查 Level-2 修改次数限制。"""
     now = datetime.now(timezone.utc)
     if user.level2_edit_reset_at:
         try:
             reset_at = datetime.fromisoformat(user.level2_edit_reset_at)
-            if (now - reset_at).days >= LEVEL2_RESET_DAYS:
+            elapsed_hours = (now - reset_at).total_seconds() / 3600
+            if elapsed_hours >= LEVEL2_RESET_HOURS:
                 user.level2_edit_count = 0
                 user.level2_edit_reset_at = None
         except (ValueError, TypeError):
             user.level2_edit_count = 0
             user.level2_edit_reset_at = None
     if user.level2_edit_count >= MAX_LEVEL2_EDITS:
-        raise BusinessException(f"实名/学生/企业信息最多修改 {MAX_LEVEL2_EDITS} 次，{LEVEL2_RESET_DAYS} 天后重置")
+        raise BusinessException(f"实名/学生/企业信息最多修改 {MAX_LEVEL2_EDITS} 次，{LEVEL2_RESET_HOURS} 小时后重置")
+
+
+def _birth_date_from_id_card(id_card: str) -> str | None:
+    """从 18 位身份证号提取出生日期 YYYY-MM-DD"""
+    if len(id_card) != 18:
+        return None
+    try:
+        birth = id_card[6:14]
+        return f"{birth[0:4]}-{birth[4:6]}-{birth[6:8]}"
+    except (ValueError, IndexError):
+        return None
+
+
+def _calc_edit_reset_hours(user: User) -> int | None:
+    """计算还有多少小时重置修改次数。未开始使用时返回 None。"""
+    if not user.level2_edit_reset_at:
+        return None
+    try:
+        reset_at = datetime.fromisoformat(user.level2_edit_reset_at)
+        elapsed = (datetime.now(timezone.utc) - reset_at).total_seconds() / 3600
+        remaining = int(LEVEL2_RESET_HOURS - elapsed)
+        return remaining if remaining > 0 else None
+    except (ValueError, TypeError):
+        return None
 
 
 async def _incr_level2_edit(user: User) -> None:
@@ -121,7 +162,14 @@ class UserService:
                 nickname=profile.nickname if profile else None,
                 email=profile.email if profile else None,
                 phone=phone if is_admin else _mask_phone(phone),
+                province=profile.province if profile else None,
+                city=profile.city if profile else None,
+                address=profile.address if profile else None,
                 user_type=realname.user_type if realname else None,
+                last_name_zh=realname.last_name_zh if realname else None,
+                first_name_zh=realname.first_name_zh if realname else None,
+                last_name_en=realname.last_name_en if realname else None,
+                first_name_en=realname.first_name_en if realname else None,
                 real_name=realname.real_name if realname else None,
                 id_card=(
                     _mask_id_card(realname.id_card_number) if realname and not is_admin
@@ -130,17 +178,39 @@ class UserService:
                 id_card_raw=realname.id_card_number if realname and (is_admin or realname.status == 'verified') else None,
                 id_card_front_oss=realname.id_card_front_oss if realname else None,
                 id_card_back_oss=realname.id_card_back_oss if realname else None,
+                avatar_oss=realname.avatar_oss if realname else None,
+                birth_date=realname.birth_date if realname else None,
                 gender=realname.gender if realname else None,
                 age=realname.age if realname else None,
                 census_register=realname.census_register if realname else None,
+                zip_code=realname.zip_code if realname else None,
+                political_status=realname.political_status if realname else None,
+                ethnicity=realname.ethnicity if realname else None,
                 identity_status=realname.status if realname else None,
                 education=student.education if student else None,
                 school=student.school if student else None,
                 major=student.major if student else None,
                 student_card_oss=student.student_card_oss if student else None,
+                enrollment_pdf_oss=student.enrollment_pdf_oss if student else None,
+                degree_cert_oss=student.degree_cert_oss if student else None,
                 student_status=student.status if student else None,
                 organization=enterprise.organization if enterprise else None,
                 enterprise_status=enterprise.status if enterprise else None,
+                identity_reject_reason=(
+                    await _get_reject_reason("identity", user_id)
+                    if realname and realname.status == "rejected" else None
+                ),
+                student_reject_reason=(
+                    await _get_reject_reason("student", user_id)
+                    if student and student.status == "rejected" else None
+                ),
+                enterprise_reject_reason=(
+                    await _get_reject_reason("enterprise", user_id)
+                    if enterprise and enterprise.status == "rejected" else None
+                ),
+                edit_count=user.level2_edit_count,
+                edit_count_limit=MAX_LEVEL2_EDITS,
+                edit_count_reset_hours=_calc_edit_reset_hours(user),
                 created_at=user.created_at.isoformat() if user.created_at else "",
             )
 
@@ -181,30 +251,20 @@ class UserService:
             raise ValidationException(error)
 
         gender, age, census = _derived_from_id_card(data.id_card_number)
+        birth_date = _birth_date_from_id_card(data.id_card_number)
+        zip_code_val = data.id_card_number[:6] if len(data.id_card_number) == 18 else None
+        # 姓名: 优先用姓+名拼接，fallback 到 real_name
+        real_name = data.real_name or (
+            f"{data.last_name_zh or ''}{data.first_name_zh or ''}".strip() or None
+        )
 
         async with get_db_ctx() as db:
             user = await db.get(User, user_id)
             if user is None or not user.is_active:
                 raise NotFoundException("用户")
 
-            # 检查用户类型互斥逻辑
-            if data.user_type == "student":
-                existing_enterprise = (await db.execute(
-                    select(UserEnterprise).where(UserEnterprise.user_id == user_id)
-                )).scalar_one_or_none()
-                if existing_enterprise:
-                    # 保留企业信息的 visible 数据，清零审核状态
-                    pass
-            elif data.user_type == "enterprise":
-                existing_student = (await db.execute(
-                    select(UserStudent).where(UserStudent.user_id == user_id)
-                )).scalar_one_or_none()
-                if existing_student:
-                    pass
-
             await _check_level2_edit_limit(user)
 
-            # 保存旧快照（用于驳回恢复）
             existing_realname = (await db.execute(
                 select(UserRealname).where(UserRealname.user_id == user_id)
             )).scalar_one_or_none()
@@ -212,24 +272,42 @@ class UserService:
             if existing_realname and existing_realname.status == "verified":
                 snapshot = {
                     "real_name": existing_realname.real_name,
+                    "last_name_zh": existing_realname.last_name_zh,
+                    "first_name_zh": existing_realname.first_name_zh,
+                    "last_name_en": existing_realname.last_name_en,
+                    "first_name_en": existing_realname.first_name_en,
                     "id_card_number": existing_realname.id_card_number,
                     "id_card_front_oss": existing_realname.id_card_front_oss,
                     "id_card_back_oss": existing_realname.id_card_back_oss,
+                    "avatar_oss": existing_realname.avatar_oss,
                     "user_type": existing_realname.user_type,
                     "gender": existing_realname.gender,
                     "age": existing_realname.age,
+                    "birth_date": existing_realname.birth_date,
                     "census_register": existing_realname.census_register,
+                    "zip_code": existing_realname.zip_code,
+                    "political_status": existing_realname.political_status,
+                    "ethnicity": existing_realname.ethnicity,
                 }
 
             if existing_realname:
                 existing_realname.user_type = data.user_type
-                existing_realname.real_name = data.real_name
+                existing_realname.real_name = real_name
+                existing_realname.last_name_zh = data.last_name_zh
+                existing_realname.first_name_zh = data.first_name_zh
+                existing_realname.last_name_en = data.last_name_en
+                existing_realname.first_name_en = data.first_name_en
                 existing_realname.id_card_number = data.id_card_number
                 existing_realname.id_card_front_oss = data.id_card_front_oss
                 existing_realname.id_card_back_oss = data.id_card_back_oss
+                existing_realname.avatar_oss = data.avatar_oss
                 existing_realname.gender = gender
                 existing_realname.age = age
+                existing_realname.birth_date = birth_date
                 existing_realname.census_register = census
+                existing_realname.zip_code = zip_code_val
+                existing_realname.political_status = data.political_status
+                existing_realname.ethnicity = data.ethnicity
                 existing_realname.status = "pending"
                 existing_realname.snapshot = snapshot
                 existing_realname.verified_at = None
@@ -237,13 +315,22 @@ class UserService:
                 existing_realname = UserRealname(
                     user_id=user_id,
                     user_type=data.user_type,
-                    real_name=data.real_name,
+                    real_name=real_name,
+                    last_name_zh=data.last_name_zh,
+                    first_name_zh=data.first_name_zh,
+                    last_name_en=data.last_name_en,
+                    first_name_en=data.first_name_en,
                     id_card_number=data.id_card_number,
                     id_card_front_oss=data.id_card_front_oss,
                     id_card_back_oss=data.id_card_back_oss,
+                    avatar_oss=data.avatar_oss,
                     gender=gender,
                     age=age,
+                    birth_date=birth_date,
                     census_register=census,
+                    zip_code=zip_code_val,
+                    political_status=data.political_status,
+                    ethnicity=data.ethnicity,
                     status="pending",
                 )
                 db.add(existing_realname)
@@ -254,13 +341,22 @@ class UserService:
 
         return RealnameResponse(
             user_type=existing_realname.user_type,
+            last_name_zh=existing_realname.last_name_zh,
+            first_name_zh=existing_realname.first_name_zh,
+            last_name_en=existing_realname.last_name_en,
+            first_name_en=existing_realname.first_name_en,
             real_name=existing_realname.real_name,
             id_card_number=_mask_id_card(existing_realname.id_card_number),
             id_card_front_oss=existing_realname.id_card_front_oss,
             id_card_back_oss=existing_realname.id_card_back_oss,
+            avatar_oss=existing_realname.avatar_oss,
+            birth_date=existing_realname.birth_date,
             gender=existing_realname.gender,
             age=existing_realname.age,
             census_register=existing_realname.census_register,
+            zip_code=existing_realname.zip_code,
+            political_status=existing_realname.political_status,
+            ethnicity=existing_realname.ethnicity,
             status=existing_realname.status,
             verified_at=existing_realname.verified_at,
         )
@@ -269,6 +365,7 @@ class UserService:
         """获取实名信息（用户端，身份证脱敏）"""
         from app.schemas.user import RealnameResponse
 
+        reject_reason = await _get_reject_reason("identity", user_id)
         async with get_db_ctx() as db:
             realname = (await db.execute(
                 select(UserRealname).where(UserRealname.user_id == user_id)
@@ -278,15 +375,25 @@ class UserService:
 
             return RealnameResponse(
                 user_type=realname.user_type,
+                last_name_zh=realname.last_name_zh,
+                first_name_zh=realname.first_name_zh,
+                last_name_en=realname.last_name_en,
+                first_name_en=realname.first_name_en,
                 real_name=realname.real_name,
                 id_card_number=_mask_id_card(realname.id_card_number),
                 id_card_front_oss=realname.id_card_front_oss,
                 id_card_back_oss=realname.id_card_back_oss,
+                avatar_oss=realname.avatar_oss,
+                birth_date=realname.birth_date,
                 gender=realname.gender,
                 age=realname.age,
                 census_register=realname.census_register,
+                zip_code=realname.zip_code,
+                political_status=realname.political_status,
+                ethnicity=realname.ethnicity,
                 status=realname.status,
                 verified_at=realname.verified_at,
+                reject_reason=reject_reason,
             )
 
     # ─── Level 2: 学生信息 ───
@@ -320,6 +427,8 @@ class UserService:
                     "school": existing.school,
                     "major": existing.major,
                     "student_card_oss": existing.student_card_oss,
+                    "enrollment_pdf_oss": existing.enrollment_pdf_oss,
+                    "degree_cert_oss": existing.degree_cert_oss,
                 }
 
             if existing:
@@ -327,6 +436,8 @@ class UserService:
                 existing.school = data.school
                 existing.major = data.major
                 existing.student_card_oss = data.student_card_oss
+                existing.enrollment_pdf_oss = data.enrollment_pdf_oss
+                existing.degree_cert_oss = data.degree_cert_oss
                 existing.status = "pending"
                 existing.snapshot = snapshot
                 existing.verified_at = None
@@ -337,6 +448,8 @@ class UserService:
                     school=data.school,
                     major=data.major,
                     student_card_oss=data.student_card_oss,
+                    enrollment_pdf_oss=data.enrollment_pdf_oss,
+                    degree_cert_oss=data.degree_cert_oss,
                     status="pending",
                 )
                 db.add(existing)
@@ -350,6 +463,8 @@ class UserService:
             school=existing.school,
             major=existing.major,
             student_card_oss=existing.student_card_oss,
+            enrollment_pdf_oss=existing.enrollment_pdf_oss,
+            degree_cert_oss=existing.degree_cert_oss,
             status=existing.status,
             verified_at=existing.verified_at,
         )
@@ -358,6 +473,7 @@ class UserService:
         """获取学生信息"""
         from app.schemas.user import StudentResponse
 
+        reject_reason = await _get_reject_reason("student", user_id)
         async with get_db_ctx() as db:
             student = (await db.execute(
                 select(UserStudent).where(UserStudent.user_id == user_id)
@@ -370,8 +486,11 @@ class UserService:
                 school=student.school,
                 major=student.major,
                 student_card_oss=student.student_card_oss,
+                enrollment_pdf_oss=student.enrollment_pdf_oss,
+                degree_cert_oss=student.degree_cert_oss,
                 status=student.status,
                 verified_at=student.verified_at,
+                reject_reason=reject_reason,
             )
 
     # ─── Level 2: 企业信息 ───
@@ -429,6 +548,7 @@ class UserService:
         """获取企业信息"""
         from app.schemas.user import EnterpriseResponse
 
+        reject_reason = await _get_reject_reason("enterprise", user_id)
         async with get_db_ctx() as db:
             enterprise = (await db.execute(
                 select(UserEnterprise).where(UserEnterprise.user_id == user_id)
@@ -440,6 +560,7 @@ class UserService:
                 organization=enterprise.organization,
                 status=enterprise.status,
                 verified_at=enterprise.verified_at,
+                reject_reason=reject_reason,
             )
 
     # ─── 其他 ───

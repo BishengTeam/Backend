@@ -13,6 +13,8 @@ class UserStudent(Base, TimestampMixin):
     school: Mapped[str] = mapped_column(String(128), nullable=False)
     major: Mapped[str] = mapped_column(String(128), nullable=False)
     student_card_oss: Mapped[str] = mapped_column(String(512), nullable=False)
+    enrollment_pdf_oss: Mapped[str | None] = mapped_column(String(512), nullable=True)  # 学信网电子注册表
+    degree_cert_oss: Mapped[str | None] = mapped_column(String(512), nullable=True)     # 学历证明
     # 审核
     status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending", index=True)
     snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
