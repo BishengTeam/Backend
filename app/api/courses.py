@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, Path, Query
 
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_current_user_optional
 from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.course import (
+    ChapterProgressResponse,
+    ChapterProgressUpsert,
     CourseDetailResponse,
     CourseEnrollRequest,
     CourseEnrollmentResponse,
@@ -91,7 +93,7 @@ async def list_categories() -> APIResponse[list[str]]:
     description="""
 小程序 **课程详情** 页面使用。
 
-**使用场景**: 查看课程详细信息
+**使用场景**: 查看课程详细信息（含章节列表、试看时长）
 
 **路径参数**:
 - `course_id`: 课程 ID
@@ -104,7 +106,7 @@ async def get_course(
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[CourseDetailResponse]:
     """课程详情"""
-    result = await CourseService().get_course(course_id)
+    result = await CourseService().get_course(course_id, current_user.id)
     return success(data=result)
 
 
@@ -130,4 +132,76 @@ async def enroll_course(
 ) -> APIResponse[CourseEnrollmentResponse]:
     """课程报名"""
     result = await CourseService().enroll(current_user.id, body)
+    return success(data=result)
+
+
+# ==================== 章节与学习进度 ====================
+
+
+@router.get("/{course_id}/chapters",
+    summary="课程章节列表（含试看时长和进度）",
+    description="""
+小程序 **视频播放页** 使用。
+
+**使用场景**: 获取课程章节列表、试看时长、用户学习进度
+
+**路径参数**:
+- `course_id`: 课程 ID
+
+**认证**: 可选登录（未登录时 progress 为 null）
+    """,
+)
+async def get_chapters(
+    course_id: int = Path(..., ge=1),
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    user_id = current_user.id if current_user else None
+    result = await CourseService().get_chapters(course_id, user_id)
+    return success(data=result)
+
+
+@router.get("/{course_id}/progress",
+    response_model=APIResponse[ChapterProgressResponse],
+    summary="查询学习进度",
+    description="""
+小程序 **视频播放页** 使用。
+
+**使用场景**: 查询用户在该课程下的学习进度
+
+**路径参数**:
+- `course_id`: 课程 ID
+
+**认证**: 需登录
+    """,
+)
+async def get_progress(
+    course_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+):
+    result = await CourseService().get_progress(current_user.id, course_id)
+    return success(data=result)
+
+
+@router.post("/{course_id}/progress",
+    response_model=APIResponse[ChapterProgressResponse],
+    summary="上报学习进度",
+    description="""
+小程序 **视频播放页** 使用。
+
+**使用场景**: 播放暂停/切换章节/退出页面时上报进度
+
+**请求体**:
+- `chapter_id`: 章节 ID
+- `last_position_seconds`: 当前播放位置（秒）
+- `is_completed`: 是否标记为完成
+
+**认证**: 需登录
+    """,
+)
+async def upsert_progress(
+    body: ChapterProgressUpsert,
+    course_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+):
+    result = await CourseService().upsert_progress(current_user.id, course_id, body)
     return success(data=result)

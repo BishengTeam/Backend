@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, Path, Query
 from app.middleware.auth import require_permission
 from app.schemas.admin_course import AdminCourseCreate, AdminCourseListItem, AdminCourseUpdate
 from app.schemas.common import APIResponse, PaginatedData, success
+from app.schemas.course import ChapterCreate, ChapterResponse, ChapterSortItem, ChapterUpdate
 from app.services.admin_course import AdminCourseService
 
 router = APIRouter(prefix="/courses", tags=["管理后台-课程管理"])
@@ -59,6 +60,133 @@ async def create_course(
 ) -> APIResponse[AdminCourseListItem]:
     result = await AdminCourseService().create_course(body)
     return success(data=result)
+
+
+# ==================== 章节管理（5 接口） ====================
+
+
+@router.get("/{course_id}/chapters",
+    response_model=APIResponse[PaginatedData[ChapterResponse]],
+    summary="章节列表",
+    description="""
+管理后台 **课程编辑 → 章节管理 Tab** 使用。
+
+**使用场景**: 查看指定课程的所有章节，支持分页和上线状态筛选
+
+**路径参数**:
+- `course_id`: 课程 ID
+
+**查询参数**:
+- `is_active`: 按上线状态筛选（可选）
+- `page`: 页码
+- `page_size`: 每页数量
+    """,
+)
+async def list_chapters(
+    course_id: int = Path(..., ge=1),
+    is_active: bool | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    _admin=Depends(require_permission("course:write")),
+):
+    result = await AdminCourseService().list_chapters(course_id, is_active, page, page_size)
+    return success(data=result)
+
+
+@router.post("/{course_id}/chapters",
+    response_model=APIResponse[ChapterResponse],
+    summary="新增章节",
+    description="""
+管理后台 **课程编辑 → 章节管理 Tab** 使用。
+
+**使用场景**: 新增章节弹窗提交
+
+**路径参数**:
+- `course_id`: 课程 ID
+
+**请求体**: 章节标题、视频 URL、时长、排序
+    """,
+)
+async def create_chapter(
+    body: ChapterCreate,
+    course_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("course:write")),
+):
+    result = await AdminCourseService().create_chapter(course_id, body)
+    return success(data=result)
+
+
+@router.put("/{course_id}/chapters/sort",
+    response_model=APIResponse[int],
+    summary="批量排序",
+    description="""
+管理后台 **课程编辑 → 章节管理 Tab** 使用。
+
+**使用场景**: 拖拽排序完成后提交新的排序
+
+**路径参数**:
+- `course_id`: 课程 ID
+
+**请求体**: 排序项列表 `[{id, sort_order}, ...]`
+
+⚠️ 该路由必须在 `PUT .../chapters/{chapter_id}` 之前注册
+    """,
+)
+async def sort_chapters(
+    body: list[ChapterSortItem],
+    course_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("course:write")),
+):
+    count = await AdminCourseService().sort_chapters(course_id, body)
+    return success(data=count, message=f"已更新 {count} 个排序")
+
+
+@router.put("/{course_id}/chapters/{chapter_id}",
+    response_model=APIResponse[ChapterResponse],
+    summary="编辑章节",
+    description="""
+管理后台 **课程编辑 → 章节管理 Tab** 使用。
+
+**使用场景**: 编辑章节弹窗提交
+
+**路径参数**:
+- `course_id`: 课程 ID
+- `chapter_id`: 章节 ID
+    """,
+)
+async def update_chapter(
+    body: ChapterUpdate,
+    course_id: int = Path(..., ge=1),
+    chapter_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("course:write")),
+):
+    result = await AdminCourseService().update_chapter(chapter_id, body)
+    return success(data=result)
+
+
+@router.delete("/{course_id}/chapters/{chapter_id}",
+    response_model=APIResponse,
+    summary="下架章节",
+    description="""
+管理后台 **课程编辑 → 章节管理 Tab** 使用。
+
+**使用场景**: 软删除指定章节
+
+**路径参数**:
+- `course_id`: 课程 ID
+- `chapter_id`: 章节 ID
+    """,
+)
+async def delete_chapter(
+    course_id: int = Path(..., ge=1),
+    chapter_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("course:write")),
+):
+    await AdminCourseService().delete_chapter(chapter_id)
+    return success(message="章节已下架")
+
+
+# ==================== 现有课程管理路由 ====================
 
 
 @router.put("/{course_id}",

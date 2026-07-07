@@ -11,6 +11,7 @@ from app.domain.order.src.index import (
     confirm_inventory_sale,
     release_inventory_lock,
 )
+from app.domain.certification.src.index import CourseEnrollment
 from app.domain.user.src.index import User
 from app.schemas.payment import (
     PaymentCallbackRequest,
@@ -205,6 +206,27 @@ class PaymentService:
                     # 课程购买自动完成，认证报名等待审核
                     target_status = "completed" if order.order_kind == "course" else "paid"
                     processed = apply_order_status_transition(order, target_status)
+                    # 课程购买：自动激活学习权限
+                    if order.order_kind == "course":
+                        course_id = int(order.product_type)
+                        enrollment = (
+                            await db.execute(
+                                select(CourseEnrollment).where(
+                                    CourseEnrollment.user_id == order.user_id,
+                                    CourseEnrollment.course_id == course_id,
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        if enrollment is None:
+                            batch_selected = order.extra_data.get("batch") if order.extra_data else None
+                            enrollment = CourseEnrollment(
+                                user_id=order.user_id,
+                                course_id=course_id,
+                                batch_selected=batch_selected,
+                            )
+                            db.add(enrollment)
+                        enrollment.learning_access = True
+                        enrollment.status = "enrolled"
                     await self._confirm_inventory_sale(db, order)
                 elif order.status in {"paid", "completed"}:
                     if not order.transaction_id:

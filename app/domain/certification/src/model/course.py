@@ -16,7 +16,12 @@ class Course(Base, TimestampMixin):
     batches: Mapped[dict | None] = mapped_column(JSON)
     teacher_name: Mapped[str | None] = mapped_column(String(64))
     teacher_contact: Mapped[str | None] = mapped_column(String(128))
+    free_preview_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_active: Mapped[bool] = mapped_column(default=True, server_default="true")
+
+    chapters: Mapped[list["CourseChapter"]] = relationship(
+        back_populates="course", order_by="CourseChapter.sort_order"
+    )
 
 
 class CourseEnrollment(Base, TimestampMixin):

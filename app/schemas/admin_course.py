@@ -15,6 +15,7 @@ class AdminCourseCreate(BaseModel):
     teacher_name: str | None = Field(None, max_length=64)
     teacher_contact: str | None = Field(None, max_length=128)
     is_active: bool = True
+    free_preview_seconds: int | None = Field(None, description="试看时长（秒），null=无试看")
 
 
 class AdminCourseUpdate(BaseModel):
@@ -28,6 +29,7 @@ class AdminCourseUpdate(BaseModel):
     teacher_name: str | None = Field(None, max_length=64)
     teacher_contact: str | None = Field(None, max_length=128)
     is_active: bool | None = None
+    free_preview_seconds: int | None = Field(None, description="试看时长（秒），null=无试看")
 
 
 class AdminCourseListItem(BaseModel):
@@ -42,6 +44,7 @@ class AdminCourseListItem(BaseModel):
     teacher_name: str | None = None
     teacher_contact: str | None = None
     is_active: bool
+    free_preview_seconds: int | None = Field(None, description="试看时长（秒），null=无试看")
     created_at: datetime
 
     model_config = {"from_attributes": True}
