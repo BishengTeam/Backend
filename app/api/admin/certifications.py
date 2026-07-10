@@ -3,11 +3,9 @@ from fastapi.responses import PlainTextResponse
 
 from app.middleware.auth import require_permission
 from app.schemas.admin_certification import AdminCertificationCreate, AdminCertificationListItem, AdminCertificationUpdate
-from app.schemas.certification import CertificationResponse
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.services.admin_certification import AdminCertificationService
 from app.services.certification import CertificationService
-
 router = APIRouter(prefix="/certifications", tags=["管理后台-认证管理"])
 
 
@@ -41,7 +39,7 @@ async def list_certifications(
 
 
 @router.post("",
-    response_model=APIResponse[CertificationResponse],
+    response_model=APIResponse[AdminCertificationListItem],
     summary="新增认证",
     description="""
 管理后台 **认证管理** 页面使用。
@@ -58,14 +56,14 @@ async def list_certifications(
 async def create_certification(
     body: AdminCertificationCreate,
     _admin=Depends(require_permission("content:write")),
-) -> APIResponse[CertificationResponse]:
+) -> APIResponse[AdminCertificationListItem]:
     """创建新认证类型"""
     result = await AdminCertificationService().create(body)
     return success(data=result)
 
 
 @router.put("/{cert_id}",
-    response_model=APIResponse[CertificationResponse],
+    response_model=APIResponse[AdminCertificationListItem],
     summary="编辑认证",
     description="""
 管理后台 **认证管理** 页面使用。
@@ -86,7 +84,7 @@ async def update_certification(
     body: AdminCertificationUpdate,
     cert_id: int = Path(..., description="认证类型 ID"),
     _admin=Depends(require_permission("content:write")),
-) -> APIResponse[CertificationResponse]:
+) -> APIResponse[AdminCertificationListItem]:
     """更新指定认证类型信息"""
     result = await AdminCertificationService().update(cert_id, body)
     return success(data=result)

@@ -230,11 +230,11 @@ class AdminUserFilterTests(unittest.TestCase):
 class AdminOrderFilterTests(unittest.TestCase):
     """P2: #7.2 Order filter enhancement"""
 
-    def test_order_filter_has_cert_type_and_phone(self):
+    def test_order_filter_has_product_type_and_phone(self):
         schema = importlib.import_module("app.schemas.order")
         filter_model = schema.OrderFilter
         fields = set(filter_model.model_fields)
-        self.assertIn("cert_type", fields)
+        self.assertIn("product_type", fields)
         self.assertIn("phone", fields)
 
 

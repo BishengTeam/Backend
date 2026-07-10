@@ -11,15 +11,17 @@ from app.domain.community.src.index import QuizCategory
 
 async def _seed_price_configs(db):
     records = [
-        PriceConfig(cert_type="H3C", user_type="student", price=380000),
-        PriceConfig(cert_type="H3C", user_type="enterprise", price=480000),
-        PriceConfig(cert_type="Sangfor", user_type="student", price=59800),
-        PriceConfig(cert_type="Sangfor", user_type="enterprise", price=89800),
-        PriceConfig(cert_type="NISP", user_type="student", price=69800),
-        PriceConfig(cert_type="NISP", user_type="enterprise", price=69800),
+        PriceConfig(product_type="H3C-NE", user_type="student", price=380000),
+        PriceConfig(product_type="H3C-NE", user_type="normal", price=480000),
+        PriceConfig(product_type="SF-CSE", user_type="student", price=59800),
+        PriceConfig(product_type="SF-CSE", user_type="normal", price=89800),
+        PriceConfig(product_type="NISP-1", user_type="student", price=69800),
+        PriceConfig(product_type="NISP-1", user_type="normal", price=69800),
+        PriceConfig(product_type="RS-ZY", user_type="student", price=0),
+        PriceConfig(product_type="RS-ZY", user_type="normal", price=0),
     ]
     db.add_all(records)
-    print("  ✓ 价格配置 (6 条)")
+    print("  ✓ 价格配置 (8 条)")
 
 
 async def _seed_certifications(db):

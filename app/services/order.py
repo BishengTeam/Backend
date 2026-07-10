@@ -20,6 +20,13 @@ from app.domain.user.src.index import UserRealname
 from app.schemas.common import PaginatedData
 from app.schemas.order import OrderCreate, OrderDetailResponse, OrderFilter, OrderResponse
 
+PRICE_TIER_NORMAL = "normal"
+PRICE_TIER_STUDENT = "student"
+
+
+def resolve_price_tier(user_type: str | None) -> str:
+    return PRICE_TIER_STUDENT if user_type == PRICE_TIER_STUDENT else PRICE_TIER_NORMAL
+
 
 def _extract_batch_price(batches: list | None, batch_key: str) -> int | None:
     """从班次列表中按索引或日期匹配获取价格。"""
@@ -70,12 +77,12 @@ class OrderService:
                     if cert is None:
                         raise BusinessException("认证类型不存在或已下架")
 
-                    user_type = identity.user_type
+                    price_tier = resolve_price_tier(identity.user_type)
                     price_rows = (
                         await db.execute(
                             select(PriceConfig).where(
                                 PriceConfig.product_type == data.product_type,
-                                PriceConfig.user_type == user_type,
+                                PriceConfig.user_type == price_tier,
                                 PriceConfig.is_active.is_(True),
                             ).limit(2)
                         )

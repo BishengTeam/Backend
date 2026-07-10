@@ -5,6 +5,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from app.schemas.order import OrderCreate, OrderFilter
+from app.services.order import resolve_price_tier
 from app.schemas.payment import PaymentCallbackRequest, PaymentPrepayResponse
 
 
@@ -13,7 +14,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def _valid_order_payload(**overrides):
     payload = {
-        "cert_type": "H3C-NE",
+        "order_kind": "certification",
+        "product_type": "H3C-NE",
         "candidate_name": "张三",
         "candidate_phone": "13800138000",
         "candidate_idcard": "11010519491231002X",
@@ -75,6 +77,11 @@ class OrderSystemTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             OrderFilter(status="cancelled")
 
+    def test_resolve_price_tier_maps_enterprise_to_normal(self):
+        self.assertEqual(resolve_price_tier("student"), "student")
+        self.assertEqual(resolve_price_tier("enterprise"), "normal")
+        self.assertEqual(resolve_price_tier(None), "normal")
+
     def test_payment_callback_rejects_unknown_trade_state(self):
         with self.assertRaises(ValidationError):
             PaymentCallbackRequest(out_trade_no="trade-no", trade_state="UNKNOWN")
@@ -133,7 +140,7 @@ class OrderSystemTests(unittest.TestCase):
     def test_order_status_machine_defines_required_transitions(self):
         source = (REPO_ROOT / "app/domain/order/src/rule/order_rules.py").read_text(encoding="utf-8")
 
-        self.assertIn('"pending": {"paid", "closed"}', source)
+        self.assertIn('"pending": {"paid", "closed", "completed"}', source)
         self.assertIn('"closed": set()', source)
         self.assertIn('"paid": {"completed", "refunded"}', source)
         self.assertIn('"completed": {"refunded"}', source)
@@ -163,11 +170,14 @@ class OrderSystemTests(unittest.TestCase):
         ]
 
         self.assertIn("async with db.begin():", create_order_source)
+        self.assertIn("price_tier = resolve_price_tier(identity.user_type)", create_order_source)
+        self.assertIn("PriceConfig.user_type == price_tier", create_order_source)
         self.assertLess(
             create_order_source.index("inventory_change = await lock_certification_inventory"),
             create_order_source.index("order = Order("),
         )
-        self.assertIn("inventory_id=inventory_change.inventory_id", create_order_source)
+        self.assertIn("inventory_id = inventory_change.inventory_id", create_order_source)
+        self.assertIn("inventory_id=inventory_id", create_order_source)
         self.assertIn("expires_at=expires_at", create_order_source)
         self.assertIn('status="pending"', create_order_source)
         self.assertIn("add_inventory_record(", create_order_source)

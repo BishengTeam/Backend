@@ -16,7 +16,7 @@ router = APIRouter(prefix="/prices", tags=["价格配置"])
 **使用场景**: 根据认证类型和用户类型获取价格配置列表
 
 **查询参数**:
-- `cert_type`: 认证类型筛选
+- `product_type`: 商品类型筛选
 - `user_type`: 用户类型筛选
 
 **响应**: 符合条件的价格配置列表
@@ -25,10 +25,10 @@ router = APIRouter(prefix="/prices", tags=["价格配置"])
     """,
 )
 async def list_prices(
-    cert_type: str | None = Query(None),
+    product_type: str | None = Query(None),
     user_type: str | None = Query(None),
 ) -> APIResponse[list[PriceResponse]]:
     """价格配置列表"""
-    filters = PriceFilter(cert_type=cert_type, user_type=user_type) if (cert_type or user_type) else None
+    filters = PriceFilter(product_type=product_type, user_type=user_type) if (product_type or user_type) else None
     result = await PriceConfigService().list_prices(filters)
     return success(data=result)

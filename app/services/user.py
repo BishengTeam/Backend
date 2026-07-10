@@ -16,6 +16,7 @@ from app.domain.community.src.index import Conversation
 from app.domain.review.src.index import Review
 from app.utils.validators import validate_id_card
 from app.utils.census import resolve_census
+from pypinyin import lazy_pinyin
 
 SESSION_KEY_PREFIX = "session_key:"
 MAX_LEVEL2_EDITS = 10
@@ -95,6 +96,13 @@ async def _check_level2_edit_limit(user):
             user.level2_edit_reset_at = None
     if user.level2_edit_count >= MAX_LEVEL2_EDITS:
         raise BusinessException(f"实名/学生/企业信息最多修改 {MAX_LEVEL2_EDITS} 次，{LEVEL2_RESET_HOURS} 小时后重置")
+
+
+def _to_pinyin(name: str | None) -> str | None:
+    """中文姓名转拼音首字母大写，如 张三 → ZhangSan。"""
+    if not name:
+        return None
+    return "".join(s.capitalize() for s in lazy_pinyin(name))
 
 
 def _birth_date_from_id_card(id_card: str) -> str | None:
@@ -257,6 +265,9 @@ class UserService:
         real_name = data.real_name or (
             f"{data.last_name_zh or ''}{data.first_name_zh or ''}".strip() or None
         )
+        # 拼音: 未传入时由中文姓/名自动计算
+        last_name_en = data.last_name_en or _to_pinyin(data.last_name_zh)
+        first_name_en = data.first_name_en or _to_pinyin(data.first_name_zh)
 
         async with get_db_ctx() as db:
             user = await db.get(User, user_id)
@@ -295,8 +306,8 @@ class UserService:
                 existing_realname.real_name = real_name
                 existing_realname.last_name_zh = data.last_name_zh
                 existing_realname.first_name_zh = data.first_name_zh
-                existing_realname.last_name_en = data.last_name_en
-                existing_realname.first_name_en = data.first_name_en
+                existing_realname.last_name_en = last_name_en
+                existing_realname.first_name_en = first_name_en
                 existing_realname.id_card_number = data.id_card_number
                 existing_realname.id_card_front_oss = data.id_card_front_oss
                 existing_realname.id_card_back_oss = data.id_card_back_oss
@@ -318,8 +329,8 @@ class UserService:
                     real_name=real_name,
                     last_name_zh=data.last_name_zh,
                     first_name_zh=data.first_name_zh,
-                    last_name_en=data.last_name_en,
-                    first_name_en=data.first_name_en,
+                    last_name_en=last_name_en,
+                    first_name_en=first_name_en,
                     id_card_number=data.id_card_number,
                     id_card_front_oss=data.id_card_front_oss,
                     id_card_back_oss=data.id_card_back_oss,
