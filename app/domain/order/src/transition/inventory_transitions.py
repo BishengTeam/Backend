@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.port.exceptions import BusinessException, ConflictException
@@ -14,6 +14,7 @@ INVENTORY_TYPE_CERTIFICATION = "certification"
 INVENTORY_LOCK_ACTION = "lock"
 INVENTORY_CONFIRM_ACTION = "confirm"
 INVENTORY_RELEASE_ACTION = "release"
+INVENTORY_REFUND_ACTION = "refund"
 
 @dataclass(frozen=True, slots=True)
 class InventoryChange:
@@ -79,6 +80,24 @@ def add_inventory_record(
         )
     )
 
+
+async def _inventory_action_exists(
+    db: AsyncSession,
+    *,
+    order_id: int,
+    action: str,
+) -> bool:
+    record_id = await db.scalar(
+        select(InventoryRecord.id)
+        .where(
+            InventoryRecord.order_id == order_id,
+            InventoryRecord.action == action,
+        )
+        .limit(1)
+    )
+    return record_id is not None
+
+
 async def lock_certification_inventory(db: AsyncSession, cert_type: str) -> InventoryChange:
     result = await db.execute(
         text(
@@ -104,6 +123,18 @@ async def lock_certification_inventory(db: AsyncSession, cert_type: str) -> Inve
 async def confirm_inventory_sale(db: AsyncSession, order: Order, *, reason: str = "payment_success") -> bool:
     if order.inventory_id is None:
         return False
+    if await _inventory_action_exists(
+        db,
+        order_id=order.id,
+        action=INVENTORY_CONFIRM_ACTION,
+    ):
+        return False
+    if await _inventory_action_exists(
+        db,
+        order_id=order.id,
+        action=INVENTORY_RELEASE_ACTION,
+    ):
+        raise ConflictException("订单库存锁已释放，无法确认成交")
     result = await db.execute(
         text(
             """
@@ -127,6 +158,18 @@ async def confirm_inventory_sale(db: AsyncSession, order: Order, *, reason: str 
 async def release_inventory_lock(db: AsyncSession, order: Order, *, reason: str = "payment_timeout") -> bool:
     if order.inventory_id is None:
         return False
+    if await _inventory_action_exists(
+        db,
+        order_id=order.id,
+        action=INVENTORY_RELEASE_ACTION,
+    ):
+        return False
+    if await _inventory_action_exists(
+        db,
+        order_id=order.id,
+        action=INVENTORY_CONFIRM_ACTION,
+    ):
+        raise ConflictException("订单库存已确认售出，无法释放锁定")
     result = await db.execute(
         text(
             """
@@ -145,4 +188,56 @@ async def release_inventory_lock(db: AsyncSession, order: Order, *, reason: str 
         raise ConflictException("订单库存锁定状态不允许释放")
     change = _change_from_after(dict(row), before_available_delta=-1, before_locked_delta=1)
     add_inventory_record(db, change=change, order_id=order.id, action=INVENTORY_RELEASE_ACTION, reason=reason)
+    return True
+
+
+async def refund_inventory_sale(
+    db: AsyncSession,
+    order: Order,
+    *,
+    reason: str = "order_refunded",
+) -> bool:
+    if order.inventory_id is None:
+        return False
+    if await _inventory_action_exists(
+        db,
+        order_id=order.id,
+        action=INVENTORY_REFUND_ACTION,
+    ):
+        return False
+    if not await _inventory_action_exists(
+        db,
+        order_id=order.id,
+        action=INVENTORY_CONFIRM_ACTION,
+    ):
+        raise ConflictException("订单库存尚未确认售出，无法退款")
+
+    result = await db.execute(
+        text(
+            """
+            UPDATE inventory
+            SET available_quota = available_quota + 1,
+                sold_quota = sold_quota - 1,
+                updated_at = now()
+            WHERE id = :inventory_id AND sold_quota >= 1
+            RETURNING id, total_quota, available_quota, locked_quota, sold_quota
+            """
+        ),
+        {"inventory_id": order.inventory_id},
+    )
+    row = result.mappings().one_or_none()
+    if row is None:
+        raise ConflictException("订单库存售出状态不允许退款")
+    change = _change_from_after(
+        dict(row),
+        before_available_delta=-1,
+        before_sold_delta=1,
+    )
+    add_inventory_record(
+        db,
+        change=change,
+        order_id=order.id,
+        action=INVENTORY_REFUND_ACTION,
+        reason=reason,
+    )
     return True

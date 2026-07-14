@@ -26,11 +26,15 @@ from app.schemas.certification import CertificationFilter, CertificationResponse
 
 # Course schemas
 from app.schemas.course import (
+    CourseAssetResponse,
+    CourseContentResponse,
     CourseDetailResponse,
     CourseEnrollRequest,
     CourseEnrollmentResponse,
     CourseFilter,
     CourseListResponse,
+    CoursePurchaseRequest,
+    CoursePurchaseResponse,
 )
 
 # Order schemas

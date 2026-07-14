@@ -10,6 +10,8 @@
 import os
 import sys
 import json
+from datetime import datetime, timedelta, timezone
+
 import httpx
 
 BASE = "http://127.0.0.1:8000"
@@ -18,7 +20,7 @@ ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
 pass_count = 0
 fail_count = 0
 SMOKE_PRODUCT = "H3C-RE"  # 使用已有认证产品 H3C-NE 的 code
-PLAN_NAME = "冒烟测试批次"
+PLAN_NAME = f"冒烟测试批次-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
 
 
 def _h() -> dict[str, str]:
@@ -71,6 +73,10 @@ def main():
     if not ADMIN_TOKEN:
         print("❌ 请设置 ADMIN_TOKEN 环境变量")
         sys.exit(1)
+
+    now = datetime.now(timezone.utc)
+    apply_start = (now - timedelta(days=1)).isoformat()
+    apply_end = (now + timedelta(days=30)).isoformat()
 
     # 先确认可用认证产品
     certs_resp = httpx.get(f"{BASE}/admin/certifications", headers=_h(),
@@ -144,8 +150,8 @@ def main():
         json={
             "name": PLAN_NAME,
             "capacity": 50,
-            "apply_start": "2026-07-01T00:00:00+08:00",
-            "apply_end": "2026-08-31T23:59:59+08:00",
+            "apply_start": apply_start,
+            "apply_end": apply_end,
         },
         headers=_h(), timeout=15,
     )
@@ -211,7 +217,11 @@ def main():
     # 创建新 published 批次然后取消
     resp_cancel = httpx.post(
         f"{BASE}/admin/certifications/{product_code}/plans",
-        json={"name": f"{PLAN_NAME}-cancel"},
+        json={
+            "name": f"{PLAN_NAME}-cancel",
+            "apply_start": apply_start,
+            "apply_end": apply_end,
+        },
         headers=_h(), timeout=15,
     )
     cancel_id = resp_cancel.json().get("data", {}).get("id")
@@ -238,7 +248,7 @@ def main():
            httpx.delete(
                f"{BASE}/admin/certifications/{product_code}/plans/{plan_id}",
                headers=_h(), timeout=15,
-           ), status=500)  # BusinessException → 500 in error middleware
+           ), status=422)
 
     # ════════════════════════════════════════════════════════════
     # 第七阶段: 用户端

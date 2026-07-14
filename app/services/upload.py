@@ -38,9 +38,15 @@ class UploadService:
     @staticmethod
     def get_file_path(file_id: str) -> Path:
         """根据 file_id 返回完整文件路径"""
+        if not UploadService._is_public_file_id(file_id):
+            return Path(UPLOAD_DIR) / ".invalid-public-file"
         return Path(UPLOAD_DIR) / file_id
 
     @staticmethod
     def file_exists(file_id: str) -> bool:
         """检查文件是否存在"""
-        return Path(UPLOAD_DIR, file_id).is_file()
+        return UploadService._is_public_file_id(file_id) and Path(UPLOAD_DIR, file_id).is_file()
+
+    @staticmethod
+    def _is_public_file_id(file_id: str) -> bool:
+        return bool(file_id) and Path(file_id).name == file_id and ".." not in file_id

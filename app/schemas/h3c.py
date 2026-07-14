@@ -22,6 +22,8 @@ class H3cProfileDefaults(BaseModel):
 
 class H3cOrderCreate(BaseModel):
     """POST /api/orders/h3c — H3C 认证报名"""
+    plan_id: int = Field(..., gt=0, description="报名批次 ID")
+
     # 预填字段（前端可覆盖）
     candidate_name: str = Field(..., min_length=1, max_length=64, description="考生姓名")
     gender: str = Field(..., min_length=1, max_length=4, description="性别")
@@ -36,7 +38,6 @@ class H3cOrderCreate(BaseModel):
     birth_date: str | None = Field(None, max_length=10, description="出生年月")
 
     # H3C 专用必填
-    exam_code: str = Field(..., min_length=1, max_length=32, description="考试代码")
     coupon_code: str = Field(..., min_length=1, max_length=64, description="考券号")
     verify_code: str = Field(..., min_length=1, max_length=16, description="在线验证码")
     identity_tag: str = Field(..., min_length=1, max_length=32, description="身份标签")
@@ -57,6 +58,7 @@ class H3cOrderCreate(BaseModel):
 class H3cOrderResponse(BaseModel):
     """H3C 报名订单响应"""
     id: int
+    plan_id: int
     order_kind: str
     product_type: str
     candidate_name: str | None

@@ -56,10 +56,15 @@ async def _cleanup_expired_accounts():
             delete(InventoryRecord).where(InventoryRecord.order_id.in_(order_sub))
         )
 
-        # 2. 删除 Order
+        # 2. CourseEnrollment may reference Order, so remove it first.
+        await db.execute(
+            delete(CourseEnrollment).where(CourseEnrollment.user_id.in_(user_ids))
+        )
+
+        # 3. 删除 Order
         await db.execute(delete(Order).where(Order.user_id.in_(user_ids)))
 
-        # 3. 删除与 User 关联的叶子表
+        # 4. 删除与 User 关联的叶子表
         for model in [
             PointsHistory,
             UserPoints,
@@ -74,15 +79,14 @@ async def _cleanup_expired_accounts():
             Agreement,
             ActivityRegistration,
             CompetitionReg,
-            CourseEnrollment,
             Share,
         ]:
             await db.execute(delete(model).where(model.user_id.in_(user_ids)))
 
-        # 4. 删除 User
+        # 5. 删除 User
         await db.execute(delete(User).where(User.id.in_(user_ids)))
 
-        # 5. 删除 DeletedOpenid
+        # 6. 删除 DeletedOpenid
         await db.execute(delete(DeletedOpenid).where(DeletedOpenid.openid.in_(openids)))
 
         await db.commit()

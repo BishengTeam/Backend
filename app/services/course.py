@@ -1,20 +1,30 @@
-from sqlalchemy import func, select, and_
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import joinedload
 
 from app.adapter.database import get_db_ctx
-from app.port.exceptions import BusinessException, NotFoundException
-from app.domain.certification.src.index import Course, CourseChapter, CourseEnrollment, UserChapterProgress
+from app.port.exceptions import NotFoundException
+from app.domain.certification.src.index import (
+    Course,
+    CourseAsset,
+    CourseChapter,
+    CourseEnrollment,
+    UserChapterProgress,
+)
 from app.schemas.common import PaginatedData
 from app.schemas.course import (
     ChapterProgressResponse,
     ChapterProgressUpsert,
     ChapterResponse,
     CourseDetailResponse,
+    CourseChaptersResponse,
+    CourseAssetResponse,
+    CourseContentResponse,
     CourseEnrollRequest,
     CourseEnrollmentResponse,
     CourseFilter,
     CourseListResponse,
 )
+from app.services.course_purchase import CoursePurchaseService
 
 
 class CourseService:
@@ -43,11 +53,17 @@ class CourseService:
             stmt = (
                 select(Course)
                 .options(joinedload(Course.chapters))
-                .where(Course.id == course_id, Course.is_active == True)
+                .where(Course.id == course_id)
             )
             result = await db.execute(stmt)
             course = result.unique().scalar_one_or_none()
             if course is None:
+                raise NotFoundException("课程")
+
+            enrollment = None
+            if user_id is not None:
+                enrollment = await self._get_learning_enrollment(db, user_id, course_id)
+            if not course.is_active and enrollment is None:
                 raise NotFoundException("课程")
 
             response = CourseDetailResponse.model_validate(course)
@@ -57,21 +73,9 @@ class CourseService:
             active_chapters.sort(key=lambda ch: ch.sort_order)
             response.chapters = [ChapterResponse.model_validate(ch) for ch in active_chapters]
 
-            if user_id is not None:
-                enrollment = (
-                    await db.execute(
-                        select(CourseEnrollment).where(
-                            and_(
-                                CourseEnrollment.user_id == user_id,
-                                CourseEnrollment.course_id == course_id,
-                                CourseEnrollment.learning_access == True,
-                            )
-                        )
-                    )
-                ).scalar_one_or_none()
-                if enrollment:
-                    response.has_access = True
-                    response.enrollment_id = enrollment.id
+            if enrollment is not None:
+                response.has_access = True
+                response.enrollment_id = enrollment.id
 
             # 试看时长：已购买为 null，否则返回课程设置的试看时长
             if not response.has_access:
@@ -80,6 +84,42 @@ class CourseService:
                 response.free_preview_seconds = None
 
             return response
+
+    async def get_content(self, user_id: int, course_id: int) -> CourseContentResponse:
+        async with get_db_ctx() as db:
+            course = await db.get(Course, course_id)
+            if course is None:
+                raise NotFoundException("课程")
+            has_access = await self._has_learning_access(db, user_id, course_id)
+            if not course.is_active and not has_access:
+                raise NotFoundException("课程")
+
+            asset_filter = CourseAsset.course_id == course_id
+            if not has_access:
+                asset_filter = and_(asset_filter, CourseAsset.is_preview.is_(True))
+            result = await db.execute(
+                select(CourseAsset)
+                .where(asset_filter)
+                .order_by(CourseAsset.sort_order, CourseAsset.id)
+            )
+            assets = result.scalars().all()
+            return CourseContentResponse(
+                course_id=course.id,
+                title=course.title,
+                learning_access=has_access,
+                assets=[
+                    CourseAssetResponse(
+                        id=asset.id,
+                        course_id=asset.course_id,
+                        title=asset.title,
+                        asset_type=asset.asset_type,
+                        sort_order=asset.sort_order,
+                        is_preview=asset.is_preview,
+                        content_url=f"/api/course-assets/{asset.id}/content",
+                    )
+                    for asset in assets
+                ],
+            )
 
     async def list_categories(self) -> list[str]:
         async with get_db_ctx() as db:
@@ -92,32 +132,17 @@ class CourseService:
             return [row[0] for row in result.all()]
 
     async def enroll(self, user_id: int, data: CourseEnrollRequest) -> CourseEnrollmentResponse:
+        purchase = await CoursePurchaseService().purchase(
+            user_id,
+            data.course_id,
+            batch=data.batch,
+            allow_paid=False,
+        )
         async with get_db_ctx() as db:
-            course = await db.get(Course, data.course_id)
-            if course is None or not course.is_active:
-                raise NotFoundException("课程")
-            existing = (
-                await db.execute(
-                    select(CourseEnrollment).where(
-                        CourseEnrollment.user_id == user_id,
-                        CourseEnrollment.course_id == data.course_id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if existing is not None:
-                raise BusinessException("已报名该课程")
-            enrollment = CourseEnrollment(
-                user_id=user_id,
-                course_id=data.course_id,
-                batch_selected=data.batch,
-            )
-            db.add(enrollment)
-            await db.commit()
-            await db.refresh(enrollment)
             stmt = (
                 select(CourseEnrollment)
                 .options(joinedload(CourseEnrollment.course))
-                .where(CourseEnrollment.id == enrollment.id)
+                .where(CourseEnrollment.id == purchase.enrollment_id)
             )
             result = await db.execute(stmt)
             enrollment = result.scalar_one()
@@ -152,40 +177,33 @@ class CourseService:
     async def check_has_access(user_id: int, course_id: int) -> bool:
         """判断用户是否有课程学习权限。"""
         async with get_db_ctx() as db:
-            result = await db.execute(
-                select(CourseEnrollment).where(
-                    and_(
-                        CourseEnrollment.user_id == user_id,
-                        CourseEnrollment.course_id == course_id,
-                        CourseEnrollment.learning_access == True,
-                    )
-                )
-            )
-            return result.scalar_one_or_none() is not None
+            return await CourseService._has_learning_access(db, user_id, course_id)
 
     async def get_chapters(
         self, course_id: int, user_id: int | None = None
-    ) -> dict:
+    ) -> CourseChaptersResponse:
         """返回 { free_preview_seconds, chapters, progress }。"""
         async with get_db_ctx() as db:
             stmt = (
                 select(Course)
                 .options(joinedload(Course.chapters))
-                .where(Course.id == course_id, Course.is_active == True)
+                .where(Course.id == course_id)
             )
             result = await db.execute(stmt)
             course = result.unique().scalar_one_or_none()
             if course is None:
                 raise NotFoundException("课程")
 
-            active_chapters = [ch for ch in course.chapters if ch.is_active]
-            active_chapters.sort(key=lambda ch: ch.sort_order)
-
             has_access = (
-                await self.check_has_access(user_id, course_id)
+                await self._has_learning_access(db, user_id, course_id)
                 if user_id is not None
                 else False
             )
+            if not course.is_active and not has_access:
+                raise NotFoundException("课程")
+
+            active_chapters = [ch for ch in course.chapters if ch.is_active]
+            active_chapters.sort(key=lambda ch: ch.sort_order)
 
             free_seconds = None if has_access else course.free_preview_seconds
 
@@ -193,11 +211,11 @@ class CourseService:
             if user_id is not None:
                 progress = await self._build_progress(user_id, course_id)
 
-            return {
-                "free_preview_seconds": free_seconds,
-                "chapters": [ChapterResponse.model_validate(ch) for ch in active_chapters],
-                "progress": progress,
-            }
+            return CourseChaptersResponse(
+                free_preview_seconds=free_seconds,
+                chapters=[ChapterResponse.model_validate(ch) for ch in active_chapters],
+                progress=progress,
+            )
 
     async def get_progress(
         self, user_id: int, course_id: int
@@ -210,7 +228,11 @@ class CourseService:
         async with get_db_ctx() as db:
             # 获取章节 duration
             chapter = await db.get(CourseChapter, data.chapter_id)
-            if chapter is None or not chapter.is_active:
+            if (
+                chapter is None
+                or chapter.course_id != course_id
+                or not chapter.is_active
+            ):
                 raise NotFoundException("章节")
 
             # 5 秒容差自动判完成
@@ -270,3 +292,21 @@ class CourseService:
                 last_position_seconds=latest.last_position_seconds,
                 completed_chapter_ids=completed_ids,
             )
+
+    @staticmethod
+    async def _get_learning_enrollment(db, user_id: int, course_id: int):
+        return (
+            await db.execute(
+                select(CourseEnrollment).where(
+                    CourseEnrollment.user_id == user_id,
+                    CourseEnrollment.course_id == course_id,
+                    CourseEnrollment.learning_access.is_(True),
+                    CourseEnrollment.status.in_(("enrolled", "completed")),
+                )
+            )
+        ).scalar_one_or_none()
+
+    @staticmethod
+    async def _has_learning_access(db, user_id: int, course_id: int) -> bool:
+        enrollment = await CourseService._get_learning_enrollment(db, user_id, course_id)
+        return enrollment is not None

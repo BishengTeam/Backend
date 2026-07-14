@@ -11,6 +11,7 @@ from app.schemas.course import (
     CourseEnrollmentResponse,
     CourseFilter,
     CourseListResponse,
+    CoursePurchaseResponse,
     EnrollmentStatus,
 )
 from app.schemas.system import PosterResponse
@@ -28,6 +29,8 @@ COURSES_EXPECTED_ROUTES = (
     ("GET", "/api/courses"),
     ("GET", "/api/courses/my"),
     ("GET", "/api/courses/{course_id}"),
+    ("GET", "/api/courses/{course_id}/content"),
+    ("POST", "/api/courses/{course_id}/purchase"),
     ("POST", "/api/courses/enroll"),
 )
 
@@ -230,8 +233,30 @@ class CoursesSystemTests(unittest.TestCase):
 
     def test_course_detail_response_has_expected_fields(self):
         r = CourseDetailResponse(id=1, title="课程A", category="网络", price=9900)
-        self.assertEqual(r.video_url, None)
+        self.assertFalse(hasattr(r, "video_url"))
+        self.assertFalse(hasattr(r, "teacher_contact"))
         self.assertEqual(r.batches, None)
+
+    def test_course_purchase_response_matches_unified_contract(self):
+        response = CoursePurchaseResponse(
+            course_id=10,
+            enrollment_id=20,
+            payment_required=True,
+            order_id=30,
+            status="pending_payment",
+            learning_access=False,
+        )
+        self.assertEqual(
+            response.model_dump(),
+            {
+                "course_id": 10,
+                "enrollment_id": 20,
+                "payment_required": True,
+                "order_id": 30,
+                "status": "pending_payment",
+                "learning_access": False,
+            },
+        )
 
     def test_course_enroll_request_requires_course_id(self):
         r = CourseEnrollRequest(course_id=1)

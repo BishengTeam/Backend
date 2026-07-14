@@ -1,11 +1,26 @@
+from datetime import datetime, timezone
+
 from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
-from app.port.exceptions import NotFoundException
-from app.domain.certification.src.index import Course, CourseChapter
-from app.schemas.admin_course import AdminCourseCreate, AdminCourseListItem, AdminCourseUpdate
+from app.port.exceptions import BusinessException, NotFoundException
+from app.domain.certification.src.index import (
+    Course,
+    CourseAsset,
+    CourseChapter,
+    CourseEnrollment,
+)
+from app.domain.order.src.index import Order
+from app.schemas.admin_course import (
+    AdminCourseAssetResponse,
+    AdminCourseCreate,
+    AdminCourseEnrollmentListItem,
+    AdminCourseListItem,
+    AdminCourseUpdate,
+)
 from app.schemas.common import PaginatedData
 from app.schemas.course import ChapterCreate, ChapterResponse, ChapterSortItem, ChapterUpdate
+from app.services.course_asset import CourseAssetStorage
 
 
 class AdminCourseService:
@@ -99,6 +114,68 @@ class AdminCourseService:
                 page_size=page_size,
             )
 
+    async def list_enrollments(
+        self,
+        *,
+        course_id: int | None,
+        user_id: int | None,
+        status: str | None,
+        page: int,
+        page_size: int,
+    ) -> PaginatedData[AdminCourseEnrollmentListItem]:
+        async with get_db_ctx() as db:
+            base = (
+                select(
+                    CourseEnrollment,
+                    Course.title.label("course_title"),
+                    Order.status.label("order_status"),
+                    Order.price.label("order_price"),
+                )
+                .join(Course, Course.id == CourseEnrollment.course_id)
+                .outerjoin(Order, Order.id == CourseEnrollment.order_id)
+            )
+            if course_id is not None:
+                base = base.where(CourseEnrollment.course_id == course_id)
+            if user_id is not None:
+                base = base.where(CourseEnrollment.user_id == user_id)
+            if status is not None:
+                base = base.where(CourseEnrollment.status == status)
+
+            count_stmt = select(func.count()).select_from(base.subquery())
+            total = (await db.execute(count_stmt)).scalar_one()
+            rows = (
+                await db.execute(
+                    base.order_by(CourseEnrollment.id.desc())
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                )
+            ).all()
+            items = []
+            for enrollment, course_title, order_status, order_price in rows:
+                items.append(
+                    AdminCourseEnrollmentListItem(
+                        id=enrollment.id,
+                        user_id=enrollment.user_id,
+                        course_id=enrollment.course_id,
+                        course_title=course_title,
+                        order_id=enrollment.order_id,
+                        order_status=order_status,
+                        order_price=order_price,
+                        batch_selected=enrollment.batch_selected,
+                        status=enrollment.status,
+                        learning_access=enrollment.learning_access,
+                        access_granted_at=enrollment.access_granted_at,
+                        access_revoked_at=enrollment.access_revoked_at,
+                        created_at=enrollment.created_at,
+                    )
+                )
+            return PaginatedData[AdminCourseEnrollmentListItem](
+                items=items,
+                total=total,
+                page=page,
+                page_size=page_size,
+            )
+
     async def create_chapter(
         self, course_id: int, data: ChapterCreate
     ) -> ChapterResponse:
@@ -166,3 +243,110 @@ class AdminCourseService:
                 count += 1
             await db.commit()
             return count
+
+    async def revoke_enrollment(
+        self,
+        enrollment_id: int,
+    ) -> AdminCourseEnrollmentListItem:
+        async with get_db_ctx() as db:
+            enrollment = (
+                await db.execute(
+                    select(CourseEnrollment)
+                    .where(CourseEnrollment.id == enrollment_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if enrollment is None:
+                raise NotFoundException("课程报名记录")
+            if enrollment.status == "pending_payment":
+                raise BusinessException("待支付报名尚未开通学习权限")
+
+            revocable = enrollment.status in {"enrolled", "completed"}
+            if revocable:
+                enrollment.status = "cancelled"
+            if enrollment.learning_access or (
+                revocable and enrollment.access_granted_at is not None
+            ):
+                enrollment.learning_access = False
+                enrollment.access_revoked_at = datetime.now(timezone.utc)
+            await db.commit()
+
+            course = await db.get(Course, enrollment.course_id)
+            order = await db.get(Order, enrollment.order_id) if enrollment.order_id else None
+            return AdminCourseEnrollmentListItem(
+                id=enrollment.id,
+                user_id=enrollment.user_id,
+                course_id=enrollment.course_id,
+                course_title=course.title if course else "",
+                order_id=enrollment.order_id,
+                order_status=order.status if order else None,
+                order_price=order.price if order else None,
+                batch_selected=enrollment.batch_selected,
+                status=enrollment.status,
+                learning_access=enrollment.learning_access,
+                access_granted_at=enrollment.access_granted_at,
+                access_revoked_at=enrollment.access_revoked_at,
+                created_at=enrollment.created_at,
+            )
+
+    async def list_assets(self, course_id: int) -> list[AdminCourseAssetResponse]:
+        async with get_db_ctx() as db:
+            if await db.get(Course, course_id) is None:
+                raise NotFoundException("课程")
+            assets = (
+                await db.execute(
+                    select(CourseAsset)
+                    .where(CourseAsset.course_id == course_id)
+                    .order_by(CourseAsset.sort_order, CourseAsset.id)
+                )
+            ).scalars().all()
+            return [AdminCourseAssetResponse.model_validate(asset) for asset in assets]
+
+    async def create_asset(
+        self,
+        *,
+        course_id: int,
+        filename: str,
+        content: bytes,
+        title: str,
+        asset_type: str,
+        sort_order: int,
+        is_preview: bool,
+    ) -> AdminCourseAssetResponse:
+        async with get_db_ctx() as db:
+            if await db.get(Course, course_id) is None:
+                raise NotFoundException("课程")
+            storage_key, _ = CourseAssetStorage.save(course_id, filename, content)
+            try:
+                asset = CourseAsset(
+                    course_id=course_id,
+                    title=title,
+                    storage_key=storage_key,
+                    asset_type=asset_type,
+                    sort_order=sort_order,
+                    is_preview=is_preview,
+                )
+                db.add(asset)
+                await db.commit()
+            except Exception:
+                CourseAssetStorage.delete(storage_key)
+                raise
+            await db.refresh(asset)
+            return AdminCourseAssetResponse.model_validate(asset)
+
+    async def delete_asset(self, course_id: int, asset_id: int) -> None:
+        async with get_db_ctx() as db:
+            asset = (
+                await db.execute(
+                    select(CourseAsset).where(
+                        CourseAsset.id == asset_id,
+                        CourseAsset.course_id == course_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if asset is None:
+                raise NotFoundException("课程资源")
+            storage_key = asset.storage_key
+            await db.delete(asset)
+            await db.commit()
+        CourseAssetStorage.delete(storage_key)

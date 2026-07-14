@@ -2,11 +2,22 @@ from app.domain.content.src.index import (
     Activity, ActivityRegistration, ActivityReminder,
     Agreement, Ticket, Zone,
 )
-from app.domain.certification.src.index import Certification, CompetitionReg, Course, CourseChapter, CourseEnrollment, Job, JobApplication, UserChapterProgress
+from app.domain.certification.src.index import (
+    Certification,
+    CompetitionReg,
+    Course,
+    CourseAsset,
+    CourseChapter,
+    CourseEnrollment,
+    Job,
+    JobApplication,
+    UserChapterProgress,
+)
 from app.domain.community.src.index import (
     Collection, Conversation, QuickQuestion,
     QuizCategory, QuizCheckin, QuizQuestion, QuizRecord, Share,
 )
+from app.domain.plan.src.index import Plan
 from app.domain.order.src.index import Coupon, Inventory, InventoryRecord, Order, PriceConfig, UserCoupon
 from app.domain.user.src.index import (
     AdminUser, DeletedOpenid, PointsHistory,
@@ -27,6 +38,7 @@ __all__ = [
     "Coupon",
     "Course",
     "CourseChapter",
+    "CourseAsset",
     "CourseEnrollment",
     "DeletedOpenid",
     "Inventory",
@@ -34,6 +46,7 @@ __all__ = [
     "Job",
     "JobApplication",
     "Order",
+    "Plan",
     "PointsHistory",
     "PriceConfig",
     "QuickQuestion",

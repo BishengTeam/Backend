@@ -14,6 +14,7 @@ from app.domain.order.src.index import (
     close_expired_pending_order,
     release_inventory_lock,
 )
+from app.services.order_fulfillment import OrderFulfillmentService
 
 MAX_CLOSE_REASON_LENGTH = 128
 
@@ -26,6 +27,9 @@ class CloseExpiredOrdersResult:
 
 
 class OrderTimeoutCloseService:
+    def __init__(self) -> None:
+        self.fulfillment = OrderFulfillmentService()
+
     async def close_expired_pending_orders(
         self,
         *,
@@ -62,10 +66,8 @@ class OrderTimeoutCloseService:
                     now=closed_at,
                     close_reason=close_reason,
                 ):
-                    try:
-                        await release_inventory_lock(db, order, reason=close_reason)
-                    except Exception:
-                        pass  # 库存锁已释放或不存在，不影响关单
+                    await release_inventory_lock(db, order, reason=close_reason)
+                    await self.fulfillment.on_closed(db, order)
                     closed_order_ids.append(order.id)
 
             if closed_order_ids:

@@ -3,7 +3,9 @@ from app.services.auth import AuthService
 from app.services.certification import CertificationService
 from app.services.chat import ChatService
 from app.services.course import CourseService
+from app.services.course_purchase import CoursePurchaseService
 from app.services.order import OrderService
+from app.services.order_fulfillment import OrderFulfillmentService
 from app.services.order_timeout import CloseExpiredOrdersResult, OrderTimeoutCloseService
 from app.services.payment import PaymentService
 from app.services.points import PointsService
@@ -19,6 +21,7 @@ from app.domain.order.src.index import (
     add_inventory_record,
     confirm_inventory_sale,
     lock_certification_inventory,
+    refund_inventory_sale,
     release_inventory_lock,
 )
 
@@ -47,7 +50,9 @@ __all__ = [
     "CertificationService",
     "ChatService",
     "CourseService",
+    "CoursePurchaseService",
     "OrderService",
+    "OrderFulfillmentService",
     "OrderTimeoutCloseService",
     "PaymentService",
     "PointsService",
@@ -63,6 +68,7 @@ __all__ = [
     "add_inventory_record",
     "confirm_inventory_sale",
     "lock_certification_inventory",
+    "refund_inventory_sale",
     "release_inventory_lock",
     # User helpers
     # Cleanup,

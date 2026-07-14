@@ -1,9 +1,14 @@
-from fastapi import APIRouter, Depends, Path
+from typing import Literal
+
+from fastapi import APIRouter, Depends, Path, Query
 
 from app.middleware.auth import require_permission
-from app.schemas.common import APIResponse, success
+from app.schemas.common import APIResponse, PaginatedData, success
+from app.schemas.order import OrderResponse, OrderStatus
 from app.schemas.plan import PlanCreate, PlanUpdate, PlanResponse
+from app.schemas.review import ReviewResponse
 from app.services.plan import PlanService
+from app.services.plan_order_management import PlanOrderManagementService
 
 router = APIRouter(tags=["管理后台-批次管理"])
 
@@ -18,6 +23,57 @@ async def list_plans(
 ):
     """获取指定认证产品下的所有批次（含 enrolled 计数）"""
     result = await PlanService().list_plans(code)
+    return success(data=result)
+
+
+@router.get(
+    "/{code}/plans/{plan_id}/orders",
+    response_model=APIResponse[PaginatedData[OrderResponse]],
+    summary="批次订单列表",
+)
+async def list_plan_orders(
+    code: str = Path(..., description="认证产品代码"),
+    plan_id: int = Path(..., ge=1, description="批次 ID"),
+    status: OrderStatus | None = Query(None, description="按订单状态筛选"),
+    phone: str | None = Query(None, description="按考生手机号筛选"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    _admin=Depends(require_permission("order:list")),
+) -> APIResponse[PaginatedData[OrderResponse]]:
+    result = await PlanOrderManagementService().list_orders(
+        product_type=code,
+        plan_id=plan_id,
+        status=status,
+        phone=phone,
+        page=page,
+        page_size=page_size,
+    )
+    return success(data=result)
+
+
+@router.get(
+    "/{code}/plans/{plan_id}/approvals",
+    response_model=APIResponse[PaginatedData[ReviewResponse]],
+    summary="批次审核记录",
+)
+async def list_plan_approvals(
+    code: str = Path(..., description="认证产品代码"),
+    plan_id: int = Path(..., ge=1, description="批次 ID"),
+    action: Literal["approve", "reject"] | None = Query(
+        None,
+        description="按审核动作筛选",
+    ),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    _admin=Depends(require_permission("order:list")),
+) -> APIResponse[PaginatedData[ReviewResponse]]:
+    result = await PlanOrderManagementService().list_approvals(
+        product_type=code,
+        plan_id=plan_id,
+        action=action,
+        page=page,
+        page_size=page_size,
+    )
     return success(data=result)
 
 
@@ -44,7 +100,7 @@ async def update_plan(
     plan_id: int = Path(..., description="批次 ID"),
     _admin=Depends(require_permission("user:write")),
 ):
-    result = await PlanService().update_plan(plan_id, body)
+    result = await PlanService().update_plan(plan_id, body, product_type=code)
     return success(data=result)
 
 
@@ -57,7 +113,7 @@ async def publish_plan(
     plan_id: int = Path(..., description="批次 ID"),
     _admin=Depends(require_permission("user:write")),
 ):
-    result = await PlanService().publish_plan(plan_id)
+    result = await PlanService().publish_plan(plan_id, product_type=code)
     return success(data=result, message="批次已发布")
 
 
@@ -70,7 +126,7 @@ async def archive_plan(
     plan_id: int = Path(..., description="批次 ID"),
     _admin=Depends(require_permission("user:write")),
 ):
-    result = await PlanService().archive_plan(plan_id)
+    result = await PlanService().archive_plan(plan_id, product_type=code)
     return success(data=result, message="批次已归档")
 
 
@@ -83,7 +139,7 @@ async def cancel_plan(
     plan_id: int = Path(..., description="批次 ID"),
     _admin=Depends(require_permission("user:write")),
 ):
-    result = await PlanService().cancel_plan(plan_id)
+    result = await PlanService().cancel_plan(plan_id, product_type=code)
     return success(data=result, message="批次已取消")
 
 
@@ -96,5 +152,5 @@ async def delete_plan(
     plan_id: int = Path(..., description="批次 ID"),
     _admin=Depends(require_permission("user:write")),
 ):
-    await PlanService().delete_plan(plan_id)
+    await PlanService().delete_plan(plan_id, product_type=code)
     return success(message="批次已删除")

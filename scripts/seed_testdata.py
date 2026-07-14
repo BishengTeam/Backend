@@ -108,6 +108,7 @@ async def clean_test_data(db):
     await db.execute(text("DELETE FROM user_coupon"))  # 可能还有残留
     await db.execute(text("DELETE FROM coupon"))
     await db.execute(text("DELETE FROM course_enrollment"))
+    await db.execute(text("DELETE FROM course_asset"))
     await db.execute(text("DELETE FROM course"))
     await db.execute(text("DELETE FROM job_application"))
     await db.execute(text("DELETE FROM job"))
@@ -276,7 +277,16 @@ async def seed_courses_and_enrollments(db, user_map: dict[str, int]):
         (user_map["test_openid_user_002"], course_ids[1], "春季班"),
     ]
     for uid, cid, batch in enrollments:
-        db.add(CourseEnrollment(user_id=uid, course_id=cid, batch_selected=batch, status="enrolled"))
+        db.add(
+            CourseEnrollment(
+                user_id=uid,
+                course_id=cid,
+                batch_selected=batch,
+                status="enrolled",
+                learning_access=True,
+                access_granted_at=NOW,
+            )
+        )
 
     await db.commit()
     print(f"  ✓ 课程 ({len(courses_data)} 门)")

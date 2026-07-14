@@ -2,7 +2,11 @@ import os
 
 from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import FileResponse
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.adapter.database import get_db
+from app.domain.certification.src.index import Course
 from app.port.exceptions import NotFoundException
 from app.middleware.auth import get_current_user
 from app.domain.user.src.index import User
@@ -39,6 +43,7 @@ async def upload(
 
 
 @media_router.get("/{file_id}",
+    response_class=FileResponse,
     summary="访问文件",
     description="""
 文件访问接口。
@@ -53,9 +58,24 @@ async def upload(
 **认证**: 无需登录
     """,
 )
-async def get_file(file_id: str):
+async def get_file(file_id: str, db: AsyncSession = Depends(get_db)):
     """访问/下载文件 — 无需登录"""
     if not UploadService.file_exists(file_id):
+        raise NotFoundException("文件")
+    legacy_course_file = (
+        await db.execute(
+            select(Course.id)
+            .where(
+                or_(
+                    Course.video_url == file_id,
+                    Course.video_url == f"/api/media/{file_id}",
+                    Course.video_url.endswith(f"/api/media/{file_id}"),
+                )
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if legacy_course_file is not None:
         raise NotFoundException("文件")
 
     file_path = UploadService.get_file_path(file_id)

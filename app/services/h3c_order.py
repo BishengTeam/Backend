@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from app.adapter.database import get_db_ctx
-from app.domain.certification.src.index import Certification
 from app.domain.order.src.index import (
     INVENTORY_LOCK_ACTION,
     ORDER_PAYMENT_EXPIRE_MINUTES,
@@ -19,16 +18,25 @@ from app.domain.user.src.index import User, UserRealname
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException, ValidationException
 from app.schemas.h3c import H3cOrderCreate, H3cOrderResponse, H3cProfileDefaults
 from app.services.order import resolve_price_tier
+from app.services.plan_enrollment import PlanEnrollmentService
 from app.services.user import UserService
 
 H3C_COUNTRY = "CHN"
 H3C_LANGUAGE = "CHS"
 
 
-def _build_extra_data(data: H3cOrderCreate) -> dict:
+def _build_extra_data(
+    data: H3cOrderCreate,
+    *,
+    product_type: str,
+    plan_name: str,
+    plan_exam_date: datetime | None,
+) -> dict:
     """将 H3C 专用字段打包为 extra_data"""
     extra = {
-        "exam_code": data.exam_code,
+        "exam_code": product_type,
+        "plan_name": plan_name,
+        "plan_exam_date": plan_exam_date.isoformat() if plan_exam_date else None,
         "coupon_code": data.coupon_code,
         "verify_code": data.verify_code,
         "identity_tag": data.identity_tag,
@@ -101,18 +109,13 @@ class H3cOrderService:
                 if identity is None:
                     raise BusinessException("请先完成实名认证")
 
-                product_type = data.exam_code
-                cert = (
-                    await db.execute(
-                        select(Certification).where(
-                            Certification.code == product_type,
-                            Certification.vendor == "H3C",
-                            Certification.is_active.is_(True),
-                        )
-                    )
-                ).scalar_one_or_none()
-                if cert is None:
-                    raise BusinessException("H3C 认证类型不存在或已下架")
+                plan = await PlanEnrollmentService().lock_enrollable_plan(
+                    db,
+                    plan_id=data.plan_id,
+                    user_id=user_id,
+                    expected_vendor="H3C",
+                )
+                product_type = plan.product_type
 
                 price_tier = resolve_price_tier(identity.user_type)
                 price_rows = (
@@ -130,7 +133,12 @@ class H3cOrderService:
                     raise ConflictException("该 H3C 认证类型价格配置重复，请联系管理员")
 
                 inventory_change = await lock_certification_inventory(db, product_type)
-                extra = _build_extra_data(data)
+                extra = _build_extra_data(
+                    data,
+                    product_type=product_type,
+                    plan_name=plan.name,
+                    plan_exam_date=plan.exam_date,
+                )
                 attachments = [oss for oss in (data.coupon_proof_oss, data.degree_cert_oss) if oss]
                 expires_at = datetime.now(timezone.utc) + timedelta(minutes=ORDER_PAYMENT_EXPIRE_MINUTES)
 
@@ -138,6 +146,7 @@ class H3cOrderService:
                     user_id=user_id,
                     order_kind="certification",
                     product_type=product_type,
+                    plan_id=plan.id,
                     inventory_id=inventory_change.inventory_id,
                     candidate_name=data.candidate_name,
                     candidate_phone=data.phone,
@@ -162,6 +171,7 @@ class H3cOrderService:
 
             return H3cOrderResponse(
                 id=order.id,
+                plan_id=order.plan_id,
                 order_kind=order.order_kind,
                 product_type=order.product_type,
                 candidate_name=order.candidate_name,

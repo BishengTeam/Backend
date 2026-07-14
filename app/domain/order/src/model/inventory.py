@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, Integer, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.adapter.database import Base, TimestampMixin
@@ -31,6 +31,16 @@ class Inventory(Base, TimestampMixin):
 
 class InventoryRecord(Base, TimestampMixin):
     __tablename__ = "inventory_record"
+    __table_args__ = (
+        Index(
+            "uq_inventory_record_order_action",
+            "order_id",
+            "action",
+            unique=True,
+            postgresql_where=text("order_id IS NOT NULL"),
+            sqlite_where=text("order_id IS NOT NULL"),
+        ),
+    )
 
     inventory_id: Mapped[int] = mapped_column(Integer, ForeignKey("inventory.id"), nullable=False, index=True)
     order_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("order.id"), nullable=True, index=True)

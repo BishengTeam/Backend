@@ -6,6 +6,7 @@ from app.api.certification import router as cert_router
 from app.api.chat import quick_router, router as chat_router
 from app.api.collection import router as collection_router
 from app.api.competition import router as competition_router
+from app.api.course_assets import router as course_assets_router
 from app.api.coupon import router as coupon_router
 from app.api.courses import router as courses_router
 from app.api.h3c import router as h3c_router
@@ -30,6 +31,7 @@ router.include_router(cert_router)
 router.include_router(user_router)
 router.include_router(chat_router)
 router.include_router(courses_router)
+router.include_router(course_assets_router)
 router.include_router(h3c_router)
 router.include_router(plans_router)
 router.include_router(orders_router)

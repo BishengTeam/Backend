@@ -23,12 +23,14 @@ from app.domain.order.src.transition.order_transitions import (
 from app.domain.order.src.transition.inventory_transitions import (
     INVENTORY_CONFIRM_ACTION,
     INVENTORY_LOCK_ACTION,
+    INVENTORY_REFUND_ACTION,
     INVENTORY_RELEASE_ACTION,
     INVENTORY_TYPE_CERTIFICATION,
     InventoryChange,
     add_inventory_record,
     confirm_inventory_sale,
     lock_certification_inventory,
+    refund_inventory_sale,
     release_inventory_lock,
 )
 
@@ -51,11 +53,13 @@ __all__ = [
     "close_expired_pending_order",
     "INVENTORY_CONFIRM_ACTION",
     "INVENTORY_LOCK_ACTION",
+    "INVENTORY_REFUND_ACTION",
     "INVENTORY_RELEASE_ACTION",
     "INVENTORY_TYPE_CERTIFICATION",
     "InventoryChange",
     "add_inventory_record",
     "confirm_inventory_sale",
     "lock_certification_inventory",
+    "refund_inventory_sale",
     "release_inventory_lock",
 ]

@@ -1,6 +1,7 @@
 """Plan module unit tests — schema validation, business logic smoke."""
 import ast
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -75,6 +76,16 @@ class PlanSchemaUnitTests(unittest.TestCase):
         assert plan.name is None
         assert plan.capacity is None
 
+    def test_plan_names_reject_blank_values(self):
+        with self.assertRaises(ValidationError):
+            self.PlanCreate(name="   ")
+        with self.assertRaises(ValidationError):
+            self.PlanUpdate(name="   ")
+
+    def test_plan_update_tracks_explicit_null_for_clearable_dates(self):
+        plan = self.PlanUpdate(exam_date=None)
+        assert "exam_date" in plan.model_fields_set
+
 
 class PlanModelUnitTests(unittest.TestCase):
     """Check Plan model structure."""
@@ -148,6 +159,50 @@ class PlanServiceUnitTests(unittest.TestCase):
         source = (REPO_ROOT / "app/services/plan.py").read_text("utf-8")
         assert 'cancel_plan' in source
 
+    def test_schedule_validation_rejects_invalid_windows(self):
+        from app.port.exceptions import ValidationException
+        from app.services.plan import PlanService
+
+        now = datetime(2026, 7, 14, tzinfo=timezone.utc)
+        with self.assertRaises(ValidationException):
+            PlanService._validate_schedule(
+                apply_start=None,
+                apply_end=None,
+                exam_date=None,
+                require_window=True,
+                now=now,
+            )
+        with self.assertRaises(ValidationException):
+            PlanService._validate_schedule(
+                apply_start=now,
+                apply_end=now,
+                exam_date=None,
+            )
+        with self.assertRaises(ValidationException):
+            PlanService._validate_schedule(
+                apply_start=now - timedelta(days=2),
+                apply_end=now - timedelta(days=1),
+                exam_date=None,
+                require_window=True,
+                now=now,
+            )
+        with self.assertRaises(ValidationException):
+            PlanService._validate_schedule(
+                apply_start=now,
+                apply_end=now + timedelta(days=2),
+                exam_date=now + timedelta(days=1),
+            )
+
+    def test_user_list_filters_to_current_application_window(self):
+        source = (REPO_ROOT / "app/services/plan.py").read_text("utf-8")
+        assert "Plan.apply_start <= now" in source
+        assert "Plan.apply_end >= now" in source
+
+    def test_update_supports_clearing_optional_dates(self):
+        source = (REPO_ROOT / "app/services/plan.py").read_text("utf-8")
+        assert 'for field in ("apply_start", "apply_end", "exam_date")' in source
+        assert "if field in update_data" in source
+
 
 class PlanAPIRouteUnitTests(unittest.TestCase):
     """Verify API route declarations."""
@@ -176,3 +231,7 @@ class PlanAPIRouteUnitTests(unittest.TestCase):
         source = (REPO_ROOT / "app/api/admin/__init__.py").read_text("utf-8")
         assert "from app.api.admin.plans import router as plans_router" in source
         assert 'router.include_router(plans_router, prefix="/certifications")' in source
+
+    def test_admin_routes_pass_product_code_to_service(self):
+        source = (REPO_ROOT / "app/api/admin/plans.py").read_text("utf-8")
+        assert source.count("product_type=code") == 7

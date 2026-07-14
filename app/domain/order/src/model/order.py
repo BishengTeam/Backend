@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.adapter.database import Base, TimestampMixin
@@ -14,11 +14,29 @@ class Order(Base, TimestampMixin):
             name="ck_order_status",
         ),
         Index("ix_order_transaction_id_unique", "transaction_id", unique=True),
+        Index(
+            "uq_order_active_user_plan",
+            "user_id",
+            "plan_id",
+            unique=True,
+            postgresql_where=text(
+                "plan_id IS NOT NULL AND status IN ('pending', 'paid', 'completed')"
+            ),
+            sqlite_where=text(
+                "plan_id IS NOT NULL AND status IN ('pending', 'paid', 'completed')"
+            ),
+        ),
     )
 
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("user.id"), nullable=False, index=True)
     order_kind: Mapped[str] = mapped_column(String(32), nullable=False, server_default="certification", index=True)
     product_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    plan_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("plan.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     inventory_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("inventory.id"), nullable=True, index=True
     )

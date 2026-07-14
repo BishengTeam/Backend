@@ -15,7 +15,7 @@ from app.domain.order.src.index import (
     lock_certification_inventory,
     validate_extra_data,
 )
-from app.domain.certification.src.index import Certification, Course
+from app.domain.certification.src.index import Certification
 from app.domain.user.src.index import UserRealname
 from app.schemas.common import PaginatedData
 from app.schemas.order import OrderCreate, OrderDetailResponse, OrderFilter, OrderResponse
@@ -26,24 +26,6 @@ PRICE_TIER_STUDENT = "student"
 
 def resolve_price_tier(user_type: str | None) -> str:
     return PRICE_TIER_STUDENT if user_type == PRICE_TIER_STUDENT else PRICE_TIER_NORMAL
-
-
-def _extract_batch_price(batches: list | None, batch_key: str) -> int | None:
-    """从班次列表中按索引或日期匹配获取价格。"""
-    if not batches or not isinstance(batches, list):
-        return None
-    try:
-        idx = int(batch_key)
-        if 0 <= idx < len(batches):
-            batch = batches[idx]
-            if isinstance(batch, dict):
-                return batch.get("price")
-    except (ValueError, TypeError):
-        pass
-    for batch in batches:
-        if isinstance(batch, dict) and batch.get("class_date") == batch_key:
-            return batch.get("price")
-    return None
 
 
 class OrderService:
@@ -98,20 +80,7 @@ class OrderService:
                     inventory_change = await lock_certification_inventory(db, data.product_type)
                     inventory_id = inventory_change.inventory_id
                 elif data.order_kind == "course":
-                    try:
-                        course_id = int(data.product_type)
-                    except (ValueError, TypeError):
-                        raise BusinessException("课程商品类型格式不正确")
-                    course = await db.get(Course, course_id)
-                    if course is None or not course.is_active:
-                        raise BusinessException("课程不存在或已下架")
-                    batch_key = data.extra_data.get("batch") if data.extra_data else None
-                    if batch_key:
-                        batch_price = _extract_batch_price(course.batches, batch_key)
-                        price = batch_price if batch_price is not None else course.price
-                    else:
-                        price = course.price
-                    inventory_id = None
+                    raise BusinessException("课程订单请使用课程购买接口创建")
                 else:
                     raise BusinessException(f"不支持的订单类型: {data.order_kind}")
 

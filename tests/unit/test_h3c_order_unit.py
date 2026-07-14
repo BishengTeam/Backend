@@ -17,17 +17,24 @@ class H3cOrderTests(unittest.TestCase):
         self.assertIn("UserRealname.user_id == user_id", create_order_source)
         self.assertIn('UserRealname.status == "verified"', create_order_source)
         self.assertIn('raise BusinessException("请先完成实名认证")', create_order_source)
-        self.assertIn("product_type = data.exam_code", create_order_source)
-        self.assertIn("Certification.code == product_type", create_order_source)
-        self.assertIn('Certification.vendor == "H3C"', create_order_source)
+        self.assertIn("PlanEnrollmentService().lock_enrollable_plan", create_order_source)
+        self.assertIn("plan_id=data.plan_id", create_order_source)
+        self.assertIn("user_id=user_id", create_order_source)
+        self.assertIn('expected_vendor="H3C"', create_order_source)
+        self.assertIn("product_type = plan.product_type", create_order_source)
         self.assertIn("price_tier = resolve_price_tier(identity.user_type)", create_order_source)
         self.assertIn("PriceConfig.product_type == product_type", create_order_source)
         self.assertIn("PriceConfig.user_type == price_tier", create_order_source)
         self.assertIn("inventory_change = await lock_certification_inventory(db, product_type)", create_order_source)
         self.assertLess(
+            create_order_source.index("PlanEnrollmentService().lock_enrollable_plan"),
+            create_order_source.index("inventory_change = await lock_certification_inventory"),
+        )
+        self.assertLess(
             create_order_source.index("inventory_change = await lock_certification_inventory"),
             create_order_source.index("order = Order("),
         )
+        self.assertIn("plan_id=plan.id", create_order_source)
         self.assertIn("inventory_id=inventory_change.inventory_id", create_order_source)
         self.assertIn("price=price_rows[0].price", create_order_source)
         self.assertIn('status="pending"', create_order_source)
@@ -35,6 +42,7 @@ class H3cOrderTests(unittest.TestCase):
         self.assertIn("add_inventory_record(", create_order_source)
         self.assertIn("action=INVENTORY_LOCK_ACTION", create_order_source)
         self.assertNotIn('H3C_PRODUCT_TYPE = "H3C-RE"', source)
+        self.assertNotIn("data.exam_code", source)
         self.assertNotIn("price=0", create_order_source)
         self.assertNotIn("await db.commit()", create_order_source)
 
@@ -53,3 +61,20 @@ class H3cOrderTests(unittest.TestCase):
 
         self.assertIn("out_trade_no", fields)
         self.assertIn("inventory_id", fields)
+        self.assertIn("plan_id", fields)
+
+    def test_h3c_request_requires_plan_and_does_not_accept_exam_code(self):
+        tree = ast.parse((REPO_ROOT / "app/schemas/h3c.py").read_text(encoding="utf-8"))
+        request_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "H3cOrderCreate"
+        )
+        fields = {
+            stmt.target.id
+            for stmt in request_class.body
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name)
+        }
+
+        self.assertIn("plan_id", fields)
+        self.assertNotIn("exam_code", fields)

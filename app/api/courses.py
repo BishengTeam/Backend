@@ -6,13 +6,18 @@ from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.course import (
     ChapterProgressResponse,
     ChapterProgressUpsert,
+    CourseChaptersResponse,
     CourseDetailResponse,
     CourseEnrollRequest,
     CourseEnrollmentResponse,
+    CourseContentResponse,
     CourseFilter,
     CourseListResponse,
+    CoursePurchaseRequest,
+    CoursePurchaseResponse,
 )
 from app.services.course import CourseService
+from app.services.course_purchase import CoursePurchaseService
 
 router = APIRouter(prefix="/courses", tags=["课程"])
 
@@ -102,7 +107,7 @@ async def list_categories() -> APIResponse[list[str]]:
     """,
 )
 async def get_course(
-    course_id: int = Path(..., description="课程 ID"),
+    course_id: int = Path(..., ge=1, description="课程 ID"),
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[CourseDetailResponse]:
     """课程详情"""
@@ -110,18 +115,49 @@ async def get_course(
     return success(data=result)
 
 
+@router.get("/{course_id}/content",
+    response_model=APIResponse[CourseContentResponse],
+    summary="课程内容",
+    description="返回试看资源；已开通学习权限时返回全部课程资源。",
+)
+async def get_course_content(
+    course_id: int = Path(..., ge=1, description="课程 ID"),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[CourseContentResponse]:
+    result = await CourseService().get_content(current_user.id, course_id)
+    return success(data=result)
+
+
+@router.post("/{course_id}/purchase",
+    response_model=APIResponse[CoursePurchaseResponse],
+    summary="购买课程",
+    description="免费课程直接开通；付费课程创建待支付订单和报名。",
+)
+async def purchase_course(
+    course_id: int = Path(..., ge=1, description="课程 ID"),
+    body: CoursePurchaseRequest | None = None,
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[CoursePurchaseResponse]:
+    result = await CoursePurchaseService().purchase(
+        current_user.id,
+        course_id,
+        batch=body.batch if body else None,
+    )
+    return success(data=result)
+
+
 @router.post("/enroll",
     response_model=APIResponse[CourseEnrollmentResponse],
     summary="课程报名",
+    deprecated=True,
     description="""
 小程序 **课程详情** 页面使用。
 
-**使用场景**: 用户报名课程
+**使用场景**: 兼容旧版客户端报名免费课程；付费课程会被拒绝
 
 **请求体**:
 - `course_id`: 课程 ID
-- `name`: 报名人姓名
-- `phone`: 联系电话
+- `batch`: 所选班次（可选）
 
 **认证**: 需登录
     """,
@@ -130,7 +166,7 @@ async def enroll_course(
     body: CourseEnrollRequest,
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[CourseEnrollmentResponse]:
-    """课程报名"""
+    """兼容旧版免费课程报名；付费课程必须使用购买接口。"""
     result = await CourseService().enroll(current_user.id, body)
     return success(data=result)
 
@@ -139,6 +175,7 @@ async def enroll_course(
 
 
 @router.get("/{course_id}/chapters",
+    response_model=APIResponse[CourseChaptersResponse],
     summary="课程章节列表（含试看时长和进度）",
     description="""
 小程序 **视频播放页** 使用。

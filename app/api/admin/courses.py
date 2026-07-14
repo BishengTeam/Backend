@@ -1,9 +1,21 @@
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
 
 from app.middleware.auth import require_permission
-from app.schemas.admin_course import AdminCourseCreate, AdminCourseListItem, AdminCourseUpdate
+from app.schemas.admin_course import (
+    AdminCourseAssetResponse,
+    AdminCourseCreate,
+    AdminCourseEnrollmentListItem,
+    AdminCourseListItem,
+    AdminCourseUpdate,
+)
 from app.schemas.common import APIResponse, PaginatedData, success
-from app.schemas.course import ChapterCreate, ChapterResponse, ChapterSortItem, ChapterUpdate
+from app.schemas.course import (
+    ChapterCreate,
+    ChapterResponse,
+    ChapterSortItem,
+    ChapterUpdate,
+    EnrollmentStatus,
+)
 from app.services.admin_course import AdminCourseService
 
 router = APIRouter(prefix="/courses", tags=["管理后台-课程管理"])
@@ -186,7 +198,97 @@ async def delete_chapter(
     return success(message="章节已下架")
 
 
-# ==================== 现有课程管理路由 ====================
+# ==================== 课程购买与私有资源管理 ====================
+
+
+@router.get("/enrollments",
+    response_model=APIResponse[PaginatedData[AdminCourseEnrollmentListItem]],
+    summary="课程购买记录",
+    description="分页查询课程购买、订单关联、报名状态及当前学习权限，支持按课程、用户和状态筛选。",
+)
+async def list_course_enrollments(
+    course_id: int | None = Query(None, ge=1),
+    user_id: int | None = Query(None, ge=1),
+    status: EnrollmentStatus | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    _admin=Depends(require_permission("course:list")),
+) -> APIResponse[PaginatedData[AdminCourseEnrollmentListItem]]:
+    result = await AdminCourseService().list_enrollments(
+        course_id=course_id,
+        user_id=user_id,
+        status=status,
+        page=page,
+        page_size=page_size,
+    )
+    return success(data=result)
+
+
+@router.post("/enrollments/{enrollment_id}/revoke",
+    response_model=APIResponse[AdminCourseEnrollmentListItem],
+    summary="撤销课程学习权限",
+    description="立即撤销指定报名记录的学习权限；操作幂等，已退款或已取消记录不会重新获得权限。",
+)
+async def revoke_course_enrollment(
+    enrollment_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("course:write")),
+) -> APIResponse[AdminCourseEnrollmentListItem]:
+    result = await AdminCourseService().revoke_enrollment(enrollment_id)
+    return success(data=result, message="学习权限已撤销")
+
+
+@router.get("/{course_id}/assets",
+    response_model=APIResponse[list[AdminCourseAssetResponse]],
+    summary="课程资源列表",
+    description="查询指定课程的全部私有资源元数据，包括资源类型、排序和是否允许试看。",
+)
+async def list_course_assets(
+    course_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("course:list")),
+) -> APIResponse[list[AdminCourseAssetResponse]]:
+    result = await AdminCourseService().list_assets(course_id)
+    return success(data=result)
+
+
+@router.post("/{course_id}/assets",
+    response_model=APIResponse[AdminCourseAssetResponse],
+    summary="上传私有课程资源",
+    description="将课程视频或文件写入私有目录并创建资源记录，不生成公共媒体访问地址。",
+)
+async def create_course_asset(
+    course_id: int = Path(..., ge=1),
+    file: UploadFile = File(...),
+    title: str = Form(..., min_length=1, max_length=256),
+    asset_type: str = Form(..., min_length=1, max_length=32),
+    sort_order: int = Form(0, ge=0),
+    is_preview: bool = Form(False),
+    _admin=Depends(require_permission("course:write")),
+) -> APIResponse[AdminCourseAssetResponse]:
+    content = await file.read()
+    result = await AdminCourseService().create_asset(
+        course_id=course_id,
+        filename=file.filename or "asset",
+        content=content,
+        title=title,
+        asset_type=asset_type,
+        sort_order=sort_order,
+        is_preview=is_preview,
+    )
+    return success(data=result)
+
+
+@router.delete("/{course_id}/assets/{asset_id}",
+    response_model=APIResponse,
+    summary="删除课程资源",
+    description="删除指定课程资源记录及其私有目录文件，不影响其他课程资源或报名记录。",
+)
+async def delete_course_asset(
+    course_id: int = Path(..., ge=1),
+    asset_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("course:write")),
+) -> APIResponse:
+    await AdminCourseService().delete_asset(course_id, asset_id)
+    return success(message="课程资源已删除")
 
 
 @router.put("/{course_id}",

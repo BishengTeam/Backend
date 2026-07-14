@@ -301,7 +301,11 @@ class TestCourseCRUD:
         db_session.add(course)
         await db_session.flush()
         enrollment = CourseEnrollment(
-            user_id=user.id, course_id=course.id, batch_selected="2026春季",
+            user_id=user.id,
+            course_id=course.id,
+            batch_selected="2026春季",
+            status="enrolled",
+            learning_access=True,
         )
         db_session.add(enrollment)
         await db_session.flush()

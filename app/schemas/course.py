@@ -3,7 +3,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-EnrollmentStatus = Literal["enrolled", "completed", "expired"]
+EnrollmentStatus = Literal[
+    "pending_payment",
+    "enrolled",
+    "completed",
+    "refunded",
+    "cancelled",
+    "expired",
+]
 
 
 class CourseListResponse(BaseModel):
@@ -58,6 +65,14 @@ class ChapterProgressResponse(BaseModel):
     completed_chapter_ids: list[int] = Field(default_factory=list)
 
 
+class CourseChaptersResponse(BaseModel):
+    """课程章节、试看配置与当前用户进度。"""
+
+    free_preview_seconds: int | None = None
+    chapters: list[ChapterResponse] = Field(default_factory=list)
+    progress: ChapterProgressResponse | None = None
+
+
 class ChapterProgressUpsert(BaseModel):
     """上报学习进度"""
     chapter_id: int
@@ -71,11 +86,9 @@ class CourseDetailResponse(BaseModel):
     category: str = Field(..., description="课程类目")
     description: str | None = Field(None, description="课程简介")
     cover_url: str | None = Field(None, description="封面图片 URL")
-    video_url: str | None = Field(None, description="课程介绍/宣传视频 URL")
     price: int = Field(..., description="价格，单位为分")
     batches: dict | None = Field(None, description="班次信息")
     teacher_name: str | None = Field(None, description="讲师名称")
-    teacher_contact: str | None = Field(None, description="讲师联系方式")
     has_access: bool = Field(False, description="当前用户是否有学习权限")
     enrollment_id: int | None = Field(None, description="报名记录 ID（已报名时返回）")
     chapters: list[ChapterResponse] = Field(default_factory=list)
@@ -89,16 +102,49 @@ class CourseFilter(BaseModel):
 
 
 class CourseEnrollRequest(BaseModel):
+    course_id: int = Field(..., gt=0)
+    batch: str | None = Field(None, max_length=64)
+
+
+class CoursePurchaseRequest(BaseModel):
+    batch: str | None = Field(None, max_length=64, description="所选班次")
+
+
+class CoursePurchaseResponse(BaseModel):
     course_id: int
-    batch: str | None = None
+    enrollment_id: int
+    payment_required: bool
+    order_id: int | None = None
+    status: EnrollmentStatus
+    learning_access: bool
 
 
 class CourseEnrollmentResponse(BaseModel):
     id: int
     course: CourseListResponse
+    order_id: int | None = Field(None, description="关联订单 ID")
     batch_selected: str | None = Field(None, description="所选班次")
-    status: EnrollmentStatus = Field(..., description="报名状态：enrolled=已报名 / completed=已完成 / expired=已过期")
+    status: EnrollmentStatus = Field(..., description="报名状态")
     learning_access: bool = Field(..., description="是否有学习权限")
+    access_granted_at: datetime | None = Field(None, description="权限开通时间")
+    access_revoked_at: datetime | None = Field(None, description="权限撤销时间")
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class CourseAssetResponse(BaseModel):
+    id: int
+    course_id: int
+    title: str
+    asset_type: str
+    sort_order: int
+    is_preview: bool
+    content_url: str
+
+
+class CourseContentResponse(BaseModel):
+    course_id: int
+    title: str
+    learning_access: bool
+    assets: list[CourseAssetResponse]

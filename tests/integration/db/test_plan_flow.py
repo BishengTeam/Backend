@@ -5,6 +5,7 @@ Requires TEST_DATABASE_URL environment variable.
 
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -12,6 +13,11 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
+
+
+def _open_window() -> tuple[datetime, datetime]:
+    now = datetime.now(timezone.utc)
+    return now - timedelta(days=1), now + timedelta(days=30)
 
 
 def _require_test_db_url() -> str:
@@ -118,7 +124,11 @@ async def test_full_state_transition(test_context):
     product_type = f"{prefix}_flow"
 
     # Create draft
-    plan = await PlanService().create_plan(product_type, PlanCreate(name="Flow Test"))
+    apply_start, apply_end = _open_window()
+    plan = await PlanService().create_plan(
+        product_type,
+        PlanCreate(name="Flow Test", apply_start=apply_start, apply_end=apply_end),
+    )
     assert plan.status == "draft"
 
     # Publish
@@ -143,7 +153,11 @@ async def test_cannot_edit_published_plan(test_context):
     factory, prefix = test_context
     product_type = f"{prefix}_lock"
 
-    plan = await PlanService().create_plan(product_type, PlanCreate(name="Locked"))
+    apply_start, apply_end = _open_window()
+    plan = await PlanService().create_plan(
+        product_type,
+        PlanCreate(name="Locked", apply_start=apply_start, apply_end=apply_end),
+    )
     await PlanService().publish_plan(plan.id)
 
     with pytest.raises(BusinessException, match="仅草稿"):
@@ -163,7 +177,11 @@ async def test_cannot_delete_published_plan(test_context):
     factory, prefix = test_context
     product_type = f"{prefix}_del"
 
-    plan = await PlanService().create_plan(product_type, PlanCreate(name="No Delete"))
+    apply_start, apply_end = _open_window()
+    plan = await PlanService().create_plan(
+        product_type,
+        PlanCreate(name="No Delete", apply_start=apply_start, apply_end=apply_end),
+    )
     await PlanService().publish_plan(plan.id)
 
     with pytest.raises(BusinessException, match="仅草稿"):
@@ -203,7 +221,11 @@ async def test_list_published_plans_only_published(test_context):
 
     # Create two: one draft, one published
     d = await PlanService().create_plan(pt, PlanCreate(name="Draft Only"))
-    p = await PlanService().create_plan(pt, PlanCreate(name="Published One"))
+    apply_start, apply_end = _open_window()
+    p = await PlanService().create_plan(
+        pt,
+        PlanCreate(name="Published One", apply_start=apply_start, apply_end=apply_end),
+    )
     await PlanService().publish_plan(p.id)
 
     results = await PlanService().list_published_plans(pt)
@@ -269,7 +291,16 @@ async def test_get_plan_detail(test_context):
     factory, prefix = test_context
     pt = f"{prefix}_detail"
 
-    plan = await PlanService().create_plan(pt, PlanCreate(name="Detail Test", capacity=100))
+    apply_start, apply_end = _open_window()
+    plan = await PlanService().create_plan(
+        pt,
+        PlanCreate(
+            name="Detail Test",
+            capacity=100,
+            apply_start=apply_start,
+            apply_end=apply_end,
+        ),
+    )
     await PlanService().publish_plan(plan.id)
 
     detail = await PlanService().get_plan(plan.id)
@@ -278,3 +309,102 @@ async def test_get_plan_detail(test_context):
     assert detail.capacity == 100
     assert detail.status == "published"
     assert detail.enrolled == 0
+
+
+async def test_update_rejects_invalid_effective_window(test_context):
+    from app.port.exceptions import ValidationException
+    from app.schemas.plan import PlanCreate, PlanUpdate
+    from app.services.plan import PlanService
+
+    _factory, prefix = test_context
+    apply_start, apply_end = _open_window()
+    plan = await PlanService().create_plan(
+        f"{prefix}_update_window",
+        PlanCreate(name="Window", apply_start=apply_start, apply_end=apply_end),
+    )
+
+    with pytest.raises(ValidationException, match="开始时间必须早于"):
+        await PlanService().update_plan(
+            plan.id,
+            PlanUpdate(apply_start=apply_end + timedelta(days=1)),
+        )
+
+
+async def test_update_can_clear_optional_dates(test_context):
+    from app.schemas.plan import PlanCreate, PlanUpdate
+    from app.services.plan import PlanService
+
+    _factory, prefix = test_context
+    apply_start, apply_end = _open_window()
+    plan = await PlanService().create_plan(
+        f"{prefix}_clear",
+        PlanCreate(
+            name="Clear Dates",
+            apply_start=apply_start,
+            apply_end=apply_end,
+            exam_date=apply_end + timedelta(days=1),
+        ),
+    )
+
+    result = await PlanService().update_plan(
+        plan.id,
+        PlanUpdate(apply_start=None, apply_end=None, exam_date=None),
+    )
+    assert result.apply_start is None
+    assert result.apply_end is None
+    assert result.exam_date is None
+
+
+async def test_publish_requires_valid_window(test_context):
+    from app.port.exceptions import ValidationException
+    from app.schemas.plan import PlanCreate
+    from app.services.plan import PlanService
+
+    _factory, prefix = test_context
+    plan = await PlanService().create_plan(
+        f"{prefix}_publish_window",
+        PlanCreate(name="No Window"),
+    )
+
+    with pytest.raises(ValidationException, match="必须设置报名开始时间和截止时间"):
+        await PlanService().publish_plan(plan.id)
+
+
+async def test_product_code_mismatch_is_not_found(test_context):
+    from app.port.exceptions import NotFoundException
+    from app.schemas.plan import PlanCreate, PlanUpdate
+    from app.services.plan import PlanService
+
+    _factory, prefix = test_context
+    plan = await PlanService().create_plan(
+        f"{prefix}_owner",
+        PlanCreate(name="Owner Check"),
+    )
+
+    with pytest.raises(NotFoundException):
+        await PlanService().update_plan(
+            plan.id,
+            PlanUpdate(name="Wrong Owner"),
+            product_type=f"{prefix}_other",
+        )
+
+
+async def test_future_published_plan_not_listed_as_open(test_context):
+    from app.schemas.plan import PlanCreate
+    from app.services.plan import PlanService
+
+    _factory, prefix = test_context
+    now = datetime.now(timezone.utc)
+    product_type = f"{prefix}_future"
+    plan = await PlanService().create_plan(
+        product_type,
+        PlanCreate(
+            name="Future",
+            apply_start=now + timedelta(days=2),
+            apply_end=now + timedelta(days=30),
+        ),
+    )
+    await PlanService().publish_plan(plan.id)
+
+    results = await PlanService().list_published_plans(product_type)
+    assert plan.id not in {item.id for item in results}

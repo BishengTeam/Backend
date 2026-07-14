@@ -8,12 +8,17 @@ from app.integrations.wechat_pay import WechatPayClient
 from app.domain.order.src.index import (
     Order,
     apply_order_status_transition,
+    refund_inventory_sale,
 )
 from app.schemas.common import PaginatedData
 from app.schemas.order import OrderDetailResponse, OrderFilter, OrderResponse
+from app.services.order_fulfillment import OrderFulfillmentService
 
 
 class AdminOrderService:
+
+    def __init__(self) -> None:
+        self.fulfillment = OrderFulfillmentService()
 
     async def list_orders(
         self,
@@ -64,7 +69,11 @@ class AdminOrderService:
             raise BusinessException("驳回并退款时需填写理由")
 
         async with get_db_ctx() as db:
-            order = await db.get(Order, order_id)
+            order = (
+                await db.execute(
+                    select(Order).where(Order.id == order_id).with_for_update()
+                )
+            ).scalar_one_or_none()
             if order is None:
                 raise NotFoundException("订单")
             if order.status != "paid":
@@ -82,8 +91,7 @@ class AdminOrderService:
                 # 尝试微信退款
                 wechat_pay = WechatPayClient()
                 if wechat_pay._is_configured() and order.transaction_id:
-                    import uuid
-                    out_refund_no = f"RF{order.out_trade_no or order.id}{uuid.uuid4().hex[:8]}"
+                    out_refund_no = f"RF{order.id}"
                     try:
                         await wechat_pay.refund(
                             out_trade_no=order.out_trade_no,
@@ -98,8 +106,12 @@ class AdminOrderService:
                     logging.getLogger(__name__).warning(
                         "微信支付未配置，订单 %s 仅本地标记退款", order_id
                     )
-                from app.domain.order.src.index import release_inventory_lock
-                await release_inventory_lock(db, order, reason="review_reject_refund")
+                await refund_inventory_sale(
+                    db,
+                    order,
+                    reason="review_reject_refund",
+                )
+                await self.fulfillment.on_refunded(db, order)
 
             await db.commit()
             await db.refresh(order)
@@ -107,14 +119,26 @@ class AdminOrderService:
 
     async def refund_order(self, order_id: int) -> OrderDetailResponse:
         import logging
-        import uuid
 
         logger = logging.getLogger(__name__)
         async with get_db_ctx() as db:
-            order = await db.get(Order, order_id)
+            order = (
+                await db.execute(
+                    select(Order).where(Order.id == order_id).with_for_update()
+                )
+            ).scalar_one_or_none()
             if order is None:
                 raise NotFoundException("订单")
             if order.status == "refunded":
+                inventory_changed = await refund_inventory_sale(
+                    db,
+                    order,
+                    reason="admin_refund_repair",
+                )
+                access_revoked = await self.fulfillment.on_refunded(db, order)
+                if inventory_changed or access_revoked:
+                    await db.commit()
+                    await db.refresh(order)
                 return OrderDetailResponse.model_validate(order)
 
             # 检查是否已支付
@@ -124,7 +148,7 @@ class AdminOrderService:
             # 尝试微信退款
             wechat_pay = WechatPayClient()
             if wechat_pay._is_configured():
-                out_refund_no = f"RF{order.out_trade_no or order.id}{uuid.uuid4().hex[:8]}"
+                out_refund_no = f"RF{order.id}"
                 try:
                     await wechat_pay.refund(
                         out_trade_no=order.out_trade_no,
@@ -138,6 +162,8 @@ class AdminOrderService:
                 logger.warning("微信支付未配置，订单 %s 仅本地标记退款", order_id)
 
             apply_order_status_transition(order, "refunded")
+            await refund_inventory_sale(db, order, reason="admin_refund")
+            await self.fulfillment.on_refunded(db, order)
             await db.commit()
             await db.refresh(order)
             return OrderDetailResponse.model_validate(order)

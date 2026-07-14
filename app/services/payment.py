@@ -9,9 +9,9 @@ from app.domain.order.src.index import (
     Order,
     apply_order_status_transition,
     confirm_inventory_sale,
+    refund_inventory_sale,
     release_inventory_lock,
 )
-from app.domain.certification.src.index import CourseEnrollment
 from app.domain.user.src.index import User
 from app.schemas.payment import (
     PaymentCallbackRequest,
@@ -19,6 +19,7 @@ from app.schemas.payment import (
     PaymentPrepayRequest,
     PaymentPrepayResponse,
 )
+from app.services.order_fulfillment import OrderFulfillmentService
 
 PREPAY_EXPIRATION_GUARD_SECONDS = 60
 
@@ -26,6 +27,7 @@ PREPAY_EXPIRATION_GUARD_SECONDS = 60
 class PaymentService:
     def __init__(self) -> None:
         self.wechat_pay = WechatPayClient()
+        self.fulfillment = OrderFulfillmentService()
 
     @staticmethod
     def _now() -> datetime:
@@ -66,11 +68,19 @@ class PaymentService:
     async def _confirm_inventory_sale(self, db, order: Order) -> None:
         await confirm_inventory_sale(db, order, reason="payment_success")
 
+    async def _refund_inventory_sale(self, db, order: Order) -> bool:
+        return await refund_inventory_sale(
+            db,
+            order,
+            reason="payment_refund_callback",
+        )
+
     async def _close_expired_order(self, db, order: Order, now: datetime) -> None:
         apply_order_status_transition(order, "closed")
         order.closed_at = now
         order.close_reason = "expired"
         await self._release_inventory_lock(db, order)
+        await self.fulfillment.on_closed(db, order)
 
     async def _ensure_order_payable_for_prepay(self, db, order: Order, now: datetime) -> None:
         if order.status != "pending":
@@ -206,28 +216,9 @@ class PaymentService:
                     # 课程购买自动完成，认证报名等待审核
                     target_status = "completed" if order.order_kind == "course" else "paid"
                     processed = apply_order_status_transition(order, target_status)
-                    # 课程购买：自动激活学习权限
-                    if order.order_kind == "course":
-                        course_id = int(order.product_type)
-                        enrollment = (
-                            await db.execute(
-                                select(CourseEnrollment).where(
-                                    CourseEnrollment.user_id == order.user_id,
-                                    CourseEnrollment.course_id == course_id,
-                                )
-                            )
-                        ).scalar_one_or_none()
-                        if enrollment is None:
-                            batch_selected = order.extra_data.get("batch") if order.extra_data else None
-                            enrollment = CourseEnrollment(
-                                user_id=order.user_id,
-                                course_id=course_id,
-                                batch_selected=batch_selected,
-                            )
-                            db.add(enrollment)
-                        enrollment.learning_access = True
-                        enrollment.status = "enrolled"
                     await self._confirm_inventory_sale(db, order)
+                    fulfilled = await self.fulfillment.on_paid(db, order)
+                    processed = processed or fulfilled
                 elif order.status in {"paid", "completed"}:
                     if not order.transaction_id:
                         order.transaction_id = data.transaction_id
@@ -235,11 +226,31 @@ class PaymentService:
                     if not order.paid_at:
                         order.paid_at = data.paid_at or self._now()
                         metadata_changed = True
+                    fulfilled = await self.fulfillment.on_paid(db, order)
+                    processed = processed or fulfilled
                 else:
                     raise ConflictException("订单状态不允许确认支付")
             elif data.trade_state == "REFUND":
-                if order.status != "refunded":
+                if order.status == "refunded":
+                    processed = await self._refund_inventory_sale(db, order)
+                else:
                     processed = apply_order_status_transition(order, "refunded")
+                    inventory_refunded = await self._refund_inventory_sale(db, order)
+                    processed = processed or inventory_refunded
+                access_revoked = await self.fulfillment.on_refunded(db, order)
+                processed = processed or access_revoked
+            elif data.trade_state in {"CLOSED", "REVOKED"}:
+                if order.status == "pending":
+                    processed = apply_order_status_transition(order, "closed")
+                    order.closed_at = self._now()
+                    order.close_reason = "payment_closed_callback"
+                    await self._release_inventory_lock(db, order)
+                    enrollment_closed = await self.fulfillment.on_closed(db, order)
+                    processed = processed or enrollment_closed
+                elif order.status == "closed":
+                    processed = await self.fulfillment.on_closed(db, order)
+                else:
+                    raise ConflictException("订单状态不允许关闭")
 
             if processed or metadata_changed:
                 await db.commit()

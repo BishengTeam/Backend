@@ -49,6 +49,7 @@ class OrderResponse(BaseModel):
     id: int
     order_kind: str = Field(..., description="订单类型")
     product_type: str = Field(..., description="商品类型代码")
+    plan_id: int | None = Field(None, description="报名批次 ID，历史订单可能为空")
     candidate_name: str | None = Field(None, description="考生姓名")
     candidate_phone: str | None = Field(None, description="考生手机号")
     candidate_idcard: str | None = Field(None, description="考生身份证号")
@@ -70,6 +71,7 @@ class OrderDetailResponse(BaseModel):
     id: int
     order_kind: str = Field(..., description="订单类型")
     product_type: str = Field(..., description="商品类型代码")
+    plan_id: int | None = Field(None, description="报名批次 ID，历史订单可能为空")
     candidate_name: str | None = Field(None, description="考生姓名")
     candidate_phone: str | None = Field(None, description="考生手机号")
     candidate_idcard: str | None = Field(None, description="考生身份证号")
