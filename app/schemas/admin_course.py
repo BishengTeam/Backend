@@ -12,7 +12,7 @@ class AdminCourseCreate(BaseModel):
     description: str | None = None
     cover_url: str | None = Field(None, max_length=512)
     price: int = Field(..., ge=0)
-    batches: Any | None = None
+    batches: dict | None = None
     teacher_name: str | None = Field(None, max_length=64)
     teacher_contact: str | None = Field(None, max_length=128)
     is_active: bool = True
@@ -25,7 +25,7 @@ class AdminCourseUpdate(BaseModel):
     description: str | None = None
     cover_url: str | None = Field(None, max_length=512)
     price: int | None = Field(None, ge=0)
-    batches: Any | None = None
+    batches: dict | None = None
     teacher_name: str | None = Field(None, max_length=64)
     teacher_contact: str | None = Field(None, max_length=128)
     is_active: bool | None = None

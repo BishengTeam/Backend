@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 EnrollmentStatus = Literal[
     "pending_payment",
@@ -93,6 +93,14 @@ class CourseDetailResponse(BaseModel):
     enrollment_id: int | None = Field(None, description="报名记录 ID（已报名时返回）")
     chapters: list[ChapterResponse] = Field(default_factory=list)
     free_preview_seconds: int | None = Field(None)
+
+    @field_validator("batches", mode="before")
+    @classmethod
+    def _normalize_batches(cls, v):
+        """历史数据可能把空班次存成 []，统一转成 {} 避免 Pydantic 校验失败。"""
+        if v == []:
+            return {}
+        return v
 
     model_config = {"from_attributes": True}
 

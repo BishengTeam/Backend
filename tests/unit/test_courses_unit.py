@@ -237,6 +237,16 @@ class CoursesSystemTests(unittest.TestCase):
         self.assertFalse(hasattr(r, "teacher_contact"))
         self.assertEqual(r.batches, None)
 
+    def test_course_detail_response_normalizes_empty_list_batches(self):
+        """历史数据可能把空班次存成 []，应自动转成 {} 避免校验失败。"""
+        r = CourseDetailResponse(id=1, title="课程A", category="网络", price=9900, batches=[])
+        self.assertEqual(r.batches, {})
+
+    def test_admin_course_create_rejects_list_batches(self):
+        from app.schemas.admin_course import AdminCourseCreate
+        with self.assertRaises(ValidationError):
+            AdminCourseCreate(title="课程A", category="网络", price=9900, batches=[])
+
     def test_course_purchase_response_matches_unified_contract(self):
         response = CoursePurchaseResponse(
             course_id=10,
