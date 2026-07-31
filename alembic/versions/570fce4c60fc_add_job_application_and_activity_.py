@@ -36,7 +36,8 @@ def _has_constraint(table_name, constraint_name):
     conn = op.get_bind()
     result = conn.execute(
         sa.text(
-            "SELECT 1 FROM pg_constraint WHERE conname = :name AND conrelid = :table::regclass"
+            "SELECT 1 FROM pg_constraint "
+            "WHERE conname = :name AND conrelid = to_regclass(:table)"
         ),
         {"name": constraint_name, "table": table_name},
     )

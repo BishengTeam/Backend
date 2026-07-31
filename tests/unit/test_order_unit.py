@@ -49,6 +49,14 @@ def _iter_order_route_decorators():
 
 
 class OrderSystemTests(unittest.TestCase):
+    def test_legacy_migration_binds_regclass_table_name_safely(self):
+        source = (
+            REPO_ROOT
+            / "alembic/versions/570fce4c60fc_add_job_application_and_activity_.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("to_regclass(:table)", source)
+        self.assertNotIn(":table::regclass", source)
+
     def test_order_create_accepts_valid_phone_and_idcard(self):
         order = OrderCreate(**_valid_order_payload())
 
