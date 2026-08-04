@@ -247,6 +247,46 @@ class CoursesSystemTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             AdminCourseCreate(title="课程A", category="网络", price=9900, batches=[])
 
+    def test_admin_course_create_accepts_schedule_dict(self):
+        from app.schemas.admin_course import AdminCourseCreate
+
+        course = AdminCourseCreate(
+            title="课程A",
+            category="网络",
+            price=0,
+            batches={
+                "550e8400-e29b-41d4-a716-446655440000": {
+                    "class_date": "2026-09-01",
+                    "start_time": "09:00",
+                    "end_time": "12:00",
+                    "location": "线上",
+                }
+            },
+        )
+
+        self.assertEqual(
+            course.batches["550e8400-e29b-41d4-a716-446655440000"].location,
+            "线上",
+        )
+
+    def test_admin_course_create_rejects_schedule_price(self):
+        from app.schemas.admin_course import AdminCourseCreate
+
+        with self.assertRaises(ValidationError):
+            AdminCourseCreate(
+                title="课程A",
+                category="网络",
+                price=0,
+                batches={
+                    "550e8400-e29b-41d4-a716-446655440000": {
+                        "class_date": "2026-09-01",
+                        "start_time": "09:00",
+                        "end_time": "12:00",
+                        "price": 100,
+                    }
+                },
+            )
+
     def test_course_purchase_response_matches_unified_contract(self):
         response = CoursePurchaseResponse(
             course_id=10,

@@ -35,6 +35,7 @@ from app.schemas.course import (
     CourseListResponse,
     CoursePurchaseRequest,
     CoursePurchaseResponse,
+    CourseSchedule,
 )
 
 # Order schemas

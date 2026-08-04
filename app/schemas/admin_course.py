@@ -1,9 +1,8 @@
 from datetime import datetime
-from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from app.schemas.course import EnrollmentStatus
+from app.schemas.course import CourseSchedule, EnrollmentStatus
 
 
 class AdminCourseCreate(BaseModel):
@@ -12,7 +11,7 @@ class AdminCourseCreate(BaseModel):
     description: str | None = None
     cover_url: str | None = Field(None, max_length=512)
     price: int = Field(..., ge=0)
-    batches: dict | None = None
+    batches: dict[str, CourseSchedule] | None = None
     teacher_name: str | None = Field(None, max_length=64)
     teacher_contact: str | None = Field(None, max_length=128)
     is_active: bool = True
@@ -25,7 +24,7 @@ class AdminCourseUpdate(BaseModel):
     description: str | None = None
     cover_url: str | None = Field(None, max_length=512)
     price: int | None = Field(None, ge=0)
-    batches: dict | None = None
+    batches: dict[str, CourseSchedule] | None = None
     teacher_name: str | None = Field(None, max_length=64)
     teacher_contact: str | None = Field(None, max_length=128)
     is_active: bool | None = None
@@ -40,12 +39,20 @@ class AdminCourseListItem(BaseModel):
     cover_url: str | None = None
     video_url: str | None = None
     price: int
-    batches: Any | None = None
+    batches: dict[str, CourseSchedule] | None = None
     teacher_name: str | None = None
     teacher_contact: str | None = None
     is_active: bool
     free_preview_seconds: int | None = Field(None, description="试看时长（秒），null=无试看")
     created_at: datetime
+
+    @field_validator("batches", mode="before")
+    @classmethod
+    def _normalize_batches(cls, value):
+        """兼容历史数据中错误存储的空数组。"""
+        if value == []:
+            return {}
+        return value
 
     model_config = {"from_attributes": True}
 

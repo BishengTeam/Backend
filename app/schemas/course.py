@@ -80,6 +80,29 @@ class ChapterProgressUpsert(BaseModel):
     is_completed: bool = False
 
 
+class CourseSchedule(BaseModel):
+    """课程的一次具体上课安排。"""
+
+    class_date: str = Field(
+        ...,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description="上课日期，格式 YYYY-MM-DD",
+    )
+    start_time: str = Field(
+        ...,
+        pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$",
+        description="开始时间，格式 HH:mm",
+    )
+    end_time: str = Field(
+        ...,
+        pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$",
+        description="结束时间，格式 HH:mm",
+    )
+    location: str | None = Field(None, max_length=128, description="上课地点")
+
+    model_config = {"extra": "forbid"}
+
+
 class CourseDetailResponse(BaseModel):
     id: int
     title: str = Field(..., description="课程标题")
@@ -87,7 +110,7 @@ class CourseDetailResponse(BaseModel):
     description: str | None = Field(None, description="课程简介")
     cover_url: str | None = Field(None, description="封面图片 URL")
     price: int = Field(..., description="价格，单位为分")
-    batches: dict | None = Field(None, description="班次信息")
+    batches: dict[str, CourseSchedule] | None = Field(None, description="上课安排")
     teacher_name: str | None = Field(None, description="讲师名称")
     has_access: bool = Field(False, description="当前用户是否有学习权限")
     enrollment_id: int | None = Field(None, description="报名记录 ID（已报名时返回）")

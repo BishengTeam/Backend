@@ -227,10 +227,20 @@ async def seed_courses_and_enrollments(db, user_map: dict[str, int]):
             "category": "H3C",
             "description": "H3C 网络工程师认证备考课程，涵盖路由交换核心知识",
             "price": 380000,
-            "batches": [
-                {"name": "第 1 期", "start": "2026-03-01", "end": "2026-06-01"},
-                {"name": "第 2 期", "start": "2026-07-01", "end": "2026-10-01"},
-            ],
+            "batches": {
+                "11111111-1111-4111-8111-111111111111": {
+                    "class_date": "2026-03-01",
+                    "start_time": "09:00",
+                    "end_time": "12:00",
+                    "location": "线上",
+                },
+                "22222222-2222-4222-8222-222222222222": {
+                    "class_date": "2026-07-01",
+                    "start_time": "09:00",
+                    "end_time": "12:00",
+                    "location": "线上",
+                },
+            },
             "teacher_name": "赵老师",
             "teacher_contact": "teacher_zhao@example.com",
         },
@@ -239,9 +249,14 @@ async def seed_courses_and_enrollments(db, user_map: dict[str, int]):
             "category": "Sangfor",
             "description": "深信服网络安全工程师认证精讲课程",
             "price": 59800,
-            "batches": [
-                {"name": "春季班", "start": "2026-03-15", "end": "2026-05-15"},
-            ],
+            "batches": {
+                "33333333-3333-4333-8333-333333333333": {
+                    "class_date": "2026-03-15",
+                    "start_time": "09:00",
+                    "end_time": "12:00",
+                    "location": "线上",
+                },
+            },
             "teacher_name": "钱老师",
         },
         {
@@ -249,10 +264,20 @@ async def seed_courses_and_enrollments(db, user_map: dict[str, int]):
             "category": "NISP",
             "description": "NISP 一级认证考前冲刺，考点全覆盖",
             "price": 69800,
-            "batches": [
-                {"name": "5 月冲刺", "start": "2026-05-01", "end": "2026-05-30"},
-                {"name": "6 月冲刺", "start": "2026-06-01", "end": "2026-06-30"},
-            ],
+            "batches": {
+                "44444444-4444-4444-8444-444444444444": {
+                    "class_date": "2026-05-01",
+                    "start_time": "09:00",
+                    "end_time": "12:00",
+                    "location": "线上",
+                },
+                "55555555-5555-4555-8555-555555555555": {
+                    "class_date": "2026-06-01",
+                    "start_time": "09:00",
+                    "end_time": "12:00",
+                    "location": "线上",
+                },
+            },
             "teacher_name": "孙老师",
         },
     ]
@@ -273,8 +298,8 @@ async def seed_courses_and_enrollments(db, user_map: dict[str, int]):
 
     # 选课：user_001 → course_1, user_002 → course_2
     enrollments = [
-        (user_map["test_openid_user_001"], course_ids[0], "第 2 期"),
-        (user_map["test_openid_user_002"], course_ids[1], "春季班"),
+        (user_map["test_openid_user_001"], course_ids[0], None),
+        (user_map["test_openid_user_002"], course_ids[1], None),
     ]
     for uid, cid, batch in enrollments:
         db.add(
