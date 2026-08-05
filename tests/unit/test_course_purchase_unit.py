@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from app.port.exceptions import NotFoundException
-from app.services.course_asset import CourseAssetStorage
+from app.port.exceptions import ForbiddenException, NotFoundException
+from app.services.course_asset import CourseAssetService, CourseAssetStorage
 from app.services.upload import UploadService
 
 
@@ -45,6 +45,42 @@ def test_course_enrollment_model_declares_lifecycle_constraints_and_indexes():
 def test_private_course_asset_path_rejects_traversal():
     with pytest.raises(NotFoundException):
         CourseAssetStorage.resolve("../public-file.mp4")
+
+
+def test_course_asset_playback_signature_binds_user_asset_and_expiry():
+    expires_at = 1_800_000_000
+    signature = CourseAssetService.create_playback_signature(10, 20, expires_at)
+
+    CourseAssetService.verify_playback_signature(
+        10,
+        20,
+        expires_at,
+        signature,
+        now=expires_at - 1,
+    )
+
+    with pytest.raises(ForbiddenException, match="签名无效"):
+        CourseAssetService.verify_playback_signature(
+            11,
+            20,
+            expires_at,
+            signature,
+            now=expires_at - 1,
+        )
+
+
+def test_course_asset_playback_signature_expires():
+    expires_at = 1_800_000_000
+    signature = CourseAssetService.create_playback_signature(10, 20, expires_at)
+
+    with pytest.raises(ForbiddenException, match="已过期"):
+        CourseAssetService.verify_playback_signature(
+            10,
+            20,
+            expires_at,
+            signature,
+            now=expires_at,
+        )
 
 
 def test_public_media_lookup_rejects_private_directory_keys():

@@ -1,6 +1,9 @@
+import hashlib
+import hmac
 import mimetypes
 import os
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,11 +12,13 @@ from sqlalchemy import select
 
 from app.adapter.database import get_db_ctx
 from app.domain.certification.src.index import Course, CourseAsset, CourseEnrollment
+from app.domain.user.src.index import User
 from app.port.config import settings
 from app.port.exceptions import ForbiddenException, NotFoundException
 
 
 PRIVATE_COURSE_ASSET_ROOT = Path(settings.UPLOAD_DIR) / "private" / "course-assets"
+PLAYBACK_URL_TTL_SECONDS = 2 * 60 * 60
 
 
 @dataclass(slots=True)
@@ -55,8 +60,61 @@ class CourseAssetStorage:
 
 
 class CourseAssetService:
+    @staticmethod
+    def _signature_key() -> bytes:
+        return hmac.new(
+            settings.JWT_SECRET.encode("utf-8"),
+            b"course-asset-playback-v1",
+            hashlib.sha256,
+        ).digest()
+
+    @classmethod
+    def create_playback_signature(
+        cls,
+        user_id: int,
+        asset_id: int,
+        expires_at: int,
+    ) -> str:
+        payload = f"{user_id}:{asset_id}:{expires_at}".encode("ascii")
+        return hmac.new(cls._signature_key(), payload, hashlib.sha256).hexdigest()
+
+    @classmethod
+    def verify_playback_signature(
+        cls,
+        user_id: int,
+        asset_id: int,
+        expires_at: int,
+        signature: str,
+        *,
+        now: int | None = None,
+    ) -> None:
+        current_time = int(time.time()) if now is None else now
+        if expires_at <= current_time:
+            raise ForbiddenException("播放地址已过期")
+        expected = cls.create_playback_signature(user_id, asset_id, expires_at)
+        if not hmac.compare_digest(signature, expected):
+            raise ForbiddenException("播放地址签名无效")
+
+    async def issue_playback_url(
+        self,
+        user_id: int,
+        asset_id: int,
+    ) -> tuple[str, int]:
+        # 签发前先执行与真实资源访问相同的权限和文件检查。
+        await self.get_content(user_id, asset_id)
+        expires_at = int(time.time()) + PLAYBACK_URL_TTL_SECONDS
+        signature = self.create_playback_signature(user_id, asset_id, expires_at)
+        url = (
+            f"/api/course-assets/{asset_id}/content"
+            f"?user_id={user_id}&expires={expires_at}&signature={signature}"
+        )
+        return url, expires_at
+
     async def get_content(self, user_id: int, asset_id: int) -> CourseAssetFile:
         async with get_db_ctx() as db:
+            user = await db.get(User, user_id)
+            if user is None or not user.is_active:
+                raise ForbiddenException("用户账号不可用")
             asset = await db.get(CourseAsset, asset_id)
             if asset is None:
                 raise NotFoundException("课程资源")

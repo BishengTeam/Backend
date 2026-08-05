@@ -179,3 +179,9 @@ class CourseContentResponse(BaseModel):
     title: str
     learning_access: bool
     assets: list[CourseAssetResponse]
+
+
+class CourseAssetPlaybackResponse(BaseModel):
+    asset_id: int
+    url: str
+    expires_at: int = Field(..., description="签名播放地址过期时间，Unix 秒")
