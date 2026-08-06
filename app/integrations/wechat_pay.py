@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import secrets
 import time
 from typing import Any
@@ -8,6 +9,8 @@ import httpx
 
 from app.port.config import settings
 from app.port.exceptions import ThirdPartyException
+
+logger = logging.getLogger(__name__)
 
 WECHAT_UNIFIED_ORDER_URL = "https://api.mch.weixin.qq.com/pay/unifiedorder"
 WECHAT_REFUND_URL = "https://api.mch.weixin.qq.com/secapi/pay/refund"
@@ -32,7 +35,19 @@ class WechatPayClient:
         total_fee: int,
     ) -> dict[str, str]:
         if not self._is_configured():
-            raise ThirdPartyException("Wechat Pay configuration is incomplete")
+            missing = [
+                name for name, value in {
+                    "WECHAT_PAY_APPID/WECHAT_APPID": self.appid,
+                    "WECHAT_PAY_MCHID": self.mch_id,
+                    "WECHAT_PAY_API_KEY": self.api_key,
+                    "WECHAT_PAY_NOTIFY_URL": self.notify_url,
+                }.items()
+                if not value
+            ]
+            logger.error("Wechat Pay configuration incomplete: %s", missing)
+            raise ThirdPartyException(
+                f"微信支付配置不完整，缺少: {', '.join(missing)}"
+            )
 
         nonce_str = self._nonce()
         params: dict[str, Any] = {
@@ -81,7 +96,19 @@ class WechatPayClient:
         refund_fee: int,
     ) -> dict[str, str]:
         if not self._is_configured():
-            raise ThirdPartyException("Wechat Pay configuration is incomplete")
+            missing = [
+                name for name, value in {
+                    "WECHAT_PAY_APPID/WECHAT_APPID": self.appid,
+                    "WECHAT_PAY_MCHID": self.mch_id,
+                    "WECHAT_PAY_API_KEY": self.api_key,
+                    "WECHAT_PAY_NOTIFY_URL": self.notify_url,
+                }.items()
+                if not value
+            ]
+            logger.error("Wechat Pay configuration incomplete: %s", missing)
+            raise ThirdPartyException(
+                f"微信支付配置不完整，缺少: {', '.join(missing)}"
+            )
 
         nonce_str = self._nonce()
         params: dict[str, Any] = {
