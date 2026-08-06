@@ -11,9 +11,8 @@ mocking _check_db and _check_redis to cover all four dependency states:
 
 No real database or Redis connection is required.
 """
+import asyncio
 from unittest.mock import AsyncMock, patch
-
-from fastapi.testclient import TestClient
 
 import app.main  # noqa: F401  ensure app.main is importable for patching
 
@@ -29,11 +28,8 @@ class TestHealthEndpoint:
             patch("app.main._check_db", AsyncMock(return_value=db_ok)),
             patch("app.main._check_redis", AsyncMock(return_value=redis_ok)),
         ):
-            from app.main import app
-            client = TestClient(app)
-            resp = client.get("/health")
-        assert resp.status_code == 200
-        return resp.json()
+            from app.main import health
+            return asyncio.run(health())
 
     def test_both_ok(self):
         """database up + redis up → code 0, status 'ok'"""

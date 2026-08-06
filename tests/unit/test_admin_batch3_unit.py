@@ -185,23 +185,27 @@ class AdminBatch3SystemTests(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             model()
-        instance = model(username="testuser", password="pass123", role="auditor")
+        instance = model(
+            username="testuser", password="strong-pass-123", role="admin"
+        )
         self.assertEqual(instance.username, "testuser")
-        self.assertEqual(instance.role, "auditor")
+        self.assertEqual(instance.role, "admin")
+        with self.assertRaises(ValidationError):
+            model(username="legacy", password="strong-pass-123", role="auditor")
 
     def test_admin_settings_user_create_default_role(self):
         schema = importlib.import_module("app.schemas.admin_settings")
         model = getattr(schema, "AdminSettingsUserCreate", None)
-        instance = model(username="testuser", password="pass123")
-        self.assertEqual(instance.role, "content_editor")
+        instance = model(username="testuser", password="strong-pass-123")
+        self.assertEqual(instance.role, "admin")
 
     def test_admin_settings_user_update_allows_partial_update(self):
         schema = importlib.import_module("app.schemas.admin_settings")
         model = getattr(schema, "AdminSettingsUserUpdate", None)
         self.assertIsNotNone(model)
         instance = model()
-        self.assertIsNone(instance.role)
         self.assertIsNone(instance.is_active)
+        self.assertNotIn("role", model.model_fields)
         instance = model(is_active=False)
         self.assertFalse(instance.is_active)
 
@@ -298,7 +302,14 @@ class AdminBatch3SystemTests(unittest.TestCase):
         for mod in ["tickets", "statistics", "settings", "competition"]:
             source = _read_text(_path(f"app/api/admin/{mod}.py"))
             with self.subTest(module=mod):
-                has_auth = "get_current_admin" in source or "require_permission" in source
+                has_auth = any(
+                    dependency in source
+                    for dependency in (
+                        "get_current_admin",
+                        "require_permission",
+                        "require_super_admin",
+                    )
+                )
                 self.assertTrue(
                     has_auth,
                     f"app/api/admin/{mod}.py should use get_current_admin or require_permission dependency",
@@ -355,10 +366,8 @@ class AdminBatch3SystemTests(unittest.TestCase):
         self.assertIn("ck_admin_user_role", source)
         self.assertIn("ADMIN_ROLES", source)
         self.assertIn("super_admin", source)
-        self.assertIn("content_editor", source)
-        self.assertIn("customer_service", source)
-        self.assertIn("finance", source)
-        self.assertIn("auditor", source)
+        self.assertIn('"admin"', source)
+        self.assertNotIn("content_editor", source)
 
     def test_admin_user_model_does_not_expose_password_in_schema(self):
         # Verify AdminSettingsUserListItem does NOT include password_hash

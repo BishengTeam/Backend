@@ -1,10 +1,10 @@
 """管理端用户服务"""
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
-from app.port.exceptions import NotFoundException, ValidationException
+from app.port.exceptions import ConflictException, NotFoundException, ValidationException
 from app.domain.community.src.index import Conversation
 from app.domain.order.src.index import Order
 from app.domain.user.src.index import (
@@ -19,8 +19,7 @@ from app.schemas.admin import (
     AdminUserStatusToggle,
 )
 from app.schemas.common import PaginatedData
-from app.services.user import _derived_from_id_card
-from app.utils.validators import validate_id_card
+from app.services.user import _assert_account_closure_allowed
 
 
 class AdminUserService:
@@ -40,11 +39,9 @@ class AdminUserService:
                     User.created_at,
                     UserRealname.status.label("identity_status"),
                     UserStudent.status.label("student_status"),
-                    UserEnterprise.status.label("enterprise_status"),
                 )
                 .outerjoin(UserRealname, UserRealname.user_id == User.id)
                 .outerjoin(UserStudent, UserStudent.user_id == User.id)
-                .outerjoin(UserEnterprise, UserEnterprise.user_id == User.id)
             )
             if filters:
                 if filters.openid:
@@ -59,8 +56,6 @@ class AdminUserService:
                     base = base.where(UserRealname.status == filters.identity_status)
                 if filters.student_status:
                     base = base.where(UserStudent.status == filters.student_status)
-                if filters.enterprise_status:
-                    base = base.where(UserEnterprise.status == filters.enterprise_status)
             count_stmt = select(func.count()).select_from(base.subquery())
             total = (await db.execute(count_stmt)).scalar() or 0
             stmt = base.order_by(User.id.desc()).offset((page - 1) * page_size).limit(page_size)
@@ -74,7 +69,6 @@ class AdminUserService:
                 created_at=r.created_at,
                 identity_status=r.identity_status,
                 student_status=r.student_status,
-                enterprise_status=r.enterprise_status,
             ) for r in rows]
             return PaginatedData[AdminUserListItem](
                 items=items,
@@ -91,7 +85,6 @@ class AdminUserService:
             base = select(User)
             need_realname = False
             need_student = False
-            need_enterprise = False
             if filters:
                 if filters.openid:
                     base = base.where(User.openid == filters.openid)
@@ -110,9 +103,6 @@ class AdminUserService:
                         base = base.outerjoin(UserRealname, UserRealname.user_id == User.id)
                     base = base.outerjoin(UserStudent, UserStudent.user_id == User.id)
                     base = base.where(UserStudent.status == filters.student_status)
-                if filters.enterprise_status:
-                    base = base.outerjoin(UserEnterprise, UserEnterprise.user_id == User.id)
-                    base = base.where(UserEnterprise.status == filters.enterprise_status)
             stmt = base.order_by(User.id.desc())
             result = await db.execute(stmt)
             users = result.scalars().all()
@@ -135,6 +125,8 @@ class AdminUserService:
             user = await db.get(User, user_id)
             if user is None:
                 raise NotFoundException("用户")
+            if not is_active and user.is_active:
+                await _assert_account_closure_allowed(db, user_id)
             user.is_active = is_active
             await db.commit()
             await db.refresh(user)
@@ -147,6 +139,7 @@ class AdminUserService:
             )
             users = result.scalars().all()
             for user in users:
+                await _assert_account_closure_allowed(db, user.id)
                 user.is_active = False
             await db.commit()
             return len(users)
@@ -161,9 +154,7 @@ class AdminUserService:
             return [AdminUserOrderBrief.model_validate(o) for o in result.scalars().all()]
 
     async def update_user_profile(self, user_id: int, data: "AdminProfileUpdate") -> "UserProfileDetail":
-        """管理员直接编辑用户任意字段，不触发审核，直接生效"""
-        from app.schemas.admin import AdminProfileUpdate
-        from app.schemas.user import UserProfileDetail
+        """Edit non-certification profile fields only."""
 
         async with get_db_ctx() as db:
             user = await db.get(User, user_id)
@@ -182,98 +173,18 @@ class AdminUserService:
 
             for key in ("nickname", "email", "province", "city", "address"):
                 if key in update_data:
-                    setattr(profile, key, update_data.pop(key))
+                    setattr(profile, key, update_data[key])
             if "phone" in update_data:
-                user.phone = update_data.pop("phone")
-
-            # Level 2: user_realname
-            realname = (await db.execute(
-                select(UserRealname).where(UserRealname.user_id == user_id)
-            )).scalar_one_or_none()
-            realname_keys = ("user_type", "last_name_zh", "first_name_zh",
-                             "last_name_en", "first_name_en",
-                             "real_name", "id_card_number",
-                             "id_card_front_oss", "id_card_back_oss", "avatar_oss",
-                             "political_status", "ethnicity")
-            # 过滤非空值：只处理非空字符串的字段
-            realname_updates = {k: update_data[k] for k in realname_keys
-                                if k in update_data and update_data[k] not in (None, "")}
-            if realname_updates:
-                # 身份证校验 + 衍生字段自动推导
-                if "id_card_number" in realname_updates:
-                    id_card = realname_updates["id_card_number"]
-                    error = validate_id_card(id_card)
-                    if error:
-                        raise ValidationException(error)
-                    gender, age, census = _derived_from_id_card(id_card)
-                    if gender is not None:
-                        realname_updates["gender"] = gender
-                    if age is not None:
-                        realname_updates["age"] = age
-                    if census is not None:
-                        realname_updates["census_register"] = census
-                if realname is None:
-                    realname = UserRealname(user_id=user_id, user_type="student",
-                                            real_name="", id_card_number="",
-                                            status="verified")
-                    db.add(realname)
-                for key, value in realname_updates.items():
-                    setattr(realname, key, value)
-                for key in realname_keys:
-                    update_data.pop(key, None)
-            if "identity_status" in update_data:
-                if realname is None:
-                    # 不存在实名记录时，忽略纯状态更新（不创建空字段记录）
-                    update_data.pop("identity_status")
-                else:
-                    realname.status = update_data.pop("identity_status")
-
-            # Level 2: user_student
-            student_keys = ("education", "school", "major", "student_card_oss",
-                            "enrollment_pdf_oss", "degree_cert_oss")
-            # 过滤非空值
-            student_updates = {k: update_data[k] for k in student_keys
-                               if k in update_data and update_data[k] not in (None, "")}
-            if student_updates or "student_status" in update_data:
-                student = (await db.execute(
-                    select(UserStudent).where(UserStudent.user_id == user_id)
-                )).scalar_one_or_none()
-            if student_updates:
-                if student is None:
-                    student = UserStudent(user_id=user_id, education="", school="",
-                                          major="", student_card_oss="", status="verified")
-                    db.add(student)
-                for key, value in student_updates.items():
-                    setattr(student, key, value)
-                for key in student_keys:
-                    update_data.pop(key, None)
-            if "student_status" in update_data:
-                if student is None:
-                    update_data.pop("student_status")
-                else:
-                    student.status = update_data.pop("student_status")
-
-            # Level 2: user_enterprise
-            enterprise = None
-            need_enterprise = ("organization" in update_data and update_data["organization"] not in (None, "")) or "enterprise_status" in update_data
-            if need_enterprise:
-                enterprise = (await db.execute(
-                    select(UserEnterprise).where(UserEnterprise.user_id == user_id)
-                )).scalar_one_or_none()
-            if "organization" in update_data:
-                org_value = update_data.pop("organization")
-                if org_value not in (None, ""):
-                    if enterprise is None:
-                        enterprise = UserEnterprise(user_id=user_id, organization=org_value,
-                                                    status="verified")
-                        db.add(enterprise)
-                    else:
-                        enterprise.organization = org_value
-            if "enterprise_status" in update_data:
-                if enterprise is None:
-                    update_data.pop("enterprise_status")
-                else:
-                    enterprise.status = update_data.pop("enterprise_status")
+                phone = update_data["phone"]
+                if phone:
+                    occupied_by = await db.scalar(
+                        select(User.id)
+                        .where(User.id != user_id, User.phone == phone, User.is_active.is_(True))
+                        .limit(1)
+                    )
+                    if occupied_by is not None:
+                        raise ConflictException("该手机号已被其他有效账号绑定")
+                user.phone = phone
 
             await db.commit()
             return await self.get_user_profile(user_id)
@@ -343,6 +254,7 @@ class AdminUserService:
                 education=student.education,
                 school=student.school,
                 major=student.major,
+                enrollment_date=student.enrollment_date,
                 student_card_oss=student.student_card_oss,
                 enrollment_pdf_oss=student.enrollment_pdf_oss,
                 degree_cert_oss=student.degree_cert_oss,
@@ -351,6 +263,7 @@ class AdminUserService:
             )
 
     async def get_user_enterprise(self, user_id: int) -> "EnterpriseResponse":
+        raise ValidationException("首版已停用企业认证，只支持学生认证")
         from app.schemas.user import EnterpriseResponse
 
         async with get_db_ctx() as db:
@@ -407,6 +320,8 @@ class AdminUserService:
 
             if data.status == "rejected" and student.snapshot:
                 for key, value in student.snapshot.items():
+                    if key == "enrollment_date" and isinstance(value, str):
+                        value = date.fromisoformat(value)
                     setattr(student, key, value)
                 student.snapshot = None
 
@@ -421,6 +336,7 @@ class AdminUserService:
         return {"user_id": user_id, "status": data.status, "comment": data.comment}
 
     async def review_enterprise(self, user_id: int, data: AdminIdentityReview) -> dict:
+        raise ValidationException("首版已停用企业认证，只支持学生认证")
         if data.status not in ("verified", "rejected"):
             raise ValidationException("status 必须为 verified 或 rejected")
 

@@ -1,7 +1,12 @@
 from fastapi import APIRouter, Depends, Path, Query
 
-from app.middleware.auth import require_permission
-from app.schemas.admin_settings import AdminSettingsUserCreate, AdminSettingsUserListItem, AdminSettingsUserUpdate
+from app.middleware.auth import require_super_admin
+from app.schemas.admin_settings import (
+    AdminSettingsPasswordReset,
+    AdminSettingsUserCreate,
+    AdminSettingsUserListItem,
+    AdminSettingsUserUpdate,
+)
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.services.admin_settings import AdminSettingsService
 
@@ -30,7 +35,7 @@ router = APIRouter(prefix="/settings", tags=["管理后台-系统设置"])
 async def list_admins(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
-    _admin=Depends(require_permission("dashboard:view")),
+    _admin=Depends(require_super_admin),
 ) -> APIResponse[PaginatedData[AdminSettingsUserListItem]]:
     result = await AdminSettingsService().list_admins(page, page_size)
     return success(data=result)
@@ -53,7 +58,7 @@ async def list_admins(
 )
 async def create_admin(
     body: AdminSettingsUserCreate,
-    _admin=Depends(require_permission("dashboard:view")),
+    _admin=Depends(require_super_admin),
 ) -> APIResponse[AdminSettingsUserListItem]:
     result = await AdminSettingsService().create_admin(body)
     return success(data=result)
@@ -80,7 +85,21 @@ async def create_admin(
 async def update_admin(
     body: AdminSettingsUserUpdate,
     admin_id: int = Path(..., ge=1),
-    _admin=Depends(require_permission("dashboard:view")),
+    _admin=Depends(require_super_admin),
 ) -> APIResponse[AdminSettingsUserListItem]:
     result = await AdminSettingsService().update_admin(admin_id, body)
     return success(data=result)
+
+
+@router.put(
+    "/admins/{admin_id}/password",
+    response_model=APIResponse,
+    summary="重置普通管理员密码（仅超级管理员）",
+)
+async def reset_admin_password(
+    body: AdminSettingsPasswordReset,
+    admin_id: int = Path(..., ge=1),
+    _admin=Depends(require_super_admin),
+) -> APIResponse:
+    await AdminSettingsService().reset_password(admin_id, body.password)
+    return success(message="管理员密码已重置")

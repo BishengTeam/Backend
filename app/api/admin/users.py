@@ -17,12 +17,13 @@ from app.schemas.admin import (
 )
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.user import (
-    EnterpriseResponse,
     RealnameAdminResponse,
     StudentResponse,
     UserProfileDetail,
 )
 from app.services.admin_user import AdminUserService
+from app.schemas.review import ReviewCreate
+from app.services.review import ReviewService
 
 router = APIRouter(prefix="/users", tags=["管理后台-用户管理"])
 
@@ -54,13 +55,12 @@ async def list_users(
     created_at_end: datetime | None = Query(None, description="创建时间止，ISO 8601"),
     identity_status: str | None = Query(None, description="按实名状态筛选：pending / verified / rejected"),
     student_status: str | None = Query(None, description="按学生状态筛选：pending / verified / rejected"),
-    enterprise_status: str | None = Query(None, description="按企业状态筛选：pending / verified / rejected"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     _admin=Depends(require_permission("user:list")),
 ) -> APIResponse[PaginatedData[AdminUserListItem]]:
-    has_filters = openid or phone or created_at_start or created_at_end or identity_status or student_status or enterprise_status
-    filters = AdminUserFilter(openid=openid, phone=phone, created_at_start=created_at_start, created_at_end=created_at_end, identity_status=identity_status, student_status=student_status, enterprise_status=enterprise_status) if has_filters else None
+    has_filters = openid or phone or created_at_start or created_at_end or identity_status or student_status
+    filters = AdminUserFilter(openid=openid, phone=phone, created_at_start=created_at_start, created_at_end=created_at_end, identity_status=identity_status, student_status=student_status) if has_filters else None
     result = await AdminUserService().list_users(filters, page, page_size)
     return success(data=result)
 
@@ -126,7 +126,7 @@ async def get_user(
 async def toggle_user_status(
     body: AdminUserStatusToggle,
     user_id: int = Path(..., description="用户 ID"),
-    _admin=Depends(require_permission("user:list")),
+    _admin=Depends(require_permission("user:write")),
 ) -> APIResponse[AdminUserListItem]:
     result = await AdminUserService().toggle_user_status(user_id, body.is_active)
     return success(data=result, message="用户状态已更新")
@@ -219,13 +219,28 @@ async def review_identity(
     user_id: int = Path(..., description="用户 ID"),
     _admin=Depends(require_permission("user:write")),
 ):
-    result = await AdminUserService().review_identity(user_id, body)
-    return success(data=result)
+    review = await ReviewService().create_review(
+        _admin.id,
+        ReviewCreate(
+            target_type="identity",
+            target_id=user_id,
+            action="approve" if body.status == "verified" else "reject",
+            comment=body.comment,
+        ),
+    )
+    return success(
+        data={
+            "user_id": user_id,
+            "status": body.status,
+            "comment": body.comment,
+            "review_id": review.id,
+        }
+    )
 
 
 @router.put("/{user_id}/profile",
     response_model=APIResponse[UserProfileDetail],
-    summary="编辑用户资料（管理端可直接修改任意数据）",
+    summary="编辑用户非认证基础资料",
 )
 async def update_user_profile(
     body: AdminProfileUpdate,
@@ -306,32 +321,20 @@ async def review_student(
     user_id: int = Path(..., description="用户 ID"),
     _admin=Depends(require_permission("user:write")),
 ):
-    result = await AdminUserService().review_student(user_id, body)
-    return success(data=result)
-
-
-# ── Level 2: 企业信息 ──
-
-@router.get("/{user_id}/enterprise",
-    response_model=APIResponse[EnterpriseResponse],
-    summary="用户企业信息",
-)
-async def get_user_enterprise(
-    user_id: int = Path(..., description="用户 ID"),
-    _admin=Depends(require_permission("user:list")),
-) -> APIResponse[EnterpriseResponse]:
-    result = await AdminUserService().get_user_enterprise(user_id)
-    return success(data=result)
-
-
-@router.put("/{user_id}/enterprise/review",
-    response_model=APIResponse[dict],
-    summary="审核企业信息",
-)
-async def review_enterprise(
-    body: AdminIdentityReview,
-    user_id: int = Path(..., description="用户 ID"),
-    _admin=Depends(require_permission("user:write")),
-):
-    result = await AdminUserService().review_enterprise(user_id, body)
-    return success(data=result)
+    review = await ReviewService().create_review(
+        _admin.id,
+        ReviewCreate(
+            target_type="student",
+            target_id=user_id,
+            action="approve" if body.status == "verified" else "reject",
+            comment=body.comment,
+        ),
+    )
+    return success(
+        data={
+            "user_id": user_id,
+            "status": body.status,
+            "comment": body.comment,
+            "review_id": review.id,
+        }
+    )

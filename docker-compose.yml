@@ -12,14 +12,18 @@ services:
       - APP_ENV=production
       - APP_DEBUG=false
       # 数据库 — 容器内通过 service name 互联
-      - DATABASE_URL=postgresql+asyncpg://wemini:wemini_pass@db:5432/wemini_app
-      - DATABASE_URL_SYNC=postgresql://wemini:wemini_pass@db:5432/wemini_app
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=${POSTGRES_USER:-wemini}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - DB_NAME=${POSTGRES_DB:-wemini_app}
       # Redis
       - REDIS_URL=redis://redis:6379/0
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       # JWT — 生产环境务必替换为强随机值
-      - JWT_SECRET=${JWT_SECRET}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - PII_HASH_KEY=${PII_HASH_KEY:?PII_HASH_KEY is required}
       - JWT_ALGORITHM=HS256
       - JWT_EXPIRE_MINUTES=120
       # 微信小程序 — 用实际值替换
@@ -33,16 +37,26 @@ services:
       # 文件存储
       - UPLOAD_DIR=/app/uploads
       - STORAGE_TYPE=local
+      # 人社材料与导出 — 生产环境强制私有阿里云 OSS
+      - RENSHE_STORAGE_TYPE=aliyun_oss
+      - ALIYUN_OSS_ENDPOINT=${ALIYUN_OSS_ENDPOINT:?ALIYUN_OSS_ENDPOINT is required}
+      - ALIYUN_OSS_BUCKET=${ALIYUN_OSS_BUCKET:?ALIYUN_OSS_BUCKET is required}
+      - ALIYUN_OSS_ACCESS_KEY_ID=${ALIYUN_OSS_ACCESS_KEY_ID:?ALIYUN_OSS_ACCESS_KEY_ID is required}
+      - ALIYUN_OSS_ACCESS_KEY_SECRET=${ALIYUN_OSS_ACCESS_KEY_SECRET:?ALIYUN_OSS_ACCESS_KEY_SECRET is required}
+      - ALIYUN_OSS_PREFIX=${ALIYUN_OSS_PREFIX:-renshe}
+      - ALIYUN_OSS_SIGNED_URL_TTL_SECONDS=300
+      - RENSHE_TEMPLATE_DIR=/app/renshe-templates
     volumes:
       - uploads:/app/uploads
+      - ../docs/renshe:/app/renshe-templates:ro
     restart: unless-stopped
 
   db:
     image: postgres:16-alpine
     environment:
-      - POSTGRES_USER=wemini
-      - POSTGRES_PASSWORD=wemini_pass
-      - POSTGRES_DB=wemini_app
+      - POSTGRES_USER=${POSTGRES_USER:-wemini}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - POSTGRES_DB=${POSTGRES_DB:-wemini_app}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -70,10 +84,14 @@ services:
     environment:
       - APP_ENV=development
       - APP_DEBUG=false
-      - DATABASE_URL=postgresql+asyncpg://wemini:wemini_pass@db:5432/wemini_app
-      - DATABASE_URL_SYNC=postgresql://wemini:wemini_pass@db:5432/wemini_app
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=${POSTGRES_USER:-wemini}
+      - DB_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - DB_NAME=${POSTGRES_DB:-wemini_app}
       - REDIS_URL=redis://redis:6379/0
       - JWT_SECRET=${JWT_SECRET:-dev-jwt-secret-for-testing-only-min-32-chars}
+      - PII_HASH_KEY=${PII_HASH_KEY:-dev-pii-hash-key-for-testing-only-min-32-chars}
       - JWT_ALGORITHM=HS256
       - JWT_EXPIRE_MINUTES=120
     profiles:

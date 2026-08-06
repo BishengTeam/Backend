@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -62,22 +62,22 @@ class UserProfileUpdate(BaseModel):
 
 class RealnameSubmit(BaseModel):
     """提交/修改实名认证信息"""
-    user_type: Literal["student", "enterprise"] = Field(..., description="用户类型")
+    user_type: Literal["student"] = Field("student", description="首版固定为 student")
     last_name_zh: str | None = Field(None, max_length=32, description="姓")
     first_name_zh: str | None = Field(None, max_length=32, description="名")
     last_name_en: str | None = Field(None, max_length=64, description="拼音姓")
     first_name_en: str | None = Field(None, max_length=64, description="拼音名")
-    real_name: str | None = Field(None, max_length=64, description="真实姓名（兼容，自动由姓+名拼接）")
+    real_name: str = Field(..., min_length=1, max_length=64, description="真实姓名")
     id_card_number: str = Field(..., min_length=18, max_length=18, description="18 位身份证号")
     id_card_front_oss: str = Field(..., min_length=1, max_length=512, description="身份证人像面 OSS key")
     id_card_back_oss: str = Field(..., min_length=1, max_length=512, description="身份证国徽面 OSS key")
-    avatar_oss: str | None = Field(None, max_length=512, description="二寸免冠照片 OSS key")
-    political_status: str | None = Field(None, max_length=16, description="政治面貌")
-    ethnicity: str | None = Field(None, max_length=16, description="民族")
+    avatar_oss: str = Field(..., min_length=1, max_length=512, description="二寸免冠照片 OSS key")
+    political_status: str = Field(..., min_length=1, max_length=16, description="政治面貌")
+    ethnicity: str = Field(..., min_length=1, max_length=16, description="民族")
 
 
 class RealnameResponse(BaseModel):
-    user_type: Literal["student", "enterprise"] | None = None
+    user_type: Literal["student"] | None = None
     last_name_zh: str | None = None
     first_name_zh: str | None = None
     last_name_en: str | None = None
@@ -110,18 +110,22 @@ class RealnameAdminResponse(RealnameResponse):
 
 class StudentSubmit(BaseModel):
     """提交/修改学生信息"""
-    education: str = Field(..., min_length=1, max_length=32, description="学历")
+    education: Literal[
+        "secondary_vocational", "associate", "bachelor", "master", "doctorate"
+    ] = Field(..., description="学历枚举")
     school: str = Field(..., min_length=1, max_length=128, description="学校")
     major: str = Field(..., min_length=1, max_length=128, description="专业")
+    enrollment_date: date = Field(..., description="入学日期，仅供人工审核")
     student_card_oss: str = Field(..., min_length=1, max_length=512, description="学生证 OSS key")
-    enrollment_pdf_oss: str | None = Field(None, max_length=512, description="学信网电子注册表 OSS key")
-    degree_cert_oss: str | None = Field(None, max_length=512, description="学历证明 OSS key")
+    enrollment_pdf_oss: str = Field(..., min_length=1, max_length=512, description="学信网电子注册表 OSS key")
+    degree_cert_oss: str = Field(..., min_length=1, max_length=512, description="学历证明 OSS key")
 
 
 class StudentResponse(BaseModel):
     education: str | None = None
     school: str | None = None
     major: str | None = None
+    enrollment_date: date | None = None
     student_card_oss: str | None = None
     enrollment_pdf_oss: str | None = None
     degree_cert_oss: str | None = None
@@ -185,17 +189,14 @@ class UserProfileDetail(BaseModel):
     education: str | None = None
     school: str | None = None
     major: str | None = None
+    enrollment_date: date | None = None
     student_card_oss: str | None = None
     enrollment_pdf_oss: str | None = None
     degree_cert_oss: str | None = None
     student_status: str | None = None
-    # Level 2 — 企业
-    organization: str | None = None
-    enterprise_status: str | None = None
     # 审核反馈
     identity_reject_reason: str | None = None
     student_reject_reason: str | None = None
-    enterprise_reject_reason: str | None = None
     # 修改次数
     edit_count: int = 0              # 已用修改次数
     edit_count_limit: int = 10       # 修改次数上限

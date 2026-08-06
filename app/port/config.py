@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     JWT_SECRET: str
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 120
+    PII_HASH_KEY: str = ""
 
     @field_validator("JWT_SECRET")
     @classmethod
@@ -59,6 +60,16 @@ class Settings(BaseSettings):
         if v in {"change-me-in-production", "change-me", "your-secret-key"}:
             raise ValueError("JWT_SECRET must not be a default/placeholder value")
         return v
+
+    @model_validator(mode="after")
+    def configure_pii_hash_key(self) -> "Settings":
+        if not self.PII_HASH_KEY:
+            if self.APP_ENV == "production":
+                raise ValueError("PII_HASH_KEY is required in production")
+            self.PII_HASH_KEY = self.JWT_SECRET
+        if len(self.PII_HASH_KEY) < 32:
+            raise ValueError("PII_HASH_KEY must be at least 32 characters")
+        return self
 
     @field_validator("APP_DEBUG")
     @classmethod
@@ -99,8 +110,128 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
     STORAGE_TYPE: str = "local"
 
+    # Human-resources certification materials. Production is private Aliyun OSS.
+    RENSHE_STORAGE_TYPE: str = "local"
+    ALIYUN_OSS_ENDPOINT: str = ""
+    ALIYUN_OSS_BUCKET: str = ""
+    ALIYUN_OSS_ACCESS_KEY_ID: str = ""
+    ALIYUN_OSS_ACCESS_KEY_SECRET: str = ""
+    ALIYUN_OSS_PREFIX: str = "renshe"
+    ALIYUN_OSS_SIGNED_URL_TTL_SECONDS: int = 300
+    RENSHE_TEMPLATE_DIR: str = "../docs/renshe"
+    RENSHE_WORKER_POLL_SECONDS: int = 5
+
+    # Frozen quiz-domain limits and worker settings.
+    QUIZ_TASKS_ENABLED: bool = True
+    QUIZ_EXAM_DURATION_SECONDS: int = 3600
+    QUIZ_MIN_QUESTION_COUNT: int = 10
+    QUIZ_MAX_QUESTION_COUNT: int = 100
+    QUIZ_WRONG_MAX_QUESTION_COUNT: int = 20
+    QUIZ_IMPORT_MAX_FILE_BYTES: int = 10 * 1024 * 1024
+    QUIZ_IMPORT_MAX_QUESTIONS: int = 5000
+    QUIZ_IMPORT_RETENTION_DAYS: int = 7
+    QUIZ_IMPORT_STORAGE_TYPE: str = "local"
+    QUIZ_OSS_ENDPOINT: str = ""
+    QUIZ_OSS_BUCKET: str = ""
+    QUIZ_OSS_ACCESS_KEY_ID: str = ""
+    QUIZ_OSS_ACCESS_KEY_SECRET: str = ""
+    QUIZ_OSS_PREFIX: str = "quiz-imports"
+    QUIZ_OSS_SIGNED_URL_TTL_SECONDS: int = 300
+    QUIZ_WORKER_POLL_SECONDS: int = 5
+    QUIZ_WORKER_HEARTBEAT_SECONDS: int = 15
+    QUIZ_WORKER_STALE_SECONDS: int = 120
+    QUIZ_WORKER_MAX_RETRIES: int = 5
+    QUIZ_QUESTION_LIST_RATE_PER_MINUTE: int = 60
+    QUIZ_ANSWER_SAVE_RATE_PER_MINUTE: int = 120
+
+    @model_validator(mode="after")
+    def validate_renshe_storage(self) -> "Settings":
+        if not 1 <= self.ALIYUN_OSS_SIGNED_URL_TTL_SECONDS <= 300:
+            raise ValueError("ALIYUN_OSS_SIGNED_URL_TTL_SECONDS must be between 1 and 300")
+        if not 1 <= self.RENSHE_WORKER_POLL_SECONDS <= 300:
+            raise ValueError("RENSHE_WORKER_POLL_SECONDS must be between 1 and 300")
+        if self.APP_ENV == "production":
+            if self.RENSHE_STORAGE_TYPE != "aliyun_oss":
+                raise ValueError("RENSHE_STORAGE_TYPE must be aliyun_oss in production")
+            required = {
+                "ALIYUN_OSS_ENDPOINT": self.ALIYUN_OSS_ENDPOINT,
+                "ALIYUN_OSS_BUCKET": self.ALIYUN_OSS_BUCKET,
+                "ALIYUN_OSS_ACCESS_KEY_ID": self.ALIYUN_OSS_ACCESS_KEY_ID,
+                "ALIYUN_OSS_ACCESS_KEY_SECRET": self.ALIYUN_OSS_ACCESS_KEY_SECRET,
+            }
+            missing = [name for name, value in required.items() if not value]
+            if missing:
+                raise ValueError(f"missing production OSS settings: {', '.join(missing)}")
+        return self
+
+    @model_validator(mode="after")
+    def validate_quiz_runtime(self) -> "Settings":
+        frozen_values = {
+            "QUIZ_EXAM_DURATION_SECONDS": (self.QUIZ_EXAM_DURATION_SECONDS, 3600),
+            "QUIZ_MIN_QUESTION_COUNT": (self.QUIZ_MIN_QUESTION_COUNT, 10),
+            "QUIZ_MAX_QUESTION_COUNT": (self.QUIZ_MAX_QUESTION_COUNT, 100),
+            "QUIZ_WRONG_MAX_QUESTION_COUNT": (
+                self.QUIZ_WRONG_MAX_QUESTION_COUNT,
+                20,
+            ),
+            "QUIZ_IMPORT_MAX_FILE_BYTES": (
+                self.QUIZ_IMPORT_MAX_FILE_BYTES,
+                10 * 1024 * 1024,
+            ),
+            "QUIZ_IMPORT_MAX_QUESTIONS": (self.QUIZ_IMPORT_MAX_QUESTIONS, 5000),
+            "QUIZ_IMPORT_RETENTION_DAYS": (self.QUIZ_IMPORT_RETENTION_DAYS, 7),
+            "QUIZ_QUESTION_LIST_RATE_PER_MINUTE": (
+                self.QUIZ_QUESTION_LIST_RATE_PER_MINUTE,
+                60,
+            ),
+            "QUIZ_ANSWER_SAVE_RATE_PER_MINUTE": (
+                self.QUIZ_ANSWER_SAVE_RATE_PER_MINUTE,
+                120,
+            ),
+        }
+        changed = [
+            f"{name} must remain {expected}"
+            for name, (actual, expected) in frozen_values.items()
+            if actual != expected
+        ]
+        if changed:
+            raise ValueError("; ".join(changed))
+        if not 1 <= self.QUIZ_OSS_SIGNED_URL_TTL_SECONDS <= 900:
+            raise ValueError("QUIZ_OSS_SIGNED_URL_TTL_SECONDS must be between 1 and 900")
+        if not 1 <= self.QUIZ_WORKER_POLL_SECONDS <= 300:
+            raise ValueError("QUIZ_WORKER_POLL_SECONDS must be between 1 and 300")
+        if not 1 <= self.QUIZ_WORKER_HEARTBEAT_SECONDS < self.QUIZ_WORKER_STALE_SECONDS:
+            raise ValueError(
+                "QUIZ_WORKER_HEARTBEAT_SECONDS must be positive and below "
+                "QUIZ_WORKER_STALE_SECONDS"
+            )
+        if not 1 <= self.QUIZ_WORKER_MAX_RETRIES <= 20:
+            raise ValueError("QUIZ_WORKER_MAX_RETRIES must be between 1 and 20")
+        if self.QUIZ_TASKS_ENABLED and not self.REDIS_URL.startswith(("redis://", "rediss://")):
+            raise ValueError("REDIS_URL must use redis:// or rediss:// when quiz tasks are enabled")
+        if self.APP_ENV == "production":
+            if not self.QUIZ_TASKS_ENABLED:
+                raise ValueError("QUIZ_TASKS_ENABLED must be true in production")
+            if self.QUIZ_IMPORT_STORAGE_TYPE != "aliyun_oss":
+                raise ValueError("QUIZ_IMPORT_STORAGE_TYPE must be aliyun_oss in production")
+            required = {
+                "QUIZ_OSS_ENDPOINT": self.QUIZ_OSS_ENDPOINT,
+                "QUIZ_OSS_BUCKET": self.QUIZ_OSS_BUCKET,
+                "QUIZ_OSS_ACCESS_KEY_ID": self.QUIZ_OSS_ACCESS_KEY_ID,
+                "QUIZ_OSS_ACCESS_KEY_SECRET": self.QUIZ_OSS_ACCESS_KEY_SECRET,
+            }
+            missing = [name for name, value in required.items() if not value]
+            if missing:
+                raise ValueError(
+                    f"missing production quiz OSS settings: {', '.join(missing)}"
+                )
+        return self
+
     model_config = {
-        "env_file": ".env.development",
+        # Local development follows the repository README and reads `.env`.
+        # Tests provide explicit, non-secret values from tests/conftest.py and
+        # production deployments should inject real environment variables.
+        "env_file": (".env", ".env.development"),
         "extra": "ignore",
     }
 

@@ -107,6 +107,10 @@ class PaymentService:
             ).scalar_one_or_none()
             if order is None:
                 raise NotFoundException("订单")
+            if order.application_id is not None:
+                raise ThirdPartyException(
+                    "人社报名必须使用微信支付 API V3；当前缺少 V3 商户凭据"
+                )
             now = self._now()
             await self._ensure_order_payable_for_prepay(db, order, now)
             user = await db.get(User, user_id)
@@ -188,6 +192,8 @@ class PaymentService:
             ).scalar_one_or_none()
             if order is None:
                 raise NotFoundException("订单")
+            if order.application_id is not None:
+                raise ThirdPartyException("拒绝使用微信支付 V2 回调处理人社订单")
 
             processed = False
             metadata_changed = False

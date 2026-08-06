@@ -69,7 +69,6 @@ class AdminUserFilter(BaseModel):
     created_at_end: datetime | None = None
     identity_status: str | None = None
     student_status: str | None = None
-    enterprise_status: str | None = None
 
 
 class AdminUserListItem(BaseModel):
@@ -80,7 +79,6 @@ class AdminUserListItem(BaseModel):
     created_at: datetime
     identity_status: str | None = None
     student_status: str | None = None
-    enterprise_status: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -89,40 +87,26 @@ class AdminUserStatusToggle(BaseModel):
 
 
 class AdminProfileUpdate(BaseModel):
-    """管理端编辑用户资料 — 所有字段可选，管理员可直接修改任意数据，不触发审核"""
+    """管理端只可编辑非认证基础资料。
+
+    实名和学生资料必须由用户提交，再通过专用人工审核接口处理；这里显式
+    禁止额外字段，避免旧客户端绕过资料锁和审核状态机。
+    """
+
     nickname: str | None = Field(None, max_length=64, description="昵称")
     email: str | None = Field(None, max_length=128, description="邮箱")
     phone: str | None = Field(None, min_length=11, max_length=11, description="手机号")
     province: str | None = Field(None, max_length=32, description="省份")
     city: str | None = Field(None, max_length=32, description="城市")
     address: str | None = Field(None, max_length=256, description="详细地址")
-    user_type: Literal["student", "enterprise"] | None = Field(None, description="用户类型")
-    last_name_zh: str | None = Field(None, max_length=32, description="姓")
-    first_name_zh: str | None = Field(None, max_length=32, description="名")
-    last_name_en: str | None = Field(None, max_length=64, description="拼音姓")
-    first_name_en: str | None = Field(None, max_length=64, description="拼音名")
-    real_name: str | None = Field(None, max_length=64, description="真实姓名")
-    id_card_number: str | None = Field(None, min_length=18, max_length=18, description="18 位身份证号")
-    id_card_front_oss: str | None = Field(None, max_length=512, description="身份证人像面 OSS key")
-    id_card_back_oss: str | None = Field(None, max_length=512, description="身份证国徽面 OSS key")
-    avatar_oss: str | None = Field(None, max_length=512, description="二寸免冠照片 OSS key")
-    political_status: str | None = Field(None, max_length=16, description="政治面貌")
-    ethnicity: str | None = Field(None, max_length=16, description="民族")
-    education: str | None = Field(None, max_length=32, description="学历")
-    school: str | None = Field(None, max_length=128, description="学校")
-    major: str | None = Field(None, max_length=128, description="专业")
-    student_card_oss: str | None = Field(None, max_length=512, description="学生证 OSS key")
-    enrollment_pdf_oss: str | None = Field(None, max_length=512, description="学信网电子注册表 OSS key")
-    degree_cert_oss: str | None = Field(None, max_length=512, description="学历证明 OSS key")
-    organization: str | None = Field(None, max_length=256, description="单位")
-    # 审核状态（可直接设为 pending / verified / rejected）
-    identity_status: Literal["pending", "verified", "rejected"] | None = Field(None, description="实名审核状态")
-    student_status: Literal["pending", "verified", "rejected"] | None = Field(None, description="学生信息审核状态")
-    enterprise_status: Literal["pending", "verified", "rejected"] | None = Field(None, description="企业信息审核状态")
+
+    model_config = {"extra": "forbid"}
 
 
 class AdminIdentityReview(BaseModel):
-    status: str = Field(..., description="审核结果: verified / rejected")
+    status: Literal["verified", "rejected"] = Field(
+        ..., description="审核结果: verified / rejected"
+    )
     comment: str | None = Field(None, max_length=256, description="审核备注")
 
 

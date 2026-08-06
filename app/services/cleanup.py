@@ -1,32 +1,39 @@
 import asyncio
 import logging
+import time
 
-from sqlalchemy import delete, select, func, text
+from sqlalchemy import delete, exists, select, func, text
 
 from app.adapter.database import get_db_ctx
 from app.domain.content.src.index import ActivityRegistration, Agreement, Ticket
 from app.domain.community.src.index import Collection, Conversation, Share
 from app.domain.certification.src.index import CompetitionReg, CourseEnrollment
 from app.domain.order.src.index import InventoryRecord, Order, UserCoupon
+from app.domain.renshe.src.index import RensheApplication
 from app.domain.user.src.index import DeletedOpenid, PointsHistory, User, UserProfile, UserRealname, UserStudent, UserEnterprise, UserPoints
 
 logger = logging.getLogger(__name__)
 
 CLEANUP_DAYS = 30
 CLEANUP_INTERVAL_SECONDS = 24 * 3600
+ORDER_TIMEOUT_INTERVAL_SECONDS = 60
 
 
 async def cleanup_loop():
+    next_account_cleanup_at = 0.0
     while True:
-        try:
-            await _cleanup_expired_accounts()
-        except Exception:
-            logger.exception("定时清理账号失败")
+        now = time.monotonic()
+        if now >= next_account_cleanup_at:
+            try:
+                await _cleanup_expired_accounts()
+            except Exception:
+                logger.exception("定时清理账号失败")
+            next_account_cleanup_at = now + CLEANUP_INTERVAL_SECONDS
         try:
             await _close_expired_orders()
         except Exception:
             logger.exception("定时关闭过期订单失败")
-        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+        await asyncio.sleep(ORDER_TIMEOUT_INTERVAL_SECONDS)
 
 
 async def _close_expired_orders():
@@ -42,7 +49,11 @@ async def _cleanup_expired_accounts():
         stale = (
             await db.execute(
                 select(User.id, User.openid)
-                .where(User.is_active == False, User.updated_at < cutoff)
+                .where(
+                    User.is_active == False,
+                    User.updated_at < cutoff,
+                    ~exists().where(RensheApplication.user_id == User.id),
+                )
             )
         ).all()
         if not stale:

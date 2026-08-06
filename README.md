@@ -19,6 +19,7 @@ Python 3.11+ / FastAPI + Uvicorn / SQLAlchemy 2.0 async / PostgreSQL (asyncpg) /
 | PostgreSQL | 主数据存储            |
 | Redis      | 缓存 / 令牌黑名单     |
 | 微信 API   | 小程序登录、微信支付   |
+| 私有 OSS   | 人社认证材料与批次导出 |
 | Dify       | AI 对话引擎           |
 
 ## 下游影响
@@ -48,3 +49,8 @@ cp .env.example .env && python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt && alembic upgrade head
 uvicorn app.main:app --reload
 ```
+
+人社生产环境必须配置私有阿里云 OSS，并将外部官方模板目录挂载到
+`RENSHE_TEMPLATE_DIR`。首次超级管理员只允许显式执行
+`python scripts/init_super_admin.py`，所需开关、用户名和强密码见
+`.env.example`；应用启动和种子脚本都不会自动创建管理员。

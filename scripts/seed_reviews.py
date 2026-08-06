@@ -1,15 +1,28 @@
-"""写入审核测试数据"""
+"""写入审核测试数据。
+
+必须显式提供 ``ADMIN_SEED_USERNAME`` 和 ``ADMIN_SEED_PASSWORD``，脚本不会
+创建管理员，也不包含默认凭据。
+"""
 
 import os, sys, httpx
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-BASE = "http://127.0.0.1:8000"
+BASE = os.getenv("ADMIN_SEED_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+
+
+def _required_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"{name} is required")
+    return value
 
 # 获取 admin token
 resp = httpx.post(f"{BASE}/admin/auth/login", json={
-    "username": "admin", "password": "admin123"
+    "username": _required_env("ADMIN_SEED_USERNAME"),
+    "password": _required_env("ADMIN_SEED_PASSWORD"),
 }, timeout=15)
+resp.raise_for_status()
 token = resp.json()["data"]["access_token"]
 headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 

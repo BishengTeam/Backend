@@ -1,5 +1,7 @@
-"""学生信息表 — Level 2: 需审核。仅 user_type=student 时存在，与 user_enterprise 互斥。"""
-from sqlalchemy import Integer, String, ForeignKey, JSON
+"""学生信息表 — Level 2: 需审核。首版唯一启用的用户资料类型。"""
+from datetime import date
+
+from sqlalchemy import Date, Integer, String, ForeignKey, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.adapter.database import Base, TimestampMixin
@@ -12,6 +14,7 @@ class UserStudent(Base, TimestampMixin):
     education: Mapped[str] = mapped_column(String(32), nullable=False)
     school: Mapped[str] = mapped_column(String(128), nullable=False)
     major: Mapped[str] = mapped_column(String(128), nullable=False)
+    enrollment_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     student_card_oss: Mapped[str] = mapped_column(String(512), nullable=False)
     enrollment_pdf_oss: Mapped[str | None] = mapped_column(String(512), nullable=True)  # 学信网电子注册表
     degree_cert_oss: Mapped[str | None] = mapped_column(String(512), nullable=True)     # 学历证明

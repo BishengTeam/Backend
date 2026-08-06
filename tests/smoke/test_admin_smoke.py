@@ -5,14 +5,15 @@ Requires: httpx (pip install httpx), target service running on localhost:8000
 """
 
 import asyncio
+import os
 import sys
 import time
 
 import httpx
 
-BASE = "http://localhost:8000"
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "admin123"
+BASE = os.getenv("ADMIN_SMOKE_BASE_URL", "http://localhost:8000").rstrip("/")
+ADMIN_USERNAME = os.getenv("ADMIN_SMOKE_USERNAME", "").strip()
+ADMIN_PASSWORD = os.getenv("ADMIN_SMOKE_PASSWORD", "").strip()
 
 # Each entry: (method, path, check_fn or None)
 # check_fn receives the response body (dict) and returns True/False
@@ -54,6 +55,10 @@ CASES = [
 
 
 async def main():
+    if not ADMIN_USERNAME or not ADMIN_PASSWORD:
+        raise RuntimeError(
+            "ADMIN_SMOKE_USERNAME and ADMIN_SMOKE_PASSWORD must be set explicitly"
+        )
     print("=== Admin Smoke Test ===")
     print(f"Target: {BASE}")
     print("=" * 40)

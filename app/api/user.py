@@ -3,8 +3,6 @@ from fastapi import APIRouter, Depends
 from app.middleware.auth import get_current_user
 from app.schemas.common import APIResponse, success
 from app.schemas.user import (
-    EnterpriseResponse,
-    EnterpriseSubmit,
     LoginResponse,
     LogoutRequest,
     PhoneDecryptRequest,
@@ -110,24 +108,11 @@ async def get_student(current_user=Depends(get_current_user)):
     return success(data=result)
 
 
-# ═══════ Level 2: 企业信息 ═══════
-
-@router.post("/enterprise",
-    response_model=APIResponse[EnterpriseResponse],
-    summary="提交企业信息（Level 2：需审核）",
+@router.delete("/account",
+    response_model=APIResponse,
+    summary="注销当前账号",
+    description="存在支付、审核、退款等活动流程时禁止注销。",
 )
-async def submit_enterprise(
-    body: EnterpriseSubmit,
-    current_user=Depends(get_current_user),
-):
-    result = await UserService().submit_enterprise(current_user.id, body)
-    return success(data=result)
-
-
-@router.get("/enterprise",
-    response_model=APIResponse[EnterpriseResponse],
-    summary="查看企业信息",
-)
-async def get_enterprise(current_user=Depends(get_current_user)):
-    result = await UserService().get_enterprise(current_user.id)
-    return success(data=result)
+async def delete_account(current_user=Depends(get_current_user)):
+    await UserService().delete_account(current_user.id)
+    return success(message="账号已注销")

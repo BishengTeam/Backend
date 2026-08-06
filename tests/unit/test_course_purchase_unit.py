@@ -1,13 +1,26 @@
 from pathlib import Path
 
 import pytest
+from fastapi.routing import APIRoute
 
+from app.api.course_assets import router as course_assets_router
 from app.port.exceptions import ForbiddenException, NotFoundException
 from app.services.course_asset import CourseAssetService, CourseAssetStorage
 from app.services.upload import UploadService
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_course_asset_playback_route_is_registered():
+    routes = [route for route in course_assets_router.routes if isinstance(route, APIRoute)]
+    playback_route = next(
+        (route for route in routes if route.path == "/course-assets/{asset_id}/playback-url"),
+        None,
+    )
+
+    assert playback_route is not None
+    assert playback_route.methods == {"POST"}
 
 
 def test_course_purchase_reads_price_from_locked_course_model():

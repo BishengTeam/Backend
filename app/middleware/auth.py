@@ -105,3 +105,9 @@ def require_permission(permission: str):
         return admin
 
     return _check
+
+
+async def require_super_admin(admin=Depends(get_current_admin)):
+    if admin.role != "super_admin":
+        raise ForbiddenException("仅超级管理员可执行此操作")
+    return admin

@@ -17,6 +17,7 @@ from app.api.payment import router as payment_router
 from app.api.points import router as points_router
 from app.api.price_config import router as prices_router
 from app.api.quiz import router as quiz_router
+from app.api.renshe import router as renshe_router
 from app.api.share import router as share_router
 from app.api.system import router as system_router
 from app.api.ticket import router as ticket_router
@@ -39,6 +40,7 @@ router.include_router(payment_router)
 router.include_router(points_router)
 router.include_router(prices_router)
 router.include_router(quiz_router)
+router.include_router(renshe_router)
 router.include_router(system_router)
 router.include_router(quick_router)
 router.include_router(zone_router)

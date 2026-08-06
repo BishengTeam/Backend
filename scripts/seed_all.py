@@ -3,14 +3,15 @@
 用法：
     python scripts/seed_all.py              # 幂等：每步独立检查，有则跳过
     python scripts/seed_all.py --force       # 强制重建（truncate 后重新 seed）
-    python scripts/seed_all.py --skip-admin  # 跳过管理员创建
     python scripts/seed_all.py --skip-config # 跳过基础配置
     python scripts/seed_all.py --skip-testdata # 跳过测试数据
 
 数据依赖层次（自底向上）：
-    第 1 层  seed_admin    — 5 角色管理员
     第 1 层  seed_config   — 认证 / 价格 / 题库分类
     第 2-4 层 seed_testdata — 用户 / 订单 / 积分 / 课程 / 优惠券 / Banner / Zone
+
+管理员账号不属于种子数据。首次超级管理员只能由运维人员显式执行
+``scripts/init_super_admin.py`` 并通过环境变量提供强密码。
 """
 
 import asyncio
@@ -36,27 +37,14 @@ def print_step(msg: str):
 
 
 async def main():
-    force = "--force" in sys.argv
-    skip_admin = "--skip-admin" in sys.argv
     skip_config = "--skip-config" in sys.argv
     skip_testdata = "--skip-testdata" in sys.argv
 
     success = True
 
-    # ── 第 1 步：管理员 ─────────────────────────────────
-    if not skip_admin:
-        print_step("第 1 步: 管理员账号")
-        try:
-            seed_admin_mod = importlib.import_module("scripts.seed_admin")
-            await seed_admin_mod.main()
-        except Exception:
-            traceback.print_exc()
-            print("  ❌ 管理员创建失败")
-            success = False
-
-    # ── 第 2 步：基础配置 ───────────────────────────────
+    # ── 第 1 步：基础配置 ───────────────────────────────
     if not skip_config:
-        print_step("第 2 步: 基础配置")
+        print_step("第 1 步: 基础配置")
         try:
             seed_config_mod = importlib.import_module("scripts.seed_data")
             await seed_config_mod.main()
@@ -65,9 +53,9 @@ async def main():
             print("  ❌ 基础配置初始化失败")
             success = False
 
-    # ── 第 3 步：测试数据 ───────────────────────────────
+    # ── 第 2 步：测试数据 ───────────────────────────────
     if not skip_testdata:
-        print_step("第 3 步: 测试数据")
+        print_step("第 2 步: 测试数据")
         try:
             # seed_testdata 直接从 sys.argv 读取 --force 参数
             seed_testdata_mod = importlib.import_module("scripts.seed_testdata")

@@ -2,7 +2,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, Path, Query
 
-from app.middleware.auth import require_permission
+from app.middleware.auth import require_permission, require_super_admin
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.order import OrderResponse, OrderStatus
 from app.schemas.plan import PlanCreate, PlanUpdate, PlanResponse
@@ -84,9 +84,9 @@ async def list_plan_approvals(
 async def create_plan(
     body: PlanCreate,
     code: str = Path(..., description="认证产品代码"),
-    _admin=Depends(require_permission("user:write")),
+    admin=Depends(require_permission("user:write")),
 ):
-    result = await PlanService().create_plan(code, body)
+    result = await PlanService().create_plan(code, body, admin_id=admin.id)
     return success(data=result)
 
 
@@ -98,9 +98,11 @@ async def update_plan(
     body: PlanUpdate,
     code: str = Path(..., description="认证产品代码"),
     plan_id: int = Path(..., description="批次 ID"),
-    _admin=Depends(require_permission("user:write")),
+    admin=Depends(require_permission("user:write")),
 ):
-    result = await PlanService().update_plan(plan_id, body, product_type=code)
+    result = await PlanService().update_plan(
+        plan_id, body, product_type=code, admin_id=admin.id
+    )
     return success(data=result)
 
 
@@ -111,9 +113,11 @@ async def update_plan(
 async def publish_plan(
     code: str = Path(..., description="认证产品代码"),
     plan_id: int = Path(..., description="批次 ID"),
-    _admin=Depends(require_permission("user:write")),
+    admin=Depends(require_permission("user:write")),
 ):
-    result = await PlanService().publish_plan(plan_id, product_type=code)
+    result = await PlanService().publish_plan(
+        plan_id, product_type=code, admin_id=admin.id
+    )
     return success(data=result, message="批次已发布")
 
 
@@ -124,9 +128,11 @@ async def publish_plan(
 async def archive_plan(
     code: str = Path(..., description="认证产品代码"),
     plan_id: int = Path(..., description="批次 ID"),
-    _admin=Depends(require_permission("user:write")),
+    admin=Depends(require_permission("user:write")),
 ):
-    result = await PlanService().archive_plan(plan_id, product_type=code)
+    result = await PlanService().archive_plan(
+        plan_id, product_type=code, admin_id=admin.id
+    )
     return success(data=result, message="批次已归档")
 
 
@@ -137,10 +143,45 @@ async def archive_plan(
 async def cancel_plan(
     code: str = Path(..., description="认证产品代码"),
     plan_id: int = Path(..., description="批次 ID"),
-    _admin=Depends(require_permission("user:write")),
+    admin=Depends(require_permission("user:write")),
 ):
-    result = await PlanService().cancel_plan(plan_id, product_type=code)
+    result = await PlanService().cancel_plan(
+        plan_id, product_type=code, admin_id=admin.id
+    )
     return success(data=result, message="批次已取消")
+
+
+@router.put(
+    "/{code}/plans/{plan_id}/close-registration",
+    response_model=APIResponse[PlanResponse],
+    summary="关闭批次报名",
+)
+async def close_registration(
+    code: str = Path(..., description="认证产品代码"),
+    plan_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("user:write")),
+):
+    result = await PlanService().close_registration(
+        plan_id, product_type=code, admin_id=admin.id
+    )
+    return success(data=result, message="批次报名已关闭")
+
+
+@router.put(
+    "/{code}/plans/{plan_id}/finalize",
+    response_model=APIResponse[PlanResponse],
+    summary="终结人社批次（仅超级管理员）",
+    description="待审核记录会阻止终结；驳回且已付款报名将逐名建立自动退款任务。",
+)
+async def finalize_plan(
+    code: str = Path(..., description="认证产品代码"),
+    plan_id: int = Path(..., ge=1),
+    admin=Depends(require_super_admin),
+):
+    result = await PlanService().finalize_plan(
+        plan_id, product_type=code, admin_id=admin.id
+    )
+    return success(data=result, message="批次已终结")
 
 
 @router.delete("/{code}/plans/{plan_id}",

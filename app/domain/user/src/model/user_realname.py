@@ -18,6 +18,10 @@ class UserRealname(Base, TimestampMixin):
     last_name_en: Mapped[str | None] = mapped_column(String(64), nullable=True)   # 拼音姓
     first_name_en: Mapped[str | None] = mapped_column(String(64), nullable=True)  # 拼音名
     id_card_number: Mapped[str] = mapped_column(String(18), nullable=False, index=True)
+    id_card_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    active_id_card_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True
+    )
     id_card_front_oss: Mapped[str | None] = mapped_column(String(512), nullable=True)
     id_card_back_oss: Mapped[str | None] = mapped_column(String(512), nullable=True)
     avatar_oss: Mapped[str | None] = mapped_column(String(512), nullable=True)    # 二寸免冠照片

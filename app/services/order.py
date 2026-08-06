@@ -31,6 +31,8 @@ def resolve_price_tier(user_type: str | None) -> str:
 class OrderService:
 
     async def create_order(self, user_id: int, data: OrderCreate) -> OrderResponse:
+        if data.product_type == "RS-ZY":
+            raise BusinessException("人社订单只能通过人社报名提交接口创建")
         async with get_db_ctx() as db:
             async with db.begin():
                 # 认证报名需要实名验证

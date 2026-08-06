@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import asyncio
 import sys
 import types
 import unittest
@@ -10,7 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+import httpx
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -171,7 +172,7 @@ class PointsHttpSmokeTests(unittest.TestCase):
             return SimpleNamespace(id=7)
 
         app.dependency_overrides[self.points_api.get_current_user] = fake_current_user
-        self.client = TestClient(app)
+        self.app = app
 
     def _restore_points_service(self) -> None:
         self.points_api.PointsService = self.original_points_service
@@ -198,20 +199,27 @@ class PointsHttpSmokeTests(unittest.TestCase):
             ("POST", "/api/points/redeem", {"redeem_type": "course", "amount": 10, "target_id": 1}),
         ]
 
-        for method, path, body in cases:
-            with self.subTest(endpoint=f"{method} {path}"):
-                response = self.client.request(
-                    method,
-                    path,
-                    json=body,
-                    headers={"Authorization": "Bearer test-token"},
-                )
-                payload = response.json()
+        async def run_cases() -> None:
+            transport = httpx.ASGITransport(app=self.app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                for method, path, body in cases:
+                    with self.subTest(endpoint=f"{method} {path}"):
+                        response = await client.request(
+                            method,
+                            path,
+                            json=body,
+                            headers={"Authorization": "Bearer test-token"},
+                        )
+                        payload = response.json()
 
-                self.assertEqual(response.status_code, 200)
-                self.assertEqual(payload["code"], 0)
-                self.assertEqual(payload["message"], "ok")
-                self.assertIsNotNone(payload["data"])
+                        self.assertEqual(response.status_code, 200)
+                        self.assertEqual(payload["code"], 0)
+                        self.assertEqual(payload["message"], "ok")
+                        self.assertIsNotNone(payload["data"])
+
+        asyncio.run(run_cases())
 
 
 if __name__ == "__main__":

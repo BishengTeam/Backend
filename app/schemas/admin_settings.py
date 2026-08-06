@@ -1,17 +1,21 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
 class AdminSettingsUserCreate(BaseModel):
     username: str = Field(..., min_length=1, max_length=64)
-    password: str = Field(..., min_length=1, max_length=128)
-    role: str = Field("content_editor", min_length=1, max_length=32)
+    password: str = Field(..., min_length=12, max_length=128)
+    role: Literal["admin"] = "admin"
 
 
 class AdminSettingsUserUpdate(BaseModel):
-    role: str | None = Field(None, min_length=1, max_length=32)
     is_active: bool | None = None
+
+
+class AdminSettingsPasswordReset(BaseModel):
+    password: str = Field(..., min_length=12, max_length=128)
 
 
 class AdminSettingsUserListItem(BaseModel):

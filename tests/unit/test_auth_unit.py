@@ -20,9 +20,9 @@ from app.schemas.user import (
     LoginRequest,
     LoginResponse,
     PhoneDecryptRequest,
+    RealnameSubmit,
     RefreshRequest,
     RefreshResponse,
-    UserIdentityCreate,
     UserProfile,
 )
 from pydantic import ValidationError as PydanticValidationError
@@ -275,26 +275,56 @@ class AuthSystemTests(unittest.TestCase):
         with self.assertRaises(PydanticValidationError):
             PhoneDecryptRequest(encrypted_data="enc")
 
-    def test_user_identity_create_enforces_fields(self):
-        r = UserIdentityCreate(
-            user_type="student", real_name="张三", id_card_number="11010519491231002X",
-            student_card_oss="oss_key",
+    def test_realname_submit_enforces_fields(self):
+        r = RealnameSubmit(
+            user_type="student",
+            real_name="张三",
+            id_card_number="11010519491231002X",
+            id_card_front_oss="front-key",
+            id_card_back_oss="back-key",
+            avatar_oss="portrait-key",
+            political_status="群众",
+            ethnicity="汉族",
         )
         self.assertEqual(r.user_type, "student")
         self.assertEqual(r.id_card_number, "11010519491231002X")
         with self.assertRaises(PydanticValidationError):
-            UserIdentityCreate(user_type="student")
+            RealnameSubmit(user_type="student")
         with self.assertRaises(PydanticValidationError):
-            UserIdentityCreate(user_type="invalid_type", real_name="张三", id_card_number="11010519491231002X")
+            RealnameSubmit(
+                user_type="invalid_type",
+                real_name="张三",
+                id_card_number="11010519491231002X",
+                id_card_front_oss="front-key",
+                id_card_back_oss="back-key",
+                avatar_oss="portrait-key",
+                political_status="群众",
+                ethnicity="汉族",
+            )
         with self.assertRaises(PydanticValidationError):
-            UserIdentityCreate(user_type="student", real_name="张三", id_card_number="123")  # too short
+            RealnameSubmit(
+                user_type="student",
+                real_name="张三",
+                id_card_number="123",
+                id_card_front_oss="front-key",
+                id_card_back_oss="back-key",
+                avatar_oss="portrait-key",
+                political_status="群众",
+                ethnicity="汉族",
+            )
 
-    def test_user_identity_create_allows_enterprise_type(self):
-        r = UserIdentityCreate(
-            user_type="enterprise", real_name="李四", id_card_number="11010519491231002X",
-        )
-        self.assertEqual(r.user_type, "enterprise")
-        self.assertIsNone(r.student_card_oss)
+    def test_realname_submit_rejects_enterprise_type(self):
+        with self.assertRaises(PydanticValidationError):
+            RealnameSubmit(
+                user_type="enterprise",
+                real_name="李四",
+                id_card_number="11010519491231002X",
+                id_card_front_oss="front-key",
+                id_card_back_oss="back-key",
+                avatar_oss="portrait-key",
+                political_status="群众",
+                ethnicity="汉族",
+            )
 
     # --- JWT / Security ---
 

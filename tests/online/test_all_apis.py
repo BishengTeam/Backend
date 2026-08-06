@@ -15,6 +15,8 @@ import os
 BASE_URL = "http://127.0.0.1:8000"
 TIMEOUT = 10
 RESULTS = []
+ADMIN_USERNAME = os.getenv("ONLINE_ADMIN_USERNAME", "").strip()
+ADMIN_PASSWORD = os.getenv("ONLINE_ADMIN_PASSWORD", "").strip()
 
 
 def curl(method: str, path: str, *,
@@ -48,9 +50,12 @@ def curl(method: str, path: str, *,
 
 
 def get_admin_token() -> str | None:
-    """Login as admin/admin123 and return access_token."""
+    """Use explicitly supplied administrator credentials."""
+    if not ADMIN_USERNAME or not ADMIN_PASSWORD:
+        print("  ⚠ 未设置 ONLINE_ADMIN_USERNAME/ONLINE_ADMIN_PASSWORD，跳过管理员接口")
+        return None
     code, body, _ = curl("POST", "/admin/auth/login",
-                         body={"username": "admin", "password": "admin123"})
+                         body={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD})
     if code == 200 and body and body.get("data"):
         return body["data"].get("access_token")
     print(f"  ⚠ 管理员登录失败 HTTP {code}: {body}")
@@ -219,10 +224,11 @@ def main():
     # 五、管理后台认证
     # ================================================================
     print("\n--- 5. 管理后台认证 ---")
-    test("管理员登录", "POST", "/admin/auth/login",
-         body={"username": "admin", "password": "admin123"})
-    test("管理员登录（错误密码）", "POST", "/admin/auth/login",
-         body={"username": "admin", "password": "wrong"})
+    if ADMIN_USERNAME and ADMIN_PASSWORD:
+        test("管理员登录", "POST", "/admin/auth/login",
+             body={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD})
+        test("管理员登录（错误密码）", "POST", "/admin/auth/login",
+             body={"username": ADMIN_USERNAME, "password": f"{ADMIN_PASSWORD}-invalid"})
     if admin_token:
         test("管理员信息", "GET", "/admin/auth/me", auth=admin_token, auth_type="admin")
 

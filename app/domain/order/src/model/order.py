@@ -37,6 +37,12 @@ class Order(Base, TimestampMixin):
         nullable=True,
         index=True,
     )
+    application_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("renshe_application.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     inventory_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("inventory.id"), nullable=True, index=True
     )

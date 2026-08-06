@@ -76,6 +76,8 @@ class AdminOrderService:
             ).scalar_one_or_none()
             if order is None:
                 raise NotFoundException("订单")
+            if order.application_id is not None:
+                raise BusinessException("人社订单必须使用专用报名审核和退款流程")
             if order.status != "paid":
                 raise BusinessException("仅已支付订单可审核")
 
@@ -129,6 +131,8 @@ class AdminOrderService:
             ).scalar_one_or_none()
             if order is None:
                 raise NotFoundException("订单")
+            if order.application_id is not None:
+                raise BusinessException("人社订单必须使用专用报名审核和退款流程")
             if order.status == "refunded":
                 inventory_changed = await refund_inventory_sale(
                     db,

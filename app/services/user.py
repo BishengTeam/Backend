@@ -1,21 +1,40 @@
-"""用户服务 — Level 1 基础资料 + Level 2 实名/学生/企业审核。"""
+"""用户服务 — Level 1 基础资料 + Level 2 实名/学生审核。"""
 from datetime import datetime, timezone
 
-from sqlalchemy import select, update, func
+from sqlalchemy import func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 
 from app.adapter.database import get_db_ctx
 from app.adapter.redis import redis_get_safe
-from app.port.exceptions import BusinessException, NotFoundException, ValidationException
+from app.port.exceptions import (
+    BusinessException,
+    ConflictException,
+    NotFoundException,
+    ValidationException,
+)
 from app.integrations.wechat import WechatClient
 from app.integrations.identity_verify import IdentityVerifyError, verify_real_name
+from app.integrations.renshe_storage import assert_owned_source_key
 from app.domain.user.src.index import (
-    DeletedOpenid, User, UserProfile, UserRealname, UserStudent, UserEnterprise,
+    DeletedIdentityHash,
+    DeletedOpenid,
+    User,
+    UserEnterprise,
+    UserProfile,
+    UserRealname,
+    UserStudent,
 )
 from app.domain.order.src.index import Order
+from app.domain.renshe.src.index import (
+    PROFILE_LOCKING_APPLICATION_STATUSES,
+    RensheApplication,
+    RensheRefundRequest,
+)
 from app.domain.community.src.index import Conversation
 from app.domain.review.src.index import Review
 from app.utils.validators import validate_id_card
 from app.utils.census import resolve_census
+from app.utils.pii import identity_hash
 from pypinyin import lazy_pinyin
 
 SESSION_KEY_PREFIX = "session_key:"
@@ -79,6 +98,60 @@ async def _get_reject_reason(target_type: str, user_id: int) -> str | None:
         )
         row = result.one_or_none()
         return row[0] if row else None
+
+
+async def _assert_renshe_profile_unlocked(db, user_id: int) -> None:
+    active_applications = (
+        await db.execute(
+            select(RensheApplication)
+            .where(
+                RensheApplication.user_id == user_id,
+                RensheApplication.status != "closed",
+            )
+            .order_by(RensheApplication.id)
+            .with_for_update()
+        )
+    ).scalars().all()
+    if any(
+        application.status in PROFILE_LOCKING_APPLICATION_STATUSES
+        or application.frozen_at is not None
+        for application in active_applications
+    ):
+        raise BusinessException("报名正在支付、审核或退款处理中，暂不能修改认证资料")
+
+
+async def _assert_account_closure_allowed(db, user_id: int) -> None:
+    """Reject soft deletion while any payment, review, or refund flow is active."""
+
+    active_application_id = await db.scalar(
+        select(RensheApplication.id)
+        .where(
+            RensheApplication.user_id == user_id,
+            or_(
+                RensheApplication.status.notin_(("draft", "closed")),
+                RensheApplication.frozen_at.is_not(None),
+            ),
+        )
+        .limit(1)
+    )
+    active_order_id = await db.scalar(
+        select(Order.id)
+        .where(
+            Order.user_id == user_id,
+            Order.status.in_(("pending", "paid", "completed")),
+        )
+        .limit(1)
+    )
+    active_refund_id = await db.scalar(
+        select(RensheRefundRequest.id)
+        .where(
+            RensheRefundRequest.user_id == user_id,
+            RensheRefundRequest.status.in_(("requested", "approved", "processing", "failed")),
+        )
+        .limit(1)
+    )
+    if any(value is not None for value in (active_application_id, active_order_id, active_refund_id)):
+        raise BusinessException("存在未结束的报名、订单、审核或退款流程，暂不能注销账号")
 
 
 async def _check_level2_edit_limit(user):
@@ -159,10 +232,6 @@ class UserService:
             student = (await db.execute(
                 select(UserStudent).where(UserStudent.user_id == user_id)
             )).scalar_one_or_none()
-            enterprise = (await db.execute(
-                select(UserEnterprise).where(UserEnterprise.user_id == user_id)
-            )).scalar_one_or_none()
-
             phone = profile.phone if profile else None
             return UserProfileDetail(
                 id=user.id,
@@ -198,12 +267,11 @@ class UserService:
                 education=student.education if student else None,
                 school=student.school if student else None,
                 major=student.major if student else None,
+                enrollment_date=student.enrollment_date if student else None,
                 student_card_oss=student.student_card_oss if student else None,
                 enrollment_pdf_oss=student.enrollment_pdf_oss if student else None,
                 degree_cert_oss=student.degree_cert_oss if student else None,
                 student_status=student.status if student else None,
-                organization=enterprise.organization if enterprise else None,
-                enterprise_status=enterprise.status if enterprise else None,
                 identity_reject_reason=(
                     await _get_reject_reason("identity", user_id)
                     if realname and realname.status == "rejected" else None
@@ -211,10 +279,6 @@ class UserService:
                 student_reject_reason=(
                     await _get_reject_reason("student", user_id)
                     if student and student.status == "rejected" else None
-                ),
-                enterprise_reject_reason=(
-                    await _get_reject_reason("enterprise", user_id)
-                    if enterprise and enterprise.status == "rejected" else None
                 ),
                 edit_count=user.level2_edit_count,
                 edit_count_limit=MAX_LEVEL2_EDITS,
@@ -257,24 +321,50 @@ class UserService:
         error = validate_id_card(data.id_card_number)
         if error:
             raise ValidationException(error)
+        for storage_key in (
+            data.id_card_front_oss,
+            data.id_card_back_oss,
+            data.avatar_oss,
+        ):
+            assert_owned_source_key(user_id, storage_key)
 
         gender, age, census = _derived_from_id_card(data.id_card_number)
         birth_date = _birth_date_from_id_card(data.id_card_number)
         zip_code_val = data.id_card_number[:6] if len(data.id_card_number) == 18 else None
         # 姓名: 优先用姓+名拼接，fallback 到 real_name
-        real_name = data.real_name or (
-            f"{data.last_name_zh or ''}{data.first_name_zh or ''}".strip() or None
-        )
+        real_name = data.real_name.strip()
         # 拼音: 未传入时由中文姓/名自动计算
         last_name_en = data.last_name_en or _to_pinyin(data.last_name_zh)
         first_name_en = data.first_name_en or _to_pinyin(data.first_name_zh)
 
         async with get_db_ctx() as db:
-            user = await db.get(User, user_id)
-            if user is None or not user.is_active:
+            user = await db.scalar(
+                select(User)
+                .where(User.id == user_id, User.is_active.is_(True))
+                .with_for_update()
+            )
+            if user is None:
                 raise NotFoundException("用户")
 
+            await _assert_renshe_profile_unlocked(db, user_id)
             await _check_level2_edit_limit(user)
+
+            digest = identity_hash(data.id_card_number)
+            occupied_by = await db.scalar(
+                select(UserRealname.user_id)
+                .join(User, User.id == UserRealname.user_id)
+                .where(
+                    UserRealname.user_id != user_id,
+                    User.is_active.is_(True),
+                    or_(
+                        UserRealname.active_id_card_hash == digest,
+                        UserRealname.id_card_number == data.id_card_number,
+                    ),
+                )
+                .limit(1)
+            )
+            if occupied_by is not None:
+                raise ConflictException("该身份证号已绑定其他有效账号")
 
             existing_realname = (await db.execute(
                 select(UserRealname).where(UserRealname.user_id == user_id)
@@ -288,6 +378,8 @@ class UserService:
                     "last_name_en": existing_realname.last_name_en,
                     "first_name_en": existing_realname.first_name_en,
                     "id_card_number": existing_realname.id_card_number,
+                    "id_card_hash": existing_realname.id_card_hash,
+                    "active_id_card_hash": existing_realname.active_id_card_hash,
                     "id_card_front_oss": existing_realname.id_card_front_oss,
                     "id_card_back_oss": existing_realname.id_card_back_oss,
                     "avatar_oss": existing_realname.avatar_oss,
@@ -302,13 +394,15 @@ class UserService:
                 }
 
             if existing_realname:
-                existing_realname.user_type = data.user_type
+                existing_realname.user_type = "student"
                 existing_realname.real_name = real_name
                 existing_realname.last_name_zh = data.last_name_zh
                 existing_realname.first_name_zh = data.first_name_zh
                 existing_realname.last_name_en = last_name_en
                 existing_realname.first_name_en = first_name_en
                 existing_realname.id_card_number = data.id_card_number
+                existing_realname.id_card_hash = digest
+                existing_realname.active_id_card_hash = digest
                 existing_realname.id_card_front_oss = data.id_card_front_oss
                 existing_realname.id_card_back_oss = data.id_card_back_oss
                 existing_realname.avatar_oss = data.avatar_oss
@@ -325,13 +419,15 @@ class UserService:
             else:
                 existing_realname = UserRealname(
                     user_id=user_id,
-                    user_type=data.user_type,
+                    user_type="student",
                     real_name=real_name,
                     last_name_zh=data.last_name_zh,
                     first_name_zh=data.first_name_zh,
                     last_name_en=last_name_en,
                     first_name_en=first_name_en,
                     id_card_number=data.id_card_number,
+                    id_card_hash=digest,
+                    active_id_card_hash=digest,
                     id_card_front_oss=data.id_card_front_oss,
                     id_card_back_oss=data.id_card_back_oss,
                     avatar_oss=data.avatar_oss,
@@ -347,7 +443,13 @@ class UserService:
                 db.add(existing_realname)
 
             await _incr_level2_edit(user)
-            await db.commit()
+            try:
+                await db.commit()
+            except IntegrityError as exc:
+                await db.rollback()
+                if "active_id_card_hash" in str(exc):
+                    raise ConflictException("该身份证号已绑定其他有效账号") from exc
+                raise
             await db.refresh(existing_realname)
 
         return RealnameResponse(
@@ -413,11 +515,23 @@ class UserService:
         """提交/修改学生信息。触发审核。"""
         from app.schemas.user import StudentResponse
 
+        for storage_key in (
+            data.student_card_oss,
+            data.enrollment_pdf_oss,
+            data.degree_cert_oss,
+        ):
+            assert_owned_source_key(user_id, storage_key)
+
         async with get_db_ctx() as db:
-            user = await db.get(User, user_id)
-            if user is None or not user.is_active:
+            user = await db.scalar(
+                select(User)
+                .where(User.id == user_id, User.is_active.is_(True))
+                .with_for_update()
+            )
+            if user is None:
                 raise NotFoundException("用户")
 
+            await _assert_renshe_profile_unlocked(db, user_id)
             # 检查互斥：不能同时有 enterprise
             enterprise = (await db.execute(
                 select(UserEnterprise).where(UserEnterprise.user_id == user_id)
@@ -437,6 +551,10 @@ class UserService:
                     "education": existing.education,
                     "school": existing.school,
                     "major": existing.major,
+                    "enrollment_date": (
+                        existing.enrollment_date.isoformat()
+                        if existing.enrollment_date else None
+                    ),
                     "student_card_oss": existing.student_card_oss,
                     "enrollment_pdf_oss": existing.enrollment_pdf_oss,
                     "degree_cert_oss": existing.degree_cert_oss,
@@ -446,6 +564,7 @@ class UserService:
                 existing.education = data.education
                 existing.school = data.school
                 existing.major = data.major
+                existing.enrollment_date = data.enrollment_date
                 existing.student_card_oss = data.student_card_oss
                 existing.enrollment_pdf_oss = data.enrollment_pdf_oss
                 existing.degree_cert_oss = data.degree_cert_oss
@@ -458,6 +577,7 @@ class UserService:
                     education=data.education,
                     school=data.school,
                     major=data.major,
+                    enrollment_date=data.enrollment_date,
                     student_card_oss=data.student_card_oss,
                     enrollment_pdf_oss=data.enrollment_pdf_oss,
                     degree_cert_oss=data.degree_cert_oss,
@@ -473,6 +593,7 @@ class UserService:
             education=existing.education,
             school=existing.school,
             major=existing.major,
+            enrollment_date=existing.enrollment_date,
             student_card_oss=existing.student_card_oss,
             enrollment_pdf_oss=existing.enrollment_pdf_oss,
             degree_cert_oss=existing.degree_cert_oss,
@@ -496,6 +617,7 @@ class UserService:
                 education=student.education,
                 school=student.school,
                 major=student.major,
+                enrollment_date=student.enrollment_date,
                 student_card_oss=student.student_card_oss,
                 enrollment_pdf_oss=student.enrollment_pdf_oss,
                 degree_cert_oss=student.degree_cert_oss,
@@ -508,6 +630,7 @@ class UserService:
 
     async def submit_enterprise(self, user_id: int, data: "EnterpriseSubmit") -> "EnterpriseResponse":
         """提交/修改企业信息。触发审核。"""
+        raise BusinessException("首版已停用企业认证，只支持学生认证")
         from app.schemas.user import EnterpriseResponse
 
         async with get_db_ctx() as db:
@@ -557,6 +680,7 @@ class UserService:
 
     async def get_enterprise(self, user_id: int) -> "EnterpriseResponse":
         """获取企业信息"""
+        raise BusinessException("首版已停用企业认证，只支持学生认证")
         from app.schemas.user import EnterpriseResponse
 
         reject_reason = await _get_reject_reason("enterprise", user_id)
@@ -579,8 +703,39 @@ class UserService:
     async def delete_account(self, user_id: int) -> None:
         async with get_db_ctx() as db:
             user = await db.get(User, user_id)
-            if user is None:
+            if user is None or not user.is_active:
                 raise NotFoundException("用户")
+
+            await _assert_account_closure_allowed(db, user_id)
+
+            now = datetime.now(timezone.utc)
+            drafts = (
+                await db.execute(
+                    select(RensheApplication).where(
+                        RensheApplication.user_id == user_id,
+                        RensheApplication.status == "draft",
+                    )
+                )
+            ).scalars().all()
+            for application in drafts:
+                application.status = "closed"
+                application.closed_at = now
+                application.close_reason = "account_deleted"
+
+            realname = await db.scalar(
+                select(UserRealname).where(UserRealname.user_id == user_id)
+            )
+            if realname is not None:
+                digest = realname.id_card_hash or identity_hash(realname.id_card_number)
+                db.add(
+                    DeletedIdentityHash(
+                        former_user_id=user_id,
+                        id_card_hash=digest,
+                        released_at=now,
+                    )
+                )
+                realname.id_card_hash = digest
+                realname.active_id_card_hash = None
             db.add(DeletedOpenid(openid=user.openid))
             await db.execute(
                 update(Order)

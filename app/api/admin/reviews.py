@@ -16,10 +16,10 @@ router = APIRouter(prefix="/reviews", tags=["管理后台-审核管理"])
     description="""
 管理后台 **审核** 功能使用。
 
-**使用场景**: 对实名认证、学生信息、企业信息、认证报名订单进行审核
+**使用场景**: 对实名认证、学生信息和旧版认证订单进行审核
 
 **请求体**:
-- `target_type`: 审核对象类型（identity / student / enterprise / order）
+- `target_type`: 审核对象类型（identity / student / order）
 - `target_id`: 审核对象 ID（user_id 或 order_id）
 - `action`: 审核动作（approve / reject）
 - `comment`: 审核备注（驳回时必填）

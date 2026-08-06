@@ -18,6 +18,9 @@ from app.middleware import setup_middleware
 from app.middleware.rate_limit import limiter
 from app.schemas.common import success
 from app.services.cleanup import cleanup_loop
+from app.services.renshe_export import renshe_export_worker_loop
+from app.services.renshe_cleanup import renshe_cleanup_worker_loop
+from app.services.quiz_tasks import ensure_quiz_runtime_ready, quiz_worker_loop
 
 logger = logging.getLogger(__name__)
 
@@ -25,15 +28,38 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
+    await ensure_quiz_runtime_ready()
     cleanup_task = asyncio.create_task(cleanup_loop())
+    renshe_export_task = asyncio.create_task(renshe_export_worker_loop())
+    renshe_cleanup_task = asyncio.create_task(renshe_cleanup_worker_loop())
+    quiz_task = (
+        asyncio.create_task(quiz_worker_loop()) if settings.QUIZ_TASKS_ENABLED else None
+    )
     logger.info("Application startup complete")
     yield
     logger.info("Shutting down background tasks...")
     cleanup_task.cancel()
+    renshe_export_task.cancel()
+    renshe_cleanup_task.cancel()
+    if quiz_task is not None:
+        quiz_task.cancel()
     try:
         await cleanup_task
     except asyncio.CancelledError:
         pass
+    try:
+        await renshe_export_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await renshe_cleanup_task
+    except asyncio.CancelledError:
+        pass
+    if quiz_task is not None:
+        try:
+            await quiz_task
+        except asyncio.CancelledError:
+            pass
     logger.info("Closing database connections...")
     await engine.dispose()
     logger.info("Closing Redis connections...")
