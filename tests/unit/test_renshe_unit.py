@@ -719,6 +719,7 @@ async def test_export_retry_locks_plan_before_job(monkeypatch):
     )
     db = _FakeDb(scalars=(11, plan, None, job))
     monkeypatch.setattr("app.services.renshe_export.get_db_ctx", _db_context(db))
+    monkeypatch.setattr(RensheExportService, "_now", staticmethod(lambda: now))
     service = RensheExportService()
     service.get_job = AsyncMock(return_value="retried")
 

@@ -67,7 +67,7 @@
 |---|---|---|---|---|---:|---|
 | QB-00 | DONE | P0 | 冻结题库数据字典与状态机 | 无 | 1 人日 | 本文件与 `数据字典与状态机.md` 覆盖本轮全部已确认规则，无未标记冲突 |
 | QB-01 | DONE | P0 | 冻结新版 OpenAPI 请求、响应和错误码 | QB-00 | 1 人日 | `app/contracts/quiz.py` 注册 43 个新端点；用户/管理端严格 Pydantic 模型、鉴权、权限、限流、错误码和示例已冻结；14 个旧端点明确删除 |
-| QB-02 | BLOCKED | P0 | 编写破坏性 Alembic 重建迁移 | QB-00 | 1.5 人日 | `quiz001` 迁移、备份硬门禁、空结构降级和真实 PostgreSQL 自动化用例已完成；静态 SQL 只操作 `quiz_*` 表；当前沙箱禁止 TCP/Unix Socket，尚缺实际 `upgrade -> downgrade -> upgrade` 运行证据 |
+| QB-02 | DONE | P0 | 编写破坏性 Alembic 重建迁移 | QB-00 | 1.5 人日 | `quiz001` 迁移、备份硬门禁和空结构降级已完成；静态 SQL 只操作 `quiz_*` 表；真实 PostgreSQL 3306 已通过 `upgrade -> downgrade -> upgrade` 自动化验证（`1 passed`） |
 | QB-03 | DONE | P0 | 新建分类、题目、会话、快照、作答、错题、收藏、打卡、考试、导入、统计和审计模型 | QB-02 | 2.5 人日 | 15 张 `quiz_*` 表已建模；字段、复合外键、状态检查、部分唯一索引、乐观锁和用户注销级联已与迁移对齐；元数据不再包含 `quiz_record` |
 | QB-04 | DONE | P0 | 实现统一题型、答案和题干规范化校验器 | QB-00 | 1.25 人日 | `app/domain/community/src/rule/quiz.py` 统一草稿/发布校验、题干摘要、A-D 答案规范化和完全匹配判分；阶段一题库测试覆盖三种题型 |
 | QB-05 | DONE | P0 | 建立题库配置项和后台任务基础设施 | QB-03 | 1 人日 | Settings 冻结 3600 秒、10-100/20、10 MB/5,000、7 天、Worker 和限流；生产校验私有 OSS/Redis；可注册任务循环已接入 lifespan |
@@ -207,7 +207,7 @@
 
 | 条件 | 当前状态 | 解除方式 |
 |---|---|---|
-| PostgreSQL 集成库 | 迁移用例已完成；当前沙箱禁止 TCP/Unix Socket，无法连接 3306 或启动临时实例 | 在允许 Socket 的环境设置 `TEST_DATABASE_URL_SYNC`；账号需有 `CREATEDB`，用例会自行创建/删除隔离数据库 |
+| PostgreSQL 集成库 | 已在本机 PostgreSQL 3306 完成独立数据库 `upgrade -> downgrade -> upgrade` 验证，结果 `1 passed in 1.25s` | 已满足；用例继续作为回归门禁 |
 | 私有 OSS | 需要真实 Bucket 和最小权限凭据 | 配置测试 Bucket、Endpoint、AccessKey 或角色凭据 |
 | 容量环境 | 本机测试不能代表 500 并发生产容量 | 准备接近生产规格的压测环境和隔离数据库 |
 | 三端同步 | 新接口不兼容旧客户端 | Backend、Admin、小程序按同一 OpenAPI 联合发布 |
