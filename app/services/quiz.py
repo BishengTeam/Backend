@@ -10,7 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import NotFoundException, ValidationException
-from app.domain.community.src.index import QuizCategory, QuizCheckin, QuizExam, QuizQuestion, QuizRecord
+from app.domain.community.src.index import (
+    QuizCategory,
+    QuizCheckin,
+    QuizCollection,
+    QuizExam,
+    QuizPracticeAttempt,
+    QuizPracticeSessionQuestion,
+    QuizPracticeSession,
+    QuizQuestion,
+    QuizWrongItem,
+)
 from app.domain.user.src.index import User
 from app.schemas.common import PaginatedData
 from app.utils.quiz_helpers import (
@@ -21,7 +31,6 @@ from app.utils.quiz_helpers import (
     normalize_question_type,
     question_payload,
     read_field,
-    record_question_payload,
     require_positive_int,
     today,
 )
@@ -155,18 +164,45 @@ class QuizService:
                 question.correct_answer,
                 question.question_type,
             )
-            record = await self._upsert_record(
-                db,
-                user_id=user_id,
-                question_id=question_id,
-                values={
-                    "user_answer": answer_for_storage,
-                    "is_correct": is_correct,
-                    "is_wrong": not is_correct,
-                },
+            now = datetime.now(timezone.utc)
+
+            session = QuizPracticeSession(
+                user_id=user_id, mode='normal', category_id=question.category_id,
+                requested_count=1, actual_count=1, status='completed',
+                started_at=now, completed_at=now,
             )
+            db.add(session)
+            await db.flush()
+
+            sq = QuizPracticeSessionQuestion(
+                session_id=session.id, question_id=question_id, position=1,
+                category_id=question.category_id,
+                category_path=[{"id": question.category_id, "name": ""}],
+                question_type=question.question_type,
+                question_text=question.question_text,
+                options=question.options or {},
+                correct_answer=question.correct_answer,
+                explanation=question.explanation or "",
+                question_lock_version=question.lock_version,
+            )
+            db.add(sq)
+            await db.flush()
+
+            attempt = QuizPracticeAttempt(
+                user_id=user_id, session_id=session.id, session_question_id=sq.id,
+                idempotency_key=f"{user_id}_{question_id}_{int(now.timestamp())}",
+                attempt_no=1, is_first_attempt=True,
+                user_answer=answer_for_storage, is_correct=is_correct,
+                submitted_at=now,
+            )
+            db.add(attempt)
+
+            if not is_correct:
+                await self._sync_wrong_item(db, user_id, question_id, question, now)
+
+            await db.commit()
             return {
-                **record_question_payload(record, question, include_correct_answer=True),
+                **question_payload(question, include_correct_answer=True),
                 "correct_answer": question.correct_answer,
                 "explanation": question.explanation,
             }
@@ -178,11 +214,20 @@ class QuizService:
         page: int | None = None,
         page_size: int | None = None,
     ) -> PaginatedData[dict[str, Any]]:
-        return await self._list_record_questions(
-            user_id=user_id,
-            flag_field="is_wrong",
-            page=page,
-            page_size=page_size,
+        user_id = require_positive_int(user_id, "user_id")
+        page, page_size = normalize_page(page, page_size)
+        async with get_db_ctx() as db:
+            await self._require_user(db, user_id)
+            base = (
+                select(QuizWrongItem, QuizQuestion)
+                .join(QuizQuestion, QuizWrongItem.question_id == QuizQuestion.id)
+                .where(QuizWrongItem.user_id == user_id, QuizWrongItem.status == 'active')
+            )
+            total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0
+            rows = (await db.execute(base.order_by(QuizWrongItem.latest_wrong_at.desc()).offset((page - 1) * page_size).limit(page_size))).all()
+        return PaginatedData[dict[str, Any]](
+            items=[question_payload(q, include_correct_answer=False) for _, q in rows],
+            total=total, page=page, page_size=page_size,
         )
 
     async def add_wrong_question(
@@ -192,14 +237,24 @@ class QuizService:
         *,
         question_id: int | None = None,
     ) -> dict[str, Any]:
-        return await self._set_record_flag(
-            user_id=user_id,
-            data=data,
-            question_id=question_id,
-            flag_field="is_wrong",
-            flag_value=True,
-            create_defaults={"is_correct": False},
-        )
+        question_id = require_positive_int(read_field(data, "question_id", question_id), "question_id")
+        async with get_db_ctx() as db:
+            await self._require_user(db, user_id)
+            question = await self._get_question(db, question_id)
+            now = datetime.now(timezone.utc)
+            existing = (await db.execute(
+                select(QuizWrongItem).where(QuizWrongItem.user_id == user_id, QuizWrongItem.question_id == question_id)
+            )).scalar_one_or_none()
+            if existing:
+                existing.status = 'active'
+                existing.latest_wrong_at = now
+                existing.cleared_at = None
+                existing.latest_wrong_snapshot = question_payload(question, include_correct_answer=True)
+            else:
+                db.add(QuizWrongItem(user_id=user_id, question_id=question_id, first_wrong_at=now,
+                                      latest_wrong_at=now, latest_wrong_snapshot=question_payload(question, include_correct_answer=True)))
+            await db.commit()
+            return question_payload(question, include_correct_answer=False)
 
     async def remove_wrong_question(
         self,
@@ -208,12 +263,18 @@ class QuizService:
         *,
         question_id: int | None = None,
     ) -> dict[str, Any]:
-        return await self._unset_record_flag(
-            user_id=user_id,
-            record_id=record_id,
-            question_id=question_id,
-            flag_field="is_wrong",
-        )
+        question_id = require_positive_int(question_id, "question_id")
+        async with get_db_ctx() as db:
+            await self._require_user(db, user_id)
+            item = (await db.execute(
+                select(QuizWrongItem).where(QuizWrongItem.user_id == user_id, QuizWrongItem.question_id == question_id, QuizWrongItem.status == 'active')
+            )).scalar_one_or_none()
+            if item is None:
+                raise NotFoundException("错题记录")
+            item.status = 'cleared'
+            item.cleared_at = datetime.now(timezone.utc)
+            await db.commit()
+            return {"question_id": item.question_id, "is_wrong": False}
 
     async def list_collections(
         self,
@@ -222,11 +283,20 @@ class QuizService:
         page: int | None = None,
         page_size: int | None = None,
     ) -> PaginatedData[dict[str, Any]]:
-        return await self._list_record_questions(
-            user_id=user_id,
-            flag_field="is_collected",
-            page=page,
-            page_size=page_size,
+        user_id = require_positive_int(user_id, "user_id")
+        page, page_size = normalize_page(page, page_size)
+        async with get_db_ctx() as db:
+            await self._require_user(db, user_id)
+            base = (
+                select(QuizCollection, QuizQuestion)
+                .join(QuizQuestion, QuizCollection.question_id == QuizQuestion.id)
+                .where(QuizCollection.user_id == user_id, QuizCollection.is_active == True)
+            )
+            total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0
+            rows = (await db.execute(base.order_by(QuizCollection.collected_at.desc()).offset((page - 1) * page_size).limit(page_size))).all()
+        return PaginatedData[dict[str, Any]](
+            items=[question_payload(q, include_correct_answer=False) for _, q in rows],
+            total=total, page=page, page_size=page_size,
         )
 
     async def add_collection(
@@ -236,14 +306,22 @@ class QuizService:
         *,
         question_id: int | None = None,
     ) -> dict[str, Any]:
-        return await self._set_record_flag(
-            user_id=user_id,
-            data=data,
-            question_id=question_id,
-            flag_field="is_collected",
-            flag_value=True,
-            create_defaults={},
-        )
+        question_id = require_positive_int(read_field(data, "question_id", question_id), "question_id")
+        async with get_db_ctx() as db:
+            await self._require_user(db, user_id)
+            question = await self._get_question(db, question_id)
+            now = datetime.now(timezone.utc)
+            existing = (await db.execute(
+                select(QuizCollection).where(QuizCollection.user_id == user_id, QuizCollection.question_id == question_id)
+            )).scalar_one_or_none()
+            if existing:
+                existing.is_active = True
+                existing.collected_at = now
+                existing.removed_at = None
+            else:
+                db.add(QuizCollection(user_id=user_id, question_id=question_id, collected_at=now))
+            await db.commit()
+            return question_payload(question, include_correct_answer=False)
 
     async def remove_collection(
         self,
@@ -252,12 +330,18 @@ class QuizService:
         *,
         question_id: int | None = None,
     ) -> dict[str, Any]:
-        return await self._unset_record_flag(
-            user_id=user_id,
-            record_id=record_id,
-            question_id=question_id,
-            flag_field="is_collected",
-        )
+        question_id = require_positive_int(question_id, "question_id")
+        async with get_db_ctx() as db:
+            await self._require_user(db, user_id)
+            item = (await db.execute(
+                select(QuizCollection).where(QuizCollection.user_id == user_id, QuizCollection.question_id == question_id, QuizCollection.is_active == True)
+            )).scalar_one_or_none()
+            if item is None:
+                raise NotFoundException("收藏记录")
+            item.is_active = False
+            item.removed_at = datetime.now(timezone.utc)
+            await db.commit()
+            return {"question_id": item.question_id, "is_collected": False}
 
     async def get_checkin_status(self, user_id: int) -> dict[str, Any]:
         user_id = require_positive_int(user_id, "user_id")
@@ -271,9 +355,9 @@ class QuizService:
                 # 自动统计当天实际答题数量，同步更新 questions_completed 为最新值
                 completed = (
                     await db.execute(
-                        select(func.count()).select_from(QuizRecord).where(
-                            QuizRecord.user_id == user_id,
-                            func.date(QuizRecord.created_at) == today_,
+                        select(func.count()).select_from(QuizPracticeAttempt).where(
+                            QuizPracticeAttempt.user_id == user_id,
+                            func.date(QuizPracticeAttempt.created_at) == today_,
                         )
                     )
                 ).scalar() or 0
@@ -327,9 +411,9 @@ class QuizService:
             # 自动统计当天实际答题数量（已签到和新建都需要）
             completed = (
                 await db.execute(
-                    select(func.count()).select_from(QuizRecord).where(
-                        QuizRecord.user_id == user_id,
-                        func.date(QuizRecord.created_at) == today_,
+                    select(func.count()).select_from(QuizPracticeAttempt).where(
+                        QuizPracticeAttempt.user_id == user_id,
+                        func.date(QuizPracticeAttempt.created_at) == today_,
                     )
                 )
             ).scalar() or 0
@@ -396,9 +480,9 @@ class QuizService:
             # 查询今日实时答题数量（用于覆盖可能过时的 questions_completed）
             today_count = (
                 await db.execute(
-                    select(func.count()).select_from(QuizRecord).where(
-                        QuizRecord.user_id == user_id,
-                        func.date(QuizRecord.created_at) == end_date,
+                    select(func.count()).select_from(QuizPracticeAttempt).where(
+                        QuizPracticeAttempt.user_id == user_id,
+                        func.date(QuizPracticeAttempt.created_at) == end_date,
                     )
                 )
             ).scalar() or 0
@@ -439,155 +523,18 @@ class QuizService:
             raise NotFoundException("题目")
         return question
 
-    async def _get_record(self, db: AsyncSession, user_id: int, question_id: int) -> QuizRecord | None:
-        return (
-            await db.execute(
-                select(QuizRecord)
-                .where(
-                    QuizRecord.user_id == user_id,
-                    QuizRecord.question_id == question_id,
-                )
-                .order_by(QuizRecord.id.asc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-
-    async def _upsert_record(
-        self,
-        db: AsyncSession,
-        *,
-        user_id: int,
-        question_id: int,
-        values: dict[str, Any],
-    ) -> QuizRecord:
-        record = await self._get_record(db, user_id, question_id)
-        if record is None:
-            create_values = {
-                "user_id": user_id,
-                "question_id": question_id,
-                "user_answer": None,
-                "is_correct": None,
-                "is_collected": False,
-                "is_wrong": False,
-            }
-            create_values.update(values)
-            record = QuizRecord(**create_values)
-            db.add(record)
-            try:
-                await db.commit()
-            except IntegrityError:
-                await db.rollback()
-                record = await self._get_record(db, user_id, question_id)
-                if record is None:
-                    raise
-                for key, value in values.items():
-                    setattr(record, key, value)
-                await db.commit()
+    async def _sync_wrong_item(self, db: AsyncSession, user_id: int, question_id: int, question: QuizQuestion, now: datetime) -> None:
+        existing = (await db.execute(
+            select(QuizWrongItem).where(QuizWrongItem.user_id == user_id, QuizWrongItem.question_id == question_id)
+        )).scalar_one_or_none()
+        if existing:
+            existing.status = 'active'
+            existing.latest_wrong_at = now
+            existing.cleared_at = None
+            existing.latest_wrong_snapshot = question_payload(question, include_correct_answer=True)
         else:
-            for key, value in values.items():
-                setattr(record, key, value)
-            await db.commit()
-        await db.refresh(record)
-        return record
-
-    async def _list_record_questions(
-        self,
-        *,
-        user_id: int,
-        flag_field: str,
-        page: int | None,
-        page_size: int | None,
-    ) -> PaginatedData[dict[str, Any]]:
-        user_id = require_positive_int(user_id, "user_id")
-        page, page_size = normalize_page(page, page_size)
-        flag_column = getattr(QuizRecord, flag_field)
-
-        async with get_db_ctx() as db:
-            await self._require_user(db, user_id)
-            filters = (QuizRecord.user_id == user_id, flag_column.is_(True))
-            total = (
-                await db.execute(select(func.count()).select_from(QuizRecord).where(*filters))
-            ).scalar() or 0
-            rows = (
-                await db.execute(
-                    select(QuizRecord, QuizQuestion)
-                    .join(QuizQuestion, QuizQuestion.id == QuizRecord.question_id)
-                    .where(*filters)
-                    .order_by(QuizRecord.id.desc())
-                    .offset((page - 1) * page_size)
-                    .limit(page_size)
-                )
-            ).all()
-
-        return PaginatedData[dict[str, Any]](
-            items=[
-                record_question_payload(record, question, include_correct_answer=False)
-                for record, question in rows
-            ],
-            total=total,
-            page=page,
-            page_size=page_size,
-        )
-
-    async def _set_record_flag(
-        self,
-        *,
-        user_id: int,
-        data: QuizToggleRequest | None,
-        question_id: int | None,
-        flag_field: str,
-        flag_value: bool,
-        create_defaults: dict[str, Any],
-    ) -> dict[str, Any]:
-        user_id = require_positive_int(user_id, "user_id")
-        question_id = require_positive_int(read_field(data, "question_id", question_id), "question_id")
-
-        async with get_db_ctx() as db:
-            await self._require_user(db, user_id)
-            question = await self._get_question(db, question_id)
-            values = {flag_field: flag_value, **create_defaults}
-            record = await self._upsert_record(
-                db,
-                user_id=user_id,
-                question_id=question_id,
-                values=values,
-            )
-            return record_question_payload(record, question, include_correct_answer=False)
-
-    async def _unset_record_flag(
-        self,
-        *,
-        user_id: int,
-        record_id: int | None,
-        question_id: int | None,
-        flag_field: str,
-    ) -> dict[str, Any]:
-        user_id = require_positive_int(user_id, "user_id")
-        if record_id is None and question_id is None:
-            raise ValidationException("record_id 或 question_id 不能为空")
-
-        async with get_db_ctx() as db:
-            await self._require_user(db, user_id)
-            stmt = select(QuizRecord, QuizQuestion).join(
-                QuizQuestion,
-                QuizQuestion.id == QuizRecord.question_id,
-            )
-            if record_id is not None:
-                record_id = require_positive_int(record_id, "record_id")
-                stmt = stmt.where(QuizRecord.user_id == user_id, QuizRecord.id == record_id)
-            else:
-                question_id = require_positive_int(question_id, "question_id")
-                stmt = stmt.where(QuizRecord.user_id == user_id, QuizRecord.question_id == question_id)
-
-            row = (await db.execute(stmt.limit(1))).first()
-            if row is None:
-                raise NotFoundException("答题记录")
-
-            record, question = row
-            setattr(record, flag_field, False)
-            await db.commit()
-            await db.refresh(record)
-            return record_question_payload(record, question, include_correct_answer=False)
+            db.add(QuizWrongItem(user_id=user_id, question_id=question_id, first_wrong_at=now,
+                                  latest_wrong_at=now, latest_wrong_snapshot=question_payload(question, include_correct_answer=True)))
 
     async def _get_checkin(self, db: AsyncSession, user_id: int, checkin_date: date) -> QuizCheckin | None:
         return (
@@ -605,13 +552,18 @@ class QuizService:
         async with get_db_ctx() as db:
             await self._require_user(db, user_id)
             today_date = today()
-            total_answers = (await db.execute(select(func.count()).select_from(QuizRecord).where(QuizRecord.user_id == user_id))).scalar() or 0
-            correct_answers = (await db.execute(select(func.count()).select_from(QuizRecord).where(QuizRecord.user_id == user_id, QuizRecord.is_correct == True))).scalar() or 0
-            answered_questions = (await db.execute(select(func.count(func.distinct(QuizRecord.question_id))).where(QuizRecord.user_id == user_id))).scalar() or 0
+            total_answers = (await db.execute(select(func.count()).select_from(QuizPracticeAttempt).where(QuizPracticeAttempt.user_id == user_id))).scalar() or 0
+            correct_answers = (await db.execute(select(func.count()).select_from(QuizPracticeAttempt).where(QuizPracticeAttempt.user_id == user_id, QuizPracticeAttempt.is_correct == True))).scalar() or 0
+            answered_questions = (await db.execute(
+                select(func.count(func.distinct(QuizPracticeSessionQuestion.question_id)))
+                .select_from(QuizPracticeAttempt)
+                .join(QuizPracticeSessionQuestion, QuizPracticeAttempt.session_question_id == QuizPracticeSessionQuestion.id)
+                .where(QuizPracticeAttempt.user_id == user_id)
+            )).scalar() or 0
             total_questions = (await db.execute(select(func.count()).select_from(QuizQuestion))).scalar() or 0
-            wrong_count = (await db.execute(select(func.count()).select_from(QuizRecord).where(QuizRecord.user_id == user_id, QuizRecord.is_wrong == True))).scalar() or 0
-            collected_count = (await db.execute(select(func.count()).select_from(QuizRecord).where(QuizRecord.user_id == user_id, QuizRecord.is_collected == True))).scalar() or 0
-            today_row = (await db.execute(select(func.count(), func.sum(func.cast(QuizRecord.is_correct, Integer))).where(QuizRecord.user_id == user_id, func.date(QuizRecord.updated_at) == today_date))).first()
+            wrong_count = (await db.execute(select(func.count()).select_from(QuizWrongItem).where(QuizWrongItem.user_id == user_id, QuizWrongItem.status == 'active'))).scalar() or 0
+            collected_count = (await db.execute(select(func.count()).select_from(QuizCollection).where(QuizCollection.user_id == user_id, QuizCollection.is_active == True))).scalar() or 0
+            today_row = (await db.execute(select(func.count(), func.sum(func.cast(QuizPracticeAttempt.is_correct, Integer))).where(QuizPracticeAttempt.user_id == user_id, func.date(QuizPracticeAttempt.submitted_at) == today_date))).first()
             today_answers = today_row[0] if today_row else 0
             today_correct = today_row[1] if today_row and today_row[1] else 0
             checkin_status = await self.get_checkin_status(user_id)
@@ -661,7 +613,8 @@ class QuizService:
                 q = q_map.get(a.question_id)
                 if q is None: continue
                 is_correct = normalize_answer(a.user_answer, q.question_type) == normalize_answer(q.correct_answer, q.question_type)
-                await self._upsert_record(db, user_id=user_id, question_id=a.question_id, values={"user_answer": a.user_answer, "is_correct": is_correct, "is_wrong": not is_correct})
+                if not is_correct:
+                    await self._sync_wrong_item(db, user_id, a.question_id, q, datetime.now(timezone.utc))
             total = correct + wrong
             exam.answers = answer_dict; exam.correct_count = correct; exam.wrong_count = wrong
             exam.score = round(correct / exam.total * 100, 1) if exam.total > 0 else 0
@@ -718,8 +671,18 @@ class QuizService:
                 sub_cats = (await db.execute(select(QuizCategory).where(QuizCategory.parent_id == p.id))).scalars().all()
                 sub_ids = [p.id] + [c.id for c in sub_cats]
                 total = (await db.execute(select(func.count()).select_from(QuizQuestion).where(QuizQuestion.category_id.in_(sub_ids)))).scalar() or 0
-                answered = (await db.execute(select(func.count(func.distinct(QuizRecord.question_id))).where(QuizRecord.user_id == user_id, QuizRecord.question_id.in_(select(QuizQuestion.id).where(QuizQuestion.category_id.in_(sub_ids)))))).scalar() or 0
-                correct = (await db.execute(select(func.count()).where(QuizRecord.user_id == user_id, QuizRecord.is_correct == True, QuizRecord.question_id.in_(select(QuizQuestion.id).where(QuizQuestion.category_id.in_(sub_ids)))))).scalar() or 0
+                answered = (await db.execute(
+                    select(func.count(func.distinct(QuizPracticeSessionQuestion.question_id)))
+                    .select_from(QuizPracticeAttempt)
+                    .join(QuizPracticeSessionQuestion, QuizPracticeAttempt.session_question_id == QuizPracticeSessionQuestion.id)
+                    .where(QuizPracticeAttempt.user_id == user_id, QuizPracticeSessionQuestion.question_id.in_(select(QuizQuestion.id).where(QuizQuestion.category_id.in_(sub_ids))))
+                )).scalar() or 0
+                correct = (await db.execute(
+                    select(func.count(func.distinct(QuizPracticeSessionQuestion.question_id)))
+                    .select_from(QuizPracticeAttempt)
+                    .join(QuizPracticeSessionQuestion, QuizPracticeAttempt.session_question_id == QuizPracticeSessionQuestion.id)
+                    .where(QuizPracticeAttempt.user_id == user_id, QuizPracticeAttempt.is_correct == True, QuizPracticeSessionQuestion.question_id.in_(select(QuizQuestion.id).where(QuizQuestion.category_id.in_(sub_ids))))
+                )).scalar() or 0
                 results.append({"category_id": p.id, "category_name": p.name, "total": total, "answered": answered, "correct": correct, "accuracy": round(correct / answered * 100, 1) if answered > 0 else 0.0})
             return results
 
@@ -727,5 +690,12 @@ class QuizService:
     async def get_recent(self, user_id: int, limit: int = 10) -> list[dict[str, Any]]:
         async with get_db_ctx() as db:
             await self._require_user(db, user_id)
-            rows = (await db.execute(select(QuizRecord, QuizQuestion).join(QuizQuestion, QuizRecord.question_id == QuizQuestion.id).where(QuizRecord.user_id == user_id).order_by(QuizRecord.updated_at.desc()).limit(limit))).all()
+            rows = (await db.execute(
+                select(QuizPracticeAttempt, QuizQuestion)
+                .join(QuizPracticeSessionQuestion, QuizPracticeAttempt.session_question_id == QuizPracticeSessionQuestion.id)
+                .join(QuizQuestion, QuizPracticeSessionQuestion.question_id == QuizQuestion.id)
+                .where(QuizPracticeAttempt.user_id == user_id)
+                .order_by(QuizPracticeAttempt.updated_at.desc())
+                .limit(limit)
+            )).all()
             return [{"id": r.id, "question_id": q.id, "question_text": q.question_text, "question_type": q.question_type, "user_answer": r.user_answer, "is_correct": r.is_correct, "updated_at": r.updated_at.isoformat() if r.updated_at else None} for r, q in rows]
