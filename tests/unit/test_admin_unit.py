@@ -286,10 +286,12 @@ class AdminRoutePresenceTests(unittest.TestCase):
         methods_paths = {(r.method, r.path) for r in routes}
         self.assertIn(("POST", "/admin/users/batch-delete"), methods_paths)
 
-    def test_batch_delete_quiz_route_exists(self):
-        # 端点使用 f-string 路径 (f"{QUESTION}/batch-delete")，AST 解析仅支持字面量
+    def test_quiz_batch_state_routes_replace_batch_delete(self):
+        # Quiz state routes use f-string paths, which this AST helper cannot resolve.
         source = (REPO_ROOT / "app/api/admin/quiz.py").read_text(encoding="utf-8")
-        self.assertIn("batch-delete", source)
+        self.assertIn("batch-publish", source)
+        self.assertIn("batch-disable", source)
+        self.assertNotIn("batch-delete", source)
 
     def test_toggle_zone_status_route_exists(self):
         routes = _iter_admin_routes("app/api/admin/zones.py")
@@ -317,7 +319,8 @@ class AdminRoutePresenceTests(unittest.TestCase):
     def test_quiz_json_import_route_exists(self):
         routes = _iter_admin_routes("app/api/admin/quiz.py")
         methods_paths = {(r.method, r.path) for r in routes}
-        self.assertIn(("POST", "/admin/quiz/import/json"), methods_paths)
+        self.assertIn(("POST", "/admin/quiz/imports/json"), methods_paths)
+        self.assertNotIn(("POST", "/admin/quiz/import/json"), methods_paths)
 
     def test_user_orders_route_exists(self):
         routes = _iter_admin_routes("app/api/admin/users.py")

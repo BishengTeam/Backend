@@ -5,29 +5,39 @@ from fastapi import APIRouter, Depends, Path, Query
 from app.middleware.auth import get_current_user
 from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, PaginatedData, success
+from app.schemas.quiz_contract import (
+    QuizCategoryNode,
+    QuizCheckinCalendarQuery,
+    QuizCheckinDay,
+    QuizCheckinStatusResponse,
+    QuizCollectionCreate,
+    QuizCollectionItem,
+    QuizCollectionMutationResponse,
+    QuizPracticeAbandonResponse,
+    QuizPracticeAttemptCreate,
+    QuizPracticeAttemptResult,
+    QuizPracticeHistoryItem,
+    QuizPracticeHistoryQuery,
+    QuizPracticeSessionCreate,
+    QuizPracticeSessionResponse,
+    QuizPublicQuestion,
+    QuizQuestionListQuery,
+    QuizStatsResponse as QuizContractStatsResponse,
+    QuizWrongBookItem,
+    QuizWrongBookQuery,
+)
 from app.schemas.quiz import (
-    QuizCategoryTreeResponse,
-    QuizCheckinRequest,
-    QuizCheckinResponse,
-    QuizCollectionRequest,
-    QuizCollectionResponse,
     QuizExamStartRequest,
     QuizExamSubmitRequest,
-    QuizQuestionResponse,
-    QuizQuestionType,
-    QuizRecordQuestionResponse,
-    QuizSubmitRequest,
-    QuizSubmitResponse,
-    QuizWrongBookRequest,
-    QuizWrongBookResponse,
 )
 from app.services.quiz import QuizService
+from app.services.quiz_practice import QuizPracticeService
 
 router = APIRouter(prefix="/quiz", tags=["题库"])
 
 
 @router.get("/categories",
-    response_model=APIResponse[list[QuizCategoryTreeResponse]],
+    response_model=APIResponse[list[QuizCategoryNode]],
     summary="题库分类树",
     description="""
 小程序 **题库** 页面使用。
@@ -39,13 +49,13 @@ router = APIRouter(prefix="/quiz", tags=["题库"])
 **认证**: 可选登录
     """,
 )
-async def list_categories() -> APIResponse[list[QuizCategoryTreeResponse]]:
-    result = await QuizService().list_categories()
+async def list_categories() -> APIResponse[list[QuizCategoryNode]]:
+    result = await QuizPracticeService().list_categories()
     return success(data=result)
 
 
 @router.get("/questions",
-    response_model=APIResponse[PaginatedData[QuizQuestionResponse]],
+    response_model=APIResponse[PaginatedData[QuizPublicQuestion]],
     summary="题目列表",
     description="""
 小程序 **题库** 页面使用。
@@ -58,54 +68,99 @@ async def list_categories() -> APIResponse[list[QuizCategoryTreeResponse]]:
 - `page`: 页码，从 1 开始
 - `page_size`: 每页条数，默认 20，最大 100
 
-**响应**: 分页题目数据，含题干、选项、正确答案
-
-**认证**: 可选登录
-    """,
-)
-async def list_questions(
-    category_id: int | None = Query(None, ge=1, description="分类 ID"),
-    question_type: QuizQuestionType | None = Query(
-        None,
-        description="题型：single_choice / multiple_choice / judge",
-    ),
-    page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
-) -> APIResponse[PaginatedData[QuizQuestionResponse]]:
-    result = await QuizService().list_questions(
-        category_id=category_id, question_type=question_type,
-        page=page, page_size=page_size,
-    )
-    return success(data=result)
-
-
-@router.post("/submit",
-    response_model=APIResponse[QuizSubmitResponse],
-    summary="提交答题",
-    description="""
-小程序 **题库** 页面使用。
-
-**使用场景**: 用户提交一道题的答案，返回判题结果和解析
-
-**请求体**:
-- `question_id`: 题目 ID
-- `answer`: 用户答案
-
-**响应**: 判题结果（正确/错误）、正确答案、解析
+**响应**: 分页题目数据，仅含题干和选项
 
 **认证**: 需登录
     """,
 )
-async def submit_answer(
-    body: QuizSubmitRequest,
+async def list_questions(
+    query: QuizQuestionListQuery = Depends(),
     current_user: User = Depends(get_current_user),
-) -> APIResponse[QuizSubmitResponse]:
-    result = await QuizService().submit_answer(current_user.id, body)
+) -> APIResponse[PaginatedData[QuizPublicQuestion]]:
+    result = await QuizPracticeService().list_questions(current_user.id, query)
+    return success(data=result)
+
+
+@router.post(
+    "/practice-sessions",
+    response_model=APIResponse[QuizPracticeSessionResponse],
+    summary="创建练习会话",
+)
+async def create_practice_session(
+    body: QuizPracticeSessionCreate,
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[QuizPracticeSessionResponse]:
+    result = await QuizPracticeService().create_session(current_user.id, body)
+    return success(data=result)
+
+
+@router.get(
+    "/practice-sessions/current",
+    response_model=APIResponse[QuizPracticeSessionResponse | None],
+    summary="当前练习会话",
+)
+async def get_current_practice_session(
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[QuizPracticeSessionResponse | None]:
+    result = await QuizPracticeService().get_current_session(current_user.id)
+    return success(data=result)
+
+
+@router.get(
+    "/practice-sessions/{session_id}",
+    response_model=APIResponse[QuizPracticeSessionResponse],
+    summary="练习会话详情",
+)
+async def get_practice_session(
+    session_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[QuizPracticeSessionResponse]:
+    result = await QuizPracticeService().get_session(current_user.id, session_id)
+    return success(data=result)
+
+
+@router.post(
+    "/practice-sessions/{session_id}/attempts",
+    response_model=APIResponse[QuizPracticeAttemptResult],
+    summary="提交练习作答",
+)
+async def submit_practice_attempt(
+    body: QuizPracticeAttemptCreate,
+    session_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[QuizPracticeAttemptResult]:
+    result = await QuizPracticeService().submit_attempt(current_user.id, session_id, body)
+    return success(data=result)
+
+
+@router.post(
+    "/practice-sessions/{session_id}/abandon",
+    response_model=APIResponse[QuizPracticeAbandonResponse],
+    summary="放弃练习会话",
+)
+async def abandon_practice_session(
+    session_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[QuizPracticeAbandonResponse]:
+    result = await QuizPracticeService().abandon_session(current_user.id, session_id)
+    return success(data=result)
+
+
+@router.get(
+    "/practice-history",
+    response_model=APIResponse[PaginatedData[QuizPracticeHistoryItem]],
+    summary="练习历史",
+)
+async def get_practice_history(
+    query: QuizPracticeHistoryQuery = Depends(),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[PaginatedData[QuizPracticeHistoryItem]]:
+    result = await QuizPracticeService().get_history(current_user.id, query)
     return success(data=result)
 
 
 @router.get("/wrong-book",
-    response_model=APIResponse[PaginatedData[QuizRecordQuestionResponse]],
+    response_model=APIResponse[PaginatedData[QuizWrongBookItem]],
     summary="错题本列表",
     description="""
 小程序 **题库** 页面使用。
@@ -122,64 +177,15 @@ async def submit_answer(
     """,
 )
 async def list_wrong_book(
-    page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    query: QuizWrongBookQuery = Depends(),
     current_user: User = Depends(get_current_user),
-) -> APIResponse[PaginatedData[QuizRecordQuestionResponse]]:
-    result = await QuizService().list_wrong_book(current_user.id, page=page, page_size=page_size)
-    return success(data=result)
-
-
-@router.post("/wrong-book",
-    response_model=APIResponse[QuizWrongBookResponse],
-    summary="加入错题本",
-    description="""
-小程序 **题库** 页面使用。
-
-**使用场景**: 用户答题错误后，系统自动或手动将错题加入错题本
-
-**请求体**:
-- `question_id`: 题目 ID
-
-**响应**: 错题记录
-
-**认证**: 需登录
-    """,
-)
-async def add_wrong_question(
-    body: QuizWrongBookRequest,
-    current_user: User = Depends(get_current_user),
-) -> APIResponse[QuizWrongBookResponse]:
-    result = await QuizService().add_wrong_question(current_user.id, body)
-    return success(data=result)
-
-
-@router.delete("/wrong-book/{id}",
-    response_model=APIResponse[QuizWrongBookResponse],
-    summary="移除错题",
-    description="""
-小程序 **题库** 页面使用。
-
-**使用场景**: 用户从错题本中移除某道错题
-
-**路径参数**:
-- `id`: 错题记录 ID
-
-**响应**: 删除结果
-
-**认证**: 需登录
-    """,
-)
-async def remove_wrong_question(
-    id: int = Path(..., ge=1, description="错题记录 ID"),
-    current_user: User = Depends(get_current_user),
-) -> APIResponse[QuizWrongBookResponse]:
-    result = await QuizService().remove_wrong_question(current_user.id, record_id=id)
+) -> APIResponse[PaginatedData[QuizWrongBookItem]]:
+    result = await QuizPracticeService().list_wrong_book(current_user.id, query)
     return success(data=result)
 
 
 @router.get("/collections",
-    response_model=APIResponse[PaginatedData[QuizRecordQuestionResponse]],
+    response_model=APIResponse[PaginatedData[QuizCollectionItem]],
     summary="收藏列表",
     description="""
 小程序 **题库** 页面使用。
@@ -196,16 +202,15 @@ async def remove_wrong_question(
     """,
 )
 async def list_collections(
-    page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    query: QuizWrongBookQuery = Depends(),
     current_user: User = Depends(get_current_user),
-) -> APIResponse[PaginatedData[QuizRecordQuestionResponse]]:
-    result = await QuizService().list_collections(current_user.id, page=page, page_size=page_size)
+) -> APIResponse[PaginatedData[QuizCollectionItem]]:
+    result = await QuizPracticeService().list_collections(current_user.id, query)
     return success(data=result)
 
 
 @router.post("/collections",
-    response_model=APIResponse[QuizCollectionResponse],
+    response_model=APIResponse[QuizCollectionMutationResponse],
     summary="收藏题目",
     description="""
 小程序 **题库** 页面使用。
@@ -221,15 +226,15 @@ async def list_collections(
     """,
 )
 async def add_collection(
-    body: QuizCollectionRequest,
+    body: QuizCollectionCreate,
     current_user: User = Depends(get_current_user),
-) -> APIResponse[QuizCollectionResponse]:
-    result = await QuizService().add_collection(current_user.id, body)
+) -> APIResponse[QuizCollectionMutationResponse]:
+    result = await QuizPracticeService().add_collection(current_user.id, body)
     return success(data=result)
 
 
-@router.delete("/collections/{id}",
-    response_model=APIResponse[QuizCollectionResponse],
+@router.delete("/collections/{question_id}",
+    response_model=APIResponse[QuizCollectionMutationResponse],
     summary="取消收藏",
     description="""
 小程序 **题库** 页面使用。
@@ -245,15 +250,15 @@ async def add_collection(
     """,
 )
 async def remove_collection(
-    id: int = Path(..., ge=1, description="收藏记录 ID"),
+    question_id: int = Path(..., ge=1, description="题目 ID"),
     current_user: User = Depends(get_current_user),
-) -> APIResponse[QuizCollectionResponse]:
-    result = await QuizService().remove_collection(current_user.id, record_id=id)
+) -> APIResponse[QuizCollectionMutationResponse]:
+    result = await QuizPracticeService().remove_collection(current_user.id, question_id)
     return success(data=result)
 
 
 @router.get("/checkin",
-    response_model=APIResponse[QuizCheckinResponse],
+    response_model=APIResponse[QuizCheckinStatusResponse],
     summary="签到状态",
     description="""
 小程序 **题库** 页面使用。
@@ -267,37 +272,13 @@ async def remove_collection(
 )
 async def get_checkin_status(
     current_user: User = Depends(get_current_user),
-) -> APIResponse[QuizCheckinResponse]:
-    result = await QuizService().get_checkin_status(current_user.id)
-    return success(data=result)
-
-
-@router.post("/checkin",
-    response_model=APIResponse[QuizCheckinResponse],
-    summary="执行签到",
-    description="""
-小程序 **题库** 页面使用。
-
-**使用场景**: 用户点击签到按钮，完成每日签到
-
-**请求体**:
-- `date`: 签到日期（通常为当日）
-
-**响应**: 签到结果，含连续签到天数
-
-**认证**: 需登录
-    """,
-)
-async def checkin(
-    body: QuizCheckinRequest,
-    current_user: User = Depends(get_current_user),
-) -> APIResponse[QuizCheckinResponse]:
-    result = await QuizService().checkin(current_user.id, body)
+) -> APIResponse[QuizCheckinStatusResponse]:
+    result = await QuizPracticeService().get_checkin_status(current_user.id)
     return success(data=result)
 
 
 @router.get("/checkin/calendar",
-    response_model=APIResponse[list[QuizCheckinResponse]],
+    response_model=APIResponse[list[QuizCheckinDay]],
     summary="签到日历",
     description="""
 小程序 **打卡日历** 页面使用。
@@ -313,23 +294,23 @@ async def checkin(
     """,
 )
 async def get_checkin_calendar(
-    days: int = Query(30, ge=1, le=365, description="返回天数"),
+    query: QuizCheckinCalendarQuery = Depends(),
     current_user: User = Depends(get_current_user),
-) -> APIResponse[list[QuizCheckinResponse]]:
-    result = await QuizService().get_checkin_calendar(current_user.id, days)
+) -> APIResponse[list[QuizCheckinDay]]:
+    result = await QuizPracticeService().get_checkin_calendar(current_user.id, query)
     return success(data=result)
 
 
 # ── 练习统计 ──────────────────────────────────────────────────
 
 @router.get("/stats",
-    response_model=APIResponse,
+    response_model=APIResponse[QuizContractStatsResponse],
     summary="练习统计",
 )
 async def get_stats(
     current_user: User = Depends(get_current_user),
 ):
-    result = await QuizService().get_stats(current_user.id)
+    result = await QuizPracticeService().get_stats(current_user.id)
     return success(data=result)
 
 

@@ -9,17 +9,27 @@
 
 ## 本地无数据库测试
 
-```powershell
-python -m pytest tests/unit -v
+```bash
+.venv/bin/python -m pytest tests/unit -v
 ```
 
 ## PostgreSQL 数据库集成测试
 
-```powershell
-$env:TEST_DATABASE_URL="postgresql+asyncpg://<user>:<password>@localhost:5432/<test_db>"
-$env:TEST_DATABASE_URL_SYNC="postgresql://<user>:<password>@localhost:5432/<test_db>"
-alembic upgrade head
-python -m pytest tests/integration/db -v
+```bash
+export TEST_DATABASE_URL="postgresql+asyncpg://<user>:<password>@localhost:5432/<test_db>"
+export TEST_DATABASE_URL_SYNC="postgresql://<user>:<password>@localhost:5432/<test_db>"
+.venv/bin/python -m alembic upgrade head
+.venv/bin/python -m pytest tests/integration/db -v
 ```
 
-未配置测试库时，数据库集成测试应跳过或失败在环境检查阶段，不能被视为业务 DB 验证通过。
+未配置测试库时，标记为 `integration_db` 的测试会统一跳过，不能被视为业务 DB 验证通过；质量报告必须保留 skipped 数量。提供两个测试 URL 后才会执行真实 PostgreSQL 读写、事务和迁移检查。
+
+## 默认命令
+
+从 `Backend` 根目录执行：
+
+```bash
+.venv/bin/pytest -q
+```
+
+该命令会运行所有本地单元测试，并在没有独立测试库时跳过数据库集成测试。使用 `python -m pytest` 或 `.venv/bin/pytest` 均应得到相同的收集结果。

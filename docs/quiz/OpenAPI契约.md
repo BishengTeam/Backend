@@ -90,6 +90,27 @@
 | POST | `/api/quiz/exams/{exam_id}/submit` | 无 | `QuizExamActionResponse` |
 | POST | `/api/quiz/exams/{exam_id}/abandon` | 无 | `QuizExamActionResponse` |
 
+为避免不同 Markdown 解析器吞掉表格中的反引号，保留一份可直接扫描的
+`METHOD /path` 索引。它与上表和 `app/contracts/quiz.py` 必须保持同步：
+
+```text
+GET /api/quiz/categories
+GET /api/quiz/questions
+POST /api/quiz/practice-sessions
+GET /api/quiz/practice-sessions/current
+GET /api/quiz/practice-sessions/{session_id}
+POST /api/quiz/practice-sessions/{session_id}/attempts
+POST /api/quiz/practice-sessions/{session_id}/abandon
+GET /api/quiz/practice-history
+GET /api/quiz/wrong-book
+GET /api/quiz/collections
+POST /api/quiz/collections
+DELETE /api/quiz/collections/{question_id}
+GET /api/quiz/checkin
+GET /api/quiz/checkin/calendar
+GET /api/quiz/stats
+```
+
 考试详情使用判别联合模型：
 
 - `in_progress`：只含题干、选项和用户已保存答案，不含标准答案或解析。

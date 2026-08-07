@@ -26,12 +26,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import sessionmaker
-
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+
+from app.domain.community.src.rule.quiz import (
+    normalize_category_name,
+    normalize_question_payload,
+)
 
 ALLOWED_QUESTION_TYPES = {"single_choice", "multiple_choice", "judge"}
 MAX_CATEGORY_NAME_LENGTH = 128
@@ -85,6 +90,27 @@ ANSWER_SPLIT_RE = re.compile(r"[,，;；|/\s]+")
 
 QuizCategory: Any = None
 QuizQuestion: Any = None
+AdminUser: Any = None
+
+
+def _require_loaded_models() -> None:
+    """Fail clearly when a helper is called before model loading.
+
+    The CLI loads settings-dependent models lazily.  Keeping this guard at the
+    helper boundary prevents a standalone import (or an embedding script)
+    from turning an uninitialized global into an opaque ``NoneType`` error.
+    """
+    if any(
+        value is None
+        for value in (
+            QuizCategory,
+            QuizQuestion,
+            AdminUser,
+        )
+    ):
+        raise RuntimeError(
+            "题库导入模型尚未加载，请先调用 load_models_and_session_factory()"
+        )
 
 
 @dataclass(frozen=True)
@@ -169,6 +195,9 @@ def split_path(value: str, *, field: str, label: str, line_no: int, errors: list
     parts = tuple(part.strip() for part in raw_parts)
     if not parts or any(not part for part in parts):
         errors.append(f"{label}:{line_no}: {field} must be a non-empty slash-separated path")
+        return None
+    if len(parts) > 3:
+        errors.append(f"{label}:{line_no}: {field} supports at most three category levels")
         return None
     for part in parts:
         if len(part) > MAX_CATEGORY_NAME_LENGTH:
@@ -436,21 +465,25 @@ def parse_questions(path: Path, errors: list[str]) -> list[QuestionInput]:
 
 
 def load_models_and_session_factory() -> sessionmaker:
-    global QuizCategory, QuizQuestion
+    global AdminUser, QuizCategory, QuizQuestion
 
     from app.core.config import settings
     from app.domain.community.src.index import QuizCategory as LoadedQuizCategory
     from app.domain.community.src.index import QuizQuestion as LoadedQuizQuestion
+    from app.domain.user.src.index import AdminUser as LoadedAdminUser
 
     QuizCategory = LoadedQuizCategory
     QuizQuestion = LoadedQuizQuestion
+    AdminUser = LoadedAdminUser
 
     engine = create_engine(settings.DATABASE_URL_SYNC, future=True)
     return sessionmaker(bind=engine, expire_on_commit=False, future=True)
 
 
 def find_category(session: Any, parent_id: int | None, name: str) -> Any | None:
-    stmt = select(QuizCategory).where(QuizCategory.name == name)
+    _require_loaded_models()
+    normalized = normalize_category_name(name)
+    stmt = select(QuizCategory).where(QuizCategory.normalized_name == normalized)
     if parent_id is None:
         stmt = stmt.where(QuizCategory.parent_id.is_(None))
     else:
@@ -459,11 +492,14 @@ def find_category(session: Any, parent_id: int | None, name: str) -> Any | None:
 
 
 def find_category_path(session: Any, category_path: tuple[str, ...]) -> Any | None:
+    _require_loaded_models()
     parent_id: int | None = None
     category = None
     for name in category_path:
         category = find_category(session, parent_id, name)
         if category is None:
+            return None
+        if getattr(category, "status", "active") != "active":
             return None
         parent_id = category.id
     return category
@@ -475,32 +511,46 @@ def ensure_category_path(
     *,
     description: str | None = None,
     stats: ImportStats,
+    admin_id: int,
 ) -> Any:
+    _require_loaded_models()
     parent_id: int | None = None
     category = None
     for index, name in enumerate(category_path):
         category = find_category(session, parent_id, name)
         if category is None:
             is_leaf = index == len(category_path) - 1
+            normalized = normalize_category_name(name)
             category = QuizCategory(
-                name=name,
+                name=normalized,
+                normalized_name=normalized,
                 parent_id=parent_id,
+                depth=index + 1,
                 description=description if is_leaf else None,
+                status="active",
+                sort_order=0,
+                ever_had_question=False,
+                lock_version=1,
+                created_by=admin_id,
+                updated_by=admin_id,
             )
             session.add(category)
             session.flush()
             stats.categories_created += 1
         else:
+            if getattr(category, "status", "active") != "active":
+                raise ValueError(f"分类已停用: {'/'.join(category_path[: index + 1])}")
             stats.categories_existing += 1
         parent_id = category.id
     return category
 
 
-def question_exists(session: Any, *, category_id: int, question_text: str) -> bool:
+def question_exists(session: Any, *, category_id: int, question_text_hash: str) -> bool:
+    _require_loaded_models()
     stmt = (
         select(QuizQuestion.id)
         .where(QuizQuestion.category_id == category_id)
-        .where(QuizQuestion.question_text == question_text)
+        .where(QuizQuestion.question_text_hash == question_text_hash)
         .limit(1)
     )
     return session.execute(stmt).scalar_one_or_none() is not None
@@ -522,16 +572,29 @@ def validate_category_references(
         else:
             exists = find_category_path(session, question.category_path) is not None
             checked_paths[question.category_path] = exists
-        if not exists and question.category_path not in csv_category_paths and not create_missing_categories:
+        if not exists and question.category_path not in csv_category_paths:
             errors.append(
                 f"questions:{question.line_no}: category_path not found: {'/'.join(question.category_path)}; "
-                "provide --categories or --create-missing-categories"
+                "provide --categories or ask an administrator to create the category first"
             )
 
 
-def import_categories(session: Any, category_rows: list[CategoryInput], stats: ImportStats) -> None:
+def import_categories(
+    session: Any,
+    category_rows: list[CategoryInput],
+    stats: ImportStats,
+    *,
+    admin_id: int,
+) -> None:
+    _require_loaded_models()
     for row in category_rows:
-        ensure_category_path(session, row.path, description=row.description, stats=stats)
+        ensure_category_path(
+            session,
+            row.path,
+            description=row.description,
+            stats=stats,
+            admin_id=admin_id,
+        )
 
 
 def import_questions(
@@ -542,34 +605,68 @@ def import_questions(
     category_rows: list[CategoryInput],
     allow_duplicates: bool,
     stats: ImportStats,
+    admin_id: int,
 ) -> None:
+    _require_loaded_models()
     csv_category_paths = {row.path for row in category_rows}
     for row in questions:
-        if create_missing_categories or row.category_path in csv_category_paths:
-            category = ensure_category_path(session, row.category_path, stats=stats)
+        # Categories are controlled by administrators and must be created
+        # before a question batch is accepted.  ``category_rows`` is an
+        # explicit category import in the same transaction, not an implicit
+        # create-from-question fallback.
+        if row.category_path in csv_category_paths:
+            category = ensure_category_path(
+                session,
+                row.category_path,
+                stats=stats,
+                admin_id=admin_id,
+            )
         else:
             category = find_category_path(session, row.category_path)
             if category is None:
-                raise RuntimeError(f"category_path not found: {'/'.join(row.category_path)}")
+                raise ValueError(
+                    f"category_path not found: {'/'.join(row.category_path)}; "
+                    "please ask an administrator to create the category first"
+                )
 
+        answer: object = row.correct_answer
+        if row.question_type == "multiple_choice":
+            answer = [part for part in ANSWER_SPLIT_RE.split(row.correct_answer) if part]
+        elif row.question_type == "judge":
+            answer = "A" if row.correct_answer.lower() in JUDGE_TRUE_VALUES else "B"
+        normalized = normalize_question_payload(
+            question_type=row.question_type,
+            question_text=row.question_text,
+            options=row.options,
+            correct_answer=answer,
+            explanation=row.explanation,
+            require_publishable=False,
+        )
         if not allow_duplicates and question_exists(
             session,
             category_id=category.id,
-            question_text=row.question_text,
+            question_text_hash=normalized.question_text_hash,
         ):
             stats.questions_skipped += 1
             continue
-
         session.add(
             QuizQuestion(
                 category_id=category.id,
-                question_type=row.question_type,
-                question_text=row.question_text,
-                options=row.options,
-                correct_answer=row.correct_answer,
-                explanation=row.explanation,
+                question_type=normalized.question_type.value,
+                status="draft",
+                question_text=normalized.question_text,
+                normalized_question_text=normalized.normalized_question_text,
+                question_text_hash=normalized.question_text_hash,
+                options=normalized.options,
+                correct_answer=normalized.correct_answer,
+                explanation=normalized.explanation,
+                ever_published=False,
+                lock_version=1,
+                created_by=admin_id,
+                updated_by=admin_id,
             )
         )
+        category.ever_had_question = True
         stats.questions_created += 1
 
 
@@ -612,6 +709,13 @@ def main() -> int:
 
     SessionLocal = load_models_and_session_factory()
     with SessionLocal() as session:
+        admin_id = session.scalar(select(AdminUser.id).order_by(AdminUser.id).limit(1))
+        if admin_id is None:
+            print(
+                "quiz import requires an administrator row; run scripts/init_super_admin.py first",
+                file=sys.stderr,
+            )
+            return 2
         if questions:
             validate_category_references(
                 session,
@@ -635,7 +739,7 @@ def main() -> int:
 
         stats = ImportStats()
         with session.begin():
-            import_categories(session, category_rows, stats)
+            import_categories(session, category_rows, stats, admin_id=admin_id)
             import_questions(
                 session,
                 questions,
@@ -643,6 +747,7 @@ def main() -> int:
                 category_rows=category_rows,
                 allow_duplicates=args.allow_duplicates,
                 stats=stats,
+                admin_id=admin_id,
             )
 
     print(

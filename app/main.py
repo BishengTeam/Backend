@@ -75,6 +75,71 @@ app = FastAPI(
 )
 
 
+RENSHE_CONTRACT_VERSION = "2026-08-07"
+RENSHE_ERROR_CODES = {
+    "40001": {"status": 422, "description": "参数或材料校验失败"},
+    "40100": {"status": 401, "description": "未登录或 Token 无效"},
+    "40101": {"status": 403, "description": "无权限或资源越权"},
+    "40200": {"status": 422, "description": "业务规则不允许"},
+    "40201": {"status": 409, "description": "当前状态冲突"},
+    "40300": {"status": 404, "description": "资源不存在"},
+    "40400": {"status": 502, "description": "第三方服务错误"},
+    "50000": {"status": 500, "description": "服务内部错误"},
+}
+
+
+def _add_renshe_contract_metadata(schema: dict) -> None:
+    """Add machine-readable error codes to the frozen human-resources API."""
+
+    error_schema = {
+        "type": "object",
+        "properties": {
+            "code": {"type": "integer", "example": 40200},
+            "message": {"type": "string", "example": "当前状态不允许此操作"},
+            "data": {"type": ["object", "null"]},
+            "detail": {
+                "type": ["array", "object", "null"],
+                "description": "可选的字段级校验详情；不包含敏感原文",
+            },
+        },
+        "required": ["code", "message"],
+    }
+    schema.setdefault("components", {}).setdefault("schemas", {})[
+        "APIErrorResponse"
+    ] = error_schema
+    for path, path_item in schema.get("paths", {}).items():
+        if "/api/renshe" not in path and "/admin/renshe" not in path:
+            continue
+        for method, operation in path_item.items():
+            if method not in {"get", "post", "put", "patch", "delete"}:
+                continue
+            operation["x-contract-version"] = RENSHE_CONTRACT_VERSION
+            operation["x-error-codes"] = sorted(RENSHE_ERROR_CODES)
+            responses = operation.setdefault("responses", {})
+            for code, metadata in RENSHE_ERROR_CODES.items():
+                status = str(metadata["status"])
+                responses.setdefault(
+                    status,
+                    {
+                        "description": f"{metadata['description']}（业务码 {code}）",
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/APIErrorResponse"},
+                                "examples": {
+                                    "error": {
+                                        "value": {
+                                            "code": int(code),
+                                            "message": metadata["description"],
+                                            "data": None,
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    },
+                )
+
+
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
@@ -100,6 +165,7 @@ def custom_openapi():
                 operation["parameters"] = [p for p in params if p not in auth_params]
                 # 添加到全局 security 方案
                 operation.setdefault("security", []).append({"BearerAuth": []})
+    _add_renshe_contract_metadata(schema)
     app.openapi_schema = schema
     return schema
 

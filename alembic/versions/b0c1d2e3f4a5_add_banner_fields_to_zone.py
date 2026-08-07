@@ -8,7 +8,7 @@ Create Date: 2026-06-06
 """
 from typing import Sequence, Union
 
-from alembic import op
+from alembic import context, op
 import sqlalchemy as sa
 
 
@@ -21,6 +21,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def _add_column_safe(table, column):
     """幂等添加列：如果列已存在则跳过"""
+    if context.is_offline_mode():
+        op.add_column(table, column)
+        return
     conn = op.get_bind()
     inspector = sa.inspect(conn)
     cols = [c['name'] for c in inspector.get_columns(table)]

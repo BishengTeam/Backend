@@ -1,32 +1,42 @@
 from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
 
 from app.port.exceptions import BusinessException
+from app.port.config import settings
 from app.middleware.auth import require_permission
-from app.schemas.admin import AdminBatchDeleteRequest
-from app.schemas.admin_quiz import (
+from app.schemas.admin_quiz_contract import (
+    AdminQuizBatchRequest,
+    AdminQuizBatchResponse,
+    AdminQuizAuditLogResponse,
+    AdminQuizAuditQuery,
+    AdminQuizImportJobQuery,
+    AdminQuizImportJobResponse,
+    AdminQuizJsonImportRequest,
+    AdminQuizSignedUrlResponse,
     AdminQuizCategoryCreate,
+    AdminQuizCategoryQuery,
+    AdminQuizCategoryResponse,
+    AdminQuizCategoryStatusUpdate,
     AdminQuizCategoryUpdate,
-    AdminQuizImportJsonRequest,
     AdminQuizQuestionCreate,
+    AdminQuizQuestionQuery,
     AdminQuizQuestionResponse,
+    AdminQuizQuestionStatsResponse,
     AdminQuizQuestionUpdate,
+    AdminQuizVersionRequest,
 )
 from app.schemas.common import APIResponse, PaginatedData, success
-from app.schemas.quiz import QuizCategoryResponse, QuizQuestionResponse
 from app.services.admin_quiz import AdminQuizService
 
 router = APIRouter(prefix="/quiz", tags=["管理后台-题库管理"])
 
 CATEGORY = "/categories"
 QUESTION = "/questions"
-CSV_ALLOWED_CONTENT_TYPES = {"text/csv", "application/vnd.ms-excel"}
-CSV_MAX_UPLOAD_SIZE = 5 * 1024 * 1024  # 5MB
 
 
 # ── Category routes ──
 
 @router.get(CATEGORY,
-    response_model=APIResponse[list[QuizCategoryResponse]],
+    response_model=APIResponse[list[AdminQuizCategoryResponse]],
     summary="题库分类列表",
     description="""
 管理后台 **题库管理** 页面使用。
@@ -37,9 +47,10 @@ CSV_MAX_UPLOAD_SIZE = 5 * 1024 * 1024  # 5MB
     """,
 )
 async def list_categories(
+    query: AdminQuizCategoryQuery = Depends(),
     _admin=Depends(require_permission("quiz:list")),
-) -> APIResponse[list[QuizCategoryResponse]]:
-    result = await AdminQuizService().list_categories()
+) -> APIResponse[list[AdminQuizCategoryResponse]]:
+    result = await AdminQuizService().list_categories(query)
     return success(data=result)
 
 
@@ -65,14 +76,16 @@ async def list_categories(
     """,
 )
 async def list_questions(
-    category_id: int | None = Query(None, ge=1, description="分类 ID"),
-    question_type: str | None = Query(None, description="题型：single_choice / multiple_choice / judge"),
-    page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    query: AdminQuizQuestionQuery = Depends(),
     _admin=Depends(require_permission("quiz:list")),
 ) -> APIResponse[PaginatedData[AdminQuizQuestionResponse]]:
     result = await AdminQuizService().list_questions(
-        category_id=category_id, question_type=question_type, page=page, page_size=page_size,
+        category_id=query.category_id,
+        question_type=query.question_type,
+        status=query.status,
+        keyword=query.keyword,
+        page=query.page,
+        page_size=query.page_size,
     )
     return success(data=result)
 
@@ -80,7 +93,7 @@ async def list_questions(
 # ── Category write routes ──
 
 @router.post(CATEGORY,
-    response_model=APIResponse[QuizCategoryResponse],
+    response_model=APIResponse[AdminQuizCategoryResponse],
     summary="新增分类",
     description="""
 管理后台 **题库管理** 页面使用。
@@ -92,14 +105,14 @@ async def list_questions(
 )
 async def create_category(
     body: AdminQuizCategoryCreate,
-    _admin=Depends(require_permission("quiz:write")),
-) -> APIResponse[QuizCategoryResponse]:
-    result = await AdminQuizService().create_category(body)
+    admin=Depends(require_permission("quiz:write")),
+) -> APIResponse[AdminQuizCategoryResponse]:
+    result = await AdminQuizService().create_category(body, admin_id=admin.id)
     return success(data=result)
 
 
 @router.put(f"{CATEGORY}/{{category_id}}",
-    response_model=APIResponse[QuizCategoryResponse],
+    response_model=APIResponse[AdminQuizCategoryResponse],
     summary="编辑分类",
     description="""
 管理后台 **题库管理** 页面使用。
@@ -112,14 +125,14 @@ async def create_category(
 async def update_category(
     body: AdminQuizCategoryUpdate,
     category_id: int = Path(..., ge=1),
-    _admin=Depends(require_permission("quiz:write")),
-) -> APIResponse[QuizCategoryResponse]:
-    result = await AdminQuizService().update_category(category_id, body)
+    admin=Depends(require_permission("quiz:write")),
+) -> APIResponse[AdminQuizCategoryResponse]:
+    result = await AdminQuizService().update_category(category_id, body, admin_id=admin.id)
     return success(data=result)
 
 
 @router.delete(f"{CATEGORY}/{{category_id}}",
-    response_model=APIResponse,
+    response_model=APIResponse[None],
     summary="删除分类",
     description="""
 管理后台 **题库管理** 页面使用。
@@ -130,17 +143,35 @@ async def update_category(
     """,
 )
 async def delete_category(
+    body: AdminQuizVersionRequest,
     category_id: int = Path(..., ge=1),
-    _admin=Depends(require_permission("quiz:write")),
+    admin=Depends(require_permission("quiz:write")),
 ):
-    await AdminQuizService().delete_category(category_id)
+    await AdminQuizService().delete_category(
+        category_id, body.lock_version, admin_id=admin.id
+    )
     return success(message="分类已删除")
+
+
+@router.post(f"{CATEGORY}/{{category_id}}/status",
+    response_model=APIResponse[AdminQuizCategoryResponse],
+    summary="启用或停用分类",
+)
+async def update_category_status(
+    body: AdminQuizCategoryStatusUpdate,
+    category_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz:write")),
+) -> APIResponse[AdminQuizCategoryResponse]:
+    result = await AdminQuizService().update_category_status(
+        category_id, body, admin_id=admin.id
+    )
+    return success(data=result)
 
 
 # ── Question routes ──
 
 @router.post(QUESTION,
-    response_model=APIResponse[QuizQuestionResponse],
+    response_model=APIResponse[AdminQuizQuestionResponse],
     summary="新增题目",
     description="""
 管理后台 **题库管理** 页面使用。
@@ -152,14 +183,14 @@ async def delete_category(
 )
 async def create_question(
     body: AdminQuizQuestionCreate,
-    _admin=Depends(require_permission("quiz:write")),
-) -> APIResponse[QuizQuestionResponse]:
-    result = await AdminQuizService().create_question(body)
+    admin=Depends(require_permission("quiz:write")),
+) -> APIResponse[AdminQuizQuestionResponse]:
+    result = await AdminQuizService().create_question(body, admin_id=admin.id)
     return success(data=result)
 
 
 @router.put(f"{QUESTION}/{{question_id}}",
-    response_model=APIResponse[QuizQuestionResponse],
+    response_model=APIResponse[AdminQuizQuestionResponse],
     summary="编辑题目",
     description="""
 管理后台 **题库管理** 页面使用。
@@ -172,14 +203,16 @@ async def create_question(
 async def update_question(
     body: AdminQuizQuestionUpdate,
     question_id: int = Path(..., ge=1),
-    _admin=Depends(require_permission("quiz:write")),
-) -> APIResponse[QuizQuestionResponse]:
-    result = await AdminQuizService().update_question(question_id, body)
+    admin=Depends(require_permission("quiz:write")),
+) -> APIResponse[AdminQuizQuestionResponse]:
+    result = await AdminQuizService().update_question(
+        question_id, body, admin_id=admin.id
+    )
     return success(data=result)
 
 
 @router.delete(f"{QUESTION}/{{question_id}}",
-    response_model=APIResponse,
+    response_model=APIResponse[None],
     summary="删除题目",
     description="""
 管理后台 **题库管理** 页面使用。
@@ -190,73 +223,203 @@ async def update_question(
     """,
 )
 async def delete_question(
+    body: AdminQuizVersionRequest,
     question_id: int = Path(..., ge=1),
-    _admin=Depends(require_permission("quiz:write")),
+    admin=Depends(require_permission("quiz:write")),
 ):
-    await AdminQuizService().delete_question(question_id)
+    await AdminQuizService().delete_question(
+        question_id, body.lock_version, admin_id=admin.id
+    )
     return success(message="题目已删除")
 
 
-@router.post(f"{QUESTION}/batch-delete",
-    response_model=APIResponse[int],
-    summary="批量删除题目",
-    description="""
-管理后台 **题库管理** 页面使用。
-
-**页面路径**: `/admin/quiz`
-
-**使用场景**: 管理员勾选多道题目后点击批量删除按钮
-    """,
+@router.post(f"{QUESTION}/{{question_id}}/publish",
+    response_model=APIResponse[AdminQuizQuestionResponse],
+    summary="发布题目",
 )
-async def batch_delete_questions(
-    body: AdminBatchDeleteRequest,
-    _admin=Depends(require_permission("quiz:write")),
-):
-    count = await AdminQuizService().batch_delete_questions(body.ids)
-    return success(data=count, message=f"已删除 {count} 道题目")
+async def publish_question(
+    body: AdminQuizVersionRequest,
+    question_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz:write")),
+) -> APIResponse[AdminQuizQuestionResponse]:
+    result = await AdminQuizService().publish_question(
+        question_id, body, admin_id=admin.id
+    )
+    return success(data=result)
 
 
-# ── Import route ──
-
-@router.post("/import",
-    response_model=APIResponse,
-    summary="CSV导入题目",
-    description="""
-管理后台 **题库管理** 页面使用。
-
-**页面路径**: `/admin/quiz`
-
-**使用场景**: 管理员上传 CSV 文件批量导入题目，支持自动创建缺失的分类
-    """,
+@router.post(f"{QUESTION}/{{question_id}}/disable",
+    response_model=APIResponse[AdminQuizQuestionResponse],
+    summary="停用题目",
 )
-async def import_questions(
+async def disable_question(
+    body: AdminQuizVersionRequest,
+    question_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz:write")),
+) -> APIResponse[AdminQuizQuestionResponse]:
+    result = await AdminQuizService().disable_question(
+        question_id, body, admin_id=admin.id
+    )
+    return success(data=result)
+
+
+@router.post(f"{QUESTION}/{{question_id}}/restore",
+    response_model=APIResponse[AdminQuizQuestionResponse],
+    summary="恢复题目",
+)
+async def restore_question(
+    body: AdminQuizVersionRequest,
+    question_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz:write")),
+) -> APIResponse[AdminQuizQuestionResponse]:
+    result = await AdminQuizService().restore_question(
+        question_id, body, admin_id=admin.id
+    )
+    return success(data=result)
+
+
+@router.post(f"{QUESTION}/batch-publish",
+    response_model=APIResponse[AdminQuizBatchResponse],
+    summary="批量发布题目",
+)
+async def batch_publish_questions(
+    body: AdminQuizBatchRequest,
+    admin=Depends(require_permission("quiz:write")),
+) -> APIResponse[AdminQuizBatchResponse]:
+    result = await AdminQuizService().batch_publish_questions(body, admin_id=admin.id)
+    return success(data=result)
+
+
+@router.post(f"{QUESTION}/batch-disable",
+    response_model=APIResponse[AdminQuizBatchResponse],
+    summary="批量停用题目",
+)
+async def batch_disable_questions(
+    body: AdminQuizBatchRequest,
+    admin=Depends(require_permission("quiz:write")),
+) -> APIResponse[AdminQuizBatchResponse]:
+    result = await AdminQuizService().batch_disable_questions(body, admin_id=admin.id)
+    return success(data=result)
+
+
+@router.get(f"{QUESTION}/{{question_id}}/stats",
+    response_model=APIResponse[AdminQuizQuestionStatsResponse],
+    summary="题目统计",
+)
+async def get_question_stats(
+    question_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[AdminQuizQuestionStatsResponse]:
+    result = await AdminQuizService().get_question_stats(question_id)
+    return success(data=result)
+
+
+@router.get("/audit-logs",
+    response_model=APIResponse[PaginatedData[AdminQuizAuditLogResponse]],
+    summary="题库管理审计日志",
+)
+async def list_audit_logs(
+    query: AdminQuizAuditQuery = Depends(),
+    _admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[PaginatedData[AdminQuizAuditLogResponse]]:
+    result = await AdminQuizService().list_audit_logs(query)
+    return success(data=result)
+
+
+# ── Import task routes ──
+
+@router.post("/imports/csv",
+    response_model=APIResponse[AdminQuizImportJobResponse],
+    summary="创建 CSV 导入任务",
+)
+async def create_csv_import(
     file: UploadFile = File(..., description="CSV 文件"),
-    create_missing_categories: bool = Form(False, description="是否自动创建缺失的分类"),
-    _admin=Depends(require_permission("quiz:import")),
-):
-    if file.content_type not in CSV_ALLOWED_CONTENT_TYPES:
-        raise BusinessException("不支持的文件类型，仅允许上传 CSV 文件")
-    content = await file.read()
-    if len(content) > CSV_MAX_UPLOAD_SIZE:
-        raise BusinessException("文件大小超过限制（最大 5MB）")
-    result = await AdminQuizService().import_questions_csv(content, create_missing_categories)
+    filename: str = Form(..., min_length=1, max_length=255),
+    size_bytes: int = Form(..., ge=1, le=10 * 1024 * 1024),
+    admin=Depends(require_permission("quiz:import")),
+) -> APIResponse[AdminQuizImportJobResponse]:
+    content = await file.read(settings.QUIZ_IMPORT_MAX_FILE_BYTES + 1)
+    if len(content) > settings.QUIZ_IMPORT_MAX_FILE_BYTES:
+        raise BusinessException("导入文件不能超过 10 MiB")
+    if size_bytes != len(content):
+        raise BusinessException("文件大小校验失败")
+    if not filename.lower().endswith(".csv"):
+        raise BusinessException("仅允许上传 .csv 文件")
+    result = await AdminQuizService().create_import_job(
+        source_type="csv",
+        content=content,
+        admin_id=admin.id,
+        filename=filename,
+    )
     return success(data=result)
 
 
-@router.post("/import/json",
-    response_model=APIResponse,
-    summary="JSON导入题目",
-    description="""
-管理后台 **题库管理** 页面使用。
-
-**页面路径**: `/admin/quiz`
-
-**使用场景**: 管理员通过 JSON 格式批量导入题目数据
-    """,
+@router.post("/imports/json",
+    response_model=APIResponse[AdminQuizImportJobResponse],
+    summary="创建 JSON 导入任务",
 )
-async def import_questions_json(
-    body: AdminQuizImportJsonRequest,
-    _admin=Depends(require_permission("quiz:import")),
-):
-    result = await AdminQuizService().import_questions_json(body)
+async def create_json_import(
+    body: AdminQuizJsonImportRequest,
+    admin=Depends(require_permission("quiz:import")),
+) -> APIResponse[AdminQuizImportJobResponse]:
+    content = body.model_dump_json(exclude_none=False).encode("utf-8")
+    result = await AdminQuizService().create_import_job(
+        source_type="json",
+        content=content,
+        admin_id=admin.id,
+        filename="quiz-import.json",
+    )
     return success(data=result)
+
+
+@router.get("/imports",
+    response_model=APIResponse[PaginatedData[AdminQuizImportJobResponse]],
+    summary="导入任务列表",
+)
+async def list_import_jobs(
+    query: AdminQuizImportJobQuery = Depends(),
+    _admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[PaginatedData[AdminQuizImportJobResponse]]:
+    result = await AdminQuizService().list_import_jobs(query)
+    return success(data=result)
+
+
+@router.get("/imports/{job_id}",
+    response_model=APIResponse[AdminQuizImportJobResponse],
+    summary="导入任务详情",
+)
+async def get_import_job(
+    job_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[AdminQuizImportJobResponse]:
+    result = await AdminQuizService().get_import_job(job_id)
+    return success(data=result)
+
+
+@router.get("/imports/{job_id}/report-url",
+    response_model=APIResponse[AdminQuizSignedUrlResponse],
+    summary="错误报告临时地址",
+)
+async def get_import_report_url(
+    job_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[AdminQuizSignedUrlResponse]:
+    result = await AdminQuizService().get_import_report_url(job_id, admin_id=admin.id)
+    return success(data=result)
+
+
+@router.get(
+    "/imports/{job_id}/report",
+    response_model=dict,
+    include_in_schema=False,
+    summary="读取本地开发错误报告",
+)
+async def read_import_report(
+    job_id: int = Path(..., ge=1),
+    expires: int = Query(..., ge=1),
+    admin_id: int = Query(..., ge=1),
+    token: str = Query(..., min_length=32, max_length=128),
+) -> dict:
+    return await AdminQuizService().read_import_report(
+        job_id, expires=expires, admin_id=admin_id, token=token
+    )

@@ -6,7 +6,7 @@ Create Date: 2026-06-07
 """
 from typing import Sequence, Union
 
-from alembic import op
+from alembic import context, op
 import sqlalchemy as sa
 
 
@@ -17,9 +17,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    conn = op.get_bind()
-    inspector = sa.inspect(conn)
-    if 'training' not in inspector.get_table_names():
+    if context.is_offline_mode() or 'training' not in sa.inspect(op.get_bind()).get_table_names():
         op.create_table('training',
             sa.Column('title', sa.String(256), nullable=False),
             sa.Column('description', sa.Text(), nullable=True),

@@ -55,8 +55,15 @@ DELETE_ORDER = [
     "deleted_openid",
     "job_application",
     "points_history",
+    # Quiz user/session data (children before their snapshots and parents).
     "quiz_checkin",
-    "quiz_record",
+    "quiz_practice_attempt",
+    "quiz_practice_session_question",
+    "quiz_exam_answer",
+    "quiz_exam_question",
+    "quiz_wrong_item",
+    "quiz_collection",
+    "quiz_user_stats",
     "share",
     "ticket",
     "user_coupon",
@@ -81,10 +88,15 @@ DELETE_ORDER = [
     "course",
     "inventory",
     "job",
-    "quiz_question",    # 子表 quiz_record 已在第 1 批清空
+    "quiz_question_stats",
+    "quiz_import_job",
+    "quiz_admin_audit_log",
+    "quiz_question",
+    "quiz_practice_session",
+    "quiz_exam",
     "training",
     "zone",
-    "quiz_category",    # 子表 quiz_question 已清空
+    "quiz_category",
 
     # ── 第 5 批：user（所有引用已解除）──
     "user",

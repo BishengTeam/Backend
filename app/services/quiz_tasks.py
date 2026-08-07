@@ -64,6 +64,51 @@ class QuizTaskRegistry:
 quiz_task_registry = QuizTaskRegistry()
 
 
+async def _process_import_jobs() -> bool:
+    # Import lazily so importing the task runtime does not eagerly construct a
+    # second database session or introduce an admin-quiz import cycle.
+    from app.services.admin_quiz import AdminQuizService
+
+    return await AdminQuizService().process_next_import_job()
+
+
+quiz_task_registry.register("quiz-import", _process_import_jobs)
+
+
+async def _cleanup_expired_imports() -> bool:
+    from app.services.admin_quiz import AdminQuizService
+
+    return await AdminQuizService().cleanup_expired_import_job()
+
+
+quiz_task_registry.register("quiz-import-cleanup", _cleanup_expired_imports)
+
+
+_last_question_stats_run: float | None = None
+
+
+async def _aggregate_question_stats() -> bool:
+    global _last_question_stats_run
+
+    loop_time = asyncio.get_running_loop().time()
+    if (
+        _last_question_stats_run is not None
+        and loop_time - _last_question_stats_run < QUIZ_TASK_RUNTIME.poll_seconds
+    ):
+        return False
+    _last_question_stats_run = loop_time
+
+    from app.services.admin_quiz import AdminQuizService
+
+    await AdminQuizService().aggregate_question_stats()
+    # Periodic maintenance must not request an immediate worker rerun. Without
+    # this, the 60-second aggregation overlap can keep the loop continuously hot.
+    return False
+
+
+quiz_task_registry.register("quiz-question-stats", _aggregate_question_stats)
+
+
 async def ensure_quiz_runtime_ready() -> None:
     """Fail production startup when the shared Redis dependency is unavailable."""
     if not settings.QUIZ_TASKS_ENABLED or settings.APP_ENV != "production":

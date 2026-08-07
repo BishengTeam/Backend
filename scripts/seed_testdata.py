@@ -27,6 +27,7 @@ from app.domain.content.src.model.banner import Banner
 from app.domain.certification.src.index import Certification, Course, CourseEnrollment, Job
 from app.domain.order.src.index import Coupon, Inventory, Order, PriceConfig, UserCoupon
 from app.domain.community.src.index import QuickQuestion, QuizQuestion
+from app.domain.community.src.rule.quiz import normalize_question_payload
 
 # ── 测试用户定义 ──────────────────────────────────────────────
 TEST_USERS = [
@@ -80,6 +81,10 @@ async def clean_test_data(db):
         "points_history",
         "user_points",
         "user_identity",
+        "user_realname",
+        "user_student",
+        "user_enterprise",
+        "user_profile",
         "user_coupon",
         "activity_registration",
         "activity_reminder",
@@ -88,8 +93,13 @@ async def clean_test_data(db):
         '"order"',
         "ticket",
         "agreement",
-        "quiz_record",
         "quiz_checkin",
+        "quiz_practice_attempt",
+        "quiz_wrong_item",
+        "quiz_collection",
+        "quiz_user_stats",
+        "quiz_practice_session",
+        "quiz_exam",
         "competition_reg",
         "conversation",
         "collection",
@@ -116,6 +126,7 @@ async def clean_test_data(db):
     await db.execute(text("DELETE FROM training"))
     await db.execute(text("DELETE FROM banner"))
     await db.execute(text("DELETE FROM zone"))
+    await db.execute(text("DELETE FROM quiz_question_stats"))
     await db.execute(text("DELETE FROM quiz_question"))
     await db.execute(text("DELETE FROM quick_question"))
     await db.execute(text("DELETE FROM deleted_openid"))
@@ -464,6 +475,12 @@ async def seed_quiz_questions(db):
         print("  ⚠ 无子分类，跳过题目创建")
         return
 
+    admin_id = await db.scalar(select(AdminUser.id).order_by(AdminUser.id).limit(1))
+    if admin_id is None:
+        raise RuntimeError(
+            "题库题目需要管理员引用，请先执行 scripts/init_super_admin.py"
+        )
+
     # 按子分类分别出题
     question_bank = {
         "网络基础": [
@@ -506,13 +523,33 @@ async def seed_quiz_questions(db):
         if cat_name not in question_bank:
             continue
         for qtype, text, opts, answer, expl in question_bank[cat_name]:
-            db.add(QuizQuestion(
-                category_id=cat.id,
+            answer_payload: object = answer
+            if qtype == "multiple_choice":
+                answer_payload = [part for part in answer.replace("，", ",").split(",") if part]
+            normalized = normalize_question_payload(
                 question_type=qtype,
                 question_text=text,
                 options=opts,
-                correct_answer=answer,
+                correct_answer=answer_payload,
                 explanation=expl,
+                require_publishable=True,
+            )
+            db.add(QuizQuestion(
+                category_id=cat.id,
+                question_type=normalized.question_type.value,
+                status="published",
+                question_text=normalized.question_text,
+                normalized_question_text=normalized.normalized_question_text,
+                question_text_hash=normalized.question_text_hash,
+                options=normalized.options,
+                correct_answer=normalized.correct_answer,
+                explanation=normalized.explanation,
+                ever_published=True,
+                published_at=NOW,
+                disabled_at=None,
+                lock_version=1,
+                created_by=admin_id,
+                updated_by=admin_id,
             ))
             total += 1
     await db.commit()

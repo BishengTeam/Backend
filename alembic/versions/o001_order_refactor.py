@@ -6,7 +6,7 @@ Create Date: 2026-06-19
 """
 from typing import Sequence, Union
 
-from alembic import op
+from alembic import context, op
 import sqlalchemy as sa
 
 
@@ -17,11 +17,15 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    conn = op.get_bind()
-    inspector = sa.inspect(conn)
+    if context.is_offline_mode():
+        columns = {"candidate_name", "candidate_phone", "cert_type"}
+        pc_columns = {"cert_type"}
+    else:
+        inspector = sa.inspect(op.get_bind())
+        columns = {c["name"] for c in inspector.get_columns("order")}
+        pc_columns = {c["name"] for c in inspector.get_columns("price_config")}
 
     # 1. 加 order_kind 列
-    columns = [c["name"] for c in inspector.get_columns("order")]
     if "order_kind" not in columns:
         op.add_column("order",
             sa.Column("order_kind", sa.String(32), nullable=False,
@@ -46,7 +50,6 @@ def upgrade() -> None:
     op.alter_column("order", "candidate_phone", nullable=True)
 
     # 4. price_config: cert_type → product_type
-    pc_columns = [c["name"] for c in inspector.get_columns("price_config")]
     if "product_type" not in pc_columns:
         op.add_column("price_config",
             sa.Column("product_type", sa.String(64), nullable=True))
@@ -69,12 +72,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    conn = op.get_bind()
-    inspector = sa.inspect(conn)
-    columns = [c["name"] for c in inspector.get_columns("order")]
+    if context.is_offline_mode():
+        columns = {"candidate_name", "candidate_phone", "product_type", "order_kind"}
+        pc_columns = {"product_type"}
+    else:
+        inspector = sa.inspect(op.get_bind())
+        columns = {c["name"] for c in inspector.get_columns("order")}
+        pc_columns = {c["name"] for c in inspector.get_columns("price_config")}
 
     # price_config: product_type → cert_type
-    pc_columns = [c["name"] for c in inspector.get_columns("price_config")]
     if "cert_type" not in pc_columns:
         op.add_column("price_config",
             sa.Column("cert_type", sa.String(64), nullable=True))

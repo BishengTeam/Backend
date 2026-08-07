@@ -10,10 +10,10 @@ from app.policy.permissions import ROLE_PERMISSIONS
 
 
 async def get_current_user(
-    authorization: str = Header(...),
+    authorization: str | None = Header(None),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    if not authorization.startswith("Bearer "):
+    if not authorization or not authorization.startswith("Bearer "):
         raise UnauthorizedException("认证格式错误")
     token = authorization[7:]
     try:
@@ -36,10 +36,10 @@ async def get_current_user(
 
 
 async def get_current_admin(
-    authorization: str = Header(...),
+    authorization: str | None = Header(None),
     db: AsyncSession = Depends(get_db),
 ):
-    if not authorization.startswith("Bearer "):
+    if not authorization or not authorization.startswith("Bearer "):
         raise UnauthorizedException("认证格式错误")
     token = authorization[7:]
     try:

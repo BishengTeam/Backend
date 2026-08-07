@@ -5,6 +5,7 @@ from contextvars import ContextVar
 from app.port.config import settings
 
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
+client_ip_var: ContextVar[str | None] = ContextVar("client_ip", default=None)
 
 LOG_FORMAT = (
     "%(asctime)s | %(levelname)-8s | %(request_id)s | %(name)s:%(lineno)d | %(message)s"

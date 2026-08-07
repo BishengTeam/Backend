@@ -18,14 +18,25 @@ ALLOWED_QUESTION_TYPES = ("single_choice", "multiple_choice", "judge")
 EXPECTED_QUIZ_ENDPOINTS = (
     ("GET", "/api/quiz/categories"),
     ("GET", "/api/quiz/questions"),
-    ("POST", "/api/quiz/submit"),
+    ("POST", "/api/quiz/practice-sessions"),
+    ("GET", "/api/quiz/practice-sessions/current"),
+    ("GET", "/api/quiz/practice-sessions/{session_id}"),
+    ("POST", "/api/quiz/practice-sessions/{session_id}/attempts"),
+    ("POST", "/api/quiz/practice-sessions/{session_id}/abandon"),
+    ("GET", "/api/quiz/practice-history"),
     ("GET", "/api/quiz/wrong-book"),
-    ("POST", "/api/quiz/wrong-book"),
-    ("DELETE", "/api/quiz/wrong-book/{id}"),
     ("GET", "/api/quiz/collections"),
     ("POST", "/api/quiz/collections"),
-    ("DELETE", "/api/quiz/collections/{id}"),
+    ("DELETE", "/api/quiz/collections/{question_id}"),
     ("GET", "/api/quiz/checkin"),
+    ("GET", "/api/quiz/checkin/calendar"),
+    ("GET", "/api/quiz/stats"),
+)
+
+REMOVED_PRACTICE_ENDPOINTS = (
+    ("POST", "/api/quiz/submit"),
+    ("POST", "/api/quiz/wrong-book"),
+    ("DELETE", "/api/quiz/wrong-book/{id}"),
     ("POST", "/api/quiz/checkin"),
 )
 
@@ -328,6 +339,13 @@ class QuizSystemTests(unittest.TestCase):
         ]
         self.assertFalse(missing_routes, f"quiz API missing expected routes: {missing_routes}")
 
+        stale_routes = [
+            f"{method} {path}"
+            for method, path in REMOVED_PRACTICE_ENDPOINTS
+            if (method, path) in actual
+        ]
+        self.assertFalse(stale_routes, f"quiz API still exposes removed practice routes: {stale_routes}")
+
         missing_response_models = [
             f"{route.method} {route.path} ({route.function_name})"
             for route in routes
@@ -407,7 +425,7 @@ class QuizSystemTests(unittest.TestCase):
             path
             for base in (_path("docs/plan"), _path("docs"))
             if base.exists()
-            for path in base.glob("*.md")
+            for path in base.rglob("*.md")
             if path.is_file() and "GET /api/quiz/categories" in _read_text(path)
         ]
         self.assertTrue(docs, "quiz endpoints should be documented in the plan or interface list")
@@ -415,7 +433,11 @@ class QuizSystemTests(unittest.TestCase):
         combined_text = "\n".join(_read_text(path) for path in docs)
         for method, endpoint in EXPECTED_QUIZ_ENDPOINTS:
             with self.subTest(endpoint=f"{method} {endpoint}"):
-                self.assertIn(f"{method} {endpoint}", combined_text)
+                self.assertIn(endpoint, combined_text)
+                self.assertRegex(
+                    combined_text,
+                    rf"(?:^|\|)\s*{re.escape(method)}(?:\s+|\s*\|\s*).*?{re.escape(endpoint)}",
+                )
 
         plan_docs = [path for path in docs if "docs\\plan" in str(path) or "docs/plan" in str(path)]
         if plan_docs:

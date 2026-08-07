@@ -7,6 +7,8 @@ from app.adapter.database import async_session_factory
 from app.domain.certification.src.index import Certification
 from app.domain.order.src.index import PriceConfig
 from app.domain.community.src.index import QuizCategory
+from app.domain.user.src.index import AdminUser
+from app.domain.community.src.rule.quiz import normalize_category_name
 
 
 async def _seed_price_configs(db):
@@ -64,20 +66,38 @@ async def _seed_certifications(db):
 
 
 async def _seed_quiz_categories(db):
-    parent = QuizCategory(name="H3C 网络工程师", description="H3C 认证题库")
-    parent2 = QuizCategory(name="深信服网络安全", description="深信服认证题库")
-    children = [
-        QuizCategory(name="网络基础", description="网络基础知识"),
-        QuizCategory(name="路由协议", description="路由协议相关"),
-        QuizCategory(name="安全基础", description="安全基础知识"),
-        QuizCategory(name="防火墙", description="防火墙相关"),
-    ]
+    admin_id = await db.scalar(select(AdminUser.id).order_by(AdminUser.id).limit(1))
+    if admin_id is None:
+        raise RuntimeError(
+            "题库分类需要管理员引用，请先执行 scripts/init_super_admin.py"
+        )
+
+    def category(name: str, description: str, *, parent_id: int | None, depth: int):
+        normalized = normalize_category_name(name)
+        return QuizCategory(
+            name=normalized,
+            normalized_name=normalized,
+            parent_id=parent_id,
+            depth=depth,
+            description=description,
+            status="active",
+            sort_order=0,
+            ever_had_question=False,
+            lock_version=1,
+            created_by=admin_id,
+            updated_by=admin_id,
+        )
+
+    parent = category("H3C 网络工程师", "H3C 认证题库", parent_id=None, depth=1)
+    parent2 = category("深信服网络安全", "深信服认证题库", parent_id=None, depth=1)
     db.add_all([parent, parent2])
     await db.flush()
-    children[0].parent_id = parent.id
-    children[1].parent_id = parent.id
-    children[2].parent_id = parent2.id
-    children[3].parent_id = parent2.id
+    children = [
+        category("网络基础", "网络基础知识", parent_id=parent.id, depth=2),
+        category("路由协议", "路由协议相关", parent_id=parent.id, depth=2),
+        category("安全基础", "安全基础知识", parent_id=parent2.id, depth=2),
+        category("防火墙", "防火墙相关", parent_id=parent2.id, depth=2),
+    ]
     db.add_all(children)
     print("  ✓ 题库分类 (4 个父类 + 4 个子类)")
 

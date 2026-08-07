@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -297,6 +297,7 @@ class QuizPracticeAttempt(Base, _QuizTimestampMixin):
             name="uq_quiz_practice_attempt_number",
         ),
         Index("ix_quiz_practice_attempt_user_time", "user_id", "submitted_at", "id"),
+        Index("ix_quiz_practice_attempt_submitted", "submitted_at", "id"),
         Index(
             "ix_quiz_practice_attempt_session_question",
             "session_id",
@@ -444,6 +445,7 @@ class QuizExam(Base, _QuizTimestampMixin):
             sqlite_where=text("status = 'in_progress'"),
         ),
         Index("ix_quiz_exam_deadline", "status", "deadline_at", "id"),
+        Index("ix_quiz_exam_status_updated", "status", "updated_at", "id"),
         Index("ix_quiz_exam_user_history", "user_id", "started_at", "id"),
     )
 
@@ -519,6 +521,7 @@ class QuizExamAnswer(Base, _QuizTimestampMixin):
         CheckConstraint("lock_version >= 1", name="ck_quiz_exam_answer_lock_version"),
         UniqueConstraint("exam_question_id", name="uq_quiz_exam_answer_question"),
         Index("ix_quiz_exam_answer_exam", "exam_id", "exam_question_id"),
+        Index("ix_quiz_exam_answer_updated", "updated_at", "id"),
     )
 
     exam_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -696,6 +699,17 @@ class QuizImportJob(Base, _QuizTimestampMixin):
     )
     error_message: Mapped[str | None] = mapped_column(String(1024))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    @property
+    def report_available(self) -> bool:
+        # Retention is enforced at the model boundary as well as by the
+        # download service, so expired jobs never advertise a usable report.
+        expires_at = self.expires_at
+        if expires_at is None:
+            return False
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        return bool(self.report_object_key) and expires_at > datetime.now(timezone.utc)
 
 
 class QuizAdminAuditLog(Base, _QuizCreatedAtMixin):

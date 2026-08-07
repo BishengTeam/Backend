@@ -198,8 +198,8 @@ class Settings(BaseSettings):
             raise ValueError("; ".join(changed))
         if not 1 <= self.QUIZ_OSS_SIGNED_URL_TTL_SECONDS <= 900:
             raise ValueError("QUIZ_OSS_SIGNED_URL_TTL_SECONDS must be between 1 and 900")
-        if not 1 <= self.QUIZ_WORKER_POLL_SECONDS <= 300:
-            raise ValueError("QUIZ_WORKER_POLL_SECONDS must be between 1 and 300")
+        if not 1 <= self.QUIZ_WORKER_POLL_SECONDS <= 60:
+            raise ValueError("QUIZ_WORKER_POLL_SECONDS must be between 1 and 60")
         if not 1 <= self.QUIZ_WORKER_HEARTBEAT_SECONDS < self.QUIZ_WORKER_STALE_SECONDS:
             raise ValueError(
                 "QUIZ_WORKER_HEARTBEAT_SECONDS must be positive and below "

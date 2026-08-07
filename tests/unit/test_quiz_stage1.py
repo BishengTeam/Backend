@@ -48,10 +48,16 @@ from app.services.quiz_tasks import QuizTaskRegistry
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATION_PATH = REPO_ROOT / "alembic/versions/quiz001_rebuild_quiz_domain.py"
+STATS_INDEX_MIGRATION_PATH = (
+    REPO_ROOT / "alembic/versions/quiz002_add_stats_dirty_indexes.py"
+)
+QUIZ_MIGRATION_PATHS = tuple(
+    sorted((REPO_ROOT / "alembic/versions").glob("quiz*.py"))
+)
 
 
-def _load_migration():
-    spec = importlib.util.spec_from_file_location("quiz001_migration", MIGRATION_PATH)
+def _load_migration(path: Path = MIGRATION_PATH):
+    spec = importlib.util.spec_from_file_location(f"{path.stem}_migration", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -291,6 +297,9 @@ def test_reactivation_and_retention_constraints_match_frozen_lifecycle() -> None
 def test_destructive_migration_is_isolated_and_backup_gated() -> None:
     migration = _load_migration()
     source = MIGRATION_PATH.read_text(encoding="utf-8")
+    all_quiz_migration_source = "\n".join(
+        path.read_text(encoding="utf-8") for path in QUIZ_MIGRATION_PATHS
+    )
     assert migration.revision == "quiz001"
     assert migration.down_revision == "rsh001"
     assert "quiz_backup_ref" in source
@@ -311,8 +320,28 @@ def test_destructive_migration_is_isolated_and_backup_gated() -> None:
             for item in (*table.constraints, *table.indexes)
             if item.name is not None
         }
-        missing = sorted(name for name in expected_names if name not in source)
+        missing = sorted(
+            name for name in expected_names if name not in all_quiz_migration_source
+        )
         assert not missing, f"migration is missing {table_name} objects: {missing}"
+
+
+def test_stats_index_migration_is_non_destructive_and_quiz_scoped() -> None:
+    migration = _load_migration(STATS_INDEX_MIGRATION_PATH)
+    source = STATS_INDEX_MIGRATION_PATH.read_text(encoding="utf-8")
+    assert migration.revision == "quiz002"
+    assert migration.down_revision == "quiz001"
+    assert "create_table" not in source
+    assert "drop_table" not in source
+    assert not re.search(r"\bbanner\b|\bzone\b", source, flags=re.IGNORECASE)
+    created_indexes = set(
+        re.findall(r'op\.create_index\(\s*"([^"]+)"', source)
+    )
+    assert created_indexes == {
+        "ix_quiz_practice_attempt_submitted",
+        "ix_quiz_exam_status_updated",
+        "ix_quiz_exam_answer_updated",
+    }
 
 
 def test_quiz_settings_are_frozen_and_production_requires_private_oss() -> None:

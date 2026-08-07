@@ -26,7 +26,8 @@ EXPECTED_ADMIN_ENDPOINTS_BATCH2 = (
     ("POST", "/admin/quiz/questions"),
     ("PUT", "/admin/quiz/questions/{question_id}"),
     ("DELETE", "/admin/quiz/questions/{question_id}"),
-    ("POST", "/admin/quiz/import"),
+    ("POST", "/admin/quiz/imports/csv"),
+    ("POST", "/admin/quiz/imports/json"),
     ("GET", "/admin/zones"),
     ("POST", "/admin/zones"),
     ("PUT", "/admin/zones/{zone_id}"),
@@ -294,7 +295,7 @@ class AdminBatch2SystemTests(unittest.TestCase):
         actual = {(method, path) for method, path, _ in routes}
 
         # Quiz routes use f-string variables (CATEGORY/QUESTION) unresolvable by AST.
-        # Verify the non-quiz routes plus /admin/quiz/import via AST.
+        # Verify the non-quiz routes plus literal quiz import routes via AST.
         ast_verifiable = [
             (m, p) for m, p in EXPECTED_ADMIN_ENDPOINTS_BATCH2
             if not ("/quiz/categories" in p or "/quiz/questions" in p)
@@ -333,9 +334,12 @@ class AdminBatch2SystemTests(unittest.TestCase):
         self.assertIn("update_question", source)
         self.assertIn("delete_question", source)
 
-        # Import route
-        self.assertIn('"/import"', source, "quiz.py should define /import route")
-        self.assertIn("import_questions", source)
+        # Frozen asynchronous import routes
+        self.assertIn('"/imports/csv"', source)
+        self.assertIn('"/imports/json"', source)
+        self.assertIn("create_csv_import", source)
+        self.assertIn("create_json_import", source)
+        self.assertNotIn('@router.post("/import")', source)
 
     # ── Service layer hygiene ──
 

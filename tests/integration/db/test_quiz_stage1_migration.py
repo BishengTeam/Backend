@@ -105,6 +105,7 @@ def test_quiz_rebuild_upgrade_downgrade_upgrade(
         "integration-test-verified-backup",
     )
     command.upgrade(config, "quiz001")
+    command.upgrade(config, "head")
 
     inspector = inspect(engine)
     expected_tables = {
@@ -137,13 +138,22 @@ def test_quiz_rebuild_upgrade_downgrade_upgrade(
                     "SELECT indexdef FROM pg_indexes "
                     "WHERE indexname IN "
                     "('uq_quiz_practice_session_active_user', "
-                    "'uq_quiz_exam_active_user') ORDER BY indexname"
+                    "'uq_quiz_exam_active_user', "
+                    "'ix_quiz_practice_attempt_submitted', "
+                    "'ix_quiz_exam_status_updated', "
+                    "'ix_quiz_exam_answer_updated') ORDER BY indexname"
                 )
             ).scalars()
         )
-        assert len(index_definitions) == 2
-        assert all("WHERE" in definition for definition in index_definitions)
-        assert all("in_progress" in definition for definition in index_definitions)
+        assert len(index_definitions) == 5
+        partial_indexes = [
+            definition
+            for definition in index_definitions
+            if "uq_quiz_" in definition
+        ]
+        assert len(partial_indexes) == 2
+        assert all("WHERE" in definition for definition in partial_indexes)
+        assert all("in_progress" in definition for definition in partial_indexes)
 
     command.downgrade(config, "rsh001")
     inspector = inspect(engine)
@@ -159,6 +169,6 @@ def test_quiz_rebuild_upgrade_downgrade_upgrade(
     }
 
     monkeypatch.delenv("QUIZ_DESTRUCTIVE_MIGRATION_BACKUP_REF", raising=False)
-    command.upgrade(config, "quiz001")
+    command.upgrade(config, "head")
     assert "quiz_record" not in inspect(engine).get_table_names()
     engine.dispose()

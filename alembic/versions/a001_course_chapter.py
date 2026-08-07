@@ -6,7 +6,7 @@ Create Date: 2026-07-07
 """
 from typing import Sequence, Union
 
-from alembic import op
+from alembic import context, op
 import sqlalchemy as sa
 
 
@@ -19,18 +19,22 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Add course_chapter and user_chapter_progress tables, and free_preview_seconds to course."""
-    conn = op.get_bind()
-    inspector = sa.inspect(conn)
+    if context.is_offline_mode():
+        existing_columns: set[str] = set()
+        existing_tables: set[str] = set()
+    else:
+        inspector = sa.inspect(op.get_bind())
+        existing_columns = {c["name"] for c in inspector.get_columns("course")}
+        existing_tables = set(inspector.get_table_names())
 
     # 1. course 表新增 free_preview_seconds 列
-    existing_columns = [c["name"] for c in inspector.get_columns("course")]
     if "free_preview_seconds" not in existing_columns:
         op.add_column("course",
             sa.Column("free_preview_seconds", sa.Integer(), nullable=True)
         )
 
     # 2. 创建 course_chapter 表
-    if "course_chapter" not in inspector.get_table_names():
+    if "course_chapter" not in existing_tables:
         op.create_table("course_chapter",
             sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
             sa.Column("course_id", sa.Integer(), sa.ForeignKey("course.id"), nullable=False),
@@ -47,7 +51,7 @@ def upgrade() -> None:
         op.create_index(op.f("ix_course_chapter_course_id"), "course_chapter", ["course_id"])
 
     # 3. 创建 user_chapter_progress 表
-    if "user_chapter_progress" not in inspector.get_table_names():
+    if "user_chapter_progress" not in existing_tables:
         op.create_table("user_chapter_progress",
             sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
             sa.Column("user_id", sa.Integer(), sa.ForeignKey("user.id"), nullable=False),
