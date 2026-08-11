@@ -5,7 +5,13 @@ from fastapi import APIRouter, Depends, Path, Query
 from app.middleware.auth import require_permission, require_super_admin
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.order import OrderResponse, OrderStatus
-from app.schemas.plan import PlanCreate, PlanUpdate, PlanResponse
+from app.schemas.plan import (
+    PlanCreate,
+    PlanImpactAction,
+    PlanImpactResponse,
+    PlanResponse,
+    PlanUpdate,
+)
 from app.schemas.review import ReviewResponse
 from app.services.plan import PlanService
 from app.services.plan_order_management import PlanOrderManagementService
@@ -165,6 +171,31 @@ async def close_registration(
         plan_id, product_type=code, admin_id=admin.id
     )
     return success(data=result, message="批次报名已关闭")
+
+
+@router.get(
+    "/{code}/plans/{plan_id}/impact",
+    response_model=APIResponse[PlanImpactResponse],
+    summary="预览取消或终结人社批次的影响",
+    description=(
+        "只读统计，不锁定资源，也不替代执行取消或终结时的权限、状态和并发重校验；"
+        "终结影响仅超级管理员可查看。"
+    ),
+)
+async def preview_plan_impact(
+    code: str = Path(..., description="认证产品代码，当前仅支持 RS-ZY"),
+    plan_id: int = Path(..., ge=1, description="批次 ID"),
+    action: PlanImpactAction = Query(..., description="危险操作：cancel 或 finalize"),
+    admin=Depends(require_permission("user:write")),
+) -> APIResponse[PlanImpactResponse]:
+    if action == "finalize":
+        await require_super_admin(admin)
+    result = await PlanService().preview_impact(
+        plan_id,
+        product_type=code,
+        action=action,
+    )
+    return success(data=result)
 
 
 @router.put(

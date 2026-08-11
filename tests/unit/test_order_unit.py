@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from app.schemas.order import OrderCreate, OrderFilter
 from app.services.order import resolve_price_tier
-from app.schemas.payment import PaymentCallbackRequest, PaymentPrepayResponse
+from app.schemas.payment import PaymentPrepayResponse, PaymentSyncResponse
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -92,7 +92,13 @@ class OrderSystemTests(unittest.TestCase):
 
     def test_payment_callback_rejects_unknown_trade_state(self):
         with self.assertRaises(ValidationError):
-            PaymentCallbackRequest(out_trade_no="trade-no", trade_state="UNKNOWN")
+            PaymentSyncResponse(
+                order_id=1,
+                status="pending",
+                processed=False,
+                trade_state="UNKNOWN",
+                synchronized_at="2026-08-10T00:00:00Z",
+            )
 
     def test_order_api_routes_declare_explicit_response_model(self):
         route_decorators = list(_iter_order_route_decorators())
@@ -224,32 +230,34 @@ class OrderSystemTests(unittest.TestCase):
         self.assertIn("status IN ('pending', 'paid', 'completed', 'refunded', 'closed')", source)
 
     def test_payment_callback_verifies_signature_locks_order_and_transitions_status(self):
-        source = (REPO_ROOT / "app/services/payment.py").read_text(encoding="utf-8")
+        service_source = (REPO_ROOT / "app/services/payment.py").read_text(encoding="utf-8")
+        client_source = (REPO_ROOT / "app/integrations/wechat_pay.py").read_text(encoding="utf-8")
 
-        self.assertIn("verify_signature", source)
-        self.assertIn("with_for_update", source)
-        self.assertIn("apply_order_status_transition", source)
-        self.assertIn('order.transaction_id = data.transaction_id', source)
-        self.assertIn("order.paid_at = data.paid_at or self._now()", source)
-        self.assertIn("confirm_inventory_sale", source)
-        self.assertIn("await self._confirm_inventory_sale(db, order)", source)
+        self.assertIn("parse_payment_notification", service_source)
+        self.assertIn("verify_signature", client_source)
+        self.assertIn("decrypt_and_verify", client_source)
+        self.assertIn("with_for_update", service_source)
+        self.assertIn("apply_order_status_transition", service_source)
+        self.assertIn("order.transaction_id = transaction.transaction_id", service_source)
+        self.assertIn("confirm_inventory_sale", service_source)
+        self.assertIn("await self._confirm_inventory_sale(db, order)", service_source)
 
     def test_payment_callback_idempotency_confirms_inventory_only_for_pending_order(self):
         source = (REPO_ROOT / "app/services/payment.py").read_text(encoding="utf-8")
         success_source = source[
-            source.index('if data.trade_state == "SUCCESS":') :
-            source.index('elif data.trade_state == "REFUND":')
+            source.index('if transaction.trade_state == "SUCCESS":') :
+            source.index('elif transaction.trade_state == "REFUND":')
         ]
         paid_or_completed_source = success_source[
             success_source.index('elif order.status in {"paid", "completed"}:') :
-            success_source.index("else:")
+            success_source.index('elif order.status == "refunded":')
         ]
 
-        self.assertIn("if not data.transaction_id:", success_source)
-        self.assertIn("Order.transaction_id == data.transaction_id", success_source)
+        self.assertIn("if not transaction.transaction_id:", success_source)
+        self.assertIn("Order.transaction_id == transaction.transaction_id", success_source)
         self.assertIn("Order.id != order.id", success_source)
         self.assertIn("raise ConflictException", success_source)
-        self.assertIn('if order.status == "pending":', success_source)
+        self.assertIn('elif order.status == "pending":', success_source)
         self.assertIn("await self._confirm_inventory_sale(db, order)", success_source)
         self.assertIn('elif order.status in {"paid", "completed"}:', success_source)
         self.assertNotIn("await self._confirm_inventory_sale", paid_or_completed_source)
@@ -356,8 +364,10 @@ class OrderSystemTests(unittest.TestCase):
         self.assertNotIn("mock", response_fields)
         self.assertNotIn("mock-prepay", source)
         self.assertNotIn("mock=True", source)
-        self.assertNotIn("APP_DEBUG and not self.api_key", source)
-        self.assertIn("Wechat Pay configuration is incomplete", source)
+        self.assertNotIn("APP_DEBUG", source)
+        self.assertNotIn("WECHAT_PAY_API_KEY", source)
+        self.assertNotIn("/pay/unifiedorder", source)
+        self.assertIn("Wechat Pay V3 configuration is incomplete", source)
 
     def test_chat_service_has_no_hardcoded_manual_reply_backend(self):
         service_source = (REPO_ROOT / "app/services/chat.py").read_text(encoding="utf-8")

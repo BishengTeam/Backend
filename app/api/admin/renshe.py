@@ -4,10 +4,12 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Path, Query, Request
 
 from app.middleware.auth import require_permission, require_super_admin
+from app.middleware.rate_limit import limiter
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.renshe import (
     RensheAdminApplicationDetailResponse,
     RensheAdminApplicationListItem,
+    RensheAuditLogResponse,
     RensheApplicationStatus,
     RensheCleanupRunResponse,
     RensheExportJobResponse,
@@ -68,7 +70,9 @@ async def get_application(
     application_id: int = Path(..., ge=1),
     _admin=Depends(require_permission("user:list")),
 ) -> APIResponse[RensheAdminApplicationDetailResponse]:
-    result = await RensheReviewService().get_application(application_id)
+    result = await RensheReviewService().get_application(
+        application_id, actor_id=_admin.id
+    )
     return success(data=result)
 
 
@@ -154,9 +158,14 @@ async def list_refunds(
     "/refunds/{refund_id}/decision",
     response_model=APIResponse[RensheRefundResponse],
     summary="批准或驳回退款（仅超级管理员）",
-    description="V3 凭据未配置时批准操作明确失败，不会伪造退款成功。",
+    description=(
+        "批准时固定商户退款单号并提交微信 V3；接口返回 processing 仅表示"
+        "微信已受理，最终成功由退款通知或主动查询确认。"
+    ),
 )
+@limiter.limit("10/minute")
 async def decide_refund(
+    request: Request,
     body: RensheRefundDecision,
     refund_id: int = Path(..., ge=1),
     admin=Depends(require_super_admin),
@@ -311,6 +320,46 @@ async def list_cleanup_runs(
     from app.services.renshe_cleanup import RensheCleanupService
 
     return success(data=await RensheCleanupService().list_runs(plan_id))
+
+
+@router.get(
+    "/audit-logs",
+    response_model=APIResponse[PaginatedData[RensheAuditLogResponse]],
+    summary="查询人社审计日志",
+    description=(
+        "按批次、报名、管理员、动作、结果和时间分页查询脱敏审计；"
+        "该资源只读，没有更新、删除或敏感原文导出接口。"
+    ),
+)
+async def list_audit_logs(
+    request: Request,
+    plan_id: int | None = Query(None, ge=1),
+    application_id: int | None = Query(None, ge=1),
+    admin_id: int | None = Query(None, ge=1, description="按操作管理员筛选"),
+    action: str | None = Query(None, min_length=1, max_length=64),
+    result: Literal["succeeded", "failed"] | None = Query(None),
+    started_at: datetime | None = Query(None),
+    ended_at: datetime | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    admin=Depends(require_permission("user:list")),
+) -> APIResponse[PaginatedData[RensheAuditLogResponse]]:
+    from app.services.renshe_audit import RensheAuditQueryService
+
+    rows = await RensheAuditQueryService().list_logs(
+        admin_id=admin.id,
+        ip_address=_client_ip(request),
+        plan_id=plan_id,
+        application_id=application_id,
+        actor_admin_id=admin_id,
+        action=action,
+        result=result,
+        started_at=started_at,
+        ended_at=ended_at,
+        page=page,
+        page_size=page_size,
+    )
+    return success(data=rows)
 
 
 @router.post(

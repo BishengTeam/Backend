@@ -60,7 +60,7 @@ async def create_admin(
     body: AdminSettingsUserCreate,
     _admin=Depends(require_super_admin),
 ) -> APIResponse[AdminSettingsUserListItem]:
-    result = await AdminSettingsService().create_admin(body)
+    result = await AdminSettingsService().create_admin(body, actor_id=_admin.id)
     return success(data=result)
 
 
@@ -87,7 +87,9 @@ async def update_admin(
     admin_id: int = Path(..., ge=1),
     _admin=Depends(require_super_admin),
 ) -> APIResponse[AdminSettingsUserListItem]:
-    result = await AdminSettingsService().update_admin(admin_id, body)
+    result = await AdminSettingsService().update_admin(
+        admin_id, body, actor_id=_admin.id
+    )
     return success(data=result)
 
 
@@ -101,5 +103,7 @@ async def reset_admin_password(
     admin_id: int = Path(..., ge=1),
     _admin=Depends(require_super_admin),
 ) -> APIResponse:
-    await AdminSettingsService().reset_password(admin_id, body.password)
+    await AdminSettingsService().reset_password(
+        admin_id, body.password, actor_id=_admin.id
+    )
     return success(message="管理员密码已重置")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from contextlib import asynccontextmanager
@@ -484,6 +485,66 @@ async def test_five_thousand_row_import_validation_rolls_back_batch(quiz_env) ->
     )
     assert report["errors"][0]["row"] == 5000
     assert report["errors"][0]["field"] == "category_path"
+
+
+async def test_import_job_claim_prevents_two_workers_from_processing_same_batch(
+    quiz_env,
+    monkeypatch,
+) -> None:
+    env = quiz_env
+    category = await _category(env, "claim")
+    content = json.dumps(
+        {
+            "questions": [
+                {
+                    "category_path": [category.name],
+                    "question_type": "single_choice",
+                    "question_text": f"{env.prefix}_claim_question",
+                    "options": {"A": "一", "B": "二", "C": "三"},
+                    "correct_answer": "A",
+                    "explanation": "认领测试解析",
+                }
+            ]
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    job = await env.service.create_import_job(
+        source_type="json",
+        content=content,
+        admin_id=env.admin_id,
+        filename="claim.json",
+    )
+
+    claimed = asyncio.Event()
+    release = asyncio.Event()
+    original_get = env.service._get_import_object
+
+    async def delayed_get(object_key: str) -> bytes:
+        claimed.set()
+        await release.wait()
+        return await original_get(object_key)
+
+    monkeypatch.setattr(env.service, "_get_import_object", delayed_get)
+    first_worker = asyncio.create_task(env.service.process_import_job(job.id))
+    await asyncio.wait_for(claimed.wait(), timeout=5)
+
+    # The first worker has committed status=validating and a fresh heartbeat.
+    # A second worker must not read the source or create the same draft batch.
+    assert await env.service.process_import_job(job.id) is False
+    release.set()
+    assert await asyncio.wait_for(first_worker, timeout=10) is True
+
+    async with env.factory() as db:
+        persisted = await db.get(QuizImportJob, job.id)
+        created_count = await db.scalar(
+            select(func.count()).select_from(QuizQuestion).where(
+                QuizQuestion.category_id == category.id,
+                QuizQuestion.question_text == f"{env.prefix}_claim_question",
+            )
+        )
+        assert persisted.status == "succeeded"
+        assert persisted.created_count == 1
+        assert created_count == 1
 
 
 async def test_import_expiry_cleanup_download_audit_and_local_signing(quiz_env) -> None:

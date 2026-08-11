@@ -74,11 +74,6 @@ async def app_context(monkeypatch, session_factory):
     )
 
 
-class ValidWechatPay:
-    def verify_signature(self, payload: dict) -> bool:
-        return True
-
-
 async def _cleanup_test_data(session_factory, prefix: str) -> None:
     from sqlalchemy import text
 
@@ -300,7 +295,7 @@ async def test_success_callback_is_idempotent_and_confirms_inventory_once(
     from sqlalchemy import func, select
 
     from app.domain.order.src.index import Inventory, InventoryRecord, Order
-    from app.schemas.payment import PaymentCallbackRequest
+    from app.integrations.wechat_pay import WechatPayTransaction
 
     data = await _seed_pending_order(
         session_factory,
@@ -308,18 +303,25 @@ async def test_success_callback_is_idempotent_and_confirms_inventory_once(
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
     )
     service = app_context.payment_module.PaymentService()
-    service.wechat_pay = ValidWechatPay()
 
-    callback = PaymentCallbackRequest(
+    callback = WechatPayTransaction(
+        appid="integration-test",
+        mchid="integration-test",
         out_trade_no=data.out_trade_no,
         transaction_id=f"{test_prefix}-tx",
         trade_state="SUCCESS",
-        total_fee=100,
-        sign="valid",
+        amount_total=100,
+        currency="CNY",
+        attach="",
+        success_time=datetime.now(timezone.utc),
     )
 
-    first = await service.handle_callback(callback)
-    second = await service.handle_callback(callback)
+    first = await service._apply_transaction(
+        callback, source="integration_test", verify_provider_fields=False
+    )
+    second = await service._apply_transaction(
+        callback, source="integration_test", verify_provider_fields=False
+    )
 
     async with session_factory() as db:
         order = (await db.execute(select(Order).where(Order.id == data.order_id))).scalar_one()

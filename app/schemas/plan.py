@@ -11,6 +11,7 @@ PlanStatus = Literal[
     "archived",
     "cancelled",
 ]
+PlanImpactAction = Literal["cancel", "finalize"]
 
 
 class PlanCreate(BaseModel):
@@ -92,3 +93,31 @@ class PlanResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class PlanImpactBlocker(BaseModel):
+    """A machine-readable reason why the requested batch action cannot run."""
+
+    code: Literal["plan_status", "pending_applications"]
+    message: str
+    count: int = Field(0, ge=0)
+    status_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class PlanImpactResponse(BaseModel):
+    """Read-only snapshot used by the admin dangerous-action confirmation UI."""
+
+    action: PlanImpactAction
+    plan_id: int
+    plan_name: str
+    plan_status: PlanStatus
+    affected_application_count: int = Field(..., ge=0)
+    pending_order_close_count: int = Field(..., ge=0)
+    refund_candidate_count: int = Field(..., ge=0)
+    refund_amount_cents: int = Field(..., ge=0)
+    blocking_application_count: int = Field(..., ge=0)
+    blocking_status_counts: dict[str, int] = Field(default_factory=dict)
+    previewed_at: datetime
+    cleanup_due_at: datetime
+    can_execute: bool
+    blockers: list[PlanImpactBlocker] = Field(default_factory=list)

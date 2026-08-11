@@ -4,6 +4,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.schemas.order import OrderStatus
+from app.schemas.plan import PlanStatus
+
 
 RensheApplicationStatus = Literal[
     "draft",
@@ -23,6 +26,15 @@ RensheMaterialKind = Literal[
     "xuexin_registration",
     "education_proof",
 ]
+RensheRefundStatus = Literal[
+    "requested",
+    "approved",
+    "processing",
+    "succeeded",
+    "rejected",
+    "failed",
+]
+RensheAuditResult = Literal["succeeded", "failed"]
 
 
 class RensheVerificationMaterialResponse(BaseModel):
@@ -110,6 +122,48 @@ class RensheApplicationDetailResponse(RensheApplicationResponse):
     required_changes: list[str] | None = None
 
 
+class RensheApplicationPlanSummary(BaseModel):
+    id: int
+    name: str
+    status: PlanStatus
+    apply_start: datetime | None = None
+    apply_end: datetime | None = None
+    exam_date: datetime | None = None
+    exam_location: str | None = None
+    price_cents: int = Field(..., ge=0)
+
+    model_config = {"from_attributes": True}
+
+
+class RensheApplicationOrderSummary(BaseModel):
+    id: int
+    status: OrderStatus
+    price_cents: int = Field(..., ge=0)
+    expires_at: datetime | None = None
+    paid_at: datetime | None = None
+    closed_at: datetime | None = None
+
+
+class RensheApplicationRefundSummary(BaseModel):
+    id: int
+    status: Literal[
+        "requested", "approved", "processing", "succeeded", "rejected", "failed"
+    ]
+    request_kind: Literal["normal", "exception", "batch_cancel", "batch_finalize"]
+    amount_cents: int = Field(..., ge=0)
+    requested_at: datetime
+    due_at: datetime
+    succeeded_at: datetime | None = None
+
+
+class RensheApplicationListItem(RensheApplicationResponse):
+    """A recoverable application entry for a newly signed-in client."""
+
+    plan: RensheApplicationPlanSummary
+    current_order: RensheApplicationOrderSummary | None = None
+    current_refund: RensheApplicationRefundSummary | None = None
+
+
 class RensheAdminApplicationListItem(BaseModel):
     id: int
     plan_id: int
@@ -161,6 +215,14 @@ class RensheReviewCorrectionCreate(BaseModel):
     to_decision: Literal["approved", "rejected"]
     reason: str = Field(..., min_length=1, max_length=2000)
 
+    @field_validator("reason")
+    @classmethod
+    def require_non_blank_reason(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("更正审核结果必须填写原因")
+        return value
+
 
 class RensheReviewCorrectionResponse(BaseModel):
     id: int
@@ -209,12 +271,18 @@ class RensheRefundResponse(BaseModel):
     reason_code: str
     reason_detail: str | None = None
     amount_cents: int
-    status: str
+    status: RensheRefundStatus
     requested_at: datetime
     due_at: datetime
     rejection_reason: str | None = None
+    approved_by_admin_id: int | None = None
+    decided_at: datetime | None = None
+    out_refund_no: str | None = None
+    wechat_refund_id: str | None = None
+    processing_at: datetime | None = None
     succeeded_at: datetime | None = None
     last_error: str | None = None
+    retry_count: int
 
     model_config = {"from_attributes": True}
 
@@ -306,5 +374,23 @@ class RensheCleanupRunResponse(BaseModel):
     retry_count: int
     rebase_count: int
     last_error: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class RensheAuditLogResponse(BaseModel):
+    id: int
+    actor_type: Literal["user", "admin", "system"]
+    actor_id: int | None = None
+    action: str
+    object_type: str
+    object_id: int
+    application_id: int | None = None
+    version_id: int | None = None
+    material_id: int | None = None
+    ip_address: str | None = None
+    result: RensheAuditResult
+    summary: dict | None = None
+    created_at: datetime
 
     model_config = {"from_attributes": True}

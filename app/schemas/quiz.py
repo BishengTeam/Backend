@@ -1,3 +1,10 @@
+"""Legacy quiz schemas retained for migration/test import compatibility only.
+
+The active HTTP contract lives in :mod:`app.schemas.quiz_contract`; no route
+uses the request/response models below after QB-31. They must not be used to
+add aliases for deleted endpoints.
+"""
+
 from __future__ import annotations
 
 from datetime import date, datetime

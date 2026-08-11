@@ -26,13 +26,17 @@ async def cleanup_loop():
         if now >= next_account_cleanup_at:
             try:
                 await _cleanup_expired_accounts()
-            except Exception:
-                logger.exception("定时清理账号失败")
+            except Exception as exc:
+                logger.error(
+                    "定时清理账号失败: exception_type=%s", type(exc).__name__
+                )
             next_account_cleanup_at = now + CLEANUP_INTERVAL_SECONDS
         try:
             await _close_expired_orders()
-        except Exception:
-            logger.exception("定时关闭过期订单失败")
+        except Exception as exc:
+            logger.error(
+                "定时关闭过期订单失败: exception_type=%s", type(exc).__name__
+            )
         await asyncio.sleep(ORDER_TIMEOUT_INTERVAL_SECONDS)
 
 

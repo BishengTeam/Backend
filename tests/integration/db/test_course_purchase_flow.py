@@ -222,21 +222,26 @@ async def test_payment_refund_and_private_content_authorization(
 
     from app.domain.certification.src.index import Course, CourseEnrollment
     from app.domain.order.src.index import Order
+    from app.integrations.wechat_pay import WechatPayTransaction
     from app.port.exceptions import ForbiddenException, NotFoundException
-    from app.schemas.payment import PaymentCallbackRequest
 
     data = await _seed_courses(course_context)
     purchase = await course_context.purchase_service.purchase(
         data.paid_user_id,
         data.paid_course_id,
     )
-    callback = PaymentCallbackRequest(
+    callback = WechatPayTransaction(
+        appid="integration-test",
+        mchid="integration-test",
         out_trade_no=(
             await _get_order(course_context, purchase.order_id)
         ).out_trade_no,
         transaction_id=f"{course_context.prefix}_transaction",
         trade_state="SUCCESS",
-        total_fee=12345,
+        amount_total=12345,
+        currency="CNY",
+        attach="",
+        success_time=datetime.now(timezone.utc),
     )
 
     original_on_paid = course_context.payment_service.fulfillment.on_paid
@@ -250,7 +255,9 @@ async def test_payment_refund_and_private_content_authorization(
         fail_fulfillment,
     )
     with pytest.raises(RuntimeError, match="simulated fulfillment failure"):
-        await course_context.payment_service.handle_callback(callback)
+        await course_context.payment_service._apply_transaction(
+            callback, source="integration_test", verify_provider_fields=False
+        )
 
     async with course_context.factory() as db:
         order = await db.get(Order, purchase.order_id)
@@ -265,7 +272,9 @@ async def test_payment_refund_and_private_content_authorization(
         "on_paid",
         original_on_paid,
     )
-    paid = await course_context.payment_service.handle_callback(callback)
+    paid = await course_context.payment_service._apply_transaction(
+        callback, source="integration_test", verify_provider_fields=False
+    )
     assert paid.status == "completed"
     assert paid.processed is True
 
@@ -294,7 +303,9 @@ async def test_payment_refund_and_private_content_authorization(
     )
     assert revoked.status == "cancelled"
     assert revoked.learning_access is False
-    duplicate_payment = await course_context.payment_service.handle_callback(callback)
+    duplicate_payment = await course_context.payment_service._apply_transaction(
+        callback, source="integration_test", verify_provider_fields=False
+    )
     assert duplicate_payment.processed is False
     async with course_context.factory() as db:
         enrollment = await db.get(CourseEnrollment, purchase.enrollment_id)
@@ -306,11 +317,18 @@ async def test_payment_refund_and_private_content_authorization(
         course.is_active = True
         await db.commit()
 
-    refund = await course_context.payment_service.handle_callback(
-        PaymentCallbackRequest(
+    refund = await course_context.payment_service._apply_transaction(
+        WechatPayTransaction(
+            appid="integration-test",
+            mchid="integration-test",
             out_trade_no=callback.out_trade_no,
             trade_state="REFUND",
-        )
+            amount_total=12345,
+            currency="CNY",
+            attach="",
+        ),
+        source="integration_test",
+        verify_provider_fields=False,
     )
     assert refund.status == "refunded"
 

@@ -4,7 +4,8 @@
 
 ## 公开能力
 - 题库分类与题目管理（QuizCategory 树形结构、QuizQuestion 单选/多选/判断）
-- 答题记录与错题/收藏（QuizRecord is_wrong/is_collected）
+- 练习会话快照与不可变作答（QuizPracticeSession/QuizPracticeAttempt）
+- 自动错题与独立收藏（QuizWrongItem/QuizCollection）
 - 每日打卡签到（QuizCheckin 连续天数）
 - 快速提问（QuickQuestion 预设问题）
 - 分享追踪（Share code + visit_count）
@@ -21,7 +22,7 @@
 
 ## 边界规则
 - 对外仅暴露 index/ 公开入口
-- 计分逻辑、每日打卡规则保留在 services/quiz.py（领域规则尚未达到独立抽取条件）
+- 题型校验、答案规范化和完全匹配判分位于 `src/rule/quiz.py`；用户端练习和考试分别由 `services/quiz_practice.py`、`services/quiz_exam.py` 提供。旧 `services/quiz.py` 仅为未接入路由的历史源码兼容文件，不属于新版运行时契约。
 
 ## 文档入口
 - doc/reference/（待建）

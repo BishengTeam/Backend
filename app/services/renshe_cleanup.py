@@ -16,15 +16,20 @@ from app.domain.renshe.src.index import (
     RensheApplicationVersion,
     RensheAuditLog,
     RensheCleanupRun,
+    RensheExportItem,
     RensheExportJob,
     RensheExportVolume,
     RensheMaterial,
     RensheRefundRequest,
+    RensheReview,
+    RensheReviewCorrection,
 )
 from app.integrations.renshe_storage import RensheObjectStorage
 from app.port.config import settings
 from app.port.exceptions import ConflictException, NotFoundException
 from app.schemas.renshe import RensheCleanupRunResponse
+from app.services.renshe_source import delete_unreferenced_source_keys
+from app.utils.audit import redact_sensitive_text
 
 
 logger = logging.getLogger(__name__)
@@ -71,7 +76,9 @@ class RensheCleanupService:
             if await self._active_refund_count(db, run.plan_id):
                 run.status = "paused"
                 run.paused_reason = "active_refunds"
-                run.due_at = now + timedelta(days=7)
+                run.due_at = now + timedelta(
+                    days=settings.RENSHE_CLEANUP_RETENTION_DAYS
+                )
             else:
                 run.status = "scheduled"
                 run.paused_reason = None
@@ -106,7 +113,11 @@ class RensheCleanupService:
         try:
             await self._run_claimed_cleanup(run_id)
         except Exception as exc:
-            logger.exception("human-resources cleanup failed: run_id=%s", run_id)
+            logger.error(
+                "human-resources cleanup failed: run_id=%s exception_type=%s",
+                run_id,
+                type(exc).__name__,
+            )
             await self._mark_failed(run_id, exc)
         finally:
             heartbeat.cancel()
@@ -144,7 +155,9 @@ class RensheCleanupService:
             now = self._now()
             run.status = "scheduled"
             run.paused_reason = None
-            run.due_at = now + timedelta(days=7)
+            run.due_at = now + timedelta(
+                days=settings.RENSHE_CLEANUP_RETENTION_DAYS
+            )
             run.rebase_count += 1
             plan = await db.get(Plan, run.plan_id)
             if plan is not None:
@@ -166,51 +179,74 @@ class RensheCleanupService:
     async def _claim_due_run(self) -> int | None:
         now = self._now()
         async with get_db_ctx() as db:
-            candidates = (
-                await db.execute(
-                    select(RensheCleanupRun.id, RensheCleanupRun.plan_id)
-                    .where(
-                        RensheCleanupRun.status == "scheduled",
-                        RensheCleanupRun.due_at <= now,
-                    )
-                    .order_by(RensheCleanupRun.due_at, RensheCleanupRun.id)
-                    .limit(1)
-                )
-            ).all()
-            if not candidates:
-                return None
-            run_id, plan_id = candidates[0]
-
-            plan = await db.scalar(
-                select(Plan).where(Plan.id == plan_id).with_for_update()
-            )
-            if plan is None:
-                raise NotFoundException("人社报名批次")
-            run = await db.scalar(
-                select(RensheCleanupRun)
-                .where(
-                    RensheCleanupRun.id == run_id,
+            # Inspect the due queue in bounded pages.  A cleanup run can be
+            # temporarily blocked by an active export (or skipped because a
+            # concurrent worker claimed it); returning immediately for that
+            # first row would starve every later batch indefinitely.  Keep a
+            # stable set of inspected IDs and continue to the next page so a
+            # worker can make progress elsewhere in the queue.
+            page_size = 100
+            inspected_ids: set[int] = set()
+            while True:
+                queue_stmt = select(
+                    RensheCleanupRun.id, RensheCleanupRun.plan_id
+                ).where(
                     RensheCleanupRun.status == "scheduled",
                     RensheCleanupRun.due_at <= now,
                 )
-                .with_for_update(skip_locked=True)
-            )
-            if run is None:
-                return None
-            if await self._active_refund_count(db, run.plan_id):
-                run.status = "paused"
-                run.paused_reason = "active_refunds"
-                await db.commit()
-                return None
-            if await self._active_export_count(db, run.plan_id):
-                return None
-            run.status = "running"
-            run.started_at = now
-            run.heartbeat_at = now
-            run.finished_at = None
-            run.last_error = None
-            await db.commit()
-            return run.id
+                if inspected_ids:
+                    queue_stmt = queue_stmt.where(
+                        ~RensheCleanupRun.id.in_(inspected_ids)
+                    )
+                candidates = (
+                    await db.execute(
+                        queue_stmt
+                        .order_by(RensheCleanupRun.due_at, RensheCleanupRun.id)
+                        .limit(page_size)
+                    )
+                ).all()
+                if not candidates:
+                    return None
+
+                for run_id, plan_id in candidates:
+                    inspected_ids.add(run_id)
+
+                    # Serialize the claim with batch finalization/export
+                    # workers.  Re-lock the run after taking the plan lock so
+                    # a concurrent worker cannot claim the same row.
+                    plan = await db.scalar(
+                        select(Plan).where(Plan.id == plan_id).with_for_update()
+                    )
+                    if plan is None:
+                        raise NotFoundException("人社报名批次")
+                    run = await db.scalar(
+                        select(RensheCleanupRun)
+                        .where(
+                            RensheCleanupRun.id == run_id,
+                            RensheCleanupRun.status == "scheduled",
+                            RensheCleanupRun.due_at <= now,
+                        )
+                        .with_for_update(skip_locked=True)
+                    )
+                    if run is None:
+                        continue
+                    if await self._active_refund_count(db, run.plan_id):
+                        run.status = "paused"
+                        run.paused_reason = "active_refunds"
+                        await db.commit()
+                        # Do not let a refund-blocked batch starve later
+                        # batches either.  Its paused run will be rebased by
+                        # _resume_one_paused_run once the refund settles.
+                        continue
+                    if await self._active_export_count(db, run.plan_id):
+                        continue
+                    run.status = "running"
+                    run.started_at = now
+                    run.heartbeat_at = now
+                    run.finished_at = None
+                    run.last_error = None
+                    await db.commit()
+                    return run.id
 
     async def _run_claimed_cleanup(self, run_id: int) -> None:
         async with get_db_ctx() as db:
@@ -228,9 +264,20 @@ class RensheCleanupService:
             )
             material_rows = (
                 await db.execute(
-                    select(RensheMaterial.id, RensheMaterial.storage_key).where(
+                    select(
+                        RensheMaterial.id,
+                        RensheMaterial.storage_key,
+                        RensheMaterial.source_storage_key,
+                    ).where(
                         RensheMaterial.application_id.in_(application_ids),
-                        RensheMaterial.is_deleted.is_(False),
+                        # A failed run may already have marked a material
+                        # deleted while retaining its source key.  Include
+                        # that row on retry so the source object is not lost
+                        # from the cleanup work set.
+                        (
+                            RensheMaterial.is_deleted.is_(False)
+                            | RensheMaterial.source_storage_key.is_not(None)
+                        ),
                     )
                 )
             ).all() if application_ids else []
@@ -247,7 +294,17 @@ class RensheCleanupService:
                     )
                 )
             ).all()
-            storage_keys = [row.storage_key for row in (*material_rows, *volume_rows)]
+            storage_keys = [
+                row.storage_key
+                for row in (*material_rows, *volume_rows)
+                if row.storage_key
+            ]
+            source_keys = [
+                row.source_storage_key
+                for row in material_rows
+                if row.source_storage_key
+            ]
+            material_ids = [row.id for row in material_rows]
 
         await self.storage.delete_many(storage_keys)
 
@@ -265,7 +322,10 @@ class RensheCleanupService:
                     .values(
                         is_deleted=True,
                         deleted_at=now,
-                        source_storage_key=None,
+                        original_filename="[DELETED]",
+                        extension="",
+                        content_type="application/octet-stream",
+                        sha256="0" * 64,
                     )
                 )
                 await db.execute(
@@ -293,11 +353,87 @@ class RensheCleanupService:
                         attachments=None,
                     )
                 )
+                # Keep the decision/stage timeline but remove free-text
+                # review and refund material that may contain PII.  The
+                # correction table's reason is non-null by design, so retain
+                # an explicit redacted sentinel and the status-only state
+                # transition snapshots.
+                await db.execute(
+                    update(RensheReview)
+                    .where(RensheReview.application_id.in_(application_ids))
+                    .values(reason="[REDACTED]", required_changes=None)
+                )
+                await db.execute(
+                    update(RensheReviewCorrection)
+                    .where(RensheReviewCorrection.application_id.in_(application_ids))
+                    .values(reason="[REDACTED]")
+                )
+                await db.execute(
+                    update(RensheRefundRequest)
+                    .where(RensheRefundRequest.application_id.in_(application_ids))
+                    .values(reason_detail=None, rejection_reason=None, last_error=None)
+                )
             if volume_rows:
                 await db.execute(
                     update(RensheExportVolume)
                     .where(RensheExportVolume.id.in_([row.id for row in volume_rows]))
                     .values(storage_key=None)
+                )
+            await db.execute(
+                update(RensheExportJob)
+                .where(RensheExportJob.plan_id == run.plan_id)
+                .values(last_error=None)
+            )
+            await db.execute(
+                update(RensheExportItem)
+                .where(RensheExportItem.job_id.in_(
+                    select(RensheExportJob.id).where(
+                        RensheExportJob.plan_id == run.plan_id
+                    )
+                ))
+                .values(last_error=None)
+            )
+            await db.execute(
+                update(RensheExportVolume)
+                .where(RensheExportVolume.job_id.in_(
+                    select(RensheExportJob.id).where(
+                        RensheExportJob.plan_id == run.plan_id
+                    )
+                ))
+                .values(last_error=None)
+            )
+            await db.commit()
+
+        # Version-owned rows are now marked deleted but retain their source
+        # keys until the storage operation succeeds.  Ignoring only this run's
+        # material IDs lets us remove replaced/orphaned profile uploads while
+        # preserving a source object selected by the user's current认证资料 or
+        # another historical version.  If OSS fails, the run is still
+        # ``running`` and _mark_failed records a retryable failure.
+        if source_keys:
+            await delete_unreferenced_source_keys(
+                self.storage,
+                source_keys,
+                ignored_material_ids=material_ids,
+                raise_on_error=True,
+            )
+
+        # Detach source references only after the object delete has completed.
+        # This preserves the candidate set if a worker crashes between the two
+        # operations; the next retry can safely attempt the idempotent delete
+        # again.
+        async with get_db_ctx() as db:
+            run = await self._lock_cleanup_mutation_rows(
+                db, application_ids=application_ids, run_id=run_id
+            )
+            if run is None or run.status != "running":
+                raise ConflictException("清理任务状态已变化")
+            now = self._now()
+            if material_ids:
+                await db.execute(
+                    update(RensheMaterial)
+                    .where(RensheMaterial.id.in_(material_ids))
+                    .values(source_storage_key=None)
                 )
             run.status = "succeeded"
             run.finished_at = now
@@ -316,6 +452,7 @@ class RensheCleanupService:
                         "applications": len(application_ids),
                         "materials": len(material_rows),
                         "export_volumes": len(volume_rows),
+                        "source_candidates": len(source_keys),
                     },
                 )
             )
@@ -345,7 +482,9 @@ class RensheCleanupService:
         )
 
     async def _mark_failed(self, run_id: int, exc: Exception) -> None:
-        safe_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
+        safe_error = redact_sensitive_text(
+            f"{type(exc).__name__}: {str(exc)[:1000]}"
+        ) or type(exc).__name__
         async with get_db_ctx() as db:
             run = await db.scalar(
                 select(RensheCleanupRun)
@@ -381,7 +520,10 @@ class RensheCleanupService:
                 update(RensheCleanupRun)
                 .where(
                     RensheCleanupRun.status == "running",
-                    RensheCleanupRun.heartbeat_at < cutoff,
+                    (
+                        RensheCleanupRun.heartbeat_at.is_(None)
+                        | (RensheCleanupRun.heartbeat_at < cutoff)
+                    ),
                 )
                 .values(
                     status="failed",
@@ -444,8 +586,11 @@ async def renshe_cleanup_worker_loop() -> None:
     while True:
         try:
             processed = await service.process_next_run()
-        except Exception:
-            logger.exception("human-resources cleanup worker iteration failed")
+        except Exception as exc:
+            logger.error(
+                "human-resources cleanup worker iteration failed: exception_type=%s",
+                type(exc).__name__,
+            )
             processed = False
         if not processed:
             await asyncio.sleep(settings.RENSHE_WORKER_POLL_SECONDS)

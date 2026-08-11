@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 
 from app.port.exceptions import BusinessException
 from app.port.config import settings
@@ -10,6 +12,7 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizAuditQuery,
     AdminQuizImportJobQuery,
     AdminQuizImportJobResponse,
+    AdminQuizImportReportResponse,
     AdminQuizJsonImportRequest,
     AdminQuizSignedUrlResponse,
     AdminQuizCategoryCreate,
@@ -26,11 +29,95 @@ from app.schemas.admin_quiz_contract import (
 )
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.services.admin_quiz import AdminQuizService
+from app.domain.community.src.rule.quiz import (
+    QuizCategoryStatus,
+    QuizImportSourceType,
+    QuizImportStatus,
+    QuizQuestionStatus,
+    QuizQuestionType,
+)
 
 router = APIRouter(prefix="/quiz", tags=["管理后台-题库管理"])
 
 CATEGORY = "/categories"
 QUESTION = "/questions"
+
+
+def _validated_query(model, values: dict):
+    try:
+        return model(**values)
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
+
+
+async def admin_category_query(
+    status: QuizCategoryStatus | None = Query(None),
+    parent_id: int | None = Query(None, ge=1),
+) -> AdminQuizCategoryQuery:
+    return _validated_query(
+        AdminQuizCategoryQuery, {"status": status, "parent_id": parent_id}
+    )
+
+
+async def admin_question_query(
+    category_id: int | None = Query(None, ge=1),
+    question_type: QuizQuestionType | None = Query(None),
+    status: QuizQuestionStatus | None = Query(None),
+    keyword: str | None = Query(None, min_length=1, max_length=128),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+) -> AdminQuizQuestionQuery:
+    return _validated_query(
+        AdminQuizQuestionQuery,
+        {
+            "category_id": category_id,
+            "question_type": question_type,
+            "status": status,
+            "keyword": keyword,
+            "page": page,
+            "page_size": page_size,
+        },
+    )
+
+
+async def admin_audit_query(
+    admin_id: int | None = Query(None, ge=1),
+    action: str | None = Query(None, min_length=1, max_length=64),
+    object_type: str | None = Query(None, min_length=1, max_length=64),
+    object_id: int | None = Query(None, ge=1),
+    result: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+) -> AdminQuizAuditQuery:
+    return _validated_query(
+        AdminQuizAuditQuery,
+        {
+            "admin_id": admin_id,
+            "action": action,
+            "object_type": object_type,
+            "object_id": object_id,
+            "result": result,
+            "page": page,
+            "page_size": page_size,
+        },
+    )
+
+
+async def admin_import_query(
+    status: QuizImportStatus | None = Query(None),
+    source_type: QuizImportSourceType | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+) -> AdminQuizImportJobQuery:
+    return _validated_query(
+        AdminQuizImportJobQuery,
+        {
+            "status": status,
+            "source_type": source_type,
+            "page": page,
+            "page_size": page_size,
+        },
+    )
 
 
 # ── Category routes ──
@@ -47,7 +134,7 @@ QUESTION = "/questions"
     """,
 )
 async def list_categories(
-    query: AdminQuizCategoryQuery = Depends(),
+    query: AdminQuizCategoryQuery = Depends(admin_category_query),
     _admin=Depends(require_permission("quiz:list")),
 ) -> APIResponse[list[AdminQuizCategoryResponse]]:
     result = await AdminQuizService().list_categories(query)
@@ -76,7 +163,7 @@ async def list_categories(
     """,
 )
 async def list_questions(
-    query: AdminQuizQuestionQuery = Depends(),
+    query: AdminQuizQuestionQuery = Depends(admin_question_query),
     _admin=Depends(require_permission("quiz:list")),
 ) -> APIResponse[PaginatedData[AdminQuizQuestionResponse]]:
     result = await AdminQuizService().list_questions(
@@ -319,7 +406,7 @@ async def get_question_stats(
     summary="题库管理审计日志",
 )
 async def list_audit_logs(
-    query: AdminQuizAuditQuery = Depends(),
+    query: AdminQuizAuditQuery = Depends(admin_audit_query),
     _admin=Depends(require_permission("quiz:list")),
 ) -> APIResponse[PaginatedData[AdminQuizAuditLogResponse]]:
     result = await AdminQuizService().list_audit_logs(query)
@@ -377,7 +464,7 @@ async def create_json_import(
     summary="导入任务列表",
 )
 async def list_import_jobs(
-    query: AdminQuizImportJobQuery = Depends(),
+    query: AdminQuizImportJobQuery = Depends(admin_import_query),
     _admin=Depends(require_permission("quiz:list")),
 ) -> APIResponse[PaginatedData[AdminQuizImportJobResponse]]:
     result = await AdminQuizService().list_import_jobs(query)
@@ -410,7 +497,7 @@ async def get_import_report_url(
 
 @router.get(
     "/imports/{job_id}/report",
-    response_model=dict,
+    response_model=AdminQuizImportReportResponse,
     include_in_schema=False,
     summary="读取本地开发错误报告",
 )
@@ -419,7 +506,7 @@ async def read_import_report(
     expires: int = Query(..., ge=1),
     admin_id: int = Query(..., ge=1),
     token: str = Query(..., min_length=32, max_length=128),
-) -> dict:
+) -> AdminQuizImportReportResponse:
     return await AdminQuizService().read_import_report(
         job_id, expires=expires, admin_id=admin_id, token=token
     )

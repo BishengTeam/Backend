@@ -1,5 +1,3 @@
-import time
-import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -15,6 +13,7 @@ from app.domain.user.src.index import User
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.course import CoursePurchaseResponse
 from app.services.order_fulfillment import OrderFulfillmentService
+from app.utils.payment import generate_out_trade_no
 
 
 ACTIVE_ENROLLMENT_STATUSES = ("pending_payment", "enrolled", "completed")
@@ -128,10 +127,7 @@ class CoursePurchaseService:
                     product_type=f"course:{course.id}",
                     price=course.price,
                     status="pending",
-                    out_trade_no=(
-                        f"course_{user_id}_{int(time.time() * 1000)}_"
-                        f"{uuid.uuid4().hex[:8]}"
-                    ),
+                    out_trade_no=generate_out_trade_no("CRS"),
                     expires_at=expires_at,
                     extra_data={"course_id": course.id, "course_title": course.title},
                 )

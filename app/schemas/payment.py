@@ -31,18 +31,17 @@ class PaymentPrepayResponse(BaseModel):
     pay_sign: str = Field(..., description="小程序支付 paySign")
 
 
-class PaymentCallbackRequest(BaseModel):
-    model_config = {"extra": "allow"}
-
-    out_trade_no: str = Field(..., min_length=1, max_length=64, description="商户订单号")
-    transaction_id: str | None = Field(None, max_length=64, description="微信支付交易号")
-    trade_state: PaymentTradeState = Field("SUCCESS", description="微信支付交易状态")
-    total_fee: int | None = Field(None, ge=0, description="支付金额，单位为分")
-    paid_at: datetime | None = Field(None, description="支付完成时间")
-    sign: str | None = Field(None, description="微信回调签名")
-
-
 class PaymentCallbackResponse(BaseModel):
     order_id: int = Field(..., description="订单 ID")
     status: OrderStatus = Field(..., description="订单状态")
     processed: bool = Field(..., description="本次回调是否导致状态变更")
+
+
+class PaymentSyncResponse(PaymentCallbackResponse):
+    trade_state: PaymentTradeState = Field(..., description="微信侧交易状态")
+    synchronized_at: datetime = Field(..., description="本次查单完成时间")
+
+
+class WechatPayNotificationAck(BaseModel):
+    code: Literal["SUCCESS", "FAIL"]
+    message: str

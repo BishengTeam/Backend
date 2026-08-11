@@ -8,6 +8,7 @@ from app.adapter.security import create_access_token, create_refresh_token, deco
 from app.integrations.wechat import WechatClient
 from app.domain.user.src.index import DeletedOpenid, User, UserProfile as DomainUserProfile
 from app.schemas.user import LoginResponse, RefreshResponse, UserProfile
+from app.services.renshe_audit import record_best_effort_audit
 
 REFRESH_TOKEN_PREFIX = "refresh_token:"
 REFRESH_TOKEN_TTL = 30 * 24 * 3600
@@ -20,6 +21,23 @@ class AuthService:
         self.wechat = WechatClient()
 
     async def login(self, code: str) -> LoginResponse:
+        try:
+            return await self._login(code)
+        except Exception as exc:
+            # Failed exchanges are useful for abuse diagnostics, but the
+            # failed code/openid/error text is never persisted.
+            await record_best_effort_audit(
+                actor_type="user",
+                actor_id=None,
+                action="auth.login",
+                object_type="auth",
+                object_id=0,
+                result="failed",
+                summary={"error_type": type(exc).__name__},
+            )
+            raise
+
+    async def _login(self, code: str) -> LoginResponse:
         wx_data = await self.wechat.code2session(code)
         openid = wx_data["openid"]
         session_key = wx_data.get("session_key", "")
@@ -35,7 +53,6 @@ class AuthService:
                 db.add(user)
                 await db.flush()
                 db.add(DomainUserProfile(user_id=user.id))
-                await db.commit()
             elif not user.is_active:
                 raise UnauthorizedException("账号已注销，如需恢复请联系客服")
             else:
@@ -47,7 +64,7 @@ class AuthService:
                 ).scalar_one_or_none()
                 if existing is None:
                     db.add(DomainUserProfile(user_id=user.id))
-                    await db.commit()
+            await db.commit()
             access_token = create_access_token(user.id, user.openid)
             refresh_token = create_refresh_token()
             await redis_setex_safe(
@@ -57,12 +74,22 @@ class AuthService:
                 await redis_setex_safe(
                     f"{SESSION_KEY_PREFIX}{user.id}", SESSION_KEY_TTL, session_key
                 )
-            return LoginResponse(
+            response = LoginResponse(
                 access_token=access_token,
                 refresh_token=refresh_token,
                 expires_in=settings.JWT_EXPIRE_MINUTES * 60,
                 user=UserProfile.model_validate(user),
             )
+        await record_best_effort_audit(
+            actor_type="user",
+            actor_id=response.user.id,
+            action="auth.login",
+            object_type="user",
+            object_id=response.user.id,
+            result="succeeded",
+            summary={"provider": "wechat"},
+        )
+        return response
 
     async def refresh(self, refresh_token: str) -> RefreshResponse:
         key = f"{REFRESH_TOKEN_PREFIX}{refresh_token}"

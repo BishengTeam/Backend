@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import logging
-import time
-import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
@@ -25,14 +23,21 @@ from app.domain.renshe.src.index import (
 from app.domain.user.src.index import User, UserRealname, UserStudent
 from app.integrations.renshe_storage import RensheObjectStorage
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
+from app.schemas.common import PaginatedData
 from app.schemas.renshe import (
     RensheApplicationDetailResponse,
+    RensheApplicationListItem,
+    RensheApplicationOrderSummary,
+    RensheApplicationPlanSummary,
+    RensheApplicationRefundSummary,
     RensheApplicationResponse,
+    RensheApplicationStatus,
     RensheApplicationSubmitResponse,
     RensheDraftUpsert,
     RensheVersionSummary,
 )
 from app.services.plan_enrollment import CAPACITY_OCCUPYING_ORDER_STATUSES, PlanEnrollmentService
+from app.utils.payment import generate_out_trade_no
 from app.utils.pii import identity_hash
 
 
@@ -190,9 +195,7 @@ class RensheApplicationService:
                         candidate_idcard=realname.id_card_number,
                         price=plan.price_cents,
                         status="pending",
-                        out_trade_no=(
-                            f"RS{user_id}_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
-                        ),
+                        out_trade_no=generate_out_trade_no("RS"),
                         expires_at=now + timedelta(minutes=RENSHE_ORDER_EXPIRE_MINUTES),
                         extra_data={"application_version_id": version.id},
                     )
@@ -227,8 +230,11 @@ class RensheApplicationService:
             if copied_keys and not committed:
                 try:
                     await self.storage.delete_many(copied_keys)
-                except Exception:
-                    logger.exception("failed to remove orphaned renshe version materials")
+                except Exception as exc:
+                    logger.error(
+                        "failed to remove orphaned renshe version materials: exception_type=%s",
+                        type(exc).__name__,
+                    )
             raise
 
     async def _lock_submission_context(
@@ -278,6 +284,129 @@ class RensheApplicationService:
             None,
         )
         return application, plan, paid_order
+
+    async def list_applications(
+        self,
+        user_id: int,
+        *,
+        plan_id: int | None = None,
+        status: RensheApplicationStatus | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> PaginatedData[RensheApplicationListItem]:
+        """List only the signed-in user's applications for client recovery."""
+
+        async with get_db_ctx() as db:
+            filters = [
+                RensheApplication.user_id == user_id,
+                Plan.product_type == "RS-ZY",
+            ]
+            if plan_id is not None:
+                filters.append(RensheApplication.plan_id == plan_id)
+            if status is not None:
+                filters.append(RensheApplication.status == status)
+
+            total = (
+                await db.scalar(
+                    select(func.count())
+                    .select_from(RensheApplication)
+                    .join(Plan, Plan.id == RensheApplication.plan_id)
+                    .where(*filters)
+                )
+                or 0
+            )
+            rows = (
+                await db.execute(
+                    select(RensheApplication, Plan)
+                    .join(Plan, Plan.id == RensheApplication.plan_id)
+                    .where(*filters)
+                    .order_by(
+                        RensheApplication.updated_at.desc(),
+                        RensheApplication.id.desc(),
+                    )
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                )
+            ).all()
+            if not rows:
+                return PaginatedData(
+                    items=[], total=total, page=page, page_size=page_size
+                )
+
+            application_ids = [application.id for application, _plan in rows]
+            orders = (
+                await db.execute(
+                    select(Order)
+                    .where(
+                        Order.application_id.in_(application_ids),
+                        Order.user_id == user_id,
+                    )
+                    .order_by(Order.application_id, Order.id)
+                )
+            ).scalars().all()
+            refunds = (
+                await db.execute(
+                    select(RensheRefundRequest)
+                    .where(
+                        RensheRefundRequest.application_id.in_(application_ids),
+                        RensheRefundRequest.user_id == user_id,
+                    )
+                    .order_by(
+                        RensheRefundRequest.application_id,
+                        RensheRefundRequest.id,
+                    )
+                )
+            ).scalars().all()
+
+            latest_orders = {
+                order.application_id: order
+                for order in orders
+                if order.application_id is not None
+            }
+            latest_refunds = {refund.application_id: refund for refund in refunds}
+            items: list[RensheApplicationListItem] = []
+            for application, plan in rows:
+                order = latest_orders.get(application.id)
+                refund = latest_refunds.get(application.id)
+                items.append(
+                    RensheApplicationListItem(
+                        **RensheApplicationResponse.model_validate(
+                            application
+                        ).model_dump(),
+                        plan=RensheApplicationPlanSummary.model_validate(plan),
+                        current_order=(
+                            RensheApplicationOrderSummary(
+                                id=order.id,
+                                status=order.status,
+                                price_cents=order.price,
+                                expires_at=order.expires_at,
+                                paid_at=order.paid_at,
+                                closed_at=order.closed_at,
+                            )
+                            if order is not None
+                            else None
+                        ),
+                        current_refund=(
+                            RensheApplicationRefundSummary(
+                                id=refund.id,
+                                status=refund.status,
+                                request_kind=refund.request_kind,
+                                amount_cents=refund.amount_cents,
+                                requested_at=refund.requested_at,
+                                due_at=refund.due_at,
+                                succeeded_at=refund.succeeded_at,
+                            )
+                            if refund is not None
+                            else None
+                        ),
+                    )
+                )
+            return PaginatedData(
+                items=items,
+                total=total,
+                page=page,
+                page_size=page_size,
+            )
 
     async def get_application(
         self, user_id: int, application_id: int
@@ -421,6 +550,7 @@ class RensheApplicationService:
             .where(
                 UserRealname.user_id != user_id,
                 User.is_active.is_(True),
+                UserRealname.status.in_(("pending", "verified")),
                 (
                     (UserRealname.active_id_card_hash == digest)
                     | (UserRealname.id_card_number == realname.id_card_number)

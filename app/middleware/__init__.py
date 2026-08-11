@@ -6,6 +6,7 @@ from app.middleware.cors import setup_cors
 from app.middleware.error_handler import (
     app_exception_handler,
     global_exception_handler,
+    rate_limit_exception_handler,
     validation_exception_handler,
 )
 from app.middleware.request_id import RequestIDMiddleware
@@ -18,4 +19,10 @@ def setup_middleware(app: FastAPI) -> None:
     app.add_middleware(RequestIDMiddleware)
     app.add_exception_handler(AppException, app_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    # slowapi's middleware handles this exception before ``call_next``; an
+    # explicit handler keeps both middleware and decorator paths on the same
+    # 429/40202 response contract.
+    from slowapi.errors import RateLimitExceeded
+
+    app.add_exception_handler(RateLimitExceeded, rate_limit_exception_handler)
     app.add_exception_handler(Exception, global_exception_handler)

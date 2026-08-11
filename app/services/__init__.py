@@ -10,7 +10,6 @@ from app.services.order_timeout import CloseExpiredOrdersResult, OrderTimeoutClo
 from app.services.payment import PaymentService
 from app.services.points import PointsService
 from app.services.price_config import PriceConfigService
-from app.services.quiz import QuizService
 from app.services.user import UserService
 
 # Domain order re-exports
@@ -57,7 +56,6 @@ __all__ = [
     "PaymentService",
     "PointsService",
     "PriceConfigService",
-    "QuizService",
     "UserService",
     # Order helpers
     "CloseExpiredOrdersResult",

@@ -14,7 +14,6 @@ from app.domain.community.src.model.quiz import (
     QuizPracticeSessionQuestion,
     QuizQuestion,
     QuizQuestionStats,
-    QuizRecord,
     QuizUserStats,
     QuizWrongItem,
 )
@@ -37,7 +36,6 @@ __all__ = [
     "QuizPracticeSessionQuestion",
     "QuizQuestion",
     "QuizQuestionStats",
-    "QuizRecord",
     "QuizUserStats",
     "QuizWrongItem",
     "QuickQuestion",
