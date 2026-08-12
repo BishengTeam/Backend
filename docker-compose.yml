@@ -27,27 +27,13 @@ services:
       - JWT_ALGORITHM=HS256
       - JWT_EXPIRE_MINUTES=120
       # 微信小程序 — 用实际值替换
-      - WECHAT_APPID=${WECHAT_APPID:?WECHAT_APPID is required}
-      - WECHAT_SECRET=${WECHAT_SECRET:?WECHAT_SECRET is required}
-      # 人社微信支付 V3 — 未配置时生产容器必须启动失败，禁止假成功
-      - WECHAT_PAY_ENABLED=${WECHAT_PAY_ENABLED:?WECHAT_PAY_ENABLED is required}
-      - WECHAT_PAY_API_VERSION=${WECHAT_PAY_API_VERSION:-v3}
+      - WECHAT_APPID=${WECHAT_APPID:-}
+      - WECHAT_SECRET=${WECHAT_SECRET:-}
+      # 微信支付 — 用实际值替换
       - WECHAT_PAY_MCHID=${WECHAT_PAY_MCHID:-}
+      - WECHAT_PAY_API_KEY=${WECHAT_PAY_API_KEY:-}
       - WECHAT_PAY_APPID=${WECHAT_PAY_APPID:-}
       - WECHAT_PAY_NOTIFY_URL=${WECHAT_PAY_NOTIFY_URL:-}
-      - WECHAT_PAY_REFUND_NOTIFY_URL=${WECHAT_PAY_REFUND_NOTIFY_URL:-}
-      - WECHAT_PAY_CERT_SERIAL_NO=${WECHAT_PAY_CERT_SERIAL_NO:-}
-      - WECHAT_PAY_PRIVATE_KEY=${WECHAT_PAY_PRIVATE_KEY:-}
-      - WECHAT_PAY_API_V3_KEY=${WECHAT_PAY_API_V3_KEY:-}
-      - WECHAT_PAY_PLATFORM_CERTIFICATE=${WECHAT_PAY_PLATFORM_CERTIFICATE:-}
-      - WECHAT_PAY_PLATFORM_CERT_SERIAL_NO=${WECHAT_PAY_PLATFORM_CERT_SERIAL_NO:-}
-      - WECHAT_PAY_NOTIFICATION_TOLERANCE_SECONDS=${WECHAT_PAY_NOTIFICATION_TOLERANCE_SECONDS:-300}
-      - WECHAT_PAY_RECONCILE_POLL_SECONDS=${WECHAT_PAY_RECONCILE_POLL_SECONDS:-30}
-      - WECHAT_PAY_RECONCILE_BATCH_SIZE=${WECHAT_PAY_RECONCILE_BATCH_SIZE:-100}
-      - WECHAT_PAY_REFUND_RECONCILE_POLL_SECONDS=${WECHAT_PAY_REFUND_RECONCILE_POLL_SECONDS:-30}
-      - WECHAT_PAY_REFUND_RECONCILE_BATCH_SIZE=${WECHAT_PAY_REFUND_RECONCILE_BATCH_SIZE:-100}
-      - WECHAT_PAY_REFUND_RECONCILE_AFTER_SECONDS=${WECHAT_PAY_REFUND_RECONCILE_AFTER_SECONDS:-60}
-      - WECHAT_PAY_SYNC_RATE_PER_MINUTE=${WECHAT_PAY_SYNC_RATE_PER_MINUTE:-10}
       # 文件存储
       - UPLOAD_DIR=/app/uploads
       - STORAGE_TYPE=local
@@ -60,22 +46,6 @@ services:
       - ALIYUN_OSS_PREFIX=${ALIYUN_OSS_PREFIX:-renshe}
       - ALIYUN_OSS_SIGNED_URL_TTL_SECONDS=300
       - RENSHE_TEMPLATE_DIR=/app/renshe-templates
-      - RENSHE_CLEANUP_RETENTION_DAYS=30
-      - HEALTH_CHECK_TIMEOUT_SECONDS=${HEALTH_CHECK_TIMEOUT_SECONDS:-3}
-      # 题库导入 — 生产环境必须使用私有阿里云 OSS；显式注入任务参数，
-      # 避免容器内因缺少 .env 而回退到本地存储。
-      - QUIZ_TASKS_ENABLED=true
-      - QUIZ_IMPORT_STORAGE_TYPE=aliyun_oss
-      - QUIZ_OSS_ENDPOINT=${QUIZ_OSS_ENDPOINT:?QUIZ_OSS_ENDPOINT is required}
-      - QUIZ_OSS_BUCKET=${QUIZ_OSS_BUCKET:?QUIZ_OSS_BUCKET is required}
-      - QUIZ_OSS_ACCESS_KEY_ID=${QUIZ_OSS_ACCESS_KEY_ID:?QUIZ_OSS_ACCESS_KEY_ID is required}
-      - QUIZ_OSS_ACCESS_KEY_SECRET=${QUIZ_OSS_ACCESS_KEY_SECRET:?QUIZ_OSS_ACCESS_KEY_SECRET is required}
-      - QUIZ_OSS_PREFIX=${QUIZ_OSS_PREFIX:-quiz-imports}
-      - QUIZ_OSS_SIGNED_URL_TTL_SECONDS=300
-      - QUIZ_WORKER_POLL_SECONDS=${QUIZ_WORKER_POLL_SECONDS:-5}
-      - QUIZ_WORKER_HEARTBEAT_SECONDS=${QUIZ_WORKER_HEARTBEAT_SECONDS:-15}
-      - QUIZ_WORKER_STALE_SECONDS=${QUIZ_WORKER_STALE_SECONDS:-120}
-      - QUIZ_WORKER_MAX_RETRIES=${QUIZ_WORKER_MAX_RETRIES:-5}
     volumes:
       - uploads:/app/uploads
       - ../docs/renshe:/app/renshe-templates:ro
@@ -90,10 +60,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      # Keep the probe aligned with the credentials/database names injected
-      # above; otherwise POSTGRES_USER/POSTGRES_DB overrides report a false
-      # unhealthy container and block the app indefinitely.
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-wemini} -d $${POSTGRES_DB:-wemini_app}"]
+      test: ["CMD-SHELL", "pg_isready -U wemini -d wemini_app"]
       interval: 3s
       timeout: 3s
       retries: 10
@@ -123,8 +90,8 @@ services:
       - DB_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       - DB_NAME=${POSTGRES_DB:-wemini_app}
       - REDIS_URL=redis://redis:6379/0
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required for seed}
-      - PII_HASH_KEY=${PII_HASH_KEY:?PII_HASH_KEY is required for seed}
+      - JWT_SECRET=${JWT_SECRET:-dev-jwt-secret-for-testing-only-min-32-chars}
+      - PII_HASH_KEY=${PII_HASH_KEY:-dev-pii-hash-key-for-testing-only-min-32-chars}
       - JWT_ALGORITHM=HS256
       - JWT_EXPIRE_MINUTES=120
     profiles:

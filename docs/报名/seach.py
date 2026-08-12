@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
-归档工具（2026-08-09）：Tavily 搜索工具。
-
-本文件不属于 Backend 运行时，仅保留历史调研用途；仓库不保存 API Key。
+Tavily 搜索工具 — 基于 tavily-python SDK 的命令行搜索工具
 
 功能:
   - search:  执行网页搜索，支持多种过滤和深度参数
@@ -28,8 +26,8 @@ except ImportError:
     print("错误: 未安装 tavily-python。请运行: pip install tavily-python")
     sys.exit(1)
 
-# API Key 只能由命令行或环境变量提供，禁止写入仓库。
-DEFAULT_API_KEY = ""
+# ── 默认 API Key（也可通过环境变量 TAVILY_API_KEY 覆盖） ──
+DEFAULT_API_KEY = "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"
 
 
 # ═══════════════════════════════════════════════════════════════════

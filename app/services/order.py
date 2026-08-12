@@ -1,3 +1,5 @@
+import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
@@ -17,7 +19,6 @@ from app.domain.certification.src.index import Certification
 from app.domain.user.src.index import UserRealname
 from app.schemas.common import PaginatedData
 from app.schemas.order import OrderCreate, OrderDetailResponse, OrderFilter, OrderResponse
-from app.utils.payment import generate_out_trade_no
 
 PRICE_TIER_NORMAL = "normal"
 PRICE_TIER_STUDENT = "student"
@@ -98,7 +99,7 @@ class OrderService:
                     candidate_idcard=data.candidate_idcard,
                     price=price,
                     status="pending",
-                    out_trade_no=generate_out_trade_no("ORD"),
+                    out_trade_no=f"{user_id}_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}",
                     expires_at=expires_at,
                     extra_data=data.extra_data,
                     attachments=data.attachments,

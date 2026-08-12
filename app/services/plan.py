@@ -9,13 +9,7 @@ from app.domain.plan.src.index import Plan
 from app.domain.renshe.src.index import RensheApplication, RensheAuditLog
 from app.port.config import settings
 from app.port.exceptions import BusinessException, NotFoundException, ValidationException
-from app.schemas.plan import (
-    PlanCreate,
-    PlanImpactAction,
-    PlanImpactResponse,
-    PlanResponse,
-    PlanUpdate,
-)
+from app.schemas.plan import PlanCreate, PlanResponse, PlanUpdate
 from app.services.plan_enrollment import CAPACITY_OCCUPYING_ORDER_STATUSES
 from app.services.renshe_batch import RensheBatchService
 
@@ -289,23 +283,6 @@ class PlanService:
             await db.commit()
             await db.refresh(plan)
             return self._response(plan, await self._count_enrolled(db, plan_id))
-
-    async def preview_impact(
-        self,
-        plan_id: int,
-        product_type: str | None,
-        *,
-        action: PlanImpactAction,
-    ) -> PlanImpactResponse:
-        async with get_db_ctx() as db:
-            plan = await self._get_plan(db, plan_id, product_type)
-            if plan.product_type != "RS-ZY":
-                raise BusinessException("批次影响预览接口仅用于人社报名")
-            return await RensheBatchService().preview_impact(
-                db,
-                plan=plan,
-                action=action,
-            )
 
     async def archive_plan(
         self,

@@ -11,7 +11,7 @@ if [[ "${1:-}" == "--help" ]]; then
 Usage: scripts/run_order_integration_tests.sh [pytest arguments]
 
 Creates or reuses a dedicated PostgreSQL test database, applies Alembic
-migrations, and runs the order/plan/inventory/course/human-resources integration tests.
+migrations, and runs the order/plan/inventory/course integration tests.
 
 Optional environment variables:
   ENV_FILE       Environment file to load. Defaults to ../.env, then ./.env.
@@ -146,24 +146,22 @@ export APP_ENV="test"
 export APP_DEBUG="false"
 
 # Never let integration tests call a real payment provider.
-export WECHAT_PAY_ENABLED="false"
 export WECHAT_PAY_MCHID=""
+export WECHAT_PAY_API_KEY=""
 export WECHAT_PAY_APPID=""
 export WECHAT_PAY_NOTIFY_URL=""
-export WECHAT_PAY_REFUND_NOTIFY_URL=""
 
 cd "${REPO_ROOT}"
 
 echo "Applying Alembic migrations..."
 "${ALEMBIC}" upgrade head
 
-echo "Running order, plan, inventory, course, and human-resources integration tests..."
+echo "Running order, plan, inventory, and course integration tests..."
 "${PYTHON}" -m pytest \
     tests/integration/db/test_inventory_lifecycle_flow.py \
     tests/integration/db/test_h3c_plan_order_flow.py \
     tests/integration/db/test_plan_order_management_flow.py \
     tests/integration/db/test_plan_flow.py \
     tests/integration/db/test_course_purchase_flow.py \
-    tests/integration/db/test_renshe_domain.py \
     -q \
     "$@"

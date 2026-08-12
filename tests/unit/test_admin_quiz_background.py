@@ -144,7 +144,6 @@ def test_quiz_worker_registers_cleanup_and_stats_with_subminute_polling() -> Non
     assert quiz_task_registry.names == (
         "quiz-import",
         "quiz-import-cleanup",
-        "quiz-exam-timeout",
         "quiz-question-stats",
     )
     assert QUIZ_TASK_RUNTIME.poll_seconds <= 60
@@ -166,22 +165,3 @@ async def test_question_stats_processor_is_periodic_not_a_busy_loop(monkeypatch)
     assert await processor() is False
     assert await processor() is False
     assert calls == 1
-
-
-@pytest.mark.asyncio
-async def test_exam_timeout_processor_reports_work(monkeypatch) -> None:
-    calls: list[int] = []
-
-    async def settle(self):
-        del self
-        calls.append(1)
-        return 2
-
-    monkeypatch.setattr(
-        "app.services.quiz_exam.QuizExamService.settle_expired_exams",
-        settle,
-    )
-    processor = quiz_task_registry._processors["quiz-exam-timeout"]
-
-    assert await processor() is True
-    assert calls == [1]

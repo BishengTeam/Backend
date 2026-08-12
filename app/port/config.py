@@ -4,32 +4,6 @@ from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
-def _with_database_driver(url: str, *, async_driver: bool) -> str:
-    """Normalize a PostgreSQL URL for the requested SQLAlchemy driver.
-
-    Deployments commonly provide only one of ``DATABASE_URL`` (async engine)
-    and ``DATABASE_URL_SYNC`` (Alembic).  Treating a plain ``postgresql://``
-    URL as an async URL, or copying a ``+psycopg2`` URL into the async engine,
-    fails only at process startup and is particularly hard to diagnose.  The
-    URL authority, path and query are preserved verbatim; only the scheme is
-    changed.
-    """
-
-    parsed = urllib.parse.urlsplit(url)
-    scheme = parsed.scheme.lower()
-    if not scheme.startswith("postgres"):
-        return url
-    if async_driver:
-        target_scheme = "postgresql+asyncpg"
-    else:
-        target_scheme = "postgresql"
-    if scheme == target_scheme:
-        return url
-    return urllib.parse.urlunsplit(
-        (target_scheme, parsed.netloc, parsed.path, parsed.query, parsed.fragment)
-    )
-
-
 class Settings(BaseSettings):
     APP_NAME: str = "weMiniApp"
     APP_ENV: str = "development"
@@ -51,33 +25,9 @@ class Settings(BaseSettings):
 
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20
-    HEALTH_CHECK_TIMEOUT_SECONDS: float = 3.0
 
     @model_validator(mode="after")
     def build_database_urls(self) -> "Settings":
-        self.DATABASE_URL = (self.DATABASE_URL or "").strip()
-        self.DATABASE_URL_SYNC = (self.DATABASE_URL_SYNC or "").strip()
-        if self.DATABASE_URL:
-            # The async engine must never receive a plain/synchronous driver
-            # URL.  Keep an explicitly selected sync driver below for Alembic.
-            self.DATABASE_URL = _with_database_driver(
-                self.DATABASE_URL, async_driver=True
-            )
-        elif self.DATABASE_URL_SYNC:
-            self.DATABASE_URL = _with_database_driver(
-                self.DATABASE_URL_SYNC, async_driver=True
-            )
-        # A deployment may provide one complete URL instead of repeating
-        # credentials in DB_* variables.  Derive the companion driver URL so
-        # Alembic/health checks and the async engine use the same endpoint.
-        if not self.DATABASE_URL_SYNC and self.DATABASE_URL:
-            self.DATABASE_URL_SYNC = _with_database_driver(
-                self.DATABASE_URL, async_driver=False
-            )
-        elif self.DATABASE_URL_SYNC.startswith("postgresql+asyncpg://"):
-            self.DATABASE_URL_SYNC = _with_database_driver(
-                self.DATABASE_URL_SYNC, async_driver=False
-            )
         if not self.DATABASE_URL:
             encoded = urllib.parse.quote_plus(self.DB_PASSWORD)
             self.DATABASE_URL = (
@@ -134,26 +84,10 @@ class Settings(BaseSettings):
     WECHAT_APPID: str = ""
     WECHAT_SECRET: str = ""
 
-    # All payment traffic uses WeChat Pay API V3.  Production explicitly
-    # enables the capability after the merchant materials are provisioned.
-    WECHAT_PAY_ENABLED: bool = False
-    WECHAT_PAY_API_VERSION: str = "v3"
     WECHAT_PAY_MCHID: str = ""
+    WECHAT_PAY_API_KEY: str = ""
     WECHAT_PAY_APPID: str = ""
     WECHAT_PAY_NOTIFY_URL: str = ""
-    WECHAT_PAY_REFUND_NOTIFY_URL: str = ""
-    WECHAT_PAY_CERT_SERIAL_NO: str = ""
-    WECHAT_PAY_PRIVATE_KEY: str = ""
-    WECHAT_PAY_API_V3_KEY: str = ""
-    WECHAT_PAY_PLATFORM_CERTIFICATE: str = ""
-    WECHAT_PAY_PLATFORM_CERT_SERIAL_NO: str = ""
-    WECHAT_PAY_NOTIFICATION_TOLERANCE_SECONDS: int = 300
-    WECHAT_PAY_RECONCILE_POLL_SECONDS: int = 30
-    WECHAT_PAY_RECONCILE_BATCH_SIZE: int = 100
-    WECHAT_PAY_REFUND_RECONCILE_POLL_SECONDS: int = 30
-    WECHAT_PAY_REFUND_RECONCILE_BATCH_SIZE: int = 100
-    WECHAT_PAY_REFUND_RECONCILE_AFTER_SECONDS: int = 60
-    WECHAT_PAY_SYNC_RATE_PER_MINUTE: int = 10
 
     CHAT_BACKEND: str = "disabled"
     DIFY_API_BASE: str = ""
@@ -186,10 +120,6 @@ class Settings(BaseSettings):
     ALIYUN_OSS_SIGNED_URL_TTL_SECONDS: int = 300
     RENSHE_TEMPLATE_DIR: str = "../docs/renshe"
     RENSHE_WORKER_POLL_SECONDS: int = 5
-    # Production retention is frozen at 30 days.  Non-production deployments
-    # may shorten it only through deployment configuration for destructive OSS
-    # cleanup UAT; no business API exposes this value.
-    RENSHE_CLEANUP_RETENTION_DAYS: float = 30
 
     # Frozen quiz-domain limits and worker settings.
     QUIZ_TASKS_ENABLED: bool = True
@@ -216,21 +146,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_renshe_storage(self) -> "Settings":
-        if not 0.5 <= self.HEALTH_CHECK_TIMEOUT_SECONDS <= 10:
-            raise ValueError("HEALTH_CHECK_TIMEOUT_SECONDS must be between 0.5 and 10")
         if not 1 <= self.ALIYUN_OSS_SIGNED_URL_TTL_SECONDS <= 300:
             raise ValueError("ALIYUN_OSS_SIGNED_URL_TTL_SECONDS must be between 1 and 300")
         if not 1 <= self.RENSHE_WORKER_POLL_SECONDS <= 300:
             raise ValueError("RENSHE_WORKER_POLL_SECONDS must be between 1 and 300")
-        if not 0 < self.RENSHE_CLEANUP_RETENTION_DAYS <= 30:
-            raise ValueError(
-                "RENSHE_CLEANUP_RETENTION_DAYS must be greater than 0 and at most 30"
-            )
         if self.APP_ENV == "production":
-            if self.RENSHE_CLEANUP_RETENTION_DAYS != 30:
-                raise ValueError(
-                    "RENSHE_CLEANUP_RETENTION_DAYS must remain 30 in production"
-                )
             if self.RENSHE_STORAGE_TYPE != "aliyun_oss":
                 raise ValueError("RENSHE_STORAGE_TYPE must be aliyun_oss in production")
             required = {
@@ -242,141 +162,6 @@ class Settings(BaseSettings):
             missing = [name for name, value in required.items() if not value]
             if missing:
                 raise ValueError(f"missing production OSS settings: {', '.join(missing)}")
-        return self
-
-    @model_validator(mode="after")
-    def validate_production_integrations(self) -> "Settings":
-        """Fail fast when a production process could not serve RS-ZY safely.
-
-        Development and test environments may use local storage and disabled
-        payment.  Production must receive explicit database, Redis, WeChat
-        login, and V3 payment configuration; no V2 or fake-success fallback is
-        accepted for the human-resources flow.
-        """
-
-        if self.APP_ENV != "production":
-            return self
-
-        # ``build_database_urls`` fills a URL from component settings before
-        # this validator runs, so validate the resulting URL itself rather than
-        # checking only whether the string is non-empty.  This still permits a
-        # deployment to provide a complete DATABASE_URL without duplicating
-        # its password in DB_* variables.
-        parsed_database = urllib.parse.urlparse(self.DATABASE_URL)
-        if not (
-            parsed_database.scheme.startswith("postgresql")
-            and parsed_database.hostname
-            and parsed_database.username
-            and parsed_database.password
-            and parsed_database.path.strip("/")
-        ):
-            raise ValueError(
-                "production database URL must include PostgreSQL host, user, password and database"
-            )
-        if not self.REDIS_URL.startswith(("redis://", "rediss://")):
-            raise ValueError("REDIS_URL must use redis:// or rediss:// in production")
-
-        missing_login = [
-            name
-            for name, value in {
-                "WECHAT_APPID": self.WECHAT_APPID,
-                "WECHAT_SECRET": self.WECHAT_SECRET,
-            }.items()
-            if not value
-        ]
-        if missing_login:
-            raise ValueError(
-                "missing production WeChat login settings: "
-                + ", ".join(missing_login)
-            )
-
-        if not self.WECHAT_PAY_ENABLED:
-            raise ValueError(
-                "WECHAT_PAY_ENABLED must be true in production; "
-                "disable production traffic until V3 payment is provisioned"
-            )
-        if self.WECHAT_PAY_API_VERSION.lower() != "v3":
-            raise ValueError("WECHAT_PAY_API_VERSION must be v3 in production")
-        missing_payment = [
-            name
-            for name, value in {
-                "WECHAT_PAY_MCHID": self.WECHAT_PAY_MCHID,
-                "WECHAT_PAY_APPID": self.WECHAT_PAY_APPID or self.WECHAT_APPID,
-                "WECHAT_PAY_CERT_SERIAL_NO": self.WECHAT_PAY_CERT_SERIAL_NO,
-                "WECHAT_PAY_PRIVATE_KEY": self.WECHAT_PAY_PRIVATE_KEY,
-                "WECHAT_PAY_API_V3_KEY": self.WECHAT_PAY_API_V3_KEY,
-                "WECHAT_PAY_PLATFORM_CERTIFICATE": self.WECHAT_PAY_PLATFORM_CERTIFICATE,
-                "WECHAT_PAY_PLATFORM_CERT_SERIAL_NO": self.WECHAT_PAY_PLATFORM_CERT_SERIAL_NO,
-                "WECHAT_PAY_NOTIFY_URL": self.WECHAT_PAY_NOTIFY_URL,
-                "WECHAT_PAY_REFUND_NOTIFY_URL": self.WECHAT_PAY_REFUND_NOTIFY_URL,
-            }.items()
-            if not value
-        ]
-        if missing_payment:
-            raise ValueError(
-                "missing production WeChat Pay V3 settings: "
-                + ", ".join(missing_payment)
-            )
-        return self
-
-    @model_validator(mode="after")
-    def validate_wechat_pay_runtime(self) -> "Settings":
-        if self.WECHAT_PAY_ENABLED and self.WECHAT_PAY_API_VERSION.lower() != "v3":
-            raise ValueError("WECHAT_PAY_API_VERSION must be v3 when payment is enabled")
-        if self.WECHAT_PAY_ENABLED and self.WECHAT_PAY_API_V3_KEY:
-            if len(self.WECHAT_PAY_API_V3_KEY.encode("utf-8")) != 32:
-                raise ValueError("WECHAT_PAY_API_V3_KEY must be exactly 32 bytes")
-        if (
-            self.WECHAT_PAY_ENABLED
-            and self.WECHAT_PAY_NOTIFY_URL
-            and self.WECHAT_PAY_REFUND_NOTIFY_URL
-            and self.WECHAT_PAY_NOTIFY_URL == self.WECHAT_PAY_REFUND_NOTIFY_URL
-        ):
-            raise ValueError(
-                "WECHAT_PAY_NOTIFY_URL and WECHAT_PAY_REFUND_NOTIFY_URL must differ"
-            )
-        if (
-            self.APP_ENV == "production"
-            and self.WECHAT_PAY_NOTIFY_URL
-            and not self.WECHAT_PAY_NOTIFY_URL.startswith("https://")
-        ):
-            raise ValueError("WECHAT_PAY_NOTIFY_URL must use https:// in production")
-        if (
-            self.APP_ENV == "production"
-            and self.WECHAT_PAY_REFUND_NOTIFY_URL
-            and not self.WECHAT_PAY_REFUND_NOTIFY_URL.startswith("https://")
-        ):
-            raise ValueError(
-                "WECHAT_PAY_REFUND_NOTIFY_URL must use https:// in production"
-            )
-        if not 60 <= self.WECHAT_PAY_NOTIFICATION_TOLERANCE_SECONDS <= 600:
-            raise ValueError(
-                "WECHAT_PAY_NOTIFICATION_TOLERANCE_SECONDS must be between 60 and 600"
-            )
-        if not 5 <= self.WECHAT_PAY_RECONCILE_POLL_SECONDS <= 300:
-            raise ValueError(
-                "WECHAT_PAY_RECONCILE_POLL_SECONDS must be between 5 and 300"
-            )
-        if not 1 <= self.WECHAT_PAY_RECONCILE_BATCH_SIZE <= 500:
-            raise ValueError(
-                "WECHAT_PAY_RECONCILE_BATCH_SIZE must be between 1 and 500"
-            )
-        if not 5 <= self.WECHAT_PAY_REFUND_RECONCILE_POLL_SECONDS <= 300:
-            raise ValueError(
-                "WECHAT_PAY_REFUND_RECONCILE_POLL_SECONDS must be between 5 and 300"
-            )
-        if not 1 <= self.WECHAT_PAY_REFUND_RECONCILE_BATCH_SIZE <= 500:
-            raise ValueError(
-                "WECHAT_PAY_REFUND_RECONCILE_BATCH_SIZE must be between 1 and 500"
-            )
-        if not 10 <= self.WECHAT_PAY_REFUND_RECONCILE_AFTER_SECONDS <= 86400:
-            raise ValueError(
-                "WECHAT_PAY_REFUND_RECONCILE_AFTER_SECONDS must be between 10 and 86400"
-            )
-        if not 1 <= self.WECHAT_PAY_SYNC_RATE_PER_MINUTE <= 60:
-            raise ValueError(
-                "WECHAT_PAY_SYNC_RATE_PER_MINUTE must be between 1 and 60"
-            )
         return self
 
     @model_validator(mode="after")

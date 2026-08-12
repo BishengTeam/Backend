@@ -12,13 +12,11 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    event,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.adapter.database import Base, TimestampMixin
-from app.utils.audit import sanitize_audit_summary
 
 
 APPLICATION_STATUSES = (
@@ -234,7 +232,6 @@ class RensheRefundRequest(Base, TimestampMixin):
         ),
         CheckConstraint("amount_cents > 0", name="ck_renshe_refund_amount_positive"),
         Index("ix_renshe_refund_status_due", "status", "due_at"),
-        Index("ix_renshe_refund_status_updated", "status", "updated_at"),
         Index(
             "uq_renshe_refund_active_order",
             "order_id",
@@ -416,12 +413,6 @@ class RensheAuditLog(Base, TimestampMixin):
         ),
         Index("ix_renshe_audit_object", "object_type", "object_id"),
         Index("ix_renshe_audit_actor", "actor_type", "actor_id"),
-        Index(
-            "ix_renshe_audit_application_created",
-            "application_id",
-            "created_at",
-        ),
-        Index("ix_renshe_audit_result_created", "result", "created_at"),
     )
 
     actor_type: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -436,16 +427,3 @@ class RensheAuditLog(Base, TimestampMixin):
     result: Mapped[str] = mapped_column(String(16), nullable=False)
     summary: Mapped[dict | None] = mapped_column(JSON)
 
-
-@event.listens_for(RensheAuditLog, "before_insert")
-def _sanitize_renshe_audit_before_insert(_mapper, _connection, target) -> None:
-    """Enforce the no-PII-in-audit contract at the persistence boundary."""
-
-    target.summary = sanitize_audit_summary(target.summary)
-
-
-@event.listens_for(RensheAuditLog, "before_update")
-def _sanitize_renshe_audit_before_update(_mapper, _connection, target) -> None:
-    # Audit rows are append-only in the service layer, but this guard also
-    # protects maintenance scripts that may update a legacy row.
-    target.summary = sanitize_audit_summary(target.summary)

@@ -1,14 +1,15 @@
 """User-facing quiz browsing and practice workflows for the frozen contract.
 
-This service uses only the rebuilt quiz tables and keeps all practice side
-effects in the same transaction as the immutable attempt.
+The legacy ``QuizService`` is intentionally left in place until QB-31 removes
+the old routes.  This service only uses the rebuilt quiz tables and keeps all
+practice side effects in the same transaction as the immutable attempt.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, select, union
@@ -1510,7 +1511,7 @@ class QuizPracticeService:
             average = (
                 (
                     Decimal(stats.exam_score_sum) / Decimal(settled_exam_count)
-                ).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+                ).quantize(Decimal("0.1"))
                 if settled_exam_count
                 else None
             )

@@ -408,11 +408,6 @@ def upgrade() -> None:
         "ix_renshe_refund_status_due", "renshe_refund_request", ["status", "due_at"]
     )
     op.create_index(
-        "ix_renshe_refund_status_updated",
-        "renshe_refund_request",
-        ["status", "updated_at"],
-    )
-    op.create_index(
         "uq_renshe_refund_active_order",
         "renshe_refund_request",
         ["order_id"],
@@ -574,23 +569,9 @@ def upgrade() -> None:
     op.create_index(
         "ix_renshe_audit_actor", "renshe_audit_log", ["actor_type", "actor_id"]
     )
-    op.create_index(
-        "ix_renshe_audit_application_created",
-        "renshe_audit_log",
-        ["application_id", "created_at"],
-    )
-    op.create_index(
-        "ix_renshe_audit_result_created",
-        "renshe_audit_log",
-        ["result", "created_at"],
-    )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_renshe_audit_result_created", table_name="renshe_audit_log")
-    op.drop_index(
-        "ix_renshe_audit_application_created", table_name="renshe_audit_log"
-    )
     op.drop_index("ix_renshe_audit_actor", table_name="renshe_audit_log")
     op.drop_index("ix_renshe_audit_object", table_name="renshe_audit_log")
     op.drop_index("ix_renshe_audit_log_action", table_name="renshe_audit_log")
@@ -607,7 +588,6 @@ def downgrade() -> None:
 
     op.drop_index("uq_renshe_refund_succeeded_order", table_name="renshe_refund_request")
     op.drop_index("uq_renshe_refund_active_order", table_name="renshe_refund_request")
-    op.drop_index("ix_renshe_refund_status_updated", table_name="renshe_refund_request")
     op.drop_index("ix_renshe_refund_status_due", table_name="renshe_refund_request")
     op.drop_index("ix_renshe_refund_request_order_id", table_name="renshe_refund_request")
     op.drop_table("renshe_refund_request")
@@ -686,16 +666,6 @@ def downgrade() -> None:
         "occupation_name",
     ):
         op.drop_column("plan", column)
-    # The pre-rsh001 schema has no separate registration_closed/finalized
-    # states.  Normalize those values before restoring its narrower check so
-    # a downgrade of a populated test/production-equivalent database does not
-    # fail while re-adding ``ck_plan_status``.
-    op.execute(
-        "UPDATE plan SET status = 'published' WHERE status = 'registration_closed'"
-    )
-    op.execute(
-        "UPDATE plan SET status = 'archived' WHERE status = 'finalized'"
-    )
     op.create_check_constraint(
         "ck_plan_status",
         "plan",

@@ -747,6 +747,11 @@ class QuizAdminAuditLog(Base, _QuizCreatedAtMixin):
     error_summary: Mapped[str | None] = mapped_column(Text)
 
 
+# Temporary source-compatibility alias for the pre-rewrite service modules. It
+# does not create or preserve the removed quiz_record table or API contract.
+QuizRecord = QuizPracticeAttempt
+
+
 __all__ = [
     "QuizAdminAuditLog",
     "QuizCategory",
@@ -761,6 +766,7 @@ __all__ = [
     "QuizPracticeSessionQuestion",
     "QuizQuestion",
     "QuizQuestionStats",
+    "QuizRecord",
     "QuizUserStats",
     "QuizWrongItem",
 ]

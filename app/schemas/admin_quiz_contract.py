@@ -254,8 +254,6 @@ class AdminQuizImportJobResponse(QuizContractModel):
     created_count: int = Field(ge=0, le=5000)
     error_count: int = Field(ge=0)
     heartbeat_at: datetime | None = None
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
     retry_count: int = Field(ge=0)
     error_message: str | None = None
     report_available: bool
@@ -267,19 +265,6 @@ class AdminQuizImportJobResponse(QuizContractModel):
 class AdminQuizSignedUrlResponse(QuizContractModel):
     url: str
     expires_at: datetime
-
-
-class AdminQuizImportReportError(QuizContractModel):
-    """One row-level validation error in an import report."""
-
-    row: int | None = Field(default=None, ge=1)
-    field: str | None = Field(default=None, min_length=1, max_length=128)
-    message: str = Field(min_length=1, max_length=1024)
-
-
-class AdminQuizImportReportResponse(QuizContractModel):
-    job_id: int = Field(ge=1)
-    errors: list[AdminQuizImportReportError]
 
 
 class AdminQuizAuditQuery(QuizContractModel):

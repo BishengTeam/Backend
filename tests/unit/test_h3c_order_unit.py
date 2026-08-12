@@ -38,7 +38,7 @@ class H3cOrderTests(unittest.TestCase):
         self.assertIn("inventory_id=inventory_change.inventory_id", create_order_source)
         self.assertIn("price=price_rows[0].price", create_order_source)
         self.assertIn('status="pending"', create_order_source)
-        self.assertIn('out_trade_no=generate_out_trade_no("H3C")', create_order_source)
+        self.assertIn("out_trade_no=f", create_order_source)
         self.assertIn("add_inventory_record(", create_order_source)
         self.assertIn("action=INVENTORY_LOCK_ACTION", create_order_source)
         self.assertNotIn('H3C_PRODUCT_TYPE = "H3C-RE"', source)

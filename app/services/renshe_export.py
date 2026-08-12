@@ -43,7 +43,6 @@ from app.port.exceptions import (
     NotFoundException,
     ThirdPartyException,
 )
-from app.utils.audit import redact_sensitive_text
 from app.schemas.renshe import (
     RensheExportJobResponse,
     RensheExportVolumeResponse,
@@ -57,15 +56,10 @@ REGISTRATION_TEMPLATE_NAME = "报名信息.xlsx"
 WORK_HISTORY_TEMPLATE_NAME = "工作经历.xlsx"
 EXPORT_FIXED_OVERHEAD_BYTES = 4 * 1024 * 1024
 EXPORT_ENTRY_OVERHEAD_BYTES = 1024
-# Workbook rows and ZIP directory entries are small compared with materials,
-# but reserving a bounded amount per candidate keeps the 10 GiB partition
-# decision conservative even when a batch is close to the ceiling.
-EXPORT_CANDIDATE_OVERHEAD_BYTES = 64 * 1024
-# The first release accepts only related-major current graduating students.
-# Qualification is intentionally a human-review decision; this value is the
-# frozen label written to the official workbook, not an automated eligibility
-# predicate.
-APPLICATION_CONDITION = "相关专业的在读应届学生"
+APPLICATION_CONDITION = (
+    "取得本专业或相关专业的技工院校或中等及以上职业院校、专科及以上普通高等学校"
+    "毕业证书（含在读应届毕业生）。"
+)
 EDUCATION_LABELS = {
     "secondary_vocational": "中专",
     "associate": "大专",
@@ -108,15 +102,12 @@ def partition_export_candidates(
     *,
     max_volume_bytes: int = MAX_EXPORT_VOLUME_BYTES,
     fixed_overhead_bytes: int = EXPORT_FIXED_OVERHEAD_BYTES,
-    per_candidate_overhead_bytes: int = 0,
 ) -> list[list[int]]:
     """First-fit candidates in stable order without splitting a candidate.
 
     ``candidates`` contains ``(application_id, estimated_material_bytes)``.
     Estimates deliberately use stored/uncompressed sizes because generated ZIPs
-    use ``ZIP_STORED``; this makes the 10 GiB ceiling predictable.  Callers can
-    reserve additional per-candidate workbook/ZIP overhead without changing
-    the no-split guarantee.
+    use ``ZIP_STORED``; this makes the 10 GiB ceiling predictable.
     """
 
     if max_volume_bytes <= fixed_overhead_bytes:
@@ -125,10 +116,8 @@ def partition_export_candidates(
     current: list[int] = []
     current_size = fixed_overhead_bytes
     for application_id, estimated_size in candidates:
-        candidate_size = (
-            max(0, estimated_size)
-            + (len(MATERIAL_SPECS) * EXPORT_ENTRY_OVERHEAD_BYTES)
-            + max(0, per_candidate_overhead_bytes)
+        candidate_size = max(0, estimated_size) + (
+            len(MATERIAL_SPECS) * EXPORT_ENTRY_OVERHEAD_BYTES
         )
         if candidate_size + fixed_overhead_bytes > max_volume_bytes:
             raise ValueError(f"报名 {application_id} 的材料无法放入单个分卷")
@@ -197,29 +186,6 @@ class RensheExportService:
             if plan.status not in {"published", "registration_closed", "finalized"}:
                 raise ConflictException("当前批次状态不能导出")
             await self._assert_export_window_open(db, plan)
-
-            # A double click or two browser tabs must not enqueue unbounded
-            # concurrent generations for the same batch.  Once the active job
-            # finishes, an explicit new request creates the next generation.
-            active_job = await db.scalar(
-                select(RensheExportJob)
-                .where(
-                    RensheExportJob.plan_id == plan_id,
-                    RensheExportJob.status.in_(("queued", "running")),
-                )
-                .order_by(RensheExportJob.generation_no.desc())
-                .with_for_update()
-                .limit(1)
-            )
-            if active_job is not None:
-                volumes = (
-                    await db.execute(
-                        select(RensheExportVolume)
-                        .where(RensheExportVolume.job_id == active_job.id)
-                        .order_by(RensheExportVolume.volume_no)
-                    )
-                ).scalars().all()
-                return self._job_response(active_job, volumes)
 
             candidates = await self._eligible_candidate_rows(db, plan_id)
             if not candidates:
@@ -371,34 +337,15 @@ class RensheExportService:
         download: bool,
         ip_address: str | None,
     ) -> RensheSignedUrlResponse:
+        async with get_db_ctx() as db:
+            material = await db.get(RensheMaterial, material_id)
+            if material is None or material.is_deleted:
+                raise NotFoundException("人社报名材料")
+            storage_key = material.storage_key
+            application_id = material.application_id
+            version_id = material.version_id
+            kind = material.kind
         action = "material.download" if download else "material.preview"
-        application_id = None
-        version_id = None
-        kind = "unknown"
-        try:
-            async with get_db_ctx() as db:
-                material = await db.get(RensheMaterial, material_id)
-                if material is None or material.is_deleted:
-                    raise NotFoundException("人社报名材料")
-                storage_key = material.storage_key
-                application_id = material.application_id
-                version_id = material.version_id
-                kind = material.kind
-        except Exception as exc:
-            await self._access_audit(
-                actor_type="admin",
-                actor_id=admin_id,
-                action=action,
-                object_type="material",
-                object_id=material_id,
-                application_id=application_id,
-                version_id=version_id,
-                material_id=material_id,
-                ip_address=ip_address,
-                result="failed",
-                summary={"kind": kind, "error_type": type(exc).__name__},
-            )
-            raise
         try:
             filename = f"{kind}{Path(storage_key).suffix.lower()}" if download else None
             url = await self.storage.signed_get_url(
@@ -481,46 +428,30 @@ class RensheExportService:
         download: bool,
         ip_address: str | None,
     ) -> RensheSignedUrlResponse:
+        async with get_db_ctx() as db:
+            realname = await db.scalar(
+                select(UserRealname).where(UserRealname.user_id == user_id)
+            )
+            student = await db.scalar(
+                select(UserStudent).where(UserStudent.user_id == user_id)
+            )
+            source_keys = {
+                "id_card_front": realname.id_card_front_oss if realname else None,
+                "id_card_back": realname.id_card_back_oss if realname else None,
+                "portrait": realname.avatar_oss if realname else None,
+                "student_card": student.student_card_oss if student else None,
+                "xuexin_registration": student.enrollment_pdf_oss if student else None,
+                "education_proof": student.degree_cert_oss if student else None,
+            }
+            if kind not in source_keys or not source_keys[kind]:
+                raise NotFoundException("用户认证材料")
+            storage_key = source_keys[kind]
+            assert_owned_source_key(user_id, storage_key)
         action = (
             "verification_material.download"
             if download
             else "verification_material.preview"
         )
-        try:
-            async with get_db_ctx() as db:
-                realname = await db.scalar(
-                    select(UserRealname).where(UserRealname.user_id == user_id)
-                )
-                student = await db.scalar(
-                    select(UserStudent).where(UserStudent.user_id == user_id)
-                )
-                source_keys = {
-                    "id_card_front": realname.id_card_front_oss if realname else None,
-                    "id_card_back": realname.id_card_back_oss if realname else None,
-                    "portrait": realname.avatar_oss if realname else None,
-                    "student_card": student.student_card_oss if student else None,
-                    "xuexin_registration": student.enrollment_pdf_oss if student else None,
-                    "education_proof": student.degree_cert_oss if student else None,
-                }
-                if kind not in source_keys or not source_keys[kind]:
-                    raise NotFoundException("用户认证材料")
-                storage_key = source_keys[kind]
-                assert_owned_source_key(user_id, storage_key)
-        except Exception as exc:
-            await self._access_audit(
-                actor_type=actor_type,
-                actor_id=actor_id,
-                action=action,
-                object_type="verification_material",
-                object_id=user_id,
-                application_id=None,
-                version_id=None,
-                material_id=None,
-                ip_address=ip_address,
-                result="failed",
-                summary={"kind": kind, "error_type": type(exc).__name__},
-            )
-            raise
         try:
             filename = f"{kind}{Path(storage_key).suffix.lower()}" if download else None
             url = await self.storage.signed_get_url(
@@ -565,48 +496,21 @@ class RensheExportService:
         admin_id: int,
         ip_address: str | None,
     ) -> RensheSignedUrlResponse:
-        job_id: int | None = None
-        volume_no: int | None = None
-        try:
-            async with get_db_ctx() as db:
-                row = (
-                    await db.execute(
-                        select(RensheExportVolume, RensheExportJob)
-                        .join(
-                            RensheExportJob,
-                            RensheExportJob.id == RensheExportVolume.job_id,
-                        )
-                        .where(RensheExportVolume.id == volume_id)
-                    )
-                ).one_or_none()
-                if row is None:
-                    raise NotFoundException("人社导出分卷")
-                volume, job = row
-                job_id = job.id
-                volume_no = volume.volume_no
-                if volume.status != "succeeded" or not volume.storage_key:
-                    raise ConflictException("导出分卷尚不可下载或已清理")
-                storage_key = volume.storage_key
-                filename = f"人社报名_批次{job.plan_id}_第{volume.volume_no}卷.zip"
-        except Exception as exc:
-            await self._access_audit(
-                actor_type="admin",
-                actor_id=admin_id,
-                action="export.download",
-                object_type="export_volume",
-                object_id=volume_id,
-                application_id=None,
-                version_id=None,
-                material_id=None,
-                ip_address=ip_address,
-                result="failed",
-                summary={
-                    "job_id": job_id,
-                    "volume_no": volume_no,
-                    "error_type": type(exc).__name__,
-                },
-            )
-            raise
+        async with get_db_ctx() as db:
+            row = (
+                await db.execute(
+                    select(RensheExportVolume, RensheExportJob)
+                    .join(RensheExportJob, RensheExportJob.id == RensheExportVolume.job_id)
+                    .where(RensheExportVolume.id == volume_id)
+                )
+            ).one_or_none()
+            if row is None:
+                raise NotFoundException("人社导出分卷")
+            volume, job = row
+            if volume.status != "succeeded" or not volume.storage_key:
+                raise ConflictException("导出分卷尚不可下载或已清理")
+            storage_key = volume.storage_key
+            filename = f"人社报名_批次{job.plan_id}_第{volume.volume_no}卷.zip"
         try:
             url = await self.storage.signed_get_url(
                 storage_key, download_filename=filename
@@ -623,7 +527,7 @@ class RensheExportService:
                 material_id=None,
                 ip_address=ip_address,
                 result="failed",
-                summary={"job_id": job_id, "error_type": type(exc).__name__},
+                summary={"job_id": job.id, "error_type": type(exc).__name__},
             )
             raise
         await self._access_audit(
@@ -637,7 +541,7 @@ class RensheExportService:
             material_id=None,
             ip_address=ip_address,
             result="succeeded",
-            summary={"job_id": job_id, "volume_no": volume_no},
+            summary={"job_id": job.id, "volume_no": volume.volume_no},
         )
         return RensheSignedUrlResponse(
             url=url, expires_in=settings.ALIYUN_OSS_SIGNED_URL_TTL_SECONDS
@@ -651,11 +555,7 @@ class RensheExportService:
         try:
             await self._run_claimed_job(job_id)
         except Exception as exc:
-            logger.error(
-                "human-resources export job failed: job_id=%s exception_type=%s",
-                job_id,
-                type(exc).__name__,
-            )
+            logger.exception("human-resources export job failed: job_id=%s", job_id)
             await self._mark_failed(job_id, exc)
         finally:
             heartbeat.cancel()
@@ -668,70 +568,23 @@ class RensheExportService:
     async def _claim_next_job(self) -> int | None:
         await self._recover_stale_jobs()
         async with get_db_ctx() as db:
-            # Do not let a queued job whose batch is already being cleaned
-            # block every later batch.  We inspect the queue in stable pages;
-            # each candidate is re-locked after its batch lock so concurrent
-            # workers/finalizers remain safe.  A bounded page avoids loading a
-            # pathological backlog into one worker transaction while the loop
-            # still guarantees progress when early batches are blocked.
-            page_size = 100
-            inspected_ids: set[int] = set()
-            while True:
-                queue_stmt = select(RensheExportJob).where(
-                    RensheExportJob.status == "queued"
-                )
-                if inspected_ids:
-                    queue_stmt = queue_stmt.where(
-                        ~RensheExportJob.id.in_(inspected_ids)
-                    )
-                result = await db.execute(
-                    queue_stmt
-                    .order_by(RensheExportJob.id)
-                    .limit(page_size)
-                )
-                candidates = result.scalars().all()
-                if not candidates:
-                    return None
-                for candidate in candidates:
-                    inspected_ids.add(candidate.id)
-                    # Serialize the worker claim with batch
-                    # finalization/cleanup.  The cleanup worker takes the
-                    # same plan lock before marking a run running, so a
-                    # queued export cannot slip in after cleanup has claimed
-                    # the batch.
-                    plan = await db.scalar(
-                        select(Plan)
-                        .where(Plan.id == candidate.plan_id)
-                        .with_for_update()
-                    )
-                    if plan is None:
-                        continue
-                    cleanup_status = await db.scalar(
-                        select(RensheCleanupRun.status)
-                        .where(RensheCleanupRun.plan_id == plan.id)
-                        .order_by(RensheCleanupRun.id.desc())
-                        .limit(1)
-                    )
-                    if cleanup_status in {"running", "succeeded"}:
-                        continue
-                    job = await db.scalar(
-                        select(RensheExportJob)
-                        .where(
-                            RensheExportJob.id == candidate.id,
-                            RensheExportJob.status == "queued",
-                        )
-                        .with_for_update(skip_locked=True)
-                    )
-                    if job is None:
-                        continue
-                    now = self._now()
-                    job.status = "running"
-                    job.started_at = now
-                    job.heartbeat_at = now
-                    job.finished_at = None
-                    job.last_error = None
-                    await db.commit()
-                    return job.id
+            job = await db.scalar(
+                select(RensheExportJob)
+                .where(RensheExportJob.status == "queued")
+                .order_by(RensheExportJob.id)
+                .with_for_update(skip_locked=True)
+                .limit(1)
+            )
+            if job is None:
+                return None
+            now = self._now()
+            job.status = "running"
+            job.started_at = now
+            job.heartbeat_at = now
+            job.finished_at = None
+            job.last_error = None
+            await db.commit()
+            return job.id
 
     async def _run_claimed_job(self, job_id: int) -> None:
         template_registration, template_work = self._template_paths()
@@ -796,7 +649,6 @@ class RensheExportService:
         partitions = partition_export_candidates(
             [(candidate.application_id, candidate.estimated_size_bytes) for candidate in candidates],
             fixed_overhead_bytes=fixed_overhead,
-            per_candidate_overhead_bytes=EXPORT_CANDIDATE_OVERHEAD_BYTES,
         )
         by_application = {candidate.application_id: candidate for candidate in candidates}
         for volume_no, application_ids in enumerate(partitions, start=1):
@@ -1073,9 +925,7 @@ class RensheExportService:
             await db.commit()
 
     async def _mark_failed(self, job_id: int, exc: Exception) -> None:
-        safe_error = redact_sensitive_text(
-            f"{type(exc).__name__}: {str(exc)[:1000]}"
-        ) or type(exc).__name__
+        safe_error = f"{type(exc).__name__}: {str(exc)[:1000]}"
         async with get_db_ctx() as db:
             job = await db.scalar(
                 select(RensheExportJob)
@@ -1123,43 +973,16 @@ class RensheExportService:
             seconds=max(60, settings.RENSHE_WORKER_POLL_SECONDS * 12)
         )
         async with get_db_ctx() as db:
-            stale_job_ids = select(RensheExportJob.id).where(
-                RensheExportJob.status == "running",
-                (
-                    RensheExportJob.heartbeat_at.is_(None)
-                    | (RensheExportJob.heartbeat_at < cutoff)
-                ),
-            )
-            stale_error = "WorkerHeartbeatLost: 导出工作进程心跳中断"
-            await db.execute(
-                update(RensheExportVolume)
-                .where(
-                    RensheExportVolume.job_id.in_(stale_job_ids),
-                    RensheExportVolume.status == "running",
-                )
-                .values(status="failed", last_error=stale_error)
-            )
-            await db.execute(
-                update(RensheExportItem)
-                .where(
-                    RensheExportItem.job_id.in_(stale_job_ids),
-                    RensheExportItem.status.in_(("queued", "running")),
-                )
-                .values(status="failed", last_error=stale_error)
-            )
             await db.execute(
                 update(RensheExportJob)
                 .where(
                     RensheExportJob.status == "running",
-                    (
-                        RensheExportJob.heartbeat_at.is_(None)
-                        | (RensheExportJob.heartbeat_at < cutoff)
-                    ),
+                    RensheExportJob.heartbeat_at < cutoff,
                 )
                 .values(
                     status="failed",
                     finished_at=self._now(),
-                    last_error=stale_error,
+                    last_error="WorkerHeartbeatLost: 导出工作进程心跳中断",
                 )
             )
             await db.commit()
@@ -1292,36 +1115,23 @@ class RensheExportService:
         result: str,
         summary: dict,
     ) -> None:
-        # A signed URL or a material upload must not be turned into a 500 just
-        # because the append-only audit table is temporarily unavailable.  The
-        # access event is still attempted and the failure is observable via a
-        # PII-safe operational log; the database/readiness probe remains the
-        # source of truth for a persistent outage.
-        try:
-            async with get_db_ctx() as db:
-                db.add(
-                    RensheAuditLog(
-                        actor_type=actor_type,
-                        actor_id=actor_id,
-                        action=action,
-                        object_type=object_type,
-                        object_id=object_id,
-                        application_id=application_id,
-                        version_id=version_id,
-                        material_id=material_id,
-                        ip_address=ip_address,
-                        result=result,
-                        summary=summary,
-                    )
+        async with get_db_ctx() as db:
+            db.add(
+                RensheAuditLog(
+                    actor_type=actor_type,
+                    actor_id=actor_id,
+                    action=action,
+                    object_type=object_type,
+                    object_id=object_id,
+                    application_id=application_id,
+                    version_id=version_id,
+                    material_id=material_id,
+                    ip_address=ip_address,
+                    result=result,
+                    summary=summary,
                 )
-                await db.commit()
-        except Exception:
-            logger.warning(
-                "renshe access audit write failed action=%s object_type=%s object_id=%s",
-                action,
-                object_type,
-                object_id,
             )
+            await db.commit()
 
 
 async def renshe_export_worker_loop() -> None:
@@ -1329,11 +1139,8 @@ async def renshe_export_worker_loop() -> None:
     while True:
         try:
             processed = await service.process_next_job()
-        except Exception as exc:
-            logger.error(
-                "human-resources export worker iteration failed: exception_type=%s",
-                type(exc).__name__,
-            )
+        except Exception:
+            logger.exception("human-resources export worker iteration failed")
             processed = False
         if not processed:
             await asyncio.sleep(settings.RENSHE_WORKER_POLL_SECONDS)

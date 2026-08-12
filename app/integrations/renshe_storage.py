@@ -266,8 +266,6 @@ class RensheObjectStorage:
             if path.is_file():
                 await asyncio.to_thread(path.unlink)
             return
-        if self.storage_type != "aliyun_oss":
-            raise ThirdPartyException("未知的人社材料存储类型")
 
         def _remove() -> None:
             try:

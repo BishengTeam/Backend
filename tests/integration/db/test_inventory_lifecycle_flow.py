@@ -20,17 +20,9 @@ def _require_test_db_url() -> str:
     return database_url
 
 
-class _SuccessfulWechatPay:
-    async def refund(self, **kwargs):
-        return {
-            "refund_id": f"wx-{kwargs['out_refund_no']}",
-            "out_refund_no": kwargs["out_refund_no"],
-            "status": "SUCCESS",
-            "amount": {
-                "total": kwargs["amount_total"],
-                "refund": kwargs["refund_amount"],
-            },
-        }
+class _UnconfiguredWechatPay:
+    def _is_configured(self) -> bool:
+        return False
 
 
 @pytest.fixture
@@ -53,7 +45,7 @@ async def lifecycle_context(monkeypatch):
             yield session
 
     monkeypatch.setattr(admin_order_module, "get_db_ctx", test_db_ctx)
-    monkeypatch.setattr(admin_order_module, "WechatPayClient", _SuccessfulWechatPay)
+    monkeypatch.setattr(admin_order_module, "WechatPayClient", _UnconfiguredWechatPay)
     monkeypatch.setattr(payment_module, "get_db_ctx", test_db_ctx)
     monkeypatch.setattr(plan_module, "get_db_ctx", test_db_ctx)
 
@@ -234,9 +226,8 @@ async def test_payment_refund_and_expiration_restore_inventory(lifecycle_context
     from sqlalchemy.exc import IntegrityError
 
     from app.domain.order.src.index import Inventory, InventoryRecord, Order
-    from app.integrations.wechat_pay import WechatPayTransaction
     from app.port.exceptions import BusinessException
-    from app.schemas.payment import PaymentPrepayRequest
+    from app.schemas.payment import PaymentCallbackRequest, PaymentPrepayRequest
 
     data = await _seed_lifecycle_orders(lifecycle_context)
 
@@ -257,23 +248,15 @@ async def test_payment_refund_and_expiration_restore_inventory(lifecycle_context
             await db.commit()
         await db.rollback()
 
-    callback = WechatPayTransaction(
-        appid="integration-test",
-        mchid="integration-test",
+    callback = PaymentCallbackRequest(
         out_trade_no=data.paid_out_trade_no,
         transaction_id=f"{lifecycle_context.prefix}_transaction",
         trade_state="SUCCESS",
-        amount_total=12800,
-        currency="CNY",
-        attach="",
-        success_time=datetime.now(timezone.utc),
+        total_fee=12800,
+        sign="valid",
     )
-    first_payment = await lifecycle_context.payment_service._apply_transaction(
-        callback, source="integration_test", verify_provider_fields=False
-    )
-    duplicate_payment = await lifecycle_context.payment_service._apply_transaction(
-        callback, source="integration_test", verify_provider_fields=False
-    )
+    first_payment = await lifecycle_context.payment_service.handle_callback(callback)
+    duplicate_payment = await lifecycle_context.payment_service.handle_callback(callback)
     assert first_payment.processed is True
     assert duplicate_payment.processed is False
 

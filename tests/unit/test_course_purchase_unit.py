@@ -112,5 +112,5 @@ def test_admin_course_writes_no_longer_accept_public_video_url():
 def test_payment_closed_callback_invokes_course_fulfillment():
     source = (REPO_ROOT / "app/services/payment.py").read_text(encoding="utf-8")
 
-    assert 'transaction.trade_state in {"CLOSED", "REVOKED"}' in source
-    assert "fulfillment_closed = await self.fulfillment.on_closed(db, order)" in source
+    assert 'data.trade_state in {"CLOSED", "REVOKED"}' in source
+    assert "await self.fulfillment.on_closed(db, order)" in source

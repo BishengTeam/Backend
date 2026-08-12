@@ -10,7 +10,7 @@ Python 3.11+ / FastAPI + Uvicorn / SQLAlchemy 2.0 async / PostgreSQL (asyncpg) /
 
 - **用户端** — `GET/POST/PUT/DELETE /api/*`（认证、用户、课程、订单、支付、积分、答题、聊天、活动等 22 个模块）
 - **管理端** — `/admin/*`
-- **健康检查** — `GET /health`（DB/Redis/OSS/微信依赖诊断）、`GET /ready`（未就绪返回 503，不切流）
+- **健康检查** — `GET /health`（DB + Redis 探活）、`GET /ready`（就绪探针）
 
 ## 上游依赖
 

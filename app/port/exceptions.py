@@ -30,13 +30,6 @@ class ConflictException(AppException):
         super().__init__(code=40201, message=message, http_status_code=409)
 
 
-class RateLimitException(AppException):
-    """Domain-facing representation of a throttled request."""
-
-    def __init__(self, message: str = "请求过于频繁，请稍后再试"):
-        super().__init__(code=40202, message=message, http_status_code=429)
-
-
 class ThirdPartyException(AppException):
     def __init__(self, message: str):
         super().__init__(code=40400, message=message, http_status_code=502)

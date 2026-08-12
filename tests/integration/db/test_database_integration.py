@@ -4,7 +4,7 @@ Requires TEST_DATABASE_URL and TEST_DATABASE_URL_SYNC environment variables.
 """
 
 import os
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import AsyncGenerator
 
 import pytest
@@ -16,12 +16,8 @@ pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
 
 ALL_TABLES = frozenset({
     "user", "user_identity", "order", "course", "course_enrollment",
-    "certification", "quiz_category", "quiz_question", "quiz_checkin",
-    "quiz_practice_session", "quiz_practice_session_question",
-    "quiz_practice_attempt", "quiz_wrong_item", "quiz_collection",
-    "quiz_exam", "quiz_exam_question", "quiz_exam_answer",
-    "quiz_user_stats", "quiz_question_stats", "quiz_import_job",
-    "quiz_admin_audit_log", "quick_question", "conversation", "price_config",
+    "certification", "quiz_category", "quiz_question", "quiz_record",
+    "quiz_checkin", "quick_question", "conversation", "price_config",
     "user_points", "points_history", "coupon", "user_coupon",
     "deleted_openid", "agreement", "competition_reg", "ticket",
 })
@@ -343,201 +339,51 @@ class TestCertificationCRUD:
 
 class TestQuizCRUD:
     async def test_full_flow(self, db_session):
-        from app.domain.user.src.index import AdminUser
         from app.domain.user.src.index import User
-        from app.domain.community.src.index import (
-            QuizCategory,
-            QuizPracticeAttempt,
-            QuizPracticeSession,
-            QuizPracticeSessionQuestion,
-            QuizQuestion,
-        )
-
+        from app.domain.community.src.index import QuizCategory, QuizQuestion, QuizRecord
         user = User(openid="quiz_flow_user")
-        admin = AdminUser(
-            username="quiz_flow_admin",
-            password_hash="integration-test-only",
-            role="super_admin",
-        )
-        db_session.add_all([user, admin])
+        db_session.add(user)
         await db_session.flush()
-        cat = QuizCategory(
-            name="网络基础",
-            normalized_name="网络基础",
-            depth=1,
-            created_by=admin.id,
-            updated_by=admin.id,
-        )
+        cat = QuizCategory(name="网络基础")
         db_session.add(cat)
         await db_session.flush()
         question = QuizQuestion(
             category_id=cat.id, question_type="single_choice",
             question_text="HTTP的默认端口?",
-            normalized_question_text="http的默认端口?",
-            question_text_hash="a" * 64,
-            options={"A": "80", "B": "443", "C": "8080"},
+            options={"A": "80", "B": "443"},
             correct_answer="A",
-            created_by=admin.id,
-            updated_by=admin.id,
         )
         db_session.add(question)
         await db_session.flush()
-        session = QuizPracticeSession(
-            user_id=user.id,
-            mode="normal",
-            category_id=cat.id,
-            requested_count=10,
-            actual_count=1,
-            started_at=datetime.now(timezone.utc),
+        record = QuizRecord(
+            user_id=user.id, question_id=question.id,
+            user_answer="A", is_correct=True,
         )
-        db_session.add(session)
+        db_session.add(record)
         await db_session.flush()
-        snapshot = QuizPracticeSessionQuestion(
-            session_id=session.id,
-            question_id=question.id,
-            position=1,
-            category_id=cat.id,
-            category_path=[{"id": cat.id, "name": cat.name}],
-            question_type=question.question_type,
-            question_text=question.question_text,
-            options=question.options,
-            correct_answer=question.correct_answer,
-            explanation="端口解析",
-            question_lock_version=question.lock_version,
-        )
-        db_session.add(snapshot)
-        await db_session.flush()
-        attempt = QuizPracticeAttempt(
-            user_id=user.id,
-            session_id=session.id,
-            session_question_id=snapshot.id,
-            idempotency_key="quiz-flow-attempt-1",
-            attempt_no=1,
-            is_first_attempt=True,
-            user_answer="A",
-            is_correct=True,
-            submitted_at=datetime.now(timezone.utc),
-        )
-        db_session.add(attempt)
-        await db_session.flush()
-        assert attempt.is_first_attempt is True
-        assert attempt.is_correct is True
+        assert record.is_collected is False
+        assert record.is_wrong is False
 
     async def test_checkin(self, db_session):
-        from app.domain.user.src.index import AdminUser
         from app.domain.user.src.index import User
-        from app.domain.community.src.index import (
-            QuizCategory,
-            QuizCheckin,
-            QuizPracticeAttempt,
-            QuizPracticeSession,
-            QuizPracticeSessionQuestion,
-            QuizQuestion,
-        )
+        from app.domain.community.src.index import QuizCheckin
         user = User(openid="checkin_user")
-        admin = AdminUser(
-            username="checkin_admin",
-            password_hash="integration-test-only",
-            role="super_admin",
-        )
-        db_session.add_all([user, admin])
-        await db_session.flush()
-        category = QuizCategory(
-            name="打卡分类",
-            normalized_name="打卡分类",
-            depth=1,
-            created_by=admin.id,
-            updated_by=admin.id,
-        )
-        db_session.add(category)
-        await db_session.flush()
-        question = QuizQuestion(
-            category_id=category.id,
-            question_type="single_choice",
-            question_text="打卡题",
-            normalized_question_text="打卡题",
-            question_text_hash="b" * 64,
-            options={"A": "对", "B": "错", "C": "不确定"},
-            correct_answer="A",
-            created_by=admin.id,
-            updated_by=admin.id,
-        )
-        db_session.add(question)
-        await db_session.flush()
-        session = QuizPracticeSession(
-            user_id=user.id,
-            mode="normal",
-            category_id=category.id,
-            requested_count=10,
-            actual_count=1,
-            started_at=datetime.now(timezone.utc),
-        )
-        db_session.add(session)
-        await db_session.flush()
-        snapshot = QuizPracticeSessionQuestion(
-            session_id=session.id,
-            question_id=question.id,
-            position=1,
-            category_id=category.id,
-            category_path=[{"id": category.id, "name": category.name}],
-            question_type="single_choice",
-            question_text=question.question_text,
-            options=question.options,
-            correct_answer="A",
-            explanation="打卡解析",
-            question_lock_version=question.lock_version,
-        )
-        db_session.add(snapshot)
-        await db_session.flush()
-        attempt = QuizPracticeAttempt(
-            user_id=user.id,
-            session_id=session.id,
-            session_question_id=snapshot.id,
-            idempotency_key="checkin-attempt-1",
-            attempt_no=1,
-            is_first_attempt=True,
-            user_answer="A",
-            is_correct=True,
-            submitted_at=datetime.now(timezone.utc),
-        )
-        db_session.add(attempt)
+        db_session.add(user)
         await db_session.flush()
         checkin = QuizCheckin(
             user_id=user.id, checkin_date=date.today(),
             questions_completed=5, consecutive_days=3,
-            first_attempt_id=attempt.id,
         )
         db_session.add(checkin)
         await db_session.flush()
         assert checkin.id is not None
 
     async def test_parent_child_category_fk(self, db_session):
-        from app.domain.user.src.index import AdminUser
         from app.domain.community.src.index import QuizCategory
-        admin = AdminUser(
-            username="category_fk_admin",
-            password_hash="integration-test-only",
-            role="super_admin",
-        )
-        db_session.add(admin)
-        await db_session.flush()
-        parent = QuizCategory(
-            name="父分类",
-            normalized_name="父分类",
-            depth=1,
-            created_by=admin.id,
-            updated_by=admin.id,
-        )
+        parent = QuizCategory(name="父分类")
         db_session.add(parent)
         await db_session.flush()
-        child = QuizCategory(
-            name="子分类",
-            normalized_name="子分类",
-            parent_id=parent.id,
-            depth=2,
-            created_by=admin.id,
-            updated_by=admin.id,
-        )
+        child = QuizCategory(name="子分类", parent_id=parent.id)
         db_session.add(child)
         await db_session.flush()
         assert child.parent_id == parent.id

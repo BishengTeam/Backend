@@ -1,9 +1,8 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from typing import Any
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import text
@@ -21,26 +20,7 @@ from app.schemas.common import success
 from app.services.cleanup import cleanup_loop
 from app.services.renshe_export import renshe_export_worker_loop
 from app.services.renshe_cleanup import renshe_cleanup_worker_loop
-from app.services.payment_reconciliation import (
-    payment_reconciliation_metrics,
-    payment_reconciliation_worker_loop,
-)
-from app.services.renshe_refund_reconciliation import (
-    renshe_refund_reconciliation_metrics,
-    renshe_refund_reconciliation_worker_loop,
-)
-from app.services.quiz_tasks import (
-    ensure_quiz_runtime_ready,
-    quiz_task_registry,
-    quiz_worker_loop,
-)
-from app.services.dependency_health import (
-    enrich_oss_probe,
-    inspect_oss_configuration,
-    inspect_wechat_login_configuration,
-    inspect_wechat_payment_configuration,
-    is_ready,
-)
+from app.services.quiz_tasks import ensure_quiz_runtime_ready, quiz_worker_loop
 
 logger = logging.getLogger(__name__)
 
@@ -55,16 +35,6 @@ async def lifespan(app: FastAPI):
     quiz_task = (
         asyncio.create_task(quiz_worker_loop()) if settings.QUIZ_TASKS_ENABLED else None
     )
-    payment_reconciliation_task = (
-        asyncio.create_task(payment_reconciliation_worker_loop())
-        if settings.WECHAT_PAY_ENABLED
-        else None
-    )
-    refund_reconciliation_task = (
-        asyncio.create_task(renshe_refund_reconciliation_worker_loop())
-        if settings.WECHAT_PAY_ENABLED
-        else None
-    )
     logger.info("Application startup complete")
     yield
     logger.info("Shutting down background tasks...")
@@ -73,10 +43,6 @@ async def lifespan(app: FastAPI):
     renshe_cleanup_task.cancel()
     if quiz_task is not None:
         quiz_task.cancel()
-    if payment_reconciliation_task is not None:
-        payment_reconciliation_task.cancel()
-    if refund_reconciliation_task is not None:
-        refund_reconciliation_task.cancel()
     try:
         await cleanup_task
     except asyncio.CancelledError:
@@ -94,16 +60,6 @@ async def lifespan(app: FastAPI):
             await quiz_task
         except asyncio.CancelledError:
             pass
-    if payment_reconciliation_task is not None:
-        try:
-            await payment_reconciliation_task
-        except asyncio.CancelledError:
-            pass
-    if refund_reconciliation_task is not None:
-        try:
-            await refund_reconciliation_task
-        except asyncio.CancelledError:
-            pass
     logger.info("Closing database connections...")
     await engine.dispose()
     logger.info("Closing Redis connections...")
@@ -119,7 +75,7 @@ app = FastAPI(
 )
 
 
-RENSHE_CONTRACT_VERSION = "2026-08-10"
+RENSHE_CONTRACT_VERSION = "2026-08-07"
 RENSHE_ERROR_CODES = {
     "40001": {"status": 422, "description": "参数或材料校验失败"},
     "40100": {"status": 401, "description": "未登录或 Token 无效"},
@@ -129,34 +85,6 @@ RENSHE_ERROR_CODES = {
     "40300": {"status": 404, "description": "资源不存在"},
     "40400": {"status": 502, "description": "第三方服务错误"},
     "50000": {"status": 500, "description": "服务内部错误"},
-}
-RENSHE_ADDITIONAL_CONTRACT_PATHS = {
-    "/admin/certifications/{code}/plans/{plan_id}/impact",
-    "/api/payment/prepay",
-    "/api/payment/orders/{order_id}/sync",
-    "/api/payment/callback",
-    "/api/payment/refund-callback",
-}
-RENSHE_PUBLIC_CALLBACK_PATHS = {
-    "/api/payment/callback",
-    "/api/payment/refund-callback",
-}
-
-QUIZ_ERROR_CODES = {
-    "40001": {"status": 422, "description": "参数校验失败"},
-    "40100": {"status": 401, "description": "请先登录"},
-    "40101": {"status": 403, "description": "无权限"},
-    "40200": {"status": 422, "description": "业务规则不允许"},
-    "40201": {"status": 409, "description": "版本或状态冲突"},
-    "40202": {"status": 429, "description": "请求过于频繁"},
-    "40300": {"status": 404, "description": "资源不存在"},
-    "50000": {"status": 500, "description": "服务内部错误"},
-}
-
-QUIZ_RATE_LIMITS = {
-    ("get", "/api/quiz/questions"): 60,
-    ("post", "/api/quiz/practice-sessions/{session_id}/attempts"): 120,
-    ("put", "/api/quiz/exams/{exam_id}/answers/{exam_question_id}"): 120,
 }
 
 
@@ -180,23 +108,12 @@ def _add_renshe_contract_metadata(schema: dict) -> None:
         "APIErrorResponse"
     ] = error_schema
     for path, path_item in schema.get("paths", {}).items():
-        if (
-            "/api/renshe" not in path
-            and "/admin/renshe" not in path
-            and path not in RENSHE_ADDITIONAL_CONTRACT_PATHS
-        ):
+        if "/api/renshe" not in path and "/admin/renshe" not in path:
             continue
         for method, operation in path_item.items():
             if method not in {"get", "post", "put", "patch", "delete"}:
                 continue
             operation["x-contract-version"] = RENSHE_CONTRACT_VERSION
-            if path in RENSHE_PUBLIC_CALLBACK_PATHS:
-                operation["x-wechat-pay-api-version"] = "v3"
-                operation["x-notification-ack"] = {
-                    "success": {"code": "SUCCESS", "message": "成功"},
-                    "failure": {"code": "FAIL", "message": "失败"},
-                }
-                continue
             operation["x-error-codes"] = sorted(RENSHE_ERROR_CODES)
             responses = operation.setdefault("responses", {})
             for code, metadata in RENSHE_ERROR_CODES.items():
@@ -205,49 +122,6 @@ def _add_renshe_contract_metadata(schema: dict) -> None:
                     status,
                     {
                         "description": f"{metadata['description']}（业务码 {code}）",
-                        "content": {
-                            "application/json": {
-                                "schema": {"$ref": "#/components/schemas/APIErrorResponse"},
-                                "examples": {
-                                    "error": {
-                                        "value": {
-                                            "code": int(code),
-                                            "message": metadata["description"],
-                                            "data": None,
-                                        }
-                                    }
-                                },
-                            }
-                        },
-                    },
-                )
-
-
-def _add_quiz_contract_metadata(schema: dict) -> None:
-    """Publish the frozen quiz error/rate-limit contract in OpenAPI."""
-
-    for path, path_item in schema.get("paths", {}).items():
-        if not (path.startswith("/api/quiz") or path.startswith("/admin/quiz")):
-            continue
-        for method, operation in path_item.items():
-            if method not in {"get", "post", "put", "patch", "delete"}:
-                continue
-            operation["x-quiz-contract-version"] = "2026-08-08"
-            operation["x-error-codes"] = sorted(QUIZ_ERROR_CODES)
-            limit = QUIZ_RATE_LIMITS.get((method, path))
-            if limit is not None:
-                operation["x-rate-limit-per-minute"] = limit
-            responses = operation.setdefault("responses", {})
-            for code, metadata in QUIZ_ERROR_CODES.items():
-                status = str(metadata["status"])
-                # Multiple business codes intentionally share HTTP 422; the
-                # machine-readable x-error-codes list preserves the distinction.
-                responses.setdefault(
-                    status,
-                    {
-                        "description": (
-                            f"{metadata['description']}（业务码 {code}）"
-                        ),
                         "content": {
                             "application/json": {
                                 "schema": {"$ref": "#/components/schemas/APIErrorResponse"},
@@ -292,7 +166,6 @@ def custom_openapi():
                 # 添加到全局 security 方案
                 operation.setdefault("security", []).append({"BearerAuth": []})
     _add_renshe_contract_metadata(schema)
-    _add_quiz_contract_metadata(schema)
     app.openapi_schema = schema
     return schema
 
@@ -307,102 +180,27 @@ app.include_router(admin_router)
 app.include_router(agreement_router)
 
 
-@app.get(
-    "/health",
-    summary="健康检查",
-    description=(
-        "进程存活检查并诊断数据库、Redis、私有 OSS、微信登录和微信支付配置；"
-        "不返回任何密钥。由 liveness probe 或负载均衡器使用。"
-    ),
-)
+@app.get("/health", summary="健康检查", description="服务健康检查，验证数据库和 Redis 连接状态。由 K8s liveness probe 或负载均衡器掉线检测使用。")
 async def health():
-    checks, details = await _dependency_checks(probe_external=False)
-    details["quiz_tasks"] = quiz_task_registry.snapshot()
-    details["payment_reconciliation"] = payment_reconciliation_metrics.snapshot()
-    details["refund_reconciliation"] = (
-        renshe_refund_reconciliation_metrics.snapshot()
-    )
-    all_ok = checks["database"] == "ok" and checks["redis"] == "ok"
+    db_ok = await _check_db()
+    redis_ok = await _check_redis()
+    all_ok = db_ok and redis_ok
     return {
         "code": 0 if all_ok else 50000,
         "message": "ok" if all_ok else "degraded",
         "data": {
             "status": "ok" if all_ok else "degraded",
-            "checks": checks,
-            "details": details,
+            "checks": {
+                "database": "ok" if db_ok else "unavailable",
+                "redis": "ok" if redis_ok else "unavailable",
+            },
         },
     }
 
 
-@app.get(
-    "/ready",
-    summary="就绪检查",
-    description=(
-        "就绪探针。检查当前环境要求的数据库、Redis、OSS、微信登录和微信支付"
-        "依赖；未就绪时返回 503，部署脚本不得切入流量。"
-    ),
-)
-async def ready(response: Response):
-    checks, details = await _dependency_checks(probe_external=True)
-    details["quiz_tasks"] = quiz_task_registry.snapshot()
-    details["payment_reconciliation"] = payment_reconciliation_metrics.snapshot()
-    details["refund_reconciliation"] = (
-        renshe_refund_reconciliation_metrics.snapshot()
-    )
-    ready_ok = is_ready(checks)
-    response.status_code = 200 if ready_ok else 503
-    return {
-        "code": 0 if ready_ok else 50000,
-        "status": "ready" if ready_ok else "not_ready",
-        "checks": checks,
-        "details": details,
-    }
-
-
-async def _dependency_checks(
-    *, probe_external: bool
-) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
-    """Collect dependency states while preserving the legacy check shape.
-
-    ``checks`` intentionally keeps the old string values (database/Redis
-    clients and monitoring scripts consume them).  ``details`` contains safe
-    diagnostic metadata for the new GOV-08/BE-18 contract.
-    """
-
-    async def _bounded(check) -> bool:
-        try:
-            return await asyncio.wait_for(
-                check(), timeout=settings.HEALTH_CHECK_TIMEOUT_SECONDS
-            )
-        except Exception:
-            return False
-
-    db_ok, redis_ok = await asyncio.gather(
-        _bounded(_check_db), _bounded(_check_redis)
-    )
-    oss_details = inspect_oss_configuration()
-    # Staging deployments can use a real private bucket too.  Probe every
-    # network-backed OSS configuration; local development storage is handled
-    # as an intentional no-network adapter by ``enrich_oss_probe``.
-    if probe_external and oss_details.get("mode") == "aliyun_oss":
-        oss_details = await enrich_oss_probe(oss_details)
-    login_details = inspect_wechat_login_configuration()
-    payment_details = inspect_wechat_payment_configuration()
-    details: dict[str, dict[str, Any]] = {
-        "database": {"status": "ok" if db_ok else "unavailable"},
-        "redis": {"status": "ok" if redis_ok else "unavailable"},
-        "oss": oss_details,
-        "wechat_login": login_details,
-        "wechat_payment": payment_details,
-    }
-    checks = {
-        "database": details["database"]["status"],
-        "redis": details["redis"]["status"],
-        "oss": oss_details["status"],
-        "wechat_login": login_details["status"],
-        "wechat_payment": payment_details["status"],
-    }
-    return checks, details
+@app.get("/ready", summary="就绪检查", description="服务就绪探针，检查服务是否可以接收流量。由 K8s readiness probe 使用，返回就绪状态。")
+async def ready():
+    return {"status": "ready"}
 
 
 async def _check_db() -> bool:

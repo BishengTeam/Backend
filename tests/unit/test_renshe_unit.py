@@ -27,12 +27,8 @@ from app.domain.renshe.src.index import (
 from app.main import app
 from app.integrations.renshe_storage import RensheObjectStorage
 from app.port.exceptions import BusinessException, ConflictException
-from app.schemas.admin import AdminIdentityReview, AdminOrderReview, AdminProfileUpdate
-from app.schemas.renshe import (
-    RensheRefundCreate,
-    RensheReviewCorrectionCreate,
-    RensheReviewCreate,
-)
+from app.schemas.admin import AdminOrderReview, AdminProfileUpdate
+from app.schemas.renshe import RensheRefundCreate, RensheReviewCreate
 from app.schemas.review import ReviewCreate
 from app.schemas.user import RealnameSubmit, StudentSubmit
 from app.services.renshe_export import (
@@ -48,8 +44,7 @@ from app.services.renshe_refund import RensheRefundService
 from app.services.renshe_review import RensheReviewService
 from app.services.review import ReviewService
 from app.services.admin_order import AdminOrderService
-from app.services.admin_user import AdminUserService
-from app.services.user import UserService, _assert_renshe_profile_unlocked
+from app.services.user import _assert_renshe_profile_unlocked
 from app.domain.plan.src.index import Plan
 
 
@@ -300,15 +295,6 @@ def test_rejection_requires_reason_and_changes():
     assert value.reason == "材料不清晰"
 
 
-def test_review_correction_reason_is_trimmed_and_cannot_be_blank():
-    value = RensheReviewCorrectionCreate(
-        to_decision="approved", reason="  更正审核结论  "
-    )
-    assert value.reason == "更正审核结论"
-    with pytest.raises(ValidationError, match="更正审核结果必须填写原因"):
-        RensheReviewCorrectionCreate(to_decision="approved", reason="   ")
-
-
 def test_three_business_days_uses_asia_shanghai_calendar():
     # 2026-08-07 16:00 UTC is Saturday 00:00 in China. Three China-local
     # weekdays later is Wednesday 00:00, or Tuesday 16:00 UTC.
@@ -351,14 +337,10 @@ def test_super_admin_guards_refund_decision_review_correction_and_batch_finalize
         assert "require_super_admin" in dependency_names
 
 
-def test_v3_payment_paths_serve_renshe_orders_without_legacy_branch():
-    service_source = (ROOT / "app/services/payment.py").read_text(encoding="utf-8")
-    client_source = (ROOT / "app/integrations/wechat_pay.py").read_text(encoding="utf-8")
-    assert "create_jsapi_prepay" in service_source
-    assert "parse_payment_notification" in service_source
-    assert "人社报名必须使用微信支付 API V3" not in service_source
-    assert "拒绝使用微信支付 V2 回调处理人社订单" not in service_source
-    assert "/v3/pay/transactions/jsapi" in client_source
+def test_v2_payment_paths_explicitly_block_renshe_orders():
+    source = (ROOT / "app/services/payment.py").read_text(encoding="utf-8")
+    assert "人社报名必须使用微信支付 API V3" in source
+    assert "拒绝使用微信支付 V2 回调处理人社订单" in source
 
 
 @pytest.mark.asyncio
@@ -562,7 +544,6 @@ def test_export_row_uses_frozen_student_mapping_and_leaves_work_fields_blank():
     assert row[6] == "大学本科"
     assert row[12] == "应届毕业生"
     assert row[14] == "四级"
-    assert row[20] == "相关专业的在读应届学生"
     assert row[11] is None
     assert row[18] is None
     assert row[21:23] == ["学历型", "新考"]
@@ -757,33 +738,6 @@ async def test_export_retry_locks_plan_before_job(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_export_worker_skips_a_cleaning_batch_and_claims_a_later_batch(monkeypatch):
-    first = SimpleNamespace(id=70, plan_id=10)
-    later = SimpleNamespace(id=71, plan_id=11)
-    db = _FakeDb(
-        scalars=(
-            SimpleNamespace(id=10),
-            "running",
-            SimpleNamespace(id=11),
-            None,
-            later,
-        ),
-        rows=([first, later],),
-    )
-    monkeypatch.setattr("app.services.renshe_export.get_db_ctx", _db_context(db))
-    monkeypatch.setattr(
-        RensheExportService, "_recover_stale_jobs", AsyncMock(return_value=None)
-    )
-    monkeypatch.setattr(RensheExportService, "_now", staticmethod(lambda: datetime(2026, 8, 5, tzinfo=timezone.utc)))
-
-    claimed = await RensheExportService()._claim_next_job()
-
-    assert claimed == 71
-    assert later.status == "running"
-    assert db.commit_count == 1
-
-
-@pytest.mark.asyncio
 async def test_user_verification_material_url_is_scoped_and_audited(monkeypatch):
     realname = SimpleNamespace(
         id_card_front_oss="renshe/source/12/front.jpg",
@@ -829,30 +783,6 @@ async def test_user_verification_material_url_is_scoped_and_audited(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_export_volume_lookup_failure_is_audited(monkeypatch):
-    class _BrokenDb:
-        async def execute(self, _statement):
-            raise RuntimeError("database unavailable")
-
-    db = _BrokenDb()
-    monkeypatch.setattr("app.services.renshe_export.get_db_ctx", _db_context(db))
-    service = RensheExportService(storage=SimpleNamespace())
-    audit = AsyncMock()
-    monkeypatch.setattr(service, "_access_audit", audit)
-
-    with pytest.raises(RuntimeError, match="database unavailable"):
-        await service.volume_signed_url(
-            volume_id=91,
-            admin_id=5,
-            ip_address="127.0.0.1",
-        )
-
-    audit.assert_awaited_once()
-    assert audit.await_args.kwargs["result"] == "failed"
-    assert audit.await_args.kwargs["summary"]["error_type"] == "RuntimeError"
-
-
-@pytest.mark.asyncio
 async def test_profile_review_record_and_status_change_share_one_transaction(monkeypatch):
     target = SimpleNamespace(
         status="pending",
@@ -881,15 +811,9 @@ async def test_profile_review_record_and_status_change_share_one_transaction(mon
     assert target.snapshot is None
     assert target.verified_at is None
     assert db.commit_count == 1
-    assert len(db.added) == 2
-    review = next(value for value in db.added if value.__class__.__name__ == "Review")
-    audit = next(
-        value for value in db.added if value.__class__.__name__ == "RensheAuditLog"
-    )
-    assert review.target_type == "student"
-    assert review.action == "reject"
-    assert audit.action == "verification.student.reject"
-    assert audit.object_id == 12
+    assert len(db.added) == 1
+    assert db.added[0].target_type == "student"
+    assert db.added[0].action == "reject"
 
 
 @pytest.mark.asyncio
@@ -948,140 +872,6 @@ async def test_cleanup_claim_locks_plan_and_waits_for_active_export(monkeypatch)
     assert "FROM renshe_cleanup_run" in statements[2]
     assert "FOR UPDATE" in statements[2]
     assert "FROM renshe_export_job" in statements[4]
-
-
-@pytest.mark.asyncio
-async def test_cleanup_worker_skips_blocked_batch_and_claims_later_batch(monkeypatch):
-    """An active export in the oldest batch must not starve later cleanup runs."""
-
-    first = SimpleNamespace(id=70, plan_id=10, status="scheduled")
-    later = SimpleNamespace(id=71, plan_id=11, status="scheduled")
-    db = _FakeDb(
-        # first plan/run: no refund, active export; later plan/run: no
-        # refund/export and therefore claimable.
-        scalars=(
-            SimpleNamespace(id=10),
-            first,
-            0,
-            1,
-            SimpleNamespace(id=11),
-            later,
-            0,
-            0,
-        ),
-        rows=([(70, 10), (71, 11)],),
-    )
-    monkeypatch.setattr("app.services.renshe_cleanup.get_db_ctx", _db_context(db))
-    monkeypatch.setattr(
-        RensheCleanupService, "_now", staticmethod(lambda: datetime(2026, 8, 5, tzinfo=timezone.utc))
-    )
-
-    claimed = await RensheCleanupService(storage=SimpleNamespace())._claim_due_run()
-
-    assert claimed == 71
-    assert first.status == "scheduled"
-    assert later.status == "running"
-    assert db.commit_count == 1
-
-
-@pytest.mark.asyncio
-async def test_rejected_identity_review_releases_active_id_card_hash(monkeypatch):
-    historical_hash = "a" * 64
-    target = SimpleNamespace(
-        status="pending",
-        snapshot=None,
-        active_id_card_hash=historical_hash,
-        id_card_hash=historical_hash,
-        verified_at="2026-08-01T00:00:00+00:00",
-    )
-    db = _FakeDb(rows=(target,))
-    monkeypatch.setattr("app.services.review.get_db_ctx", _db_context(db))
-
-    await ReviewService().create_review(
-        reviewer_id=5,
-        data=ReviewCreate(
-            target_type="identity",
-            target_id=12,
-            action="reject",
-            comment="身份证照片不清晰",
-        ),
-    )
-
-    assert target.status == "rejected"
-    assert target.active_id_card_hash is None
-    # The irreversible historical digest remains available for audit/retention
-    # checks, while the live unique reservation is released.
-    assert target.id_card_hash == historical_hash
-    assert db.commit_count == 1
-
-
-@pytest.mark.asyncio
-async def test_admin_identity_rejection_also_releases_active_id_card_hash(monkeypatch):
-    target = SimpleNamespace(
-        status="pending",
-        snapshot=None,
-        active_id_card_hash="b" * 64,
-        id_card_hash="b" * 64,
-        verified_at="2026-08-01T00:00:00+00:00",
-    )
-    db = _FakeDb(rows=(target,))
-    monkeypatch.setattr("app.services.admin_user.get_db_ctx", _db_context(db))
-
-    result = await AdminUserService().review_identity(
-        12,
-        AdminIdentityReview(status="rejected", comment="请重新上传清晰证件"),
-        actor_id=5,
-    )
-
-    assert result["status"] == "rejected"
-    assert target.active_id_card_hash is None
-    assert target.id_card_hash == "b" * 64
-    assert db.commit_count == 1
-
-
-@pytest.mark.asyncio
-async def test_rejected_identity_is_excluded_from_duplicate_reservation_query(monkeypatch):
-    """Submitting an ID is allowed when the only matching row is rejected."""
-
-    from app.schemas.user import RealnameSubmit
-
-    user = SimpleNamespace(
-        id=22,
-        is_active=True,
-        level2_edit_count=0,
-        level2_edit_reset_at=None,
-    )
-    db = _FakeDb(
-        # user lock, duplicate lookup (no active occupant), then no existing
-        # profile.  The rejected account is represented by the status filter
-        # in the duplicate lookup itself and therefore must not be returned.
-        scalars=(user, None),
-        rows=([], None),
-    )
-    monkeypatch.setattr("app.services.user.get_db_ctx", _db_context(db))
-    monkeypatch.setattr("app.services.user.assert_owned_source_key", lambda *_: None)
-
-    payload = RealnameSubmit(
-        real_name="张三",
-        id_card_number="11010519491231002X",
-        id_card_front_oss="renshe/source/22/front.jpg",
-        id_card_back_oss="renshe/source/22/back.jpg",
-        avatar_oss="renshe/source/22/avatar.jpg",
-        political_status="群众",
-        ethnicity="汉族",
-    )
-    response = await UserService().submit_realname(22, payload)
-
-    assert response.status == "pending"
-    duplicate_sql = str(db.executed[2])
-    assert "user_realname.status IN" in duplicate_sql
-    duplicate_params = db.executed[2].compile().params
-    status_values = next(
-        value
-        for key, value in duplicate_params.items()
-        if "status" in key
-    )
-    assert set(status_values) >= {"pending", "verified"}
 
 
 def test_cleanup_worker_removes_objects_and_sensitive_snapshots_but_keeps_audit():

@@ -74,7 +74,7 @@ class AdminUserFilter(BaseModel):
 class AdminUserListItem(BaseModel):
     id: int
     openid: str
-    phone: str | None = Field(None, description="手机号（列表默认脱敏）")
+    phone: str | None = None
     is_active: bool
     created_at: datetime
     identity_status: str | None = None

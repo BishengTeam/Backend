@@ -1,5 +1,3 @@
-import logging
-
 from fastapi import Depends, Header
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,9 +7,6 @@ from app.port.exceptions import AppException, BusinessException, ForbiddenExcept
 from app.adapter.security import decode_access_token, is_token_revoked
 from app.domain.user.src.index import AdminUser, User, UserRealname
 from app.policy.permissions import ROLE_PERMISSIONS
-
-
-logger = logging.getLogger(__name__)
 
 
 async def get_current_user(
@@ -24,10 +19,8 @@ async def get_current_user(
     try:
         payload = decode_access_token(token)
     except Exception as e:
-        # Never include the bearer token (or an exception string that may echo
-        # it) in application logs.  The request id middleware supplies the
-        # correlation context when a deployment needs to trace the failure.
-        logger.warning("JWT decode failed: exception_type=%s", type(e).__name__)
+        import logging
+        logging.getLogger(__name__).warning(f"JWT decode failed: {e}, token prefix: {token[:20]}...")
         raise UnauthorizedException("登录已过期，请重新登录")
     if await is_token_revoked(token):
         raise UnauthorizedException("登录已过期，请重新登录")
@@ -52,7 +45,8 @@ async def get_current_admin(
     try:
         payload = decode_access_token(token)
     except Exception as e:
-        logger.warning("admin JWT decode failed: exception_type=%s", type(e).__name__)
+        import logging
+        logging.getLogger(__name__).warning(f"JWT decode failed: {e}, token prefix: {token[:20]}...")
         raise UnauthorizedException("登录已过期，请重新登录")
     if await is_token_revoked(token):
         raise UnauthorizedException("登录已过期，请重新登录")
