@@ -22,6 +22,15 @@ run_backend() {
     (cd "$BACKEND_ROOT" && "$PYTHON_BIN" -m pytest tests/unit -q)
     (cd "$BACKEND_ROOT" && "$PYTHON_BIN" scripts/check_renshe_contract.py)
     (cd "$BACKEND_ROOT" && "$PYTHON_BIN" scripts/check_migrations.py --offline-sql)
+    (cd "$BACKEND_ROOT" && "$PYTHON_BIN" scripts/postgres_backup.py --help >/dev/null)
+    (cd "$BACKEND_ROOT" && "$PYTHON_BIN" scripts/quiz_acceptance_preflight.py --help >/dev/null)
+    (cd "$BACKEND_ROOT" && "$PYTHON_BIN" scripts/quiz_acceptance_runner.py --help >/dev/null)
+    (cd "$BACKEND_ROOT" && "$PYTHON_BIN" scripts/quiz_acceptance_timeout_followup.py --help >/dev/null)
+    (cd "$BACKEND_ROOT" && "$PYTHON_BIN" scripts/quiz_contract_manifest.py \
+        --check app/contracts/quiz_contract_manifest.json)
+    (cd "$BACKEND_ROOT" && "$PYTHON_BIN" scripts/quiz_acceptance_fixtures.py \
+        check-manifest --manifest app/contracts/quiz_acceptance_fixture_manifest.json)
+    (cd "$BACKEND_ROOT" && "$PYTHON_BIN" scripts/quiz_acceptance_fixtures.py self-check)
 }
 
 run_admin() {

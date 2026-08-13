@@ -1,0 +1,18 @@
+[Unit]
+Description=weMiniApp verified PostgreSQL daily backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=wemini-backup
+Group=wemini-backup
+UMask=0077
+Environment=BACKUP_DATABASE_URL_FILE=/run/secrets/wemini/backup_database_url
+ExecStart=/opt/wemini/venv/bin/python /opt/wemini/Backend/scripts/postgres_backup.py backup --kind daily --output-dir /srv/wemini/backups/postgresql
+ExecStartPost=/opt/wemini/venv/bin/python /opt/wemini/Backend/scripts/postgres_backup.py check --output-dir /srv/wemini/backups/postgresql --max-age-hours 24
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/wemini/backups/postgresql

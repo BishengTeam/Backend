@@ -59,9 +59,12 @@ async def login(request: Request, body: AdminLoginRequest) -> APIResponse[AdminL
 **使用场景**: 管理员点击退出登录，将当前 token 加入撤销黑名单
     """,
 )
-async def logout(authorization: str = Header(...)):
-    """退出登录，将 token 加入撤销黑名单"""
-    if authorization.startswith("Bearer "):
-        token = authorization[7:]
-        await revoke_token(token)
+async def logout(
+    authorization: str | None = Header(None),
+    _admin=Depends(get_current_admin),
+):
+    """退出登录，将当前管理员 token 加入撤销黑名单。"""
+    # get_current_admin has already required and validated the Bearer token.
+    token = (authorization or "")[7:]
+    await revoke_token(token)
     return success(message="已退出登录")

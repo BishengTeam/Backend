@@ -720,6 +720,13 @@ async def test_http_auth_validation_ownership_and_answer_visibility(
             public = await client.get("/api/quiz/categories")
             assert public.status_code == 200, public.text
 
+            no_current = await client.get(
+                "/api/quiz/practice-sessions/current",
+                headers=user_headers,
+            )
+            assert no_current.status_code == 200, no_current.text
+            assert no_current.json()["data"] is None
+
             unauthenticated = await client.get("/api/quiz/questions")
             assert unauthenticated.status_code == 401
             assert unauthenticated.json()["code"] == 40100
@@ -761,6 +768,13 @@ async def test_http_auth_validation_ownership_and_answer_visibility(
             assert "correct_answer" not in pending_question
             assert "explanation" not in pending_question
 
+            current = await client.get(
+                "/api/quiz/practice-sessions/current",
+                headers=user_headers,
+            )
+            assert current.status_code == 200, current.text
+            assert current.json()["data"]["id"] == session["id"]
+
             hidden = await client.get(
                 f"/api/quiz/practice-sessions/{session['id']}",
                 headers=other_headers,
@@ -783,6 +797,31 @@ async def test_http_auth_validation_ownership_and_answer_visibility(
             assert result["correct_answer"] == "A"
             assert result["explanation"]
 
+            completed_current = await client.get(
+                "/api/quiz/practice-sessions/current",
+                headers=user_headers,
+            )
+            assert completed_current.status_code == 200, completed_current.text
+            assert completed_current.json()["data"] is None
+
+            history = await client.get(
+                "/api/quiz/practice-history",
+                headers=user_headers,
+                params={
+                    "category_id": category.id,
+                    "question_type": "single_choice",
+                    "is_correct": "false",
+                    "page": 1,
+                    "page_size": 20,
+                },
+            )
+            assert history.status_code == 200, history.text
+            history_items = history.json()["data"]["items"]
+            assert len(history_items) == 1
+            assert history_items[0]["attempt_id"] == result["attempt_id"]
+            assert history_items[0]["correct_answer"] == "A"
+            assert history_items[0]["explanation"]
+
             wrong_book = await client.get(
                 "/api/quiz/wrong-book",
                 headers=user_headers,
@@ -791,6 +830,83 @@ async def test_http_auth_validation_ownership_and_answer_visibility(
             wrong_question = wrong_book.json()["data"]["items"][0]["question"]
             assert "correct_answer" not in wrong_question
             assert "explanation" not in wrong_question
+
+            added_collection = await client.post(
+                "/api/quiz/collections",
+                headers=user_headers,
+                json={"question_id": question_payload["id"]},
+            )
+            assert added_collection.status_code == 200, added_collection.text
+            assert added_collection.json()["data"]["is_active"] is True
+
+            collections = await client.get(
+                "/api/quiz/collections",
+                headers=user_headers,
+            )
+            assert collections.status_code == 200, collections.text
+            collection_items = collections.json()["data"]["items"]
+            assert len(collection_items) == 1
+            collection_question = collection_items[0]["question"]
+            assert "correct_answer" not in collection_question
+            assert "explanation" not in collection_question
+
+            removed_collection = await client.delete(
+                f"/api/quiz/collections/{question_payload['id']}",
+                headers=user_headers,
+            )
+            assert removed_collection.status_code == 200, removed_collection.text
+            assert removed_collection.json()["data"]["is_active"] is False
+
+            checkin = await client.get("/api/quiz/checkin", headers=user_headers)
+            assert checkin.status_code == 200, checkin.text
+            checkin_data = checkin.json()["data"]
+            assert checkin_data["checked_in"] is True
+            assert checkin_data["questions_completed"] == 1
+
+            calendar = await client.get(
+                "/api/quiz/checkin/calendar",
+                headers=user_headers,
+                params={
+                    "date_from": checkin_data["checkin_date"],
+                    "date_to": checkin_data["checkin_date"],
+                },
+            )
+            assert calendar.status_code == 200, calendar.text
+            assert [item["checkin_date"] for item in calendar.json()["data"]] == [
+                checkin_data["checkin_date"]
+            ]
+
+            stats = await client.get("/api/quiz/stats", headers=user_headers)
+            assert stats.status_code == 200, stats.text
+            stats_data = stats.json()["data"]
+            assert stats_data["practice"]["total_attempts"] == 1
+            assert stats_data["practice"]["active_wrong_count"] == 1
+            assert stats_data["practice"]["checkin_days"] == 1
+
+            second = await client.post(
+                "/api/quiz/practice-sessions",
+                headers=user_headers,
+                json={
+                    "mode": "normal",
+                    "category_id": category.id,
+                    "question_count": 10,
+                },
+            )
+            assert second.status_code == 200, second.text
+            second_session = second.json()["data"]
+            abandoned = await client.post(
+                f"/api/quiz/practice-sessions/{second_session['id']}/abandon",
+                headers=user_headers,
+            )
+            assert abandoned.status_code == 200, abandoned.text
+            assert abandoned.json()["data"]["status"] == "abandoned"
+
+            abandoned_detail = await client.get(
+                f"/api/quiz/practice-sessions/{second_session['id']}",
+                headers=user_headers,
+            )
+            assert abandoned_detail.status_code == 200, abandoned_detail.text
+            assert abandoned_detail.json()["data"]["status"] == "abandoned"
     finally:
         app.dependency_overrides.clear()
         app.dependency_overrides.update(previous_overrides)

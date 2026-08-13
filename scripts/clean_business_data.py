@@ -89,6 +89,7 @@ DELETE_ORDER = [
     "inventory",
     "job",
     "quiz_question_stats",
+    "quiz_import_error",
     "quiz_import_job",
     "quiz_admin_audit_log",
     "quiz_question",

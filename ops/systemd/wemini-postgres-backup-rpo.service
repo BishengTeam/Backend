@@ -1,0 +1,14 @@
+[Unit]
+Description=Check weMiniApp PostgreSQL 24-hour backup RPO
+
+[Service]
+Type=oneshot
+User=wemini-backup
+Group=wemini-backup
+UMask=0077
+ExecStart=/opt/wemini/venv/bin/python /opt/wemini/Backend/scripts/postgres_backup.py check --output-dir /srv/wemini/backups/postgresql --max-age-hours 24
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/srv/wemini/backups/postgresql

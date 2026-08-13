@@ -7,13 +7,14 @@ import json
 import re
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError as PydanticValidationError
-from sqlalchemy import exists, func, or_, select, text, union
+from sqlalchemy import delete, exists, func, or_, select, text, union
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
@@ -32,8 +33,10 @@ from app.domain.community.src.index import (
     QuizExam,
     QuizExamAnswer,
     QuizExamQuestion,
+    QuizImportError,
     QuizImportJob,
     QuizPracticeAttempt,
+    QuizPracticeSession,
     QuizPracticeSessionQuestion,
     QuizCollection,
     QuizWrongItem,
@@ -58,6 +61,8 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizBatchItemError,
     AdminQuizBatchRequest,
     AdminQuizCategoryCreate,
+    AdminQuizCategoryImpactQuery,
+    AdminQuizCategoryImpactResponse,
     AdminQuizCategoryUpdate,
     AdminQuizBatchResponse,
     AdminQuizCategoryStatusUpdate,
@@ -67,16 +72,50 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizQuestionQuery,
     AdminQuizQuestionResponse,
     AdminQuizQuestionStatsResponse,
+    AdminQuizQuestionStatsListItem,
+    AdminQuizStatsOverviewResponse,
+    AdminQuizStatsQuestionQuery,
     AdminQuizVersionRequest,
     AdminQuizAuditLogResponse,
     AdminQuizAuditQuery,
     AdminQuizImportJobQuery,
     AdminQuizImportJobResponse,
+    AdminQuizImportErrorPage,
+    AdminQuizImportErrorQuery,
+    AdminQuizImportCategoryImpactNode,
+    AdminQuizImportCategoryImpactResponse,
+    AdminQuizImportConfirmCategoriesRequest,
+    AdminQuizImportCancelRequest,
+    AdminQuizImportReportResponse,
     AdminQuizJsonImportRequest,
     AdminQuizSignedUrlResponse,
     AdminQuizImportQuestion,
 )
 from app.port.config import settings
+from app.utils.audit import redact_sensitive_text, sanitize_audit_value
+
+
+@dataclass(frozen=True, slots=True)
+class LocalImportDownload:
+    data: bytes
+    media_type: str
+    extension: str
+
+
+@dataclass(frozen=True, slots=True)
+class ImportCategoryResolution:
+    category_id: int | None
+    missing: bool
+    blocked: bool
+    message: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ImportValidationResult:
+    valid: list[tuple[int, AdminQuizImportQuestion, int | tuple[str, ...]]]
+    errors: list[dict[str, object]]
+    missing_errors: list[dict[str, object]]
+    impact: AdminQuizImportCategoryImpactResponse | None
 
 
 class AdminQuizService:
@@ -93,10 +132,15 @@ class AdminQuizService:
         if isinstance(value, Decimal):
             return str(value)
         if isinstance(value, dict):
-            return {str(key): AdminQuizService._audit_value(item) for key, item in value.items()}
-        if isinstance(value, (list, tuple)):
-            return [AdminQuizService._audit_value(item) for item in value]
-        return getattr(value, "value", value)
+            serialized = {
+                str(key): AdminQuizService._audit_value(item)
+                for key, item in value.items()
+            }
+        elif isinstance(value, (list, tuple)):
+            serialized = [AdminQuizService._audit_value(item) for item in value]
+        else:
+            serialized = getattr(value, "value", value)
+        return sanitize_audit_value(serialized)
 
     @classmethod
     def _add_audit(
@@ -142,7 +186,7 @@ class AdminQuizService:
                     cls._audit_value(changed_fields) if changed_fields is not None else None
                 ),
                 target_ids=target_ids,
-                error_summary=error_summary,
+                error_summary=redact_sensitive_text(error_summary),
             )
         )
 
@@ -183,6 +227,24 @@ class AdminQuizService:
         # Legacy internal callers did not carry a version. New HTTP models do.
         if expected is not None and getattr(entity, "lock_version", None) != expected:
             raise ConflictException(cls._VERSION_CONFLICT_MESSAGE)
+
+    @classmethod
+    async def record_permission_denied(
+        cls, *, admin_id: int, permission: str
+    ) -> None:
+        """Persist a safe, append-only audit row for a quiz RBAC denial."""
+
+        async with get_db_ctx() as db:
+            cls._add_audit(
+                db,
+                admin_id=admin_id,
+                action="permission.denied",
+                object_type="permission",
+                result="failed",
+                error_summary=f"缺少权限: {permission}",
+                permission=permission,
+            )
+            await db.commit()
 
     @staticmethod
     async def _get_for_update(db, model, entity_id: int):
@@ -320,12 +382,180 @@ class AdminQuizService:
             )
             return list(result.scalars().all())
 
+    @staticmethod
+    def _category_subtree_ids(
+        categories: list[QuizCategory], category_id: int
+    ) -> list[int]:
+        children: dict[int, list[int]] = {}
+        for item in categories:
+            if item.parent_id is not None:
+                children.setdefault(item.parent_id, []).append(item.id)
+        result: list[int] = []
+        queue = [category_id]
+        while queue:
+            current = queue.pop(0)
+            if current in result:
+                continue
+            result.append(current)
+            queue.extend(children.get(current, []))
+        return result
+
+    async def preview_category_impact(
+        self,
+        category_id: int,
+        query: AdminQuizCategoryImpactQuery,
+    ) -> AdminQuizCategoryImpactResponse:
+        """Calculate a read-only impact snapshot for one category operation."""
+
+        calculated_at = datetime.now(timezone.utc)
+        async with get_db_ctx() as db:
+            categories = list((await db.execute(select(QuizCategory))).scalars().all())
+            by_id = {item.id: item for item in categories}
+            category = by_id.get(category_id)
+            if category is None:
+                raise NotFoundException("题库分类")
+            subtree_ids = self._category_subtree_ids(categories, category_id)
+            descendant_ids = subtree_ids[1:]
+            count_rows = (
+                await db.execute(
+                    select(QuizQuestion.status, func.count(QuizQuestion.id))
+                    .where(QuizQuestion.category_id.in_(subtree_ids))
+                    .group_by(QuizQuestion.status)
+                )
+            ).all()
+            question_counts = {str(status): int(count) for status, count in count_rows}
+            published_rows = (
+                await db.execute(
+                    select(QuizQuestion.category_id, func.count(QuizQuestion.id))
+                    .where(
+                        QuizQuestion.category_id.in_(subtree_ids),
+                        QuizQuestion.status == QuizQuestionStatus.PUBLISHED.value,
+                    )
+                    .group_by(QuizQuestion.category_id)
+                )
+            ).all()
+            published_by_category = {
+                int(item_category_id): int(count)
+                for item_category_id, count in published_rows
+            }
+
+            def chain_active(item_id: int) -> bool:
+                seen: set[int] = set()
+                current_id: int | None = item_id
+                while current_id is not None:
+                    if current_id in seen:
+                        return False
+                    seen.add(current_id)
+                    current = by_id.get(current_id)
+                    if current is None or current.status != QuizCategoryStatus.ACTIVE.value:
+                        return False
+                    current_id = current.parent_id
+                return True
+
+            def subtree_chain_active(item_id: int) -> bool:
+                """Check only the category chain that moves with the subtree."""
+
+                seen: set[int] = set()
+                current_id: int | None = item_id
+                while current_id is not None:
+                    if current_id in seen:
+                        return False
+                    seen.add(current_id)
+                    current = by_id.get(current_id)
+                    if current is None or current.status != QuizCategoryStatus.ACTIVE.value:
+                        return False
+                    if current_id == category_id:
+                        return True
+                    current_id = current.parent_id
+                return False
+
+            blockers: list[str] = []
+            affected_new_pool = 0
+            target_parent_id = query.target_parent_id if query.action == "move" else None
+            if query.action == "disable":
+                if category.status == QuizCategoryStatus.DISABLED.value:
+                    blockers.append("分类已经停用")
+                # Only currently effective published questions leave the pool.
+                affected_new_pool = sum(
+                    published_by_category.get(item_id, 0)
+                    for item_id in subtree_ids
+                    if chain_active(item_id)
+                )
+            elif query.action == "delete":
+                if descendant_ids:
+                    blockers.append("该分类下存在子分类，请先删除子分类")
+                if category.ever_had_question:
+                    blockers.append("该分类曾包含题目，不允许物理删除")
+                if sum(question_counts.values()):
+                    blockers.append("该分类下存在题目，请先删除题目")
+            else:
+                if target_parent_id == category.parent_id:
+                    blockers.append("目标父分类与当前父分类相同")
+                if target_parent_id == category_id:
+                    blockers.append("分类不能将自身设为父分类")
+                target_parent = by_id.get(target_parent_id) if target_parent_id else None
+                if target_parent_id is not None and target_parent is None:
+                    blockers.append("目标父分类不存在")
+                if target_parent_id in descendant_ids:
+                    blockers.append("分类不能移动到自身的子分类下")
+                target_depth = 1 if target_parent is None else target_parent.depth + 1
+                subtree_height = max(
+                    (by_id[item_id].depth - category.depth for item_id in subtree_ids),
+                    default=0,
+                )
+                if target_depth + subtree_height > 3:
+                    blockers.append("移动后分类层级将超过三级")
+                if target_parent_id is None:
+                    duplicate = any(
+                        item.id != category_id
+                        and item.parent_id is None
+                        and item.normalized_name == category.normalized_name
+                        for item in categories
+                    )
+                else:
+                    duplicate = any(
+                        item.id != category_id
+                        and item.parent_id == target_parent_id
+                        and item.normalized_name == category.normalized_name
+                        for item in categories
+                    )
+                if duplicate:
+                    blockers.append("目标父级下已存在同名分类")
+                if not blockers:
+                    target_chain_active = (
+                        True
+                        if target_parent is None
+                        else chain_active(target_parent.id)
+                    )
+                    for item_id in subtree_ids:
+                        old_effective = chain_active(item_id)
+                        internal_active = subtree_chain_active(item_id)
+                        new_effective = internal_active and target_chain_active
+                        if old_effective != new_effective:
+                            affected_new_pool += published_by_category.get(item_id, 0)
+
+        return AdminQuizCategoryImpactResponse(
+            category_id=category_id,
+            action=query.action,
+            target_parent_id=target_parent_id,
+            descendant_category_count=len(descendant_ids),
+            draft_question_count=question_counts.get("draft", 0),
+            published_question_count=question_counts.get("published", 0),
+            disabled_question_count=question_counts.get("disabled", 0),
+            affected_new_pool_question_count=affected_new_pool,
+            history_snapshot_affected=False,
+            can_execute=not blockers,
+            blocking_reasons=blockers,
+            calculated_at=calculated_at,
+        )
+
     # ── Question queries ──
 
     async def list_questions(
         self,
         *,
         category_id: int | None = None,
+        include_descendants: bool = False,
         question_type: str | None = None,
         status: str | None = None,
         keyword: str | None = None,
@@ -335,7 +565,17 @@ class AdminQuizService:
         async with get_db_ctx() as db:
             base = select(QuizQuestion)
             if category_id is not None:
-                base = base.where(QuizQuestion.category_id == category_id)
+                category_ids = [category_id]
+                if include_descendants:
+                    categories = list(
+                        (await db.execute(select(QuizCategory))).scalars().all()
+                    )
+                    if not any(item.id == category_id for item in categories):
+                        raise NotFoundException("题库分类")
+                    category_ids = self._category_subtree_ids(
+                        categories, category_id
+                    )
+                base = base.where(QuizQuestion.category_id.in_(category_ids))
             if question_type is not None:
                 base = base.where(
                     QuizQuestion.question_type == self._enum_value(question_type)
@@ -1139,18 +1379,41 @@ class AdminQuizService:
                 await db.commit()
             except IntegrityError as exc:
                 await db.rollback()
+                commit_errors = [
+                    AdminQuizBatchItemError(
+                        question_id=item.question_id,
+                        code=40001,
+                        field=None,
+                        message="题目状态更新失败，批量操作未提交",
+                    )
+                    for item in data.items
+                ]
+                # The business transaction was rolled back, including its
+                # optimistic success audit. Persist the failed outcome in a
+                # fresh transaction so every batch invocation remains
+                # observable without compromising atomicity.
+                try:
+                    async with get_db_ctx() as audit_db:
+                        self._add_audit(
+                            audit_db,
+                            admin_id=admin_id,
+                            action=f"question.batch_{action}",
+                            object_type="question",
+                            result="failed",
+                            target_ids=[item.question_id for item in data.items],
+                            error_summary="题目状态更新失败，批量操作未提交",
+                            permission="quiz:write",
+                        )
+                        await audit_db.commit()
+                except Exception:
+                    # Keep the original, fully rolled-back database failure
+                    # observable instead of disguising it as a successful
+                    # business-level validation response.
+                    raise exc
                 return AdminQuizBatchResponse(
                     succeeded=False,
                     updated_count=0,
-                    errors=[
-                        AdminQuizBatchItemError(
-                            question_id=item.question_id,
-                            code=40001,
-                            field=None,
-                            message="题目状态更新失败，批量操作未提交",
-                        )
-                        for item in data.items
-                    ],
+                    errors=commit_errors,
                 )
             return AdminQuizBatchResponse(
                 succeeded=True,
@@ -1207,6 +1470,176 @@ class AdminQuizService:
                 else Decimal("0.0")
             ),
             aggregated_through=getattr(stats, "aggregated_through", None),
+        )
+
+    @staticmethod
+    def _accuracy(correct: int, total: int) -> Decimal:
+        if total <= 0:
+            return Decimal("0.0")
+        return (
+            (Decimal(correct) * Decimal(100)) / Decimal(total)
+        ).quantize(Decimal("0.1"))
+
+    async def get_stats_overview(self) -> AdminQuizStatsOverviewResponse:
+        """Return anonymous aggregate counters for the admin overview."""
+
+        async with get_db_ctx() as db:
+            category_row = (
+                await db.execute(
+                    select(
+                        func.count(QuizCategory.id),
+                        func.count(QuizCategory.id).filter(
+                            QuizCategory.status == "active"
+                        ),
+                        func.count(QuizCategory.id).filter(
+                            QuizCategory.status == "disabled"
+                        ),
+                    )
+                )
+            ).one()
+            question_row = (
+                await db.execute(
+                    select(
+                        func.count(QuizQuestion.id),
+                        func.count(QuizQuestion.id).filter(
+                            QuizQuestion.status == "draft"
+                        ),
+                        func.count(QuizQuestion.id).filter(
+                            QuizQuestion.status == "published"
+                        ),
+                        func.count(QuizQuestion.id).filter(
+                            QuizQuestion.status == "disabled"
+                        ),
+                    )
+                )
+            ).one()
+            practice_session_count = int(
+                await db.scalar(select(func.count(QuizPracticeSession.id))) or 0
+            )
+            stats_row = (
+                await db.execute(
+                    select(
+                        func.coalesce(func.sum(QuizQuestionStats.practice_first_attempts), 0),
+                        func.coalesce(func.sum(QuizQuestionStats.practice_first_correct), 0),
+                        func.coalesce(func.sum(QuizQuestionStats.exam_answers), 0),
+                        func.coalesce(func.sum(QuizQuestionStats.exam_correct), 0),
+                        func.max(QuizQuestionStats.aggregated_through),
+                    )
+                )
+            ).one()
+            exam_row = (
+                await db.execute(
+                    select(
+                        func.count(QuizExam.id).filter(QuizExam.status == "completed"),
+                        func.count(QuizExam.id).filter(QuizExam.status == "timed_out"),
+                    )
+                )
+            ).one()
+
+        practice_attempts = int(stats_row[0] or 0)
+        practice_correct = int(stats_row[1] or 0)
+        exam_answers = int(stats_row[2] or 0)
+        exam_correct = int(stats_row[3] or 0)
+        calculated_at = datetime.now(timezone.utc)
+        return AdminQuizStatsOverviewResponse(
+            calculated_at=calculated_at,
+            aggregated_through=stats_row[4],
+            category_count=int(category_row[0] or 0),
+            active_category_count=int(category_row[1] or 0),
+            disabled_category_count=int(category_row[2] or 0),
+            question_count=int(question_row[0] or 0),
+            draft_question_count=int(question_row[1] or 0),
+            published_question_count=int(question_row[2] or 0),
+            disabled_question_count=int(question_row[3] or 0),
+            practice_session_count=practice_session_count,
+            practice_first_attempts=practice_attempts,
+            practice_first_correct=practice_correct,
+            practice_first_accuracy=self._accuracy(practice_correct, practice_attempts),
+            completed_exam_count=int(exam_row[0] or 0),
+            timed_out_exam_count=int(exam_row[1] or 0),
+            exam_answers=exam_answers,
+            exam_correct=exam_correct,
+            exam_accuracy=self._accuracy(exam_correct, exam_answers),
+        )
+
+    async def list_question_stats(
+        self, query: AdminQuizStatsQuestionQuery
+    ) -> PaginatedData[AdminQuizQuestionStatsListItem]:
+        """Return filtered per-question aggregates without any user dimension."""
+
+        async with get_db_ctx() as db:
+            filters = []
+            if query.category_id is not None:
+                filters.append(QuizQuestion.category_id == query.category_id)
+            if query.question_type is not None:
+                filters.append(
+                    QuizQuestion.question_type == self._enum_value(query.question_type)
+                )
+            if query.status is not None:
+                filters.append(QuizQuestion.status == self._enum_value(query.status))
+            if query.keyword:
+                keyword = f"%{query.keyword.strip()}%"
+                filters.append(
+                    or_(
+                        QuizQuestion.question_text.ilike(keyword),
+                        QuizQuestion.normalized_question_text.ilike(keyword),
+                    )
+                )
+            total = int(
+                await db.scalar(
+                    select(func.count(QuizQuestion.id)).where(*filters)
+                )
+                or 0
+            )
+            rows = (
+                await db.execute(
+                    select(QuizQuestion, QuizCategory, QuizQuestionStats)
+                    .join(QuizCategory, QuizCategory.id == QuizQuestion.category_id)
+                    .outerjoin(
+                        QuizQuestionStats,
+                        QuizQuestionStats.question_id == QuizQuestion.id,
+                    )
+                    .where(*filters)
+                    .order_by(QuizQuestion.updated_at.desc(), QuizQuestion.id.desc())
+                    .offset((query.page - 1) * query.page_size)
+                    .limit(query.page_size)
+                )
+            ).all()
+
+        items: list[AdminQuizQuestionStatsListItem] = []
+        for question, category, stats in rows:
+            practice_attempts = int(
+                getattr(stats, "practice_first_attempts", 0) or 0
+            )
+            practice_correct = int(
+                getattr(stats, "practice_first_correct", 0) or 0
+            )
+            exam_answers = int(getattr(stats, "exam_answers", 0) or 0)
+            exam_correct = int(getattr(stats, "exam_correct", 0) or 0)
+            items.append(
+                AdminQuizQuestionStatsListItem(
+                    question_id=question.id,
+                    question_text=question.question_text,
+                    category_id=category.id,
+                    category_name=category.name,
+                    question_type=question.question_type,
+                    status=question.status,
+                    practice_first_attempts=practice_attempts,
+                    practice_first_correct=practice_correct,
+                    practice_first_accuracy=self._accuracy(
+                        practice_correct, practice_attempts
+                    ),
+                    exam_answers=exam_answers,
+                    exam_correct=exam_correct,
+                    exam_accuracy=self._accuracy(exam_correct, exam_answers),
+                    aggregated_through=getattr(stats, "aggregated_through", None),
+                )
+            )
+        return PaginatedData[AdminQuizQuestionStatsListItem](
+            items=items,
+            total=total,
+            page=query.page,
+            page_size=query.page_size,
         )
 
     async def aggregate_question_stats(
@@ -1433,6 +1866,12 @@ class AdminQuizService:
                 stmt = stmt.where(QuizAdminAuditLog.object_id == query.object_id)
             if query.result is not None:
                 stmt = stmt.where(QuizAdminAuditLog.result == query.result)
+            if query.request_id is not None:
+                stmt = stmt.where(QuizAdminAuditLog.request_id == query.request_id)
+            if query.start_at is not None:
+                stmt = stmt.where(QuizAdminAuditLog.created_at >= query.start_at)
+            if query.end_at is not None:
+                stmt = stmt.where(QuizAdminAuditLog.created_at <= query.end_at)
 
             total = (await db.execute(
                 select(func.count()).select_from(stmt.subquery())
@@ -1464,6 +1903,87 @@ class AdminQuizService:
     @staticmethod
     def _terminal_import_expiry(finished_at: datetime) -> datetime:
         return finished_at + timedelta(days=settings.QUIZ_IMPORT_RETENTION_DAYS)
+
+    @staticmethod
+    def _aware(value: datetime) -> datetime:
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+    @staticmethod
+    def _import_error(
+        *,
+        row: int | None,
+        question_index: int | None,
+        field: str | None,
+        error_code: str,
+        message: str,
+    ) -> dict[str, object]:
+        return {
+            "row": row,
+            "question_index": question_index,
+            "field": field,
+            "error_code": error_code,
+            "message": message,
+        }
+
+    @staticmethod
+    def _impact_version(payload: dict[str, object]) -> str:
+        # ``calculated_at`` is presentation metadata. Recalculating an
+        # otherwise identical tree must not force the administrator to confirm
+        # it again.
+        payload = {
+            key: value for key, value in payload.items() if key != "calculated_at"
+        }
+        canonical = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hmac.new(
+            settings.JWT_SECRET.encode("utf-8"), canonical, hashlib.sha256
+        ).hexdigest()
+
+    @classmethod
+    def _impact_snapshot_payload(
+        cls,
+        *,
+        tree: list[dict[str, object]],
+        new_category_count: int,
+        reused_category_count: int,
+        affected_question_count: int,
+        blocking_reasons: list[str],
+        calculated_at: datetime,
+    ) -> dict[str, object]:
+        return {
+            "tree": tree,
+            "new_category_count": new_category_count,
+            "reused_category_count": reused_category_count,
+            "affected_question_count": affected_question_count,
+            "blocking_reasons": blocking_reasons,
+            "calculated_at": calculated_at.isoformat(),
+        }
+
+    @staticmethod
+    async def _replace_import_errors(
+        db,
+        *,
+        job_id: int,
+        validation_version: int,
+        errors: list[dict[str, object]],
+    ) -> None:
+        await db.execute(delete(QuizImportError).where(QuizImportError.job_id == job_id))
+        for item in errors:
+            db.add(
+                QuizImportError(
+                    job_id=job_id,
+                    validation_version=validation_version,
+                    row=item.get("row"),
+                    question_index=item.get("question_index"),
+                    field=item.get("field"),
+                    error_code=str(item.get("error_code") or "validation_error"),
+                    message=str(item.get("message") or "参数校验失败")[:1024],
+                )
+            )
 
     @staticmethod
     def _local_import_path(object_key: str) -> Path:
@@ -1508,7 +2028,14 @@ class AdminQuizService:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(data)
 
-            await asyncio.to_thread(_write)
+            try:
+                await asyncio.to_thread(_write)
+            except OSError as exc:
+                # Keep local filesystem details out of the debug response and
+                # expose this as an infrastructure failure, not an unexpected
+                # application 500. Readiness probes report the same condition
+                # before an administrator starts an import.
+                raise ThirdPartyException("题库导入存储不可用") from exc
             return
         if settings.QUIZ_IMPORT_STORAGE_TYPE != "aliyun_oss":
             raise ThirdPartyException("未知的题库导入存储类型")
@@ -1532,9 +2059,14 @@ class AdminQuizService:
     async def _get_import_object(self, object_key: str) -> bytes:
         if settings.QUIZ_IMPORT_STORAGE_TYPE == "local":
             path = self._local_import_path(object_key)
-            if not path.is_file():
-                raise ValidationException("导入源文件不存在")
-            return await asyncio.to_thread(path.read_bytes)
+            try:
+                if not path.is_file():
+                    raise ValidationException("导入源文件不存在")
+                return await asyncio.to_thread(path.read_bytes)
+            except ValidationException:
+                raise
+            except OSError as exc:
+                raise ThirdPartyException("题库导入存储不可用") from exc
         if settings.QUIZ_IMPORT_STORAGE_TYPE != "aliyun_oss":
             raise ThirdPartyException("未知的题库导入存储类型")
 
@@ -1551,8 +2083,11 @@ class AdminQuizService:
             return
         if settings.QUIZ_IMPORT_STORAGE_TYPE == "local":
             path = self._local_import_path(object_key)
-            if path.is_file():
-                await asyncio.to_thread(path.unlink)
+            try:
+                if path.is_file():
+                    await asyncio.to_thread(path.unlink)
+            except OSError as exc:
+                raise ThirdPartyException("题库导入存储不可用") from exc
             return
         if settings.QUIZ_IMPORT_STORAGE_TYPE != "aliyun_oss":
             return
@@ -1571,27 +2106,50 @@ class AdminQuizService:
         await asyncio.to_thread(_delete)
 
     async def _signed_import_url(
-        self, job: QuizImportJob, *, expires_at: datetime
+        self,
+        job: QuizImportJob,
+        *,
+        expires_at: datetime,
+        object_kind: str = "report",
+        accessor_admin_id: int | None = None,
     ) -> str:
-        if not job.report_object_key:
-            raise NotFoundException("错误报告")
+        if object_kind not in {"source", "report"}:
+            raise ValidationException("不支持的题库导入对象类型")
+        object_key = (
+            job.source_object_key if object_kind == "source" else job.report_object_key
+        )
+        resource_name = "导入源文件" if object_kind == "source" else "错误报告"
+        if not object_key:
+            raise NotFoundException(resource_name)
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
         if expires_at <= datetime.now(timezone.utc):
             raise ValidationException("错误报告链接已过期")
         if settings.QUIZ_IMPORT_STORAGE_TYPE == "aliyun_oss":
             expires = max(1, int((expires_at - datetime.now(timezone.utc)).total_seconds()))
+            if object_kind == "source":
+                extension = ".csv" if job.source_type == "csv" else ".json"
+                download_name = f"quiz-import-{job.id}{extension}"
+            else:
+                download_name = f"quiz-import-{job.id}-errors.json"
 
             def _sign() -> str:
                 try:
                     return self._quiz_oss_bucket().sign_url(
-                        "GET", job.report_object_key, expires
+                        "GET",
+                        object_key,
+                        expires,
+                        params={
+                            "response-content-disposition": (
+                                f'attachment; filename="{download_name}"'
+                            )
+                        },
                     )
                 except ThirdPartyException:
                     raise
                 except Exception as exc:
                     raise ThirdPartyException(
-                        "阿里云 OSS 生成错误报告地址失败"
+                        f"阿里云 OSS 生成{resource_name}地址失败"
                     ) from exc
 
             return await asyncio.to_thread(_sign)
@@ -1599,13 +2157,14 @@ class AdminQuizService:
         # Development/local storage uses a short HMAC URL so a browser download
         # does not need to forward the admin's bearer token.
         expires_unix = int(expires_at.timestamp())
-        payload = f"{job.id}:{expires_unix}:{job.admin_id or 0}"
+        signed_admin_id = accessor_admin_id or job.admin_id or 0
+        payload = f"{job.id}:{object_kind}:{expires_unix}:{signed_admin_id}"
         token = hmac.new(
             settings.JWT_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
         ).hexdigest()
         return (
-            f"/admin/quiz/imports/{job.id}/report"
-            f"?expires={expires_unix}&admin_id={job.admin_id or 0}&token={token}"
+            f"/admin/quiz/imports/{job.id}/{object_kind}"
+            f"?expires={expires_unix}&admin_id={signed_admin_id}&token={token}"
         )
 
     async def create_import_job(
@@ -1685,11 +2244,17 @@ class AdminQuizService:
                     pass
 
     async def list_import_jobs(
-        self, query: AdminQuizImportJobQuery | None = None
+        self,
+        query: AdminQuizImportJobQuery | None = None,
+        *,
+        admin_id: int | None = None,
+        is_super_admin: bool = False,
     ) -> PaginatedData[AdminQuizImportJobResponse]:
         query = query or AdminQuizImportJobQuery()
         async with get_db_ctx() as db:
             stmt = select(QuizImportJob)
+            if admin_id is not None and not is_super_admin:
+                stmt = stmt.where(QuizImportJob.admin_id == admin_id)
             if query.status is not None:
                 stmt = stmt.where(QuizImportJob.status == self._enum_value(query.status))
             if query.source_type is not None:
@@ -1711,18 +2276,324 @@ class AdminQuizService:
         )
 
     async def get_import_job(
-        self, job_id: int, *, admin_id: int | None = None
+        self,
+        job_id: int,
+        *,
+        admin_id: int | None = None,
+        is_super_admin: bool = False,
     ) -> QuizImportJob:
         async with get_db_ctx() as db:
             job = await db.get(QuizImportJob, job_id)
-            if job is None or (admin_id is not None and job.admin_id != admin_id):
+            if job is None or (
+                admin_id is not None
+                and not is_super_admin
+                and job.admin_id != admin_id
+            ):
                 raise NotFoundException("导入任务")
+            if admin_id is not None:
+                self._add_audit(
+                    db,
+                    admin_id=admin_id,
+                    action="import.detail_view",
+                    object_type="import_job",
+                    object_id=job.id,
+                    changed_fields={
+                        "status": {"before": None, "after": job.status}
+                    },
+                    permission="quiz:list",
+                )
+                await db.commit()
+            return job
+
+    async def list_import_errors(
+        self,
+        job_id: int,
+        query: AdminQuizImportErrorQuery,
+        *,
+        admin_id: int,
+        is_super_admin: bool = False,
+    ) -> AdminQuizImportErrorPage:
+        async with get_db_ctx() as db:
+            job = await db.get(QuizImportJob, job_id)
+            if job is None or (
+                not is_super_admin and job.admin_id != admin_id
+            ):
+                raise NotFoundException("导入任务")
+            expires_at = self._aware(job.expires_at)
+            if expires_at <= datetime.now(timezone.utc):
+                self._add_audit(
+                    db,
+                    admin_id=admin_id,
+                    action="import.errors_view",
+                    object_type="import_job",
+                    object_id=job.id,
+                    result="failed",
+                    error_summary="导入错误明细已过期",
+                    permission="quiz:list",
+                )
+                await db.commit()
+                raise BusinessException("导入错误明细已过期")
+
+            base = select(QuizImportError).where(
+                QuizImportError.job_id == job.id,
+                QuizImportError.validation_version == job.validation_version,
+            )
+            if query.field is not None:
+                base = base.where(QuizImportError.field == query.field)
+            total = int(
+                (
+                    await db.execute(
+                        select(func.count()).select_from(base.subquery())
+                    )
+                ).scalar()
+                or 0
+            )
+            rows = list(
+                (
+                    await db.execute(
+                        base.order_by(QuizImportError.id.asc())
+                        .offset((query.page - 1) * 50)
+                        .limit(50)
+                    )
+                ).scalars().all()
+            )
+            available_fields = list(
+                (
+                    await db.execute(
+                        select(QuizImportError.field)
+                        .where(
+                            QuizImportError.job_id == job.id,
+                            QuizImportError.validation_version
+                            == job.validation_version,
+                            QuizImportError.field.is_not(None),
+                        )
+                        .distinct()
+                        .order_by(QuizImportError.field.asc())
+                    )
+                ).scalars().all()
+            )
+            self._add_audit(
+                db,
+                admin_id=admin_id,
+                action="import.errors_view",
+                object_type="import_job",
+                object_id=job.id,
+                changed_fields={
+                    "page": {"before": None, "after": query.page},
+                    "field_filter": {"before": None, "after": query.field},
+                    "returned_count": {"before": None, "after": len(rows)},
+                },
+                permission="quiz:list",
+            )
+            await db.commit()
+        return AdminQuizImportErrorPage(
+            items=[
+                {
+                    "row": row.row,
+                    "question_index": row.question_index,
+                    "field": row.field,
+                    "error_code": row.error_code,
+                    "message": row.message,
+                }
+                for row in rows
+            ],
+            total=total,
+            page=query.page,
+            page_size=50,
+            available_fields=available_fields,
+            validation_version=job.validation_version,
+        )
+
+    async def get_import_category_impact(
+        self,
+        job_id: int,
+        *,
+        admin_id: int,
+        is_super_admin: bool = False,
+    ) -> AdminQuizImportCategoryImpactResponse:
+        async with get_db_ctx() as db:
+            job = await db.get(QuizImportJob, job_id)
+            if job is None or (
+                not is_super_admin and job.admin_id != admin_id
+            ):
+                raise NotFoundException("导入任务")
+            if job.status != "awaiting_category_confirmation" or not job.category_impact:
+                self._add_audit(
+                    db,
+                    admin_id=admin_id,
+                    action="import.category_impact_view",
+                    object_type="import_job",
+                    object_id=job.id,
+                    result="failed",
+                    error_summary="导入任务不在等待分类确认状态",
+                    permission="quiz:list",
+                )
+                await db.commit()
+                raise BusinessException("导入任务不在等待分类确认状态")
+            impact = AdminQuizImportCategoryImpactResponse.model_validate(
+                {
+                    **job.category_impact,
+                    "job_id": job.id,
+                    "status": job.status,
+                    "lock_version": job.lock_version,
+                    "impact_version": job.impact_version,
+                }
+            )
+            self._add_audit(
+                db,
+                admin_id=admin_id,
+                action="import.category_impact_view",
+                object_type="import_job",
+                object_id=job.id,
+                changed_fields={
+                    "new_category_count": {
+                        "before": None,
+                        "after": impact.new_category_count,
+                    },
+                    "affected_question_count": {
+                        "before": None,
+                        "after": impact.affected_question_count,
+                    },
+                },
+                permission="quiz:list",
+            )
+            await db.commit()
+            return impact
+
+    async def confirm_import_categories(
+        self,
+        job_id: int,
+        data: AdminQuizImportConfirmCategoriesRequest,
+        *,
+        admin_id: int,
+        is_super_admin: bool = False,
+    ) -> QuizImportJob:
+        now = datetime.now(timezone.utc)
+        async with get_db_ctx() as db:
+            job = await self._get_for_update(db, QuizImportJob, job_id)
+            if job is None or (
+                not is_super_admin and job.admin_id != admin_id
+            ):
+                raise NotFoundException("导入任务")
+            if job.status != "awaiting_category_confirmation":
+                raise ConflictException("导入任务已被确认、取消或过期")
+            if job.lock_version != data.lock_version:
+                raise ConflictException(self._VERSION_CONFLICT_MESSAGE)
+            if not job.impact_version or not hmac.compare_digest(
+                job.impact_version, data.impact_version
+            ):
+                raise ConflictException("分类影响已变化，请刷新后重新确认")
+            impact = AdminQuizImportCategoryImpactResponse.model_validate(
+                {
+                    **(job.category_impact or {}),
+                    "job_id": job.id,
+                    "status": job.status,
+                    "lock_version": job.lock_version,
+                    "impact_version": job.impact_version,
+                }
+            )
+            if impact.blocking_reasons:
+                raise BusinessException("分类影响存在阻断原因，不能确认")
+            before_version = job.lock_version
+            # Requeue for the standalone Worker. The claim transaction changes
+            # this to ``importing``; the HTTP request never performs the 5,000
+            # row write itself.
+            job.status = "queued"
+            job.confirmed_by = admin_id
+            job.confirmed_at = now
+            job.execution_protected_until = now + timedelta(minutes=30)
+            job.heartbeat_at = now
+            job.finished_at = None
+            job.lock_version += 1
+            self._add_audit(
+                db,
+                admin_id=admin_id,
+                action="import.categories_confirm",
+                object_type="import_job",
+                object_id=job.id,
+                changed_fields={
+                    "status": {
+                        "before": "awaiting_category_confirmation",
+                        "after": "queued",
+                    },
+                    "lock_version": {
+                        "before": before_version,
+                        "after": job.lock_version,
+                    },
+                    "new_category_count": {
+                        "before": None,
+                        "after": impact.new_category_count,
+                    },
+                    "affected_question_count": {
+                        "before": None,
+                        "after": impact.affected_question_count,
+                    },
+                },
+                permission="quiz:write",
+            )
+            await db.commit()
+            await db.refresh(job)
+            return job
+
+    async def cancel_import_job(
+        self,
+        job_id: int,
+        data: AdminQuizImportCancelRequest,
+        *,
+        admin_id: int,
+        is_super_admin: bool = False,
+    ) -> QuizImportJob:
+        now = datetime.now(timezone.utc)
+        async with get_db_ctx() as db:
+            job = await self._get_for_update(db, QuizImportJob, job_id)
+            if job is None or (
+                not is_super_admin and job.admin_id != admin_id
+            ):
+                raise NotFoundException("导入任务")
+            if job.status != "awaiting_category_confirmation":
+                raise ConflictException("导入任务已被确认、取消或过期")
+            if job.lock_version != data.lock_version:
+                raise ConflictException(self._VERSION_CONFLICT_MESSAGE)
+            before_version = job.lock_version
+            job.status = "cancelled"
+            job.finished_at = now
+            job.heartbeat_at = now
+            job.expires_at = self._terminal_import_expiry(now)
+            job.lock_version += 1
+            self._add_audit(
+                db,
+                admin_id=admin_id,
+                action="import.cancel",
+                object_type="import_job",
+                object_id=job.id,
+                changed_fields={
+                    "status": {
+                        "before": "awaiting_category_confirmation",
+                        "after": "cancelled",
+                    },
+                    "lock_version": {
+                        "before": before_version,
+                        "after": job.lock_version,
+                    },
+                },
+                permission="quiz:import",
+            )
+            await db.commit()
+            await db.refresh(job)
             return job
 
     async def get_import_report_url(
-        self, job_id: int, *, admin_id: int
+        self,
+        job_id: int,
+        *,
+        admin_id: int,
+        is_super_admin: bool = False,
     ) -> AdminQuizSignedUrlResponse:
-        job = await self.get_import_job(job_id, admin_id=admin_id)
+        job = await self.get_import_job(
+            job_id,
+            admin_id=admin_id,
+            is_super_admin=is_super_admin,
+        )
         now = datetime.now(timezone.utc)
         if job.expires_at <= now:
             await self._audit_import_report_access(
@@ -1747,7 +2618,11 @@ class AdminQuizService:
             now + timedelta(seconds=settings.QUIZ_OSS_SIGNED_URL_TTL_SECONDS),
         )
         try:
-            url = await self._signed_import_url(job, expires_at=expires_at)
+            url = await self._signed_import_url(
+                job,
+                expires_at=expires_at,
+                accessor_admin_id=admin_id,
+            )
         except Exception as exc:
             await self._audit_import_report_access(
                 job_id=job.id,
@@ -1765,7 +2640,56 @@ class AdminQuizService:
         )
         return AdminQuizSignedUrlResponse(url=url, expires_at=expires_at)
 
-    async def _audit_import_report_access(
+    async def get_import_source_url(
+        self,
+        job_id: int,
+        *,
+        admin_id: int,
+        is_super_admin: bool = False,
+    ) -> AdminQuizSignedUrlResponse:
+        job = await self.get_import_job(
+            job_id,
+            admin_id=admin_id,
+            is_super_admin=is_super_admin,
+        )
+        now = datetime.now(timezone.utc)
+        if job.expires_at <= now:
+            await self._audit_import_access(
+                job_id=job.id,
+                admin_id=admin_id,
+                action="import.source_download_url",
+                result="failed",
+                error_summary="导入源文件已过期",
+            )
+            raise BusinessException("导入源文件已过期")
+        expires_at = min(
+            job.expires_at,
+            now + timedelta(seconds=settings.QUIZ_OSS_SIGNED_URL_TTL_SECONDS),
+        )
+        try:
+            url = await self._signed_import_url(
+                job,
+                expires_at=expires_at,
+                object_kind="source",
+                accessor_admin_id=admin_id,
+            )
+        except Exception:
+            await self._audit_import_access(
+                job_id=job.id,
+                admin_id=admin_id,
+                action="import.source_download_url",
+                result="failed",
+                error_summary="导入源文件地址生成失败",
+            )
+            raise
+        await self._audit_import_access(
+            job_id=job.id,
+            admin_id=admin_id,
+            action="import.source_download_url",
+        )
+        return AdminQuizSignedUrlResponse(url=url, expires_at=expires_at)
+
+    async def _audit_import_access(
         self,
         *,
         job_id: int,
@@ -1783,7 +2707,7 @@ class AdminQuizService:
                 object_id=job_id,
                 result=result,
                 changed_fields=(
-                    {"report_access": {"before": None, "after": result}}
+                    {"download_access": {"before": None, "after": result}}
                     if result == "succeeded"
                     else None
                 ),
@@ -1792,42 +2716,223 @@ class AdminQuizService:
             )
             await db.commit()
 
-    async def read_import_report(
-        self, job_id: int, *, expires: int, admin_id: int, token: str
-    ) -> dict[str, object]:
+    async def _audit_import_report_access(self, **kwargs) -> None:
+        """Backward-compatible internal alias used by report download paths."""
+
+        await self._audit_import_access(**kwargs)
+
+    async def _read_local_signed_import_object(
+        self,
+        job_id: int,
+        *,
+        object_kind: str,
+        expires: int,
+        admin_id: int,
+        token: str,
+    ) -> bytes:
         if expires < int(time.time()):
-            raise ValidationException("错误报告链接已过期")
-        payload = f"{job_id}:{expires}:{admin_id}"
+            raise ValidationException("题库导入文件链接已过期")
+        payload = f"{job_id}:{object_kind}:{expires}:{admin_id}"
         expected = hmac.new(
             settings.JWT_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
         ).hexdigest()
         if not hmac.compare_digest(expected, token):
-            raise ValidationException("错误报告链接无效")
-        job = await self.get_import_job(job_id, admin_id=admin_id)
+            raise ValidationException("题库导入文件链接无效")
+        job = await self.get_import_job(
+            job_id,
+            admin_id=admin_id,
+            is_super_admin=True,
+        )
         now = datetime.now(timezone.utc)
         if job.expires_at <= now:
-            await self._audit_import_report_access(
+            await self._audit_import_access(
                 job_id=job.id,
                 admin_id=admin_id,
-                action="import.report_download",
+                action=f"import.{object_kind}_download",
                 result="failed",
-                error_summary="错误报告已过期",
+                error_summary="题库导入文件已过期",
             )
-            raise BusinessException("错误报告已过期")
-        if not job.report_object_key:
-            raise NotFoundException("错误报告")
-        raw = await self._get_import_object(job.report_object_key)
+            raise BusinessException("题库导入文件已过期")
+        object_key = (
+            job.source_object_key if object_kind == "source" else job.report_object_key
+        )
+        if not object_key:
+            raise NotFoundException("导入源文件" if object_kind == "source" else "错误报告")
+        raw = await self._get_import_object(object_key)
+        await self._audit_import_access(
+            job_id=job.id,
+            admin_id=admin_id,
+            action=f"import.{object_kind}_download",
+        )
+        return raw
+
+    async def read_import_report(
+        self, job_id: int, *, expires: int, admin_id: int, token: str
+    ) -> AdminQuizImportReportResponse:
+        raw = await self._read_local_signed_import_object(
+            job_id,
+            object_kind="report",
+            expires=expires,
+            admin_id=admin_id,
+            token=token,
+        )
         try:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise BusinessException("错误报告内容损坏") from exc
-        await self._audit_import_report_access(
-            job_id=job.id,
+        try:
+            return AdminQuizImportReportResponse.model_validate(payload)
+        except PydanticValidationError as exc:
+            raise BusinessException("错误报告内容损坏") from exc
+
+    async def read_import_source(
+        self, job_id: int, *, expires: int, admin_id: int, token: str
+    ) -> LocalImportDownload:
+        job = await self.get_import_job(
+            job_id,
             admin_id=admin_id,
-            action="import.report_download",
-            result="succeeded",
+            is_super_admin=True,
         )
-        return payload
+        raw = await self._read_local_signed_import_object(
+            job_id,
+            object_kind="source",
+            expires=expires,
+            admin_id=admin_id,
+            token=token,
+        )
+        if job.source_type == "csv":
+            return LocalImportDownload(
+                data=raw,
+                media_type="text/csv; charset=utf-8",
+                extension="csv",
+            )
+        return LocalImportDownload(
+            data=raw,
+            media_type="application/json; charset=utf-8",
+            extension="json",
+        )
+
+    async def retry_import_job(self, job_id: int, *, admin_id: int) -> QuizImportJob:
+        """Manually requeue only a terminal infrastructure failure."""
+
+        async with get_db_ctx() as db:
+            job = await self._get_for_update(db, QuizImportJob, job_id)
+            if job is None or job.admin_id != admin_id:
+                raise NotFoundException("导入任务")
+            if job.status != "failed":
+                self._add_audit(
+                    db,
+                    admin_id=admin_id,
+                    action="import.manual_retry",
+                    object_type="import_job",
+                    object_id=job.id,
+                    result="failed",
+                    error_summary="仅 failed 导入任务允许人工重试",
+                    permission="quiz:import",
+                )
+                await db.commit()
+                raise BusinessException("仅 failed 导入任务允许人工重试")
+            if (job.retry_count or 0) >= settings.QUIZ_WORKER_MAX_RETRIES:
+                self._add_audit(
+                    db,
+                    admin_id=admin_id,
+                    action="import.manual_retry",
+                    object_type="import_job",
+                    object_id=job.id,
+                    result="failed",
+                    error_summary="导入任务重试次数已耗尽",
+                    permission="quiz:import",
+                )
+                await db.commit()
+                raise BusinessException("导入任务重试次数已耗尽")
+            expires_at = job.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at <= datetime.now(timezone.utc):
+                self._add_audit(
+                    db,
+                    admin_id=admin_id,
+                    action="import.manual_retry",
+                    object_type="import_job",
+                    object_id=job.id,
+                    result="failed",
+                    error_summary="导入源文件已过期",
+                    permission="quiz:import",
+                )
+                await db.commit()
+                raise BusinessException("导入源文件已过期，无法重试")
+            before_status = job.status
+            job.status = "queued"
+            job.error_message = None
+            job.started_at = None
+            job.finished_at = None
+            job.heartbeat_at = datetime.now(timezone.utc)
+            self._add_audit(
+                db,
+                admin_id=admin_id,
+                action="import.manual_retry",
+                object_type="import_job",
+                object_id=job.id,
+                changed_fields={
+                    "status": {"before": before_status, "after": "queued"},
+                    "import_batch_key": {
+                        "before": job.import_batch_key,
+                        "after": job.import_batch_key,
+                    },
+                },
+                permission="quiz:import",
+            )
+            await db.commit()
+            await db.refresh(job)
+            return job
+
+    async def expire_awaiting_import_job(
+        self,
+        *,
+        now: datetime | None = None,
+        job_id: int | None = None,
+    ) -> bool:
+        cutoff = now or datetime.now(timezone.utc)
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=timezone.utc)
+        waiting_before = cutoff - timedelta(days=settings.QUIZ_IMPORT_RETENTION_DAYS)
+        async with get_db_ctx() as db:
+            stmt = select(QuizImportJob).where(
+                QuizImportJob.status == "awaiting_category_confirmation",
+                QuizImportJob.updated_at <= waiting_before,
+            )
+            if job_id is not None:
+                stmt = stmt.where(QuizImportJob.id == job_id)
+            job = (
+                await db.execute(
+                    stmt.order_by(QuizImportJob.updated_at.asc(), QuizImportJob.id.asc())
+                    .with_for_update(skip_locked=True)
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if job is None:
+                return False
+            job.status = "expired"
+            job.finished_at = cutoff
+            job.heartbeat_at = cutoff
+            job.expires_at = cutoff
+            job.lock_version += 1
+            self._add_audit(
+                db,
+                admin_id=None,
+                action="import.expire",
+                object_type="import_job",
+                object_id=job.id,
+                changed_fields={
+                    "status": {
+                        "before": "awaiting_category_confirmation",
+                        "after": "expired",
+                    }
+                },
+                permission="quiz:import",
+            )
+            await db.commit()
+            return True
 
     async def cleanup_expired_import_job(
         self,
@@ -1839,7 +2944,8 @@ class AdminQuizService:
         cutoff = now or datetime.now(timezone.utc)
         if cutoff.tzinfo is None:
             cutoff = cutoff.replace(tzinfo=timezone.utc)
-        stale_before = cutoff - timedelta(seconds=settings.QUIZ_WORKER_STALE_SECONDS)
+        if await self.expire_awaiting_import_job(now=cutoff, job_id=job_id):
+            return True
         async with get_db_ctx() as db:
             already_cleaned = exists(
                 select(1).where(
@@ -1853,17 +2959,14 @@ class AdminQuizService:
                 select(QuizImportJob)
                 .where(
                     QuizImportJob.expires_at <= cutoff,
-                    or_(
-                        QuizImportJob.status.in_(
-                            ("validation_failed", "succeeded", "failed")
-                        ),
+                    QuizImportJob.status.in_(
                         (
-                            QuizImportJob.status.in_(("queued", "validating", "importing"))
-                            & (
-                                QuizImportJob.heartbeat_at.is_(None)
-                                | (QuizImportJob.heartbeat_at < stale_before)
-                            )
-                        ),
+                            "validation_failed",
+                            "succeeded",
+                            "failed",
+                            "cancelled",
+                            "expired",
+                        )
                     ),
                     ~already_cleaned,
                 )
@@ -1921,20 +3024,43 @@ class AdminQuizService:
                 },
                 permission="quiz:import",
             )
+            await db.execute(
+                delete(QuizImportError).where(QuizImportError.job_id == job.id)
+            )
             await db.commit()
             return True
 
-    @staticmethod
-    def _validation_errors(exc: PydanticValidationError, row: int) -> list[dict[str, object]]:
+    @classmethod
+    def _validation_errors(
+        cls,
+        exc: PydanticValidationError,
+        *,
+        source_type: str,
+        locator: int,
+    ) -> list[dict[str, object]]:
         errors: list[dict[str, object]] = []
         for item in exc.errors():
             location = [str(part) for part in item.get("loc", ())]
+            context_error = (item.get("ctx") or {}).get("error")
+            if isinstance(context_error, QuizRuleViolation):
+                # Field validators already provide the public request field in
+                # ``loc`` (for example ``category_path`` while the underlying
+                # normalizer reports ``name``). Model-level validators have an
+                # empty location, so retain the domain error's precise field
+                # such as ``options`` or ``correct_answer`` there.
+                field = ".".join(location) or context_error.field
+                message = context_error.message
+            else:
+                field = ".".join(location) or None
+                message = str(item.get("msg", "参数校验失败"))
             errors.append(
-                {
-                    "row": row,
-                    "field": ".".join(location) or None,
-                    "message": str(item.get("msg", "参数校验失败")),
-                }
+                cls._import_error(
+                    row=locator if source_type == "csv" else None,
+                    question_index=locator - 1 if source_type == "csv" else locator,
+                    field=field,
+                    error_code="schema_validation",
+                    message=message,
+                )
             )
         return errors
 
@@ -1948,25 +3074,69 @@ class AdminQuizService:
             try:
                 payload = json.loads(content.decode("utf-8-sig"))
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                return [], [{"row": 1, "field": None, "message": f"JSON 文件无效: {exc}"}]
+                return [], [
+                    self._import_error(
+                        row=None,
+                        question_index=None,
+                        field=None,
+                        error_code="invalid_json",
+                        message=f"JSON 文件无效: {exc}",
+                    )
+                ]
             if not isinstance(payload, dict) or set(payload) != {"questions"}:
-                return [], [{"row": 1, "field": None, "message": "JSON 顶层必须仅包含 questions 字段"}]
+                return [], [
+                    self._import_error(
+                        row=None,
+                        question_index=None,
+                        field=None,
+                        error_code="invalid_document",
+                        message="JSON 顶层必须仅包含 questions 字段",
+                    )
+                ]
             raw_questions = payload.get("questions")
             if not isinstance(raw_questions, list):
-                return [], [{"row": 1, "field": "questions", "message": "questions 必须是数组"}]
+                return [], [
+                    self._import_error(
+                        row=None,
+                        question_index=None,
+                        field="questions",
+                        error_code="invalid_document",
+                        message="questions 必须是数组",
+                    )
+                ]
             if not 1 <= len(raw_questions) <= settings.QUIZ_IMPORT_MAX_QUESTIONS:
-                return [], [{"row": 1, "field": "questions", "message": "题目数量必须在 1 至 5,000 之间"}]
+                return [], [
+                    self._import_error(
+                        row=None,
+                        question_index=None,
+                        field="questions",
+                        error_code="question_count_out_of_range",
+                        message="题目数量必须在 1 至 5,000 之间",
+                    )
+                ]
             for row_no, raw in enumerate(raw_questions, start=1):
                 try:
                     rows.append((row_no, AdminQuizImportQuestion.model_validate(raw)))
                 except PydanticValidationError as exc:
-                    errors.extend(self._validation_errors(exc, row_no))
+                    errors.extend(
+                        self._validation_errors(
+                            exc, source_type="json", locator=row_no
+                        )
+                    )
             return rows, errors
 
         try:
             text = content.decode("utf-8-sig")
         except UnicodeDecodeError as exc:
-            return [], [{"row": 1, "field": None, "message": f"CSV 必须使用 UTF-8 编码: {exc}"}]
+            return [], [
+                self._import_error(
+                    row=None,
+                    question_index=None,
+                    field=None,
+                    error_code="invalid_encoding",
+                    message=f"CSV 必须使用 UTF-8 编码: {exc}",
+                )
+            ]
         reader = csv.DictReader(io.StringIO(text, newline=""))
         expected_headers = [
             "category_path",
@@ -1977,7 +3147,15 @@ class AdminQuizService:
             "explanation",
         ]
         if reader.fieldnames != expected_headers:
-            return [], [{"row": 1, "field": None, "message": "CSV 表头必须严格为固定六列"}]
+            return [], [
+                self._import_error(
+                    row=None,
+                    question_index=None,
+                    field=None,
+                    error_code="invalid_csv_header",
+                    message="CSV 表头必须严格为固定六列",
+                )
+            ]
         data_row_count = 0
         limit_error_added = False
         for row_no, raw in enumerate(reader, start=2):
@@ -1985,14 +3163,16 @@ class AdminQuizService:
             if data_row_count > settings.QUIZ_IMPORT_MAX_QUESTIONS:
                 if not limit_error_added:
                     errors.append(
-                        {
-                            "row": row_no,
-                            "field": None,
-                            "message": (
+                        self._import_error(
+                            row=row_no,
+                            question_index=data_row_count,
+                            field=None,
+                            error_code="question_count_out_of_range",
+                            message=(
                                 "CSV 题目数量超过限制，单批最多 "
                                 f"{settings.QUIZ_IMPORT_MAX_QUESTIONS} 道"
                             ),
-                        }
+                        )
                     )
                     limit_error_added = True
                 continue
@@ -2013,9 +3193,21 @@ class AdminQuizService:
                 rows.append((row_no, AdminQuizImportQuestion.model_validate(item)))
             except (ValueError, TypeError, json.JSONDecodeError, PydanticValidationError) as exc:
                 if isinstance(exc, PydanticValidationError):
-                    errors.extend(self._validation_errors(exc, row_no))
+                    errors.extend(
+                        self._validation_errors(
+                            exc, source_type="csv", locator=row_no
+                        )
+                    )
                 else:
-                    errors.append({"row": row_no, "field": None, "message": f"CSV 行无效: {exc}"})
+                    errors.append(
+                        self._import_error(
+                            row=row_no,
+                            question_index=data_row_count,
+                            field=None,
+                            error_code="invalid_csv_row",
+                            message=f"CSV 行无效: {exc}",
+                        )
+                    )
         return rows, errors
 
     async def _validate_import_rows(
@@ -2023,50 +3215,104 @@ class AdminQuizService:
         db,
         rows: list[tuple[int, AdminQuizImportQuestion]],
         initial_errors: list[dict[str, object]],
-    ) -> tuple[list[tuple[int, AdminQuizImportQuestion, int]], list[dict[str, object]]]:
-        valid: list[tuple[int, AdminQuizImportQuestion, int]] = []
+        *,
+        source_type: str,
+        job_id: int,
+        lock_version: int,
+        lock_categories: bool = False,
+    ) -> ImportValidationResult:
+        valid: list[tuple[int, AdminQuizImportQuestion, int | tuple[str, ...]]] = []
         errors = list(initial_errors)
-        category_cache: dict[tuple[str, ...], int | None] = {}
-        category_error_cache: dict[tuple[str, ...], str] = {}
-        seen: set[tuple[int, str]] = set()
-        candidates: list[tuple[int, AdminQuizImportQuestion, int, str]] = []
-        for row_no, item in rows:
+        missing_errors: list[dict[str, object]] = []
+
+        category_stmt = select(QuizCategory).order_by(
+            QuizCategory.depth.asc(), QuizCategory.id.asc()
+        )
+        if lock_categories:
+            category_stmt = category_stmt.with_for_update()
+        categories = list((await db.execute(category_stmt)).scalars().all())
+        by_parent_name = {
+            (item.parent_id, item.normalized_name): item for item in categories
+        }
+        category_by_prefix: dict[tuple[str, ...], QuizCategory] = {}
+        missing_prefixes: set[tuple[str, ...]] = set()
+        path_rows: list[tuple[tuple[str, ...], int]] = []
+        seen: set[tuple[object, str]] = set()
+        candidates: list[
+            tuple[
+                int,
+                AdminQuizImportQuestion,
+                int | tuple[str, ...],
+                str,
+            ]
+        ] = []
+
+        def location(locator: int) -> tuple[int | None, int]:
+            if source_type == "csv":
+                return locator, locator - 1
+            return None, locator
+
+        for locator, item in rows:
             path_key = tuple(item.category_path)
-            category_id = category_cache.get(path_key)
-            if path_key not in category_cache:
-                parent_id: int | None = None
-                category_id = None
-                for part in path_key:
-                    category = (
-                        await db.execute(
-                            select(QuizCategory)
-                            .where(
-                                QuizCategory.parent_id == parent_id,
-                                QuizCategory.normalized_name == part,
-                            )
-                            .limit(1)
-                        )
-                    ).scalar_one_or_none()
-                    if category is None:
-                        category_id = None
-                        category_error_cache[path_key] = f"分类不存在: {part}"
-                        break
-                    if category.status != QuizCategoryStatus.ACTIVE.value:
-                        category_id = None
-                        category_error_cache[path_key] = f"分类已停用: {part}"
-                        break
-                    parent_id = category.id
-                    category_id = category.id
-                category_cache[path_key] = category_id
-            if category_id is None:
+            path_rows.append((path_key, locator))
+            parent_id: int | None = None
+            category_id: int | None = None
+            missing = False
+            blocked: QuizCategory | None = None
+            for depth, part in enumerate(path_key, start=1):
+                prefix = path_key[:depth]
+                if missing:
+                    missing_prefixes.add(prefix)
+                    continue
+                category = by_parent_name.get((parent_id, part))
+                if category is None:
+                    missing = True
+                    missing_prefixes.add(prefix)
+                    continue
+                category_by_prefix[prefix] = category
+                if category.status != QuizCategoryStatus.ACTIVE.value:
+                    blocked = category
+                    break
+                parent_id = category.id
+                category_id = category.id
+
+            row_no, question_index = location(locator)
+            if blocked is not None:
                 errors.append(
-                    {
-                        "row": row_no,
-                        "field": "category_path",
-                        "message": category_error_cache.get(path_key, "分类路径无效"),
-                    }
+                    self._import_error(
+                        row=row_no,
+                        question_index=question_index,
+                        field="category_path",
+                        error_code="category_disabled",
+                        message=f"分类已停用: {blocked.name}",
+                    )
                 )
                 continue
+
+            target: int | tuple[str, ...]
+            if missing:
+                target = path_key
+                first_missing = next(
+                    (
+                        path_key[index - 1]
+                        for index in range(1, len(path_key) + 1)
+                        if path_key[:index] in missing_prefixes
+                        and path_key[:index] not in category_by_prefix
+                    ),
+                    path_key[-1],
+                )
+                missing_errors.append(
+                    self._import_error(
+                        row=row_no,
+                        question_index=question_index,
+                        field="category_path",
+                        error_code="category_missing",
+                        message=f"分类不存在: {first_missing}",
+                    )
+                )
+            else:
+                assert category_id is not None
+                target = category_id
 
             try:
                 normalized = normalize_question_payload(
@@ -2079,22 +3325,63 @@ class AdminQuizService:
                 )
             except QuizRuleViolation as exc:
                 errors.append(
-                    {"row": row_no, "field": exc.field, "message": exc.message}
+                    self._import_error(
+                        row=row_no,
+                        question_index=question_index,
+                        field=exc.field,
+                        error_code="question_validation",
+                        message=exc.message,
+                    )
                 )
                 continue
-            key = (category_id, normalized.question_text_hash)
+            target_key: object = (
+                ("category", target) if isinstance(target, int) else ("path", *target)
+            )
+            key = (target_key, normalized.question_text_hash)
             if key in seen:
-                errors.append({"row": row_no, "field": "question_text", "message": "本批次题干重复"})
+                errors.append(
+                    self._import_error(
+                        row=row_no,
+                        question_index=question_index,
+                        field="question_text",
+                        error_code="duplicate_question_in_batch",
+                        message="本批次题干重复",
+                    )
+                )
                 continue
             seen.add(key)
-            candidates.append((row_no, item, category_id, normalized.question_text_hash))
+            candidates.append((locator, item, target, normalized.question_text_hash))
+
+        too_many_missing_categories = len(missing_prefixes) > 500
+        if too_many_missing_categories:
+            errors.append(
+                self._import_error(
+                    row=None,
+                    question_index=None,
+                    field="category_path",
+                    error_code="category_creation_limit_exceeded",
+                    message="单个导入任务最多新建 500 个分类节点",
+                )
+            )
+
+        # A 5,000-row fixture can contain 5,000 distinct category paths. Once
+        # the hard 500-node limit is known to be violated, skip the remaining
+        # duplicate queries; the task is already a content validation failure.
+        if too_many_missing_categories:
+            return ImportValidationResult(
+                valid=[],
+                errors=errors,
+                missing_errors=missing_errors,
+                impact=None,
+            )
 
         # Resolve existing hashes once per category instead of issuing one
         # round-trip per row. This keeps the 5,000-row task bounded on the
         # PostgreSQL baseline while preserving row-level duplicate errors.
         hashes_by_category: dict[int, set[str]] = {}
-        for _, _, category_id, question_hash in candidates:
-            hashes_by_category.setdefault(category_id, set()).add(question_hash)
+        for _, _, target, question_hash in candidates:
+            if isinstance(target, int):
+                hashes_by_category.setdefault(target, set()).add(question_hash)
         existing_by_category: dict[int, set[str]] = {}
         for category_id, hashes in hashes_by_category.items():
             result = await db.execute(
@@ -2104,18 +3391,324 @@ class AdminQuizService:
                 )
             )
             existing_by_category[category_id] = set(result.scalars().all())
-        for row_no, item, category_id, question_hash in candidates:
-            if question_hash in existing_by_category.get(category_id, set()):
+        for locator, item, target, question_hash in candidates:
+            row_no, question_index = location(locator)
+            if isinstance(target, int) and question_hash in existing_by_category.get(
+                target, set()
+            ):
                 errors.append(
-                    {
-                        "row": row_no,
-                        "field": "question_text",
-                        "message": "同一分类内规范化题干已存在",
-                    }
+                    self._import_error(
+                        row=row_no,
+                        question_index=question_index,
+                        field="question_text",
+                        error_code="duplicate_question",
+                        message="同一分类内规范化题干已存在",
+                    )
                 )
                 continue
-            valid.append((row_no, item, category_id))
-        return valid, errors
+            valid.append((locator, item, target))
+
+        impact = (
+            self._build_import_category_impact(
+                job_id=job_id,
+                lock_version=lock_version,
+                categories=categories,
+                category_by_prefix=category_by_prefix,
+                missing_prefixes=missing_prefixes,
+                path_rows=path_rows,
+            )
+            # A confirmed run must also snapshot the all-existing tree. If
+            # another administrator creates the formerly missing categories
+            # between preview and execution, that is a material impact change
+            # and requires a fresh explicit confirmation.
+            if (missing_prefixes or lock_categories)
+            and not too_many_missing_categories
+            else None
+        )
+        return ImportValidationResult(
+            valid=valid,
+            errors=errors,
+            missing_errors=missing_errors,
+            impact=impact,
+        )
+
+    def _build_import_category_impact(
+        self,
+        *,
+        job_id: int,
+        lock_version: int,
+        categories: list[QuizCategory],
+        category_by_prefix: dict[tuple[str, ...], QuizCategory],
+        missing_prefixes: set[tuple[str, ...]],
+        path_rows: list[tuple[tuple[str, ...], int]],
+    ) -> AdminQuizImportCategoryImpactResponse:
+        direct_counts: dict[tuple[str, ...], int] = {}
+        subtree_counts: dict[tuple[str, ...], int] = {}
+        all_prefixes: set[tuple[str, ...]] = set()
+        for path, _ in path_rows:
+            direct_counts[path] = direct_counts.get(path, 0) + 1
+            for depth in range(1, len(path) + 1):
+                prefix = path[:depth]
+                all_prefixes.add(prefix)
+                subtree_counts[prefix] = subtree_counts.get(prefix, 0) + 1
+
+        disabled_prefixes = {
+            prefix
+            for prefix, category in category_by_prefix.items()
+            if category.status != QuizCategoryStatus.ACTIVE.value
+        }
+        blocking_reasons: list[str] = []
+        nodes: dict[tuple[str, ...], dict[str, object]] = {}
+        for prefix in sorted(all_prefixes, key=lambda item: (len(item), item)):
+            category = category_by_prefix.get(prefix)
+            blocked_ancestor = next(
+                (
+                    ancestor
+                    for depth in range(1, len(prefix) + 1)
+                    if (ancestor := prefix[:depth]) in disabled_prefixes
+                ),
+                None,
+            )
+            reasons: list[str] = []
+            if blocked_ancestor is not None:
+                disabled = category_by_prefix[blocked_ancestor]
+                reasons.append(f"分类已停用: {disabled.name}")
+                status = "blocked"
+            elif prefix in missing_prefixes or category is None:
+                status = "will_create"
+            else:
+                status = "existing"
+            for reason in reasons:
+                if reason not in blocking_reasons:
+                    blocking_reasons.append(reason)
+            nodes[prefix] = {
+                "name": prefix[-1],
+                "path": list(prefix),
+                "depth": len(prefix),
+                "status": status,
+                "category_id": category.id if category is not None else None,
+                "direct_question_count": direct_counts.get(prefix, 0),
+                "subtree_question_count": subtree_counts.get(prefix, 0),
+                "blocking_reasons": reasons,
+                "children": [],
+            }
+
+        roots: list[dict[str, object]] = []
+        for prefix in sorted(nodes, key=lambda item: (len(item), item)):
+            node = nodes[prefix]
+            if len(prefix) == 1:
+                roots.append(node)
+            else:
+                children = nodes[prefix[:-1]]["children"]
+                assert isinstance(children, list)
+                children.append(node)
+
+        calculated_at = datetime.now(timezone.utc)
+        new_count = sum(
+            1 for node in nodes.values() if node["status"] == "will_create"
+        )
+        reused_count = sum(
+            1 for node in nodes.values() if node["status"] == "existing"
+        )
+        payload = self._impact_snapshot_payload(
+            tree=roots,
+            new_category_count=new_count,
+            reused_category_count=reused_count,
+            affected_question_count=len(path_rows),
+            blocking_reasons=blocking_reasons,
+            calculated_at=calculated_at,
+        )
+        impact_version = self._impact_version(payload)
+        return AdminQuizImportCategoryImpactResponse(
+            job_id=job_id,
+            status="awaiting_category_confirmation",
+            tree=roots,
+            new_category_count=new_count,
+            reused_category_count=reused_count,
+            affected_question_count=len(path_rows),
+            blocking_reasons=blocking_reasons,
+            lock_version=lock_version,
+            impact_version=impact_version,
+            calculated_at=calculated_at,
+        )
+
+    @staticmethod
+    def _import_total_rows(
+        *,
+        source_type: str,
+        rows: list[tuple[int, AdminQuizImportQuestion]],
+        errors: list[dict[str, object]],
+    ) -> int:
+        indexes = {locator - 1 if source_type == "csv" else locator for locator, _ in rows}
+        indexes.update(
+            int(item["question_index"])
+            for item in errors
+            if item.get("question_index") is not None
+        )
+        return min(settings.QUIZ_IMPORT_MAX_QUESTIONS, len(indexes))
+
+    @staticmethod
+    def _report_errors(errors: list[dict[str, object]]) -> list[dict[str, object]]:
+        return [
+            {
+                key: value
+                for key, value in item.items()
+                if key in {"row", "question_index", "field", "error_code", "message"}
+            }
+            for item in errors
+        ]
+
+    async def _write_import_report(
+        self,
+        job: QuizImportJob,
+        errors: list[dict[str, object]],
+    ) -> str:
+        report_key = self._import_object_key(job.import_batch_key, "report.json")
+        report = json.dumps(
+            {"job_id": job.id, "errors": self._report_errors(errors)},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        await self._put_import_object(report_key, report, "application/json")
+        return report_key
+
+    async def _create_import_questions(
+        self,
+        db,
+        *,
+        current: QuizImportJob,
+        valid: list[tuple[int, AdminQuizImportQuestion, int | tuple[str, ...]]],
+    ) -> None:
+        assert current.admin_id is not None
+        path_categories: dict[tuple[str, ...], int] = {}
+        for _, item, target in valid:
+            if not isinstance(target, int):
+                raise ValidationException("导入分类尚未确认")
+            normalized = normalize_question_payload(
+                question_type=item.question_type,
+                question_text=item.question_text,
+                options=item.options,
+                correct_answer=item.correct_answer,
+                explanation=item.explanation,
+                require_publishable=False,
+            )
+            db.add(
+                QuizQuestion(
+                    category_id=target,
+                    question_type=normalized.question_type.value,
+                    status=QuizQuestionStatus.DRAFT.value,
+                    question_text=normalized.question_text,
+                    normalized_question_text=normalized.normalized_question_text,
+                    question_text_hash=normalized.question_text_hash,
+                    options=normalized.options,
+                    correct_answer=normalized.correct_answer,
+                    explanation=normalized.explanation,
+                    ever_published=False,
+                    lock_version=1,
+                    created_by=current.admin_id,
+                    updated_by=current.admin_id,
+                )
+            )
+            path_categories[tuple(item.category_path)] = target
+        for category_id in set(path_categories.values()):
+            category = await db.get(QuizCategory, category_id)
+            if category is not None:
+                category.ever_had_question = True
+
+    async def _create_confirmed_categories_and_questions(
+        self,
+        db,
+        *,
+        current: QuizImportJob,
+        valid: list[tuple[int, AdminQuizImportQuestion, int | tuple[str, ...]]],
+    ) -> list[tuple[int, AdminQuizImportQuestion, int]]:
+        assert current.admin_id is not None
+        categories = list(
+            (
+                await db.execute(
+                    select(QuizCategory)
+                    .order_by(QuizCategory.depth.asc(), QuizCategory.id.asc())
+                    .with_for_update()
+                )
+            ).scalars().all()
+        )
+        by_parent_name = {
+            (category.parent_id, category.normalized_name): category
+            for category in categories
+        }
+        resolved: dict[tuple[str, ...], QuizCategory] = {}
+        requested_paths = sorted(
+            {tuple(item.category_path) for _, item, _ in valid},
+            key=lambda path: (len(path), path),
+        )
+        created_count = 0
+        for path in requested_paths:
+            parent_id: int | None = None
+            for depth, name in enumerate(path, start=1):
+                prefix = path[:depth]
+                category = by_parent_name.get((parent_id, name))
+                if category is None:
+                    created_count += 1
+                    if created_count > 500:
+                        raise ValidationException("单个导入任务最多新建 500 个分类节点")
+                    category = QuizCategory(
+                        name=name,
+                        normalized_name=name,
+                        parent_id=parent_id,
+                        depth=depth,
+                        description=None,
+                        status=QuizCategoryStatus.ACTIVE.value,
+                        sort_order=0,
+                        ever_had_question=False,
+                        lock_version=1,
+                        created_by=current.admin_id,
+                        updated_by=current.admin_id,
+                    )
+                    db.add(category)
+                    await db.flush()
+                    by_parent_name[(parent_id, name)] = category
+                if category.status != QuizCategoryStatus.ACTIVE.value:
+                    raise ValidationException(f"分类已停用: {category.name}")
+                resolved[prefix] = category
+                parent_id = category.id
+
+        final: list[tuple[int, AdminQuizImportQuestion, int]] = []
+        for locator, item, _ in valid:
+            category = resolved[tuple(item.category_path)]
+            final.append((locator, item, category.id))
+        await self._create_import_questions(db, current=current, valid=final)
+        return final
+
+    @staticmethod
+    def _integrity_import_error(
+        exc: IntegrityError,
+        *,
+        source_type: str,
+    ) -> dict[str, object] | None:
+        constraint = str(
+            getattr(getattr(exc, "orig", None), "constraint_name", "") or ""
+        )
+        if not constraint:
+            constraint = str(exc)
+        if "uq_quiz_question_category_text_hash" in constraint:
+            return AdminQuizService._import_error(
+                row=None,
+                question_index=None,
+                field="question_text",
+                error_code="duplicate_question",
+                message="确认执行时发现同一分类内规范化题干已存在",
+            )
+        if (
+            "uq_quiz_category_root_name" in constraint
+            or "uq_quiz_category_sibling_name" in constraint
+        ):
+            return AdminQuizService._import_error(
+                row=None,
+                question_index=None,
+                field="category_path",
+                error_code="category_conflict",
+                message="确认执行时分类树发生并发变化，请重新导入",
+            )
+        return None
 
     async def process_import_job(
         self,
@@ -2123,7 +3716,7 @@ class AdminQuizService:
         *,
         already_claimed: bool = False,
     ) -> bool:
-        """Validate and atomically import one queued job."""
+        """Validate and atomically import one queued or confirmed job."""
         now = datetime.now(timezone.utc)
         stale_before = now - timedelta(seconds=settings.QUIZ_WORKER_STALE_SECONDS)
         async with get_db_ctx() as db:
@@ -2134,18 +3727,32 @@ class AdminQuizService:
                     .with_for_update()
                 )
             ).scalar_one_or_none()
-            if job is None or job.status in {"succeeded", "validation_failed", "failed"}:
+            terminal = {
+                "succeeded",
+                "validation_failed",
+                "failed",
+                "awaiting_category_confirmation",
+                "cancelled",
+                "expired",
+            }
+            if job is None or job.status in terminal:
                 return False
+            before_status = job.status
+            confirmed_run = (
+                job.confirmed_at is not None and job.status in {"queued", "importing"}
+            )
             if already_claimed:
-                # ``process_next_import_job`` commits the validating claim
-                # before any file I/O. A second worker therefore cannot select
-                # the same fresh row; only a stale heartbeat can reclaim it.
-                if job.status != "validating":
+                if job.status not in {"validating", "importing"}:
                     return False
             elif job.status in {"validating", "importing"}:
                 heartbeat = job.heartbeat_at
                 if heartbeat is not None and heartbeat.tzinfo is None:
                     heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+                protected_until = job.execution_protected_until
+                if protected_until is not None and protected_until.tzinfo is None:
+                    protected_until = protected_until.replace(tzinfo=timezone.utc)
+                if protected_until is not None and protected_until > now:
+                    return False
                 if heartbeat is not None and heartbeat >= stale_before:
                     return False
                 before_retry_count = job.retry_count or 0
@@ -2176,45 +3783,79 @@ class AdminQuizService:
                     )
                     await db.commit()
                     return True
-            job.status = "validating"
+            job.status = "importing" if confirmed_run else "validating"
             job.started_at = job.started_at or now
             job.heartbeat_at = now
             job.finished_at = None
             job.error_message = None
+            self._add_audit(
+                db,
+                admin_id=None,
+                action="import.claim",
+                object_type="import_job",
+                object_id=job.id,
+                changed_fields={
+                    "status": {"before": before_status, "after": job.status},
+                },
+                permission="quiz:import",
+            )
             await db.commit()
 
         try:
             content = await self._get_import_object(job.source_object_key)
             rows, parse_errors = self._parse_import_rows(job.source_type, content)
             async with get_db_ctx() as db:
-                current = await db.get(QuizImportJob, job_id)
+                current = (
+                    await db.execute(
+                        select(QuizImportJob)
+                        .where(QuizImportJob.id == job_id)
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
                 if current is None:
                     return False
-                current.total_rows = min(
-                    settings.QUIZ_IMPORT_MAX_QUESTIONS,
-                    len(rows)
-                    + len(
-                        {
-                            int(error.get("row", 0))
-                            for error in parse_errors
-                            if int(error.get("row", 0)) <= settings.QUIZ_IMPORT_MAX_QUESTIONS + 1
-                        }
-                    ),
+                if confirmed_run:
+                    if current.status != "importing" or current.confirmed_at is None:
+                        return False
+                elif current.status != "validating":
+                    return False
+                if current.admin_id is None:
+                    raise ValidationException("导入任务所属管理员不存在")
+
+                next_validation_version = current.validation_version + 1
+                current.total_rows = self._import_total_rows(
+                    source_type=current.source_type,
+                    rows=rows,
+                    errors=parse_errors,
                 )
                 current.heartbeat_at = datetime.now(timezone.utc)
-                valid, errors = await self._validate_import_rows(db, rows, parse_errors)
-                current.validated_rows = len(valid)
-                current.error_count = len(errors)
+                validation = await self._validate_import_rows(
+                    db,
+                    rows,
+                    parse_errors,
+                    source_type=current.source_type,
+                    job_id=current.id,
+                    lock_version=current.lock_version,
+                    lock_categories=confirmed_run,
+                )
+                errors = validation.errors
+                missing_errors = validation.missing_errors
+                current.validation_version = next_validation_version
+                current.validated_rows = len(validation.valid)
+
+                # Missing categories are a confirmation state only when there
+                # are no independent content/category blockers.
                 if errors:
-                    report_key = self._import_object_key(current.import_batch_key, "report.json")
-                    report = json.dumps(
-                        {"job_id": current.id, "errors": errors},
-                        ensure_ascii=False,
-                    ).encode("utf-8")
-                    await self._put_import_object(report_key, report, "application/json")
+                    all_errors = [*errors, *missing_errors]
+                    report_key = await self._write_import_report(current, all_errors)
                     current.report_object_key = report_key
                     current.status = "validation_failed"
-                    current.error_message = f"共 {len(errors)} 项校验错误"
+                    current.error_count = len(all_errors)
+                    current.error_message = f"共 {len(all_errors)} 项校验错误"
+                    current.category_impact = None
+                    current.impact_version = None
+                    current.missing_category_count = 0
+                    current.affected_question_count = 0
                     current.finished_at = datetime.now(timezone.utc)
                     current.heartbeat_at = current.finished_at
                     current.expires_at = self._terminal_import_expiry(
@@ -2234,7 +3875,7 @@ class AdminQuizService:
                             },
                             "error_count": {
                                 "before": 0,
-                                "after": len(errors),
+                                "after": len(all_errors),
                             },
                             "report_object_key": {
                                 "before": None,
@@ -2244,49 +3885,124 @@ class AdminQuizService:
                         error_summary=current.error_message,
                         permission="quiz:import",
                     )
+                    await self._replace_import_errors(
+                        db,
+                        job_id=current.id,
+                        validation_version=next_validation_version,
+                        errors=all_errors,
+                    )
+                    await db.commit()
+                    return True
+
+                if missing_errors and not confirmed_run:
+                    assert validation.impact is not None
+                    impact = validation.impact
+                    snapshot = impact.model_dump(mode="json")
+                    current.status = "awaiting_category_confirmation"
+                    current.error_count = 0
+                    current.report_object_key = None
+                    current.error_message = None
+                    current.category_impact = snapshot
+                    current.impact_version = impact.impact_version
+                    current.missing_category_count = impact.new_category_count
+                    current.affected_question_count = impact.affected_question_count
+                    current.finished_at = None
+                    current.lock_version += 1
+                    snapshot["lock_version"] = current.lock_version
+                    current.category_impact = snapshot
+                    self._add_audit(
+                        db,
+                        admin_id=current.admin_id,
+                        action="import.awaiting_category_confirmation",
+                        object_type="import_job",
+                        object_id=current.id,
+                        changed_fields={
+                            "status": {
+                                "before": "validating",
+                                "after": current.status,
+                            },
+                            "missing_category_count": {
+                                "before": 0,
+                                "after": current.missing_category_count,
+                            },
+                            "affected_question_count": {
+                                "before": 0,
+                                "after": current.affected_question_count,
+                            },
+                        },
+                        permission="quiz:import",
+                    )
+                    await self._replace_import_errors(
+                        db,
+                        job_id=current.id,
+                        validation_version=next_validation_version,
+                        errors=[],
+                    )
+                    await db.commit()
+                    return True
+
+                if (
+                    confirmed_run
+                    and validation.impact is not None
+                    and validation.impact.impact_version != current.impact_version
+                ):
+                    # The administrator confirmed an earlier impact but the
+                    # category tree has since changed. Publish the refreshed
+                    # snapshot and require an explicit second confirmation.
+                    assert validation.impact is not None
+                    impact = validation.impact
+                    snapshot = impact.model_dump(mode="json")
+                    current.status = "awaiting_category_confirmation"
+                    current.confirmed_by = None
+                    current.confirmed_at = None
+                    current.execution_protected_until = None
+                    current.category_impact = snapshot
+                    current.impact_version = impact.impact_version
+                    current.missing_category_count = impact.new_category_count
+                    current.affected_question_count = impact.affected_question_count
+                    current.lock_version += 1
+                    snapshot["lock_version"] = current.lock_version
+                    current.category_impact = snapshot
+                    self._add_audit(
+                        db,
+                        admin_id=current.admin_id,
+                        action="import.category_impact_changed",
+                        object_type="import_job",
+                        object_id=current.id,
+                        changed_fields={
+                            "status": {
+                                "before": "importing",
+                                "after": current.status,
+                            }
+                        },
+                        permission="quiz:import",
+                    )
                     await db.commit()
                     return True
 
                 current.status = "importing"
-                current.heartbeat_at = datetime.now(timezone.utc)
-                await db.commit()
-
-            async with get_db_ctx() as db:
-                current = await db.get(QuizImportJob, job_id)
-                if current is None:
-                    return False
-                if current.admin_id is None:
-                    raise ValidationException("导入任务所属管理员不存在")
-                for _, item, category_id in valid:
-                    normalized = normalize_question_payload(
-                        question_type=item.question_type,
-                        question_text=item.question_text,
-                        options=item.options,
-                        correct_answer=item.correct_answer,
-                        explanation=item.explanation,
-                        require_publishable=False,
+                if confirmed_run:
+                    final = await self._create_confirmed_categories_and_questions(
+                        db,
+                        current=current,
+                        valid=validation.valid,
                     )
-                    question = QuizQuestion(
-                        category_id=category_id,
-                        question_type=normalized.question_type.value,
-                        status=QuizQuestionStatus.DRAFT.value,
-                        question_text=normalized.question_text,
-                        normalized_question_text=normalized.normalized_question_text,
-                        question_text_hash=normalized.question_text_hash,
-                        options=normalized.options,
-                        correct_answer=normalized.correct_answer,
-                        explanation=normalized.explanation,
-                        ever_published=False,
-                        lock_version=1,
-                        created_by=current.admin_id,
-                        updated_by=current.admin_id,
+                else:
+                    final = [
+                        (locator, item, target)
+                        for locator, item, target in validation.valid
+                        if isinstance(target, int)
+                    ]
+                    await self._create_import_questions(
+                        db,
+                        current=current,
+                        valid=final,
                     )
-                    db.add(question)
-                    category = await db.get(QuizCategory, category_id)
-                    if category is not None:
-                        category.ever_had_question = True
-                current.created_count = len(valid)
+                current.created_count = len(final)
                 current.status = "succeeded"
+                current.error_count = 0
+                current.report_object_key = None
+                current.error_message = None
                 current.finished_at = datetime.now(timezone.utc)
                 current.heartbeat_at = current.finished_at
                 current.expires_at = self._terminal_import_expiry(
@@ -2299,41 +4015,94 @@ class AdminQuizService:
                     object_type="import_job",
                     object_id=current.id,
                     target_ids=[],
-                    changed_fields={"created_count": {"before": 0, "after": len(valid)}, "status": {"before": "importing", "after": "succeeded"}},
+                    changed_fields={
+                        "created_count": {"before": 0, "after": len(final)},
+                        "status": {"before": "importing", "after": "succeeded"},
+                    },
                     permission="quiz:import",
+                )
+                await self._replace_import_errors(
+                    db,
+                    job_id=current.id,
+                    validation_version=next_validation_version,
+                    errors=[],
                 )
                 await db.commit()
                 return True
-        except Exception:
+        except Exception as exc:
             # A failed import never leaves a partial question batch behind.
-            # Infrastructure failures are returned to the queue until the
-            # frozen retry budget is exhausted; validation failures are
-            # handled in the earlier ``validation_failed`` branch and are
-            # terminal with a row-level report.  Re-queueing uses the same
+            # Infrastructure failures enter ``failed`` and wait for the
+            # explicit admin retry endpoint. Validation failures are handled
+            # in the earlier terminal branch. Manual retry retains the same
             # import_batch_key and the question transaction is all-or-nothing,
             # so a retry cannot duplicate a successful batch.
+            validation_error = (
+                self._integrity_import_error(exc, source_type=job.source_type)
+                if isinstance(exc, IntegrityError)
+                else None
+            )
             async with get_db_ctx() as db:
                 current = await db.get(QuizImportJob, job_id)
-                if current is not None and current.status not in {"succeeded", "validation_failed"}:
+                if current is not None and current.status not in {
+                    "succeeded",
+                    "validation_failed",
+                    "awaiting_category_confirmation",
+                    "cancelled",
+                    "expired",
+                }:
                     now = datetime.now(timezone.utc)
                     before_status = current.status
+                    if validation_error is not None:
+                        now = datetime.now(timezone.utc)
+                        next_validation_version = current.validation_version + 1
+                        report_key = await self._write_import_report(
+                            current, [validation_error]
+                        )
+                        current.validation_version = next_validation_version
+                        current.status = "validation_failed"
+                        current.created_count = 0
+                        current.error_count = 1
+                        current.report_object_key = report_key
+                        current.error_message = "共 1 项校验错误"
+                        current.finished_at = now
+                        current.heartbeat_at = now
+                        current.expires_at = self._terminal_import_expiry(now)
+                        await self._replace_import_errors(
+                            db,
+                            job_id=current.id,
+                            validation_version=next_validation_version,
+                            errors=[validation_error],
+                        )
+                        self._add_audit(
+                            db,
+                            admin_id=current.admin_id,
+                            action="import.validation_failed",
+                            object_type="import_job",
+                            object_id=current.id,
+                            result="failed",
+                            changed_fields={
+                                "status": {
+                                    "before": before_status,
+                                    "after": "validation_failed",
+                                },
+                                "error_count": {"before": 0, "after": 1},
+                            },
+                            error_summary=current.error_message,
+                            permission="quiz:import",
+                        )
+                        await db.commit()
+                        return True
                     before_retry_count = current.retry_count or 0
                     current.retry_count = before_retry_count + 1
-                    retryable = current.retry_count < settings.QUIZ_WORKER_MAX_RETRIES
-                    current.status = "queued" if retryable else "failed"
-                    current.error_message = (
-                        "导入任务执行失败，等待自动重试"
-                        if retryable
-                        else "导入任务重试次数已耗尽"
-                    )
-                    current.finished_at = None if retryable else now
+                    current.status = "failed"
+                    current.error_message = "导入任务执行失败，可由管理员重试"
+                    current.finished_at = now
                     current.heartbeat_at = now
-                    if not retryable:
-                        current.expires_at = self._terminal_import_expiry(now)
+                    current.expires_at = self._terminal_import_expiry(now)
                     self._add_audit(
                         db,
                         admin_id=current.admin_id,
-                        action="import.retry" if retryable else "import.failed",
+                        action="import.failed",
                         object_type="import_job",
                         object_id=current.id,
                         result="failed",
@@ -2351,10 +4120,9 @@ class AdminQuizService:
                         permission="quiz:import",
                     )
                     await db.commit()
-            # The row now records either a queued retry or an exhausted
-            # terminal failure. Propagate the infrastructure exception so the
-            # task registry records a failed run/retry instead of a false
-            # success; the worker loop isolates it and continues.
+            # Propagate the infrastructure exception so the task registry
+            # records a failed run rather than a false success. A later manual
+            # retry requeues the same row and batch key.
             raise
 
     async def process_next_import_job(self) -> bool:
@@ -2368,15 +4136,12 @@ class AdminQuizService:
                     or_(
                         QuizImportJob.status == "queued",
                         (
-                            (QuizImportJob.status == "failed")
-                            & (
-                                QuizImportJob.retry_count
-                                < settings.QUIZ_WORKER_MAX_RETRIES
-                            )
-                        ),
-                        (
                             QuizImportJob.status.in_(
                                 ("validating", "importing")
+                            )
+                            & (
+                                QuizImportJob.execution_protected_until.is_(None)
+                                | (QuizImportJob.execution_protected_until <= now)
                             )
                             & (
                                 QuizImportJob.heartbeat_at.is_(None)
@@ -2420,6 +4185,10 @@ class AdminQuizService:
             was_stale = bool(
                 job.status in {"validating", "importing"}
                 and (
+                    job.execution_protected_until is None
+                    or self._aware(job.execution_protected_until) <= now
+                )
+                and (
                     job.heartbeat_at is None
                     or job.heartbeat_at < stale_before
                 )
@@ -2455,26 +4224,25 @@ class AdminQuizService:
             # Publish the claim before reading OSS/local storage. Other
             # workers only select queued or stale rows, so this closes the
             # previous window where two workers could process one queued job.
-            job.status = "validating"
+            job.status = "importing" if job.confirmed_at is not None else "validating"
             job.started_at = job.started_at or now
             job.finished_at = None
             job.error_message = None
-            if was_stale:
-                self._add_audit(
-                    db,
-                    admin_id=None,
-                    action="import.retry",
-                    object_type="import_job",
-                    object_id=job.id,
-                    changed_fields={
-                        "status": {"before": before_status, "after": "validating"},
-                        "retry_count": {
-                            "before": before_retry_count,
-                            "after": job.retry_count,
-                        },
+            self._add_audit(
+                db,
+                admin_id=None,
+                action="import.retry" if was_stale else "import.claim",
+                object_type="import_job",
+                object_id=job.id,
+                changed_fields={
+                    "status": {"before": before_status, "after": job.status},
+                    "retry_count": {
+                        "before": before_retry_count,
+                        "after": job.retry_count,
                     },
-                    permission="quiz:import",
-                )
+                },
+                permission="quiz:import",
+            )
             await db.commit()
             job_id = job.id
         return await self.process_import_job(job_id, already_claimed=True)

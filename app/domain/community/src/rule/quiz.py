@@ -67,8 +67,11 @@ class QuizImportStatus(StrEnum):
     VALIDATING = "validating"
     VALIDATION_FAILED = "validation_failed"
     IMPORTING = "importing"
+    AWAITING_CATEGORY_CONFIRMATION = "awaiting_category_confirmation"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
 
 
 class QuizRuleViolation(ValueError):

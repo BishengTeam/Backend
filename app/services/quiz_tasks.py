@@ -9,6 +9,7 @@ health/metrics endpoint and contains no user or question content.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -23,6 +24,7 @@ from app.port.config import settings
 logger = logging.getLogger(__name__)
 QuizTaskProcessor = Callable[[], Awaitable[bool]]
 QuizQueueDepthReader = Callable[[], Awaitable[int]]
+QUIZ_TASK_METRICS_KEY = "quiz:worker:metrics:v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +45,25 @@ QUIZ_TASK_RUNTIME = QuizTaskRuntime(
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _parse_metric_time(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _metric_age_seconds(value: Any, *, now: datetime) -> float | None:
+    parsed = _parse_metric_time(value)
+    if parsed is None:
+        return None
+    return round(max(0.0, (now - parsed).total_seconds()), 3)
 
 
 @dataclass(slots=True)
@@ -211,6 +232,7 @@ class QuizTaskRegistry:
         """Return JSON-safe queue depth, runtime, failure and heartbeat data."""
 
         return {
+            "source": "process",
             "heartbeat_at": (
                 self._last_heartbeat.isoformat() if self._last_heartbeat else None
             ),
@@ -238,14 +260,11 @@ async def _import_queue_depth() -> int:
                 or_(
                     QuizImportJob.status == "queued",
                     (
-                        (QuizImportJob.status == "failed")
-                        & (
-                            QuizImportJob.retry_count
-                            < settings.QUIZ_WORKER_MAX_RETRIES
-                        )
-                    ),
-                    (
                         QuizImportJob.status.in_(("validating", "importing"))
+                        & (
+                            QuizImportJob.execution_protected_until.is_(None)
+                            | (QuizImportJob.execution_protected_until <= now)
+                        )
                         & (
                             QuizImportJob.heartbeat_at.is_(None)
                             | (QuizImportJob.heartbeat_at < stale_at)
@@ -266,7 +285,7 @@ async def _import_cleanup_queue_depth() -> int:
     now = _utc_now()
     from datetime import timedelta
 
-    stale_at = now - timedelta(seconds=settings.QUIZ_WORKER_STALE_SECONDS)
+    waiting_before = now - timedelta(days=settings.QUIZ_IMPORT_RETENTION_DAYS)
     async with get_db_ctx() as db:
         already_cleaned = exists(
             select(1).where(
@@ -280,16 +299,23 @@ async def _import_cleanup_queue_depth() -> int:
             select(func.count())
             .select_from(QuizImportJob)
             .where(
-                QuizImportJob.expires_at <= now,
                 (
-                    QuizImportJob.status.in_(("validation_failed", "succeeded", "failed"))
-                    | (
-                        QuizImportJob.status.in_(("queued", "validating", "importing"))
-                        & (
-                            QuizImportJob.heartbeat_at.is_(None)
-                            | (QuizImportJob.heartbeat_at < stale_at)
+                    (
+                        QuizImportJob.expires_at <= now
+                    )
+                    & QuizImportJob.status.in_(
+                        (
+                            "validation_failed",
+                            "succeeded",
+                            "failed",
+                            "cancelled",
+                            "expired",
                         )
                     )
+                )
+                | (
+                    (QuizImportJob.status == "awaiting_category_confirmation")
+                    & (QuizImportJob.updated_at <= waiting_before)
                 ),
                 ~already_cleaned,
             )
@@ -362,6 +388,166 @@ async def _process_import_jobs() -> bool:
 quiz_task_registry.register(
     "quiz-import", _process_import_jobs, queue_depth=_import_queue_depth
 )
+
+
+def _metrics_ttl_seconds() -> int:
+    return max(
+        QUIZ_TASK_RUNTIME.stale_seconds * 2,
+        QUIZ_TASK_RUNTIME.heartbeat_seconds * 4,
+        60,
+    )
+
+
+async def publish_quiz_task_snapshot(
+    registry: QuizTaskRegistry | None = None,
+) -> None:
+    """Publish the worker snapshot for Web probes and Admin monitoring.
+
+    The payload contains only aggregate counters and exception class names.
+    A TTL prevents a dead worker from leaving a permanently healthy-looking
+    document behind.
+    """
+
+    from app.adapter.redis import redis_client
+
+    active_registry = registry or quiz_task_registry
+    snapshot = active_registry.snapshot()
+    snapshot["source"] = "redis"
+    await redis_client.setex(
+        QUIZ_TASK_METRICS_KEY,
+        _metrics_ttl_seconds(),
+        json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")),
+    )
+
+
+async def read_quiz_task_snapshot() -> dict[str, Any]:
+    """Read the independent worker's shared metrics without leaking Redis data."""
+
+    if not settings.QUIZ_TASKS_ENABLED:
+        return {
+            "source": "disabled",
+            "heartbeat_at": None,
+            "processors": {},
+        }
+
+    if settings.QUIZ_EMBEDDED_WORKER_ENABLED:
+        return quiz_task_registry.snapshot()
+
+    from app.adapter.redis import redis_client
+
+    try:
+        raw = await redis_client.get(QUIZ_TASK_METRICS_KEY)
+        payload = json.loads(raw) if raw else None
+        if not isinstance(payload, dict):
+            raise ValueError("missing quiz worker metrics")
+        processors = payload.get("processors")
+        if not isinstance(processors, dict):
+            raise ValueError("invalid quiz worker metrics")
+        return {
+            "source": "redis",
+            "heartbeat_at": payload.get("heartbeat_at"),
+            "processors": processors,
+        }
+    except Exception as exc:
+        logger.warning(
+            "quiz worker shared metrics unavailable: exception_type=%s",
+            type(exc).__name__,
+        )
+        return {
+            "source": "unavailable",
+            "heartbeat_at": None,
+            "processors": {},
+        }
+
+
+def quiz_task_snapshot_ready(snapshot: dict[str, Any]) -> bool:
+    """Return whether the configured worker has a fresh, complete heartbeat."""
+
+    if not settings.QUIZ_TASKS_ENABLED:
+        return True
+    expected_source = "process" if settings.QUIZ_EMBEDDED_WORKER_ENABLED else "redis"
+    if snapshot.get("source") != expected_source:
+        return False
+    processors = snapshot.get("processors")
+    if not isinstance(processors, dict) or set(processors) != set(quiz_task_registry.names):
+        return False
+    heartbeat = _parse_metric_time(snapshot.get("heartbeat_at"))
+    if heartbeat is None:
+        return False
+    age = (_utc_now() - heartbeat).total_seconds()
+    return 0 <= age <= QUIZ_TASK_RUNTIME.stale_seconds
+
+
+def quiz_task_snapshot_signals(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Derive alert-friendly, content-free signals from a worker snapshot."""
+
+    now = _utc_now()
+    processors_raw = snapshot.get("processors")
+    processors = processors_raw if isinstance(processors_raw, dict) else {}
+    heartbeat_age = _metric_age_seconds(snapshot.get("heartbeat_at"), now=now)
+    stale = heartbeat_age is None or heartbeat_age > QUIZ_TASK_RUNTIME.stale_seconds
+    total_queue_depth = 0
+    total_failures = 0
+    stuck_processors: list[str] = []
+
+    for name, metric_raw in processors.items():
+        if not isinstance(metric_raw, dict):
+            continue
+        queue_depth = max(0, int(metric_raw.get("queue_depth") or 0))
+        failures = max(0, int(metric_raw.get("failures") or 0))
+        total_queue_depth += queue_depth
+        total_failures += failures
+        processor_age = _metric_age_seconds(
+            metric_raw.get("last_heartbeat_at"),
+            now=now,
+        )
+        if queue_depth > 0 and (
+            processor_age is None
+            or processor_age > QUIZ_TASK_RUNTIME.stale_seconds
+        ):
+            stuck_processors.append(str(name))
+
+    stats = processors.get("quiz-question-stats")
+    stats_queue_depth = (
+        max(0, int(stats.get("queue_depth") or 0))
+        if isinstance(stats, dict)
+        else 0
+    )
+    stats_lag_seconds = (
+        _metric_age_seconds(stats.get("last_finished_at"), now=now)
+        if isinstance(stats, dict)
+        else None
+    )
+    stats_lagging = stats_queue_depth > 0 and (
+        stats_lag_seconds is None or stats_lag_seconds > 60
+    )
+
+    def queue_depth(name: str) -> int:
+        metric = processors.get(name)
+        return (
+            max(0, int(metric.get("queue_depth") or 0))
+            if isinstance(metric, dict)
+            else 0
+        )
+
+    return {
+        "ready": quiz_task_snapshot_ready(snapshot),
+        "stale": stale,
+        "heartbeat_age_seconds": heartbeat_age,
+        "total_queue_depth": total_queue_depth,
+        "total_failures": total_failures,
+        "stuck_processors": sorted(stuck_processors),
+        "stats_lag_seconds": stats_lag_seconds,
+        "stats_lagging": stats_lagging,
+        "exam_timeout_queue_depth": queue_depth("quiz-exam-timeout"),
+        "oss_cleanup_queue_depth": queue_depth("quiz-import-cleanup"),
+    }
+
+
+def enrich_quiz_task_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(snapshot)
+    enriched["signals"] = quiz_task_snapshot_signals(enriched)
+    return enriched
 
 
 async def _cleanup_expired_imports() -> bool:
@@ -440,6 +626,15 @@ async def quiz_worker_loop(registry: QuizTaskRegistry | None = None) -> None:
     )
     while True:
         did_work = await active_registry.run_once()
+        try:
+            await publish_quiz_task_snapshot(active_registry)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(
+                "quiz task metrics publish failed: exception_type=%s",
+                type(exc).__name__,
+            )
         current = loop.time()
         if current - last_heartbeat >= QUIZ_TASK_RUNTIME.heartbeat_seconds:
             active_registry.heartbeat()
@@ -454,10 +649,16 @@ async def quiz_worker_loop(registry: QuizTaskRegistry | None = None) -> None:
 
 
 __all__ = [
+    "QUIZ_TASK_METRICS_KEY",
     "QUIZ_TASK_RUNTIME",
     "QuizTaskMetric",
     "QuizTaskRegistry",
+    "enrich_quiz_task_snapshot",
     "ensure_quiz_runtime_ready",
+    "publish_quiz_task_snapshot",
+    "quiz_task_snapshot_ready",
+    "quiz_task_snapshot_signals",
     "quiz_task_registry",
+    "read_quiz_task_snapshot",
     "quiz_worker_loop",
 ]

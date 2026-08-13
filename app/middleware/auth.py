@@ -102,11 +102,27 @@ async def require_identity(
 def require_permission(permission: str):
     """Dependency factory: returns a dependency that checks admin permission."""
 
-    async def _check(admin=Depends(get_current_admin)):
+    async def _check(
+        admin=Depends(get_current_admin),
+    ):
         if admin.role == "super_admin":
             return admin
         allowed = ROLE_PERMISSIONS.get(admin.role, [])
         if permission not in allowed and "*" not in allowed:
+            if permission.startswith("quiz:"):
+                try:
+                    from app.services.admin_quiz import AdminQuizService
+
+                    await AdminQuizService.record_permission_denied(
+                        admin_id=admin.id,
+                        permission=permission,
+                    )
+                except Exception:
+                    logger.error(
+                        "quiz permission denial audit failed: admin_id=%s permission=%s",
+                        admin.id,
+                        permission,
+                    )
             raise ForbiddenException(f"缺少权限: {permission}")
         return admin
 

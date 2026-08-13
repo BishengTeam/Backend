@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
 
-ROLES = ("super_admin", "content_editor", "customer_service", "finance", "auditor")
+ROLES = ("super_admin", "admin")
 
 
 @pytest.fixture

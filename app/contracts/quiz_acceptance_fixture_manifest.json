@@ -1,0 +1,51 @@
+{
+  "artifacts": {
+    "acceptance-plan.json": {
+      "row_or_case_count": 9,
+      "sha256": "a2cad6f8f77465bb0364c3e16be546b79936268536cf19343a66af6a08188b59",
+      "size_bytes": 6007
+    },
+    "categories.json": {
+      "row_or_case_count": 7,
+      "sha256": "d9a434c733a200444a3b3fe448a49436e80c97fdc9fb28ed4e8f3d8b6ddab6b2",
+      "size_bytes": 1178
+    },
+    "import-success-5000.csv": {
+      "row_or_case_count": 5000,
+      "sha256": "e5e1896644b8e02e2cc745dfc53b21cf3b331642e9d3887660f65aa54bb1af69",
+      "size_bytes": 1219634
+    },
+    "import-success-5000.json": {
+      "row_or_case_count": 5000,
+      "sha256": "cf90deb7743ff83db160d7a0869600c26ec8aa4eee94392eb8b525358737b5f7",
+      "size_bytes": 1600565
+    },
+    "import-validation-errors.csv": {
+      "row_or_case_count": 5,
+      "sha256": "fa96729a769938f4d6ad3ebd8ee5b14319fa24f5a731b779a0e43ffa763a32ed",
+      "size_bytes": 948
+    },
+    "import-validation-errors.json": {
+      "row_or_case_count": 4,
+      "sha256": "da8f6f310ab0925e397c3edd8eca9bdc341c5ba2aec9779f4f52e3667010cac9",
+      "size_bytes": 1084
+    },
+    "workflow-questions.json": {
+      "row_or_case_count": 20,
+      "sha256": "7ba04db364a5457b64ca0d7dc1c937f01ba249509ed2df592f018c24a8e2d888",
+      "size_bytes": 6020
+    }
+  },
+  "definition_sha256": "66e3e284bdee769a4626c617a5b70679f078798ce4d6404a14fcb1c80554fe4d",
+  "fixture_prefix": "QF55-V1",
+  "fixture_version": "2026-08-12-qf55-v1",
+  "generation": {
+    "connects_to_external_services": false,
+    "contains_credentials": false,
+    "deterministic": true
+  },
+  "limits": {
+    "max_import_bytes": 10485760,
+    "max_import_questions": 5000
+  }
+}

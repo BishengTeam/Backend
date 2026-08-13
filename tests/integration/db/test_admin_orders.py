@@ -8,11 +8,14 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import text
 
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
+
+SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
 # ---------------------------------------------------------------------------
@@ -92,24 +95,35 @@ async def _cleanup_test_data(session_factory, prefix: str) -> None:
                 """
                 DELETE FROM inventory_record
                 WHERE order_id IN (
-                    SELECT id FROM "order" WHERE cert_type LIKE :pl
+                    SELECT id FROM "order" WHERE product_type LIKE :pl
                 )
                 """
             ),
             {"pl": prefix_like},
         )
         await db.execute(
-            text('DELETE FROM "order" WHERE cert_type LIKE :pl'),
+            text('DELETE FROM "order" WHERE product_type LIKE :pl'),
             {"pl": prefix_like},
         )
         await db.execute(
-            text("DELETE FROM price_config WHERE cert_type LIKE :pl"),
+            text("DELETE FROM price_config WHERE product_type LIKE :pl"),
             {"pl": prefix_like},
         )
         await db.execute(
             text(
                 """
-                DELETE FROM user_identity
+                DELETE FROM user_student
+                WHERE user_id IN (
+                    SELECT id FROM "user" WHERE openid LIKE :pl
+                )
+                """
+            ),
+            {"pl": prefix_like},
+        )
+        await db.execute(
+            text(
+                """
+                DELETE FROM user_realname
                 WHERE user_id IN (
                     SELECT id FROM "user" WHERE openid LIKE :pl
                 )
@@ -156,27 +170,38 @@ async def _seed_order(
     *,
     status: str = "paid",
     price: int = 9900,
-    cert_type: str | None = None,
+    product_type: str | None = None,
     candidate_name: str = "测试考生",
     candidate_phone: str = "13800000001",
+    created_at: datetime | None = None,
 ) -> int:
     """Seed a single order and return its id.
 
-    ``cert_type`` defaults to *prefix* so the row is captured by the
+    ``product_type`` defaults to *prefix* so the row is captured by the
     prefix-based cleanup.
     """
+    # Register every table referenced by Order's foreign keys.  Keeping these
+    # imports explicit makes this file runnable on its own instead of relying
+    # on another integration test having populated Base.metadata first.
+    import importlib
+
+    importlib.import_module("app.domain.plan.src.index")
+    importlib.import_module("app.domain.renshe.src.index")
     from app.domain.order.src.index import Order
 
-    ct = cert_type or prefix
+    product = product_type or prefix
     async with session_factory() as db:
         order = Order(
             user_id=user_id,
-            cert_type=ct,
+            order_kind="certification",
+            product_type=product,
             candidate_name=candidate_name,
             candidate_phone=candidate_phone,
             price=price,
             status=status,
         )
+        if created_at is not None:
+            order.created_at = created_at
         db.add(order)
         await db.flush()
         order_id = order.id
@@ -210,7 +235,7 @@ class TestAdminOrderExport:
         lines = csv_content.strip().split(line_sep)
         header = lines[0]
 
-        for col in ("ID", "UserID", "CertType", "CandidateName", "CandidatePhone",
+        for col in ("ID", "UserID", "ProductType", "CandidateName", "CandidatePhone",
                      "Price", "Status", "CreatedAt"):
             assert col in header, f"CSV header missing column: {col}"
 
@@ -270,7 +295,7 @@ class TestAdminOrderReconciliation:
     ):
         """Reconciliation aggregates today's orders by paid vs refunded."""
         user_id = await _seed_user(session_factory, test_prefix)
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date_str = datetime.now(SHANGHAI).strftime("%Y-%m-%d")
 
         await _seed_order(session_factory, test_prefix, user_id, status="paid", price=100)
         await _seed_order(session_factory, test_prefix, user_id, status="paid", price=200)
@@ -291,7 +316,7 @@ class TestAdminOrderReconciliation:
         self, session_factory, app_context, test_prefix
     ):
         """Reconciliation response should always include expected numeric fields."""
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date_str = datetime.now(SHANGHAI).strftime("%Y-%m-%d")
 
         result = await app_context.admin_order_module.AdminOrderService().reconciliation(date_str)
 
@@ -304,20 +329,57 @@ class TestAdminOrderReconciliation:
     async def test_reconciliation_excludes_other_dates(
         self, session_factory, app_context, test_prefix
     ):
-        """Orders from other days should not be counted in today's reconciliation."""
-        from datetime import timedelta
-
+        """Shanghai calendar-day boundaries form a half-open UTC range."""
         user_id = await _seed_user(session_factory, test_prefix)
-        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        yesterday_str = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+        target_date = "2099-01-15"
+        await _seed_order(
+            session_factory,
+            test_prefix,
+            user_id,
+            status="paid",
+            price=1,
+            created_at=datetime(2099, 1, 14, 15, 59, 59, tzinfo=timezone.utc),
+        )
+        await _seed_order(
+            session_factory,
+            test_prefix,
+            user_id,
+            status="paid",
+            price=10,
+            created_at=datetime(2099, 1, 14, 16, 0, tzinfo=timezone.utc),
+        )
+        await _seed_order(
+            session_factory,
+            test_prefix,
+            user_id,
+            status="paid",
+            price=20,
+            created_at=datetime(
+                2099,
+                1,
+                15,
+                15,
+                59,
+                59,
+                999999,
+                tzinfo=timezone.utc,
+            ),
+        )
+        await _seed_order(
+            session_factory,
+            test_prefix,
+            user_id,
+            status="paid",
+            price=100,
+            created_at=datetime(2099, 1, 15, 16, 0, tzinfo=timezone.utc),
+        )
 
-        await _seed_order(session_factory, test_prefix, user_id, status="paid", price=100)
-
-        # Today's reconciliation should include today's order
-        result = await app_context.admin_order_module.AdminOrderService().reconciliation(today_str)
-        assert result["order_count"] >= 1
-
-        # Yesterday (with no orders seeded for yesterday) should be empty
-        result = await app_context.admin_order_module.AdminOrderService().reconciliation(yesterday_str)
-        assert result["order_count"] == 0
-        assert result["order_total"] == 0
+        result = await app_context.admin_order_module.AdminOrderService().reconciliation(
+            target_date
+        )
+        assert result == {
+            "order_total": 30,
+            "refund_total": 0,
+            "net_income": 30,
+            "order_count": 2,
+        }

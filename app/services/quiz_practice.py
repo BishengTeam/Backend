@@ -1318,15 +1318,22 @@ class QuizPracticeService:
                 )
                 db.add(item)
                 stats.active_collection_count += 1
+                response_updated_at = now
             elif not item.is_active:
                 item.is_active = True
                 item.collected_at = now
                 stats.active_collection_count += 1
+                response_updated_at = now
+            else:
+                # Cache ORM values before commit.  AsyncSession expires
+                # server-generated timestamps on commit, and reading them
+                # afterwards would attempt implicit async I/O.
+                response_updated_at = item.updated_at or now
             await db.commit()
             return QuizCollectionMutationResponse(
                 question_id=data.question_id,
                 is_active=True,
-                updated_at=item.updated_at or now,
+                updated_at=response_updated_at,
             )
 
     async def remove_collection(
@@ -1358,11 +1365,14 @@ class QuizPracticeService:
                 item.removed_at = now
                 stats = await self._ensure_stats(db, user_id)
                 stats.active_collection_count = max(0, stats.active_collection_count - 1)
+                response_updated_at = now
                 await db.commit()
+            else:
+                response_updated_at = item.updated_at or now
             return QuizCollectionMutationResponse(
                 question_id=question_id,
                 is_active=False,
-                updated_at=item.updated_at or now,
+                updated_at=response_updated_at,
             )
 
     async def get_checkin_status(self, user_id: int) -> QuizCheckinStatusResponse:

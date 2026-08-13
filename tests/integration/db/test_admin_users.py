@@ -69,12 +69,19 @@ async def test_context(monkeypatch):
                 {"pl": pl},
             )
             await db.execute(
-                text('DELETE FROM "order" WHERE cert_type LIKE :pl'),
+                text('DELETE FROM "order" WHERE product_type LIKE :pl'),
                 {"pl": pl},
             )
             await db.execute(
                 text(
-                    'DELETE FROM user_identity WHERE user_id IN '
+                    'DELETE FROM user_student WHERE user_id IN '
+                    '(SELECT id FROM "user" WHERE openid LIKE :pl)'
+                ),
+                {"pl": pl},
+            )
+            await db.execute(
+                text(
+                    'DELETE FROM user_realname WHERE user_id IN '
                     '(SELECT id FROM "user" WHERE openid LIKE :pl)'
                 ),
                 {"pl": pl},
@@ -185,7 +192,8 @@ async def test_get_user_orders_returns_order_list(test_context):
         # Create an order associated with the user
         order = Order(
             user_id=user_id,
-            cert_type=f"{prefix}_cert",
+            order_kind="certification",
+            product_type=f"{prefix}_cert",
             candidate_name="Test Candidate",
             candidate_phone="13800000000",
             price=9900,
@@ -200,8 +208,9 @@ async def test_get_user_orders_returns_order_list(test_context):
     assert isinstance(orders, list), "Result must be a list"
     assert len(orders) > 0, "Should return at least one order"
     order = orders[0]
-    for field in ("id", "status", "cert_type"):
-        assert field in order, f"Order dict must contain '{field}'"
+    assert order.order_kind == "certification"
+    assert order.product_type == f"{prefix}_cert"
+    assert order.status == "pending"
 
 
 # ---------------------------------------------------------------------------
@@ -240,5 +249,5 @@ async def test_get_user_conversations_returns_session_list(test_context):
     assert isinstance(conversations, list), "Result must be a list"
     assert len(conversations) > 0, "Should return at least one conversation"
     conv = conversations[0]
-    for field in ("session_id", "backend_type"):
-        assert field in conv, f"Conversation dict must contain '{field}'"
+    assert conv.session_id == f"{prefix}_session"
+    assert conv.backend_type == "manual"

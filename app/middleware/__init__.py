@@ -10,11 +10,13 @@ from app.middleware.error_handler import (
     validation_exception_handler,
 )
 from app.middleware.request_id import RequestIDMiddleware
+from app.middleware.removed_quiz_routes import RemovedQuizRouteMiddleware
 from app.middleware.security import SecureHeadersMiddleware
 
 
 def setup_middleware(app: FastAPI) -> None:
     setup_cors(app)
+    app.add_middleware(RemovedQuizRouteMiddleware)
     app.add_middleware(SecureHeadersMiddleware)
     app.add_middleware(RequestIDMiddleware)
     app.add_exception_handler(AppException, app_exception_handler)

@@ -1,7 +1,68 @@
 import urllib.parse
+from pathlib import Path
+from typing import Any
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
+
+
+SECRET_FILE_FIELDS = (
+    "DB_PASSWORD",
+    "DATABASE_URL",
+    "DATABASE_URL_SYNC",
+    "REDIS_URL",
+    "JWT_SECRET",
+    "PII_HASH_KEY",
+    "WECHAT_SECRET",
+    "WECHAT_PAY_PRIVATE_KEY",
+    "WECHAT_PAY_API_V3_KEY",
+    "WECHAT_PAY_PLATFORM_CERTIFICATE",
+    "ALIYUN_OSS_ACCESS_KEY_ID",
+    "ALIYUN_OSS_ACCESS_KEY_SECRET",
+    "QUIZ_OSS_ACCESS_KEY_ID",
+    "QUIZ_OSS_ACCESS_KEY_SECRET",
+    "QUIZ_METRICS_BEARER_TOKEN",
+)
+SECRET_FILE_NAMES = {f"{field_name}_FILE" for field_name in SECRET_FILE_FIELDS}
+
+
+def _load_secret_files(values: Any) -> Any:
+    """Resolve explicit ``FIELD_FILE`` inputs before regular validation.
+
+    Docker/Kubernetes secrets are mounted as files.  Supporting this common
+    convention avoids placing credentials in Compose inspection output while
+    retaining the ordinary environment variables for local development.
+    Direct values and file paths are mutually exclusive to prevent ambiguous
+    rotations.  File content is stripped only at its outer boundary.
+    """
+
+    if values is None:
+        data: dict[str, Any] = {}
+    elif isinstance(values, dict):
+        data = dict(values)
+    else:
+        try:
+            data = dict(values)
+        except (TypeError, ValueError):
+            return values
+
+    for field_name in SECRET_FILE_FIELDS:
+        file_name = f"{field_name}_FILE"
+        file_path = data.pop(file_name, None)
+        direct = data.get(field_name)
+        if not file_path:
+            continue
+        if direct not in (None, ""):
+            raise ValueError(f"{field_name} and {file_name} are mutually exclusive")
+        path = Path(str(file_path))
+        try:
+            value = path.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise ValueError(f"cannot read secret file for {field_name}") from exc
+        if not value:
+            raise ValueError(f"secret file for {field_name} is empty")
+        data[field_name] = value
+    return data
 
 
 def _with_database_driver(url: str, *, async_driver: bool) -> str:
@@ -52,6 +113,44 @@ class Settings(BaseSettings):
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20
     HEALTH_CHECK_TIMEOUT_SECONDS: float = 3.0
+
+    # Deployment-only indirection.  These paths are consumed by the pre-model
+    # validator and are never used as application credentials themselves.
+    DB_PASSWORD_FILE: str = ""
+    DATABASE_URL_FILE: str = ""
+    DATABASE_URL_SYNC_FILE: str = ""
+    REDIS_URL_FILE: str = ""
+    JWT_SECRET_FILE: str = ""
+    PII_HASH_KEY_FILE: str = ""
+    WECHAT_SECRET_FILE: str = ""
+    WECHAT_PAY_PRIVATE_KEY_FILE: str = ""
+    WECHAT_PAY_API_V3_KEY_FILE: str = ""
+    WECHAT_PAY_PLATFORM_CERTIFICATE_FILE: str = ""
+    ALIYUN_OSS_ACCESS_KEY_ID_FILE: str = ""
+    ALIYUN_OSS_ACCESS_KEY_SECRET_FILE: str = ""
+    QUIZ_OSS_ACCESS_KEY_ID_FILE: str = ""
+    QUIZ_OSS_ACCESS_KEY_SECRET_FILE: str = ""
+    QUIZ_METRICS_BEARER_TOKEN_FILE: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def load_secret_files(cls, values: Any) -> Any:
+        return _load_secret_files(values)
+
+    def model_dump(self, *args, **kwargs):
+        """Keep secret mount paths out of diagnostics and accidental dumps."""
+
+        excluded = kwargs.pop("exclude", None)
+        if excluded is None:
+            merged_exclude: set[str] = set(SECRET_FILE_NAMES)
+        elif isinstance(excluded, set):
+            merged_exclude = set(excluded) | SECRET_FILE_NAMES
+        elif isinstance(excluded, dict):
+            merged_exclude = dict(excluded)
+            merged_exclude.update({name: True for name in SECRET_FILE_NAMES})
+        else:
+            merged_exclude = excluded
+        return super().model_dump(*args, exclude=merged_exclude, **kwargs)
 
     @model_validator(mode="after")
     def build_database_urls(self) -> "Settings":
@@ -191,8 +290,12 @@ class Settings(BaseSettings):
     # cleanup UAT; no business API exposes this value.
     RENSHE_CLEANUP_RETENTION_DAYS: float = 30
 
-    # Frozen quiz-domain limits and worker settings.
+    # Frozen quiz-domain limits and worker settings.  Development keeps the
+    # embedded loop enabled for convenience; production compose explicitly
+    # disables it in the Web process and runs ``app.quiz_worker`` separately.
     QUIZ_TASKS_ENABLED: bool = True
+    QUIZ_EMBEDDED_WORKER_ENABLED: bool = True
+    QUIZ_WORKER_PROCESS: bool = False
     QUIZ_EXAM_DURATION_SECONDS: int = 3600
     QUIZ_MIN_QUESTION_COUNT: int = 10
     QUIZ_MAX_QUESTION_COUNT: int = 100
@@ -213,6 +316,14 @@ class Settings(BaseSettings):
     QUIZ_WORKER_MAX_RETRIES: int = 5
     QUIZ_QUESTION_LIST_RATE_PER_MINUTE: int = 60
     QUIZ_ANSWER_SAVE_RATE_PER_MINUTE: int = 120
+    QUIZ_ADMIN_WRITE_RATE_PER_MINUTE: int = 120
+    QUIZ_ADMIN_BATCH_RATE_PER_MINUTE: int = 30
+    QUIZ_ADMIN_IMPORT_RATE_PER_MINUTE: int = 10
+    QUIZ_ADMIN_SIGNED_URL_RATE_PER_MINUTE: int = 60
+    QUIZ_METRICS_ENABLED: bool = True
+    # Prometheus must authenticate with this dedicated Bearer token.  It is
+    # never emitted in metrics, health documents or logs.
+    QUIZ_METRICS_BEARER_TOKEN: str = ""
 
     @model_validator(mode="after")
     def validate_renshe_storage(self) -> "Settings":
@@ -403,6 +514,22 @@ class Settings(BaseSettings):
                 self.QUIZ_ANSWER_SAVE_RATE_PER_MINUTE,
                 120,
             ),
+            "QUIZ_ADMIN_WRITE_RATE_PER_MINUTE": (
+                self.QUIZ_ADMIN_WRITE_RATE_PER_MINUTE,
+                120,
+            ),
+            "QUIZ_ADMIN_BATCH_RATE_PER_MINUTE": (
+                self.QUIZ_ADMIN_BATCH_RATE_PER_MINUTE,
+                30,
+            ),
+            "QUIZ_ADMIN_IMPORT_RATE_PER_MINUTE": (
+                self.QUIZ_ADMIN_IMPORT_RATE_PER_MINUTE,
+                10,
+            ),
+            "QUIZ_ADMIN_SIGNED_URL_RATE_PER_MINUTE": (
+                self.QUIZ_ADMIN_SIGNED_URL_RATE_PER_MINUTE,
+                60,
+            ),
         }
         changed = [
             f"{name} must remain {expected}"
@@ -411,8 +538,8 @@ class Settings(BaseSettings):
         ]
         if changed:
             raise ValueError("; ".join(changed))
-        if not 1 <= self.QUIZ_OSS_SIGNED_URL_TTL_SECONDS <= 900:
-            raise ValueError("QUIZ_OSS_SIGNED_URL_TTL_SECONDS must be between 1 and 900")
+        if not 1 <= self.QUIZ_OSS_SIGNED_URL_TTL_SECONDS <= 300:
+            raise ValueError("QUIZ_OSS_SIGNED_URL_TTL_SECONDS must be between 1 and 300")
         if not 1 <= self.QUIZ_WORKER_POLL_SECONDS <= 60:
             raise ValueError("QUIZ_WORKER_POLL_SECONDS must be between 1 and 60")
         if not 1 <= self.QUIZ_WORKER_HEARTBEAT_SECONDS < self.QUIZ_WORKER_STALE_SECONDS:
@@ -422,11 +549,23 @@ class Settings(BaseSettings):
             )
         if not 1 <= self.QUIZ_WORKER_MAX_RETRIES <= 20:
             raise ValueError("QUIZ_WORKER_MAX_RETRIES must be between 1 and 20")
+        if self.QUIZ_WORKER_PROCESS and not self.QUIZ_TASKS_ENABLED:
+            raise ValueError(
+                "QUIZ_TASKS_ENABLED must be true when QUIZ_WORKER_PROCESS is enabled"
+            )
+        if self.QUIZ_WORKER_PROCESS and self.QUIZ_EMBEDDED_WORKER_ENABLED:
+            raise ValueError(
+                "QUIZ_EMBEDDED_WORKER_ENABLED must be false in the standalone quiz worker"
+            )
         if self.QUIZ_TASKS_ENABLED and not self.REDIS_URL.startswith(("redis://", "rediss://")):
             raise ValueError("REDIS_URL must use redis:// or rediss:// when quiz tasks are enabled")
         if self.APP_ENV == "production":
             if not self.QUIZ_TASKS_ENABLED:
                 raise ValueError("QUIZ_TASKS_ENABLED must be true in production")
+            if self.QUIZ_EMBEDDED_WORKER_ENABLED:
+                raise ValueError(
+                    "QUIZ_EMBEDDED_WORKER_ENABLED must be false in production"
+                )
             if self.QUIZ_IMPORT_STORAGE_TYPE != "aliyun_oss":
                 raise ValueError("QUIZ_IMPORT_STORAGE_TYPE must be aliyun_oss in production")
             required = {
@@ -439,6 +578,13 @@ class Settings(BaseSettings):
             if missing:
                 raise ValueError(
                     f"missing production quiz OSS settings: {', '.join(missing)}"
+                )
+            if not self.QUIZ_METRICS_ENABLED:
+                raise ValueError("QUIZ_METRICS_ENABLED must be true in production")
+            if len(self.QUIZ_METRICS_BEARER_TOKEN) < 32:
+                raise ValueError(
+                    "QUIZ_METRICS_BEARER_TOKEN must contain at least 32 characters "
+                    "in production"
                 )
         return self
 

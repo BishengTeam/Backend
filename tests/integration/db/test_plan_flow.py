@@ -160,7 +160,7 @@ async def test_cannot_edit_published_plan(test_context):
     )
     await PlanService().publish_plan(plan.id)
 
-    with pytest.raises(BusinessException, match="仅草稿"):
+    with pytest.raises(BusinessException, match="当前批次状态不可编辑"):
         await PlanService().update_plan(plan.id, PlanUpdate(name="New Name"))
 
 

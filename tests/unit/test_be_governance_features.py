@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -11,7 +12,17 @@ from httpx import ASGITransport, AsyncClient
 from app.main import _dependency_checks, ready
 from app.port.config import Settings, settings
 from app.services.dependency_health import is_ready
-from app.utils.audit import REDACTED, redact_sensitive_text, sanitize_audit_summary
+from app.services.dependency_health import (
+    enrich_quiz_oss_probe,
+    inspect_quiz_oss_configuration,
+    probe_quiz_oss,
+)
+from app.utils.audit import (
+    REDACTED,
+    redact_sensitive_text,
+    sanitize_audit_summary,
+    sanitize_audit_value,
+)
 from app.main import app
 from app.services.renshe_source import (
     delete_unreferenced_source_keys,
@@ -48,6 +59,24 @@ def test_free_form_diagnostics_redact_tokens_and_pii() -> None:
     assert value == (
         "Bearer [REDACTED]; id=[REDACTED]; phone=[REDACTED]; url=[REDACTED]"
     )
+
+
+def test_audit_values_never_persist_object_keys_or_signed_urls() -> None:
+    sanitized = sanitize_audit_value(
+        {
+            "source_object_key": "quiz-imports/private-source.json",
+            "report_object_key": "quiz-imports/private-report.json",
+            "signed_url": "https://private.example/download?signature=secret",
+            "created_count": 12,
+        }
+    )
+
+    assert sanitized == {
+        "source_object_key": REDACTED,
+        "report_object_key": REDACTED,
+        "signed_url": REDACTED,
+        "created_count": 12,
+    }
 
 
 def test_profile_source_keys_collects_only_non_empty_current_materials() -> None:
@@ -107,10 +136,16 @@ async def test_source_cleanup_can_surface_oss_failure_for_retention_retry(monkey
 
 @pytest.mark.asyncio
 async def test_dependency_checks_keep_legacy_shape_and_add_safe_details(monkeypatch) -> None:
-    monkeypatch.setattr("app.main._check_db", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "app.main._database_probe", AsyncMock(return_value={"status": "ok"})
+    )
     monkeypatch.setattr("app.main._check_redis", AsyncMock(return_value=True))
     monkeypatch.setattr(
         "app.main.inspect_oss_configuration",
+        lambda: {"status": "ok", "configured": True, "mode": "local"},
+    )
+    monkeypatch.setattr(
+        "app.main.inspect_quiz_oss_configuration",
         lambda: {"status": "ok", "configured": True, "mode": "local"},
     )
     monkeypatch.setattr(
@@ -127,7 +162,52 @@ async def test_dependency_checks_keep_legacy_shape_and_add_safe_details(monkeypa
     assert checks["database"] == "ok"
     assert checks["redis"] == "ok"
     assert checks["oss"] == "ok"
+    assert checks["quiz_oss"] == "ok"
+    assert details["quiz_oss"]["mode"] == "local"
     assert details["wechat_payment"]["status"] == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_dependency_checks_reject_unwritable_local_quiz_storage(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.main._database_probe", AsyncMock(return_value={"status": "ok"})
+    )
+    monkeypatch.setattr("app.main._check_redis", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "app.main.inspect_oss_configuration",
+        lambda: {"status": "ok", "configured": True, "mode": "local"},
+    )
+    monkeypatch.setattr(
+        "app.main.inspect_quiz_oss_configuration",
+        lambda: {"status": "ok", "configured": True, "mode": "local"},
+    )
+    monkeypatch.setattr(
+        "app.main.enrich_quiz_oss_probe",
+        AsyncMock(
+            return_value={
+                "status": "unavailable",
+                "configured": True,
+                "mode": "local",
+                "probe": "unavailable",
+                "reason": "local_storage_not_writable",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "app.main.inspect_wechat_login_configuration",
+        lambda: {"status": "ok", "configured": True},
+    )
+    monkeypatch.setattr(
+        "app.main.inspect_wechat_payment_configuration",
+        lambda: {"status": "disabled", "configured": False, "required": False},
+    )
+
+    checks, details = await _dependency_checks(probe_external=True)
+
+    assert checks["quiz_oss"] == "unavailable"
+    assert details["quiz_oss"]["reason"] == "local_storage_not_writable"
 
 
 @pytest.mark.asyncio
@@ -140,6 +220,7 @@ async def test_ready_returns_503_when_required_dependency_is_unavailable(monkeyp
                     "database": "ok",
                     "redis": "ok",
                     "oss": "unavailable",
+                    "quiz_oss": "ok",
                     "wechat_login": "ok",
                     "wechat_payment": "ok",
                 },
@@ -147,6 +228,17 @@ async def test_ready_returns_503_when_required_dependency_is_unavailable(monkeyp
             )
         ),
     )
+    monkeypatch.setattr(
+        "app.main.read_quiz_task_snapshot",
+        AsyncMock(
+            return_value={
+                "source": "process",
+                "heartbeat_at": "2026-08-12T00:00:00+00:00",
+                "processors": {},
+            }
+        ),
+    )
+    monkeypatch.setattr("app.main.quiz_task_snapshot_ready", lambda snapshot: True)
     transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/ready")
@@ -162,6 +254,8 @@ def test_readiness_requires_production_wechat_and_payment() -> None:
             "database": "ok",
             "redis": "ok",
             "oss": "ok",
+            "quiz_oss": "ok",
+            "quiz_worker": "ok",
             "wechat_login": "ok",
             "wechat_payment": "disabled",
         }
@@ -170,6 +264,95 @@ def test_readiness_requires_production_wechat_and_payment() -> None:
         assert is_ready(checks) is True
     finally:
         settings.APP_ENV = previous
+
+
+def test_quiz_oss_configuration_is_independent_from_renshe_storage(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings, "RENSHE_STORAGE_TYPE", "local")
+    monkeypatch.setattr(settings, "QUIZ_IMPORT_STORAGE_TYPE", "aliyun_oss")
+    monkeypatch.setattr(settings, "QUIZ_OSS_ENDPOINT", "https://oss.example")
+    monkeypatch.setattr(settings, "QUIZ_OSS_BUCKET", "")
+    monkeypatch.setattr(settings, "QUIZ_OSS_ACCESS_KEY_ID", "quiz-key")
+    monkeypatch.setattr(settings, "QUIZ_OSS_ACCESS_KEY_SECRET", "quiz-secret")
+
+    result = inspect_quiz_oss_configuration()
+
+    assert result["status"] == "unavailable"
+    assert result["mode"] == "aliyun_oss"
+    assert result["missing"] == ["QUIZ_OSS_BUCKET"]
+
+
+@pytest.mark.asyncio
+async def test_quiz_oss_probe_requires_private_bucket_acl(monkeypatch) -> None:
+    async def run_inline(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("app.services.dependency_health.asyncio.to_thread", run_inline)
+
+    class _Bucket:
+        def __init__(self, acl: str) -> None:
+            self.acl = acl
+
+        def get_bucket_acl(self):
+            return SimpleNamespace(status=200, acl=self.acl)
+
+    monkeypatch.setattr(settings, "QUIZ_IMPORT_STORAGE_TYPE", "aliyun_oss")
+    monkeypatch.setattr(settings, "QUIZ_OSS_ENDPOINT", "https://oss.example")
+    monkeypatch.setattr(settings, "QUIZ_OSS_BUCKET", "quiz-private")
+    monkeypatch.setattr(settings, "QUIZ_OSS_ACCESS_KEY_ID", "quiz-key")
+    monkeypatch.setattr(settings, "QUIZ_OSS_ACCESS_KEY_SECRET", "quiz-secret")
+    fake_oss2 = SimpleNamespace(
+        Auth=lambda *_args: object(),
+        Bucket=lambda *_args: _Bucket("public-read"),
+    )
+    monkeypatch.setitem(sys.modules, "oss2", fake_oss2)
+    assert await probe_quiz_oss(timeout_seconds=1) is False
+
+    fake_oss2.Bucket = lambda *_args: _Bucket("private")
+    assert await probe_quiz_oss(timeout_seconds=1) is True
+
+
+@pytest.mark.asyncio
+async def test_local_quiz_storage_probe_creates_and_removes_file(
+    monkeypatch, tmp_path
+) -> None:
+    async def run_inline(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr("app.services.dependency_health.asyncio.to_thread", run_inline)
+    monkeypatch.setattr(settings, "QUIZ_IMPORT_STORAGE_TYPE", "local")
+    monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
+    monkeypatch.setattr(settings, "QUIZ_OSS_PREFIX", "quiz-imports")
+
+    result = await enrich_quiz_oss_probe(inspect_quiz_oss_configuration())
+
+    assert result == {
+        "status": "ok",
+        "configured": True,
+        "mode": "local",
+        "probe": "ok",
+    }
+    target = tmp_path / "private" / "quiz-imports"
+    assert target.is_dir()
+    assert list(target.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_local_quiz_storage_probe_reports_non_sensitive_write_failure(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings, "QUIZ_IMPORT_STORAGE_TYPE", "local")
+    monkeypatch.setattr(
+        "app.services.dependency_health._probe_local_quiz_storage",
+        lambda: False,
+    )
+
+    result = await enrich_quiz_oss_probe(inspect_quiz_oss_configuration())
+
+    assert result["status"] == "unavailable"
+    assert result["probe"] == "unavailable"
+    assert result["reason"] == "local_storage_not_writable"
 
 
 def test_production_settings_require_explicit_wechat_v3_configuration() -> None:
@@ -200,10 +383,12 @@ def test_production_settings_require_explicit_wechat_v3_configuration() -> None:
         "ALIYUN_OSS_ACCESS_KEY_ID": "access-key",
         "ALIYUN_OSS_ACCESS_KEY_SECRET": "access-secret",
         "QUIZ_IMPORT_STORAGE_TYPE": "aliyun_oss",
+        "QUIZ_EMBEDDED_WORKER_ENABLED": False,
         "QUIZ_OSS_ENDPOINT": "https://oss.example",
         "QUIZ_OSS_BUCKET": "quiz-bucket",
         "QUIZ_OSS_ACCESS_KEY_ID": "quiz-key",
         "QUIZ_OSS_ACCESS_KEY_SECRET": "quiz-secret",
+        "QUIZ_METRICS_BEARER_TOKEN": "quiz-metrics-token-that-is-long-enough",
     }
     valid = Settings(**values)
     assert valid.WECHAT_PAY_API_VERSION == "v3"
@@ -244,6 +429,53 @@ def test_database_url_driver_is_derived_when_only_one_complete_url_is_given() ->
     assert sync_settings.DATABASE_URL_SYNC == (
         "postgresql+psycopg2://user:p%40ss@db.example:3306/app"
     )
+
+
+def test_settings_load_secrets_from_read_only_files(tmp_path, monkeypatch) -> None:
+    for name in ("JWT_SECRET", "PII_HASH_KEY", "REDIS_URL"):
+        monkeypatch.delenv(name, raising=False)
+    jwt_file = tmp_path / "jwt"
+    pii_file = tmp_path / "pii"
+    redis_file = tmp_path / "redis"
+    jwt_file.write_text("j" * 40 + "\n", encoding="utf-8")
+    pii_file.write_text("p" * 40 + "\n", encoding="utf-8")
+    redis_file.write_text("redis://redis.internal:6379/0\n", encoding="utf-8")
+
+    file_settings = Settings(
+        _env_file=None,
+        APP_ENV="test",
+        JWT_SECRET_FILE=str(jwt_file),
+        PII_HASH_KEY_FILE=str(pii_file),
+        REDIS_URL_FILE=str(redis_file),
+    )
+
+    assert file_settings.JWT_SECRET == "j" * 40
+    assert file_settings.PII_HASH_KEY == "p" * 40
+    assert file_settings.REDIS_URL == "redis://redis.internal:6379/0"
+    assert "JWT_SECRET_FILE" not in file_settings.model_dump()
+    assert "REDIS_URL_FILE" not in file_settings.model_dump()
+
+
+def test_settings_reject_ambiguous_or_empty_secret_files(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    empty_file = tmp_path / "empty"
+    empty_file.write_text("\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="secret file for JWT_SECRET is empty"):
+        Settings(
+            _env_file=None,
+            APP_ENV="test",
+            JWT_SECRET_FILE=str(empty_file),
+        )
+
+    populated = tmp_path / "populated"
+    populated.write_text("f" * 40, encoding="utf-8")
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        Settings(
+            _env_file=None,
+            APP_ENV="test",
+            JWT_SECRET="d" * 40,
+            JWT_SECRET_FILE=str(populated),
+        )
 
 
 @pytest.mark.asyncio

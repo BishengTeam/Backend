@@ -1,34 +1,63 @@
 services:
+  # A named volume masks the ownership prepared in the image.  Initialize it
+  # as root once per Compose start, then keep the application itself on UID
+  # 10001. Existing files are retained and only their ownership is repaired.
+  uploads-init:
+    build: .
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        umask 077
+        mkdir -p \
+          /app/uploads/private/quiz-imports \
+          /app/uploads/private/renshe \
+          /app/uploads/private/course-assets
+        chown -R 10001:10001 /app/uploads
+    volumes:
+      - uploads:/app/uploads
+    restart: "no"
+
   app:
     build: .
     ports:
       - "8000:8000"
     depends_on:
+      uploads-init:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
     environment:
       - APP_ENV=production
       - APP_DEBUG=false
+      - RUN_MIGRATIONS=true
       # 数据库 — 容器内通过 service name 互联
       - DB_HOST=db
       - DB_PORT=5432
       - DB_USER=${POSTGRES_USER:-wemini}
-      - DB_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - DB_PASSWORD_FILE=/run/secrets/postgres_password
       - DB_NAME=${POSTGRES_DB:-wemini_app}
       # Redis
       - REDIS_URL=redis://redis:6379/0
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       # JWT — 生产环境务必替换为强随机值
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
-      - PII_HASH_KEY=${PII_HASH_KEY:?PII_HASH_KEY is required}
+      - JWT_SECRET_FILE=/run/secrets/jwt_secret
+      - PII_HASH_KEY_FILE=/run/secrets/pii_hash_key
       - JWT_ALGORITHM=HS256
       - JWT_EXPIRE_MINUTES=120
       # 微信小程序 — 用实际值替换
       - WECHAT_APPID=${WECHAT_APPID:?WECHAT_APPID is required}
-      - WECHAT_SECRET=${WECHAT_SECRET:?WECHAT_SECRET is required}
+      - WECHAT_SECRET_FILE=/run/secrets/wechat_secret
       # 人社微信支付 V3 — 未配置时生产容器必须启动失败，禁止假成功
       - WECHAT_PAY_ENABLED=${WECHAT_PAY_ENABLED:?WECHAT_PAY_ENABLED is required}
       - WECHAT_PAY_API_VERSION=${WECHAT_PAY_API_VERSION:-v3}
@@ -37,9 +66,9 @@ services:
       - WECHAT_PAY_NOTIFY_URL=${WECHAT_PAY_NOTIFY_URL:-}
       - WECHAT_PAY_REFUND_NOTIFY_URL=${WECHAT_PAY_REFUND_NOTIFY_URL:-}
       - WECHAT_PAY_CERT_SERIAL_NO=${WECHAT_PAY_CERT_SERIAL_NO:-}
-      - WECHAT_PAY_PRIVATE_KEY=${WECHAT_PAY_PRIVATE_KEY:-}
-      - WECHAT_PAY_API_V3_KEY=${WECHAT_PAY_API_V3_KEY:-}
-      - WECHAT_PAY_PLATFORM_CERTIFICATE=${WECHAT_PAY_PLATFORM_CERTIFICATE:-}
+      - WECHAT_PAY_PRIVATE_KEY_FILE=/run/secrets/wechat_pay_private_key
+      - WECHAT_PAY_API_V3_KEY_FILE=/run/secrets/wechat_pay_api_v3_key
+      - WECHAT_PAY_PLATFORM_CERTIFICATE_FILE=/run/secrets/wechat_pay_platform_certificate
       - WECHAT_PAY_PLATFORM_CERT_SERIAL_NO=${WECHAT_PAY_PLATFORM_CERT_SERIAL_NO:-}
       - WECHAT_PAY_NOTIFICATION_TOLERANCE_SECONDS=${WECHAT_PAY_NOTIFICATION_TOLERANCE_SECONDS:-300}
       - WECHAT_PAY_RECONCILE_POLL_SECONDS=${WECHAT_PAY_RECONCILE_POLL_SECONDS:-30}
@@ -50,13 +79,15 @@ services:
       - WECHAT_PAY_SYNC_RATE_PER_MINUTE=${WECHAT_PAY_SYNC_RATE_PER_MINUTE:-10}
       # 文件存储
       - UPLOAD_DIR=/app/uploads
+      # Legacy generic upload endpoints still use a dedicated non-sensitive
+      # volume. Human-resources documents and quiz imports are OSS-only below.
       - STORAGE_TYPE=local
       # 人社材料与导出 — 生产环境强制私有阿里云 OSS
       - RENSHE_STORAGE_TYPE=aliyun_oss
       - ALIYUN_OSS_ENDPOINT=${ALIYUN_OSS_ENDPOINT:?ALIYUN_OSS_ENDPOINT is required}
       - ALIYUN_OSS_BUCKET=${ALIYUN_OSS_BUCKET:?ALIYUN_OSS_BUCKET is required}
-      - ALIYUN_OSS_ACCESS_KEY_ID=${ALIYUN_OSS_ACCESS_KEY_ID:?ALIYUN_OSS_ACCESS_KEY_ID is required}
-      - ALIYUN_OSS_ACCESS_KEY_SECRET=${ALIYUN_OSS_ACCESS_KEY_SECRET:?ALIYUN_OSS_ACCESS_KEY_SECRET is required}
+      - ALIYUN_OSS_ACCESS_KEY_ID_FILE=/run/secrets/aliyun_oss_access_key_id
+      - ALIYUN_OSS_ACCESS_KEY_SECRET_FILE=/run/secrets/aliyun_oss_access_key_secret
       - ALIYUN_OSS_PREFIX=${ALIYUN_OSS_PREFIX:-renshe}
       - ALIYUN_OSS_SIGNED_URL_TTL_SECONDS=300
       - RENSHE_TEMPLATE_DIR=/app/renshe-templates
@@ -65,30 +96,107 @@ services:
       # 题库导入 — 生产环境必须使用私有阿里云 OSS；显式注入任务参数，
       # 避免容器内因缺少 .env 而回退到本地存储。
       - QUIZ_TASKS_ENABLED=true
+      - QUIZ_EMBEDDED_WORKER_ENABLED=false
+      - QUIZ_WORKER_PROCESS=false
       - QUIZ_IMPORT_STORAGE_TYPE=aliyun_oss
       - QUIZ_OSS_ENDPOINT=${QUIZ_OSS_ENDPOINT:?QUIZ_OSS_ENDPOINT is required}
       - QUIZ_OSS_BUCKET=${QUIZ_OSS_BUCKET:?QUIZ_OSS_BUCKET is required}
-      - QUIZ_OSS_ACCESS_KEY_ID=${QUIZ_OSS_ACCESS_KEY_ID:?QUIZ_OSS_ACCESS_KEY_ID is required}
-      - QUIZ_OSS_ACCESS_KEY_SECRET=${QUIZ_OSS_ACCESS_KEY_SECRET:?QUIZ_OSS_ACCESS_KEY_SECRET is required}
+      - QUIZ_OSS_ACCESS_KEY_ID_FILE=/run/secrets/quiz_oss_access_key_id
+      - QUIZ_OSS_ACCESS_KEY_SECRET_FILE=/run/secrets/quiz_oss_access_key_secret
       - QUIZ_OSS_PREFIX=${QUIZ_OSS_PREFIX:-quiz-imports}
       - QUIZ_OSS_SIGNED_URL_TTL_SECONDS=300
       - QUIZ_WORKER_POLL_SECONDS=${QUIZ_WORKER_POLL_SECONDS:-5}
       - QUIZ_WORKER_HEARTBEAT_SECONDS=${QUIZ_WORKER_HEARTBEAT_SECONDS:-15}
       - QUIZ_WORKER_STALE_SECONDS=${QUIZ_WORKER_STALE_SECONDS:-120}
       - QUIZ_WORKER_MAX_RETRIES=${QUIZ_WORKER_MAX_RETRIES:-5}
+      - QUIZ_METRICS_ENABLED=true
+      - QUIZ_METRICS_BEARER_TOKEN_FILE=/run/secrets/quiz_metrics_bearer_token
+    secrets: &app_secrets
+      - source: postgres_password
+      - source: jwt_secret
+      - source: pii_hash_key
+      - source: wechat_secret
+      - source: wechat_pay_private_key
+      - source: wechat_pay_api_v3_key
+      - source: wechat_pay_platform_certificate
+      - source: aliyun_oss_access_key_id
+      - source: aliyun_oss_access_key_secret
+      - source: quiz_oss_access_key_id
+      - source: quiz_oss_access_key_secret
+      - source: quiz_metrics_bearer_token
     volumes:
       - uploads:/app/uploads
       - ../docs/renshe:/app/renshe-templates:ro
+    restart: unless-stopped
+
+  quiz-worker:
+    build: .
+    command: ["python", "-m", "app.quiz_worker"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - RUN_MIGRATIONS=false
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=${POSTGRES_USER:-wemini}
+      - DB_PASSWORD_FILE=/run/secrets/postgres_password
+      - DB_NAME=${POSTGRES_DB:-wemini_app}
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET_FILE=/run/secrets/jwt_secret
+      - PII_HASH_KEY_FILE=/run/secrets/pii_hash_key
+      - WECHAT_APPID=${WECHAT_APPID:?WECHAT_APPID is required}
+      - WECHAT_SECRET_FILE=/run/secrets/wechat_secret
+      - WECHAT_PAY_ENABLED=${WECHAT_PAY_ENABLED:?WECHAT_PAY_ENABLED is required}
+      - WECHAT_PAY_API_VERSION=${WECHAT_PAY_API_VERSION:-v3}
+      - WECHAT_PAY_MCHID=${WECHAT_PAY_MCHID:-}
+      - WECHAT_PAY_APPID=${WECHAT_PAY_APPID:-}
+      - WECHAT_PAY_NOTIFY_URL=${WECHAT_PAY_NOTIFY_URL:-}
+      - WECHAT_PAY_REFUND_NOTIFY_URL=${WECHAT_PAY_REFUND_NOTIFY_URL:-}
+      - WECHAT_PAY_CERT_SERIAL_NO=${WECHAT_PAY_CERT_SERIAL_NO:-}
+      - WECHAT_PAY_PRIVATE_KEY_FILE=/run/secrets/wechat_pay_private_key
+      - WECHAT_PAY_API_V3_KEY_FILE=/run/secrets/wechat_pay_api_v3_key
+      - WECHAT_PAY_PLATFORM_CERTIFICATE_FILE=/run/secrets/wechat_pay_platform_certificate
+      - WECHAT_PAY_PLATFORM_CERT_SERIAL_NO=${WECHAT_PAY_PLATFORM_CERT_SERIAL_NO:-}
+      - RENSHE_STORAGE_TYPE=aliyun_oss
+      - ALIYUN_OSS_ENDPOINT=${ALIYUN_OSS_ENDPOINT:?ALIYUN_OSS_ENDPOINT is required}
+      - ALIYUN_OSS_BUCKET=${ALIYUN_OSS_BUCKET:?ALIYUN_OSS_BUCKET is required}
+      - ALIYUN_OSS_ACCESS_KEY_ID_FILE=/run/secrets/aliyun_oss_access_key_id
+      - ALIYUN_OSS_ACCESS_KEY_SECRET_FILE=/run/secrets/aliyun_oss_access_key_secret
+      - QUIZ_TASKS_ENABLED=true
+      - QUIZ_EMBEDDED_WORKER_ENABLED=false
+      - QUIZ_WORKER_PROCESS=true
+      - QUIZ_IMPORT_STORAGE_TYPE=aliyun_oss
+      - QUIZ_OSS_ENDPOINT=${QUIZ_OSS_ENDPOINT:?QUIZ_OSS_ENDPOINT is required}
+      - QUIZ_OSS_BUCKET=${QUIZ_OSS_BUCKET:?QUIZ_OSS_BUCKET is required}
+      - QUIZ_OSS_ACCESS_KEY_ID_FILE=/run/secrets/quiz_oss_access_key_id
+      - QUIZ_OSS_ACCESS_KEY_SECRET_FILE=/run/secrets/quiz_oss_access_key_secret
+      - QUIZ_OSS_PREFIX=${QUIZ_OSS_PREFIX:-quiz-imports}
+      - QUIZ_OSS_SIGNED_URL_TTL_SECONDS=300
+      - QUIZ_WORKER_POLL_SECONDS=${QUIZ_WORKER_POLL_SECONDS:-5}
+      - QUIZ_WORKER_HEARTBEAT_SECONDS=${QUIZ_WORKER_HEARTBEAT_SECONDS:-15}
+      - QUIZ_WORKER_STALE_SECONDS=${QUIZ_WORKER_STALE_SECONDS:-120}
+      - QUIZ_WORKER_MAX_RETRIES=${QUIZ_WORKER_MAX_RETRIES:-5}
+      - QUIZ_METRICS_ENABLED=true
+      - QUIZ_METRICS_BEARER_TOKEN_FILE=/run/secrets/quiz_metrics_bearer_token
+    secrets: *app_secrets
+    entrypoint: []
     restart: unless-stopped
 
   db:
     image: postgres:16-alpine
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-wemini}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
       - POSTGRES_DB=${POSTGRES_DB:-wemini_app}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    secrets:
+      - source: postgres_password
     healthcheck:
       # Keep the probe aligned with the credentials/database names injected
       # above; otherwise POSTGRES_USER/POSTGRES_DB overrides report a false
@@ -120,16 +228,46 @@ services:
       - DB_HOST=db
       - DB_PORT=5432
       - DB_USER=${POSTGRES_USER:-wemini}
-      - DB_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - DB_PASSWORD_FILE=/run/secrets/postgres_password
       - DB_NAME=${POSTGRES_DB:-wemini_app}
       - REDIS_URL=redis://redis:6379/0
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required for seed}
-      - PII_HASH_KEY=${PII_HASH_KEY:?PII_HASH_KEY is required for seed}
+      - JWT_SECRET_FILE=/run/secrets/jwt_secret
+      - PII_HASH_KEY_FILE=/run/secrets/pii_hash_key
       - JWT_ALGORITHM=HS256
       - JWT_EXPIRE_MINUTES=120
+    secrets:
+      - source: postgres_password
+      - source: jwt_secret
+      - source: pii_hash_key
     profiles:
       - seed
 
 volumes:
   pgdata:
   uploads:
+
+secrets:
+  postgres_password:
+    file: ${SECRETS_DIR:?SECRETS_DIR is required}/postgres_password
+  jwt_secret:
+    file: ${SECRETS_DIR:?SECRETS_DIR is required}/jwt_secret
+  pii_hash_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR is required}/pii_hash_key
+  wechat_secret:
+    file: ${SECRETS_DIR:?SECRETS_DIR is required}/wechat_secret
+  wechat_pay_private_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR is required}/wechat_pay_private_key
+  wechat_pay_api_v3_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR is required}/wechat_pay_api_v3_key
+  wechat_pay_platform_certificate:
+    file: ${SECRETS_DIR:?SECRETS_DIR is required}/wechat_pay_platform_certificate
+  aliyun_oss_access_key_id:
+    file: ${SECRETS_DIR:?SECRETS_DIR is required}/aliyun_oss_access_key_id
+  aliyun_oss_access_key_secret:
+    file: ${SECRETS_DIR:?SECRETS_DIR is required}/aliyun_oss_access_key_secret
+  quiz_oss_access_key_id:
+    file: ${SECRETS_DIR:?SECRETS_DIR is required}/quiz_oss_access_key_id
+  quiz_oss_access_key_secret:
+    file: ${SECRETS_DIR:?SECRETS_DIR is required}/quiz_oss_access_key_secret
+  quiz_metrics_bearer_token:
+    file: ${SECRETS_DIR:?SECRETS_DIR is required}/quiz_metrics_bearer_token

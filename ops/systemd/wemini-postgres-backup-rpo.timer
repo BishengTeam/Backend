@@ -1,0 +1,11 @@
+[Unit]
+Description=Check weMiniApp PostgreSQL backup freshness hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5m
+Unit=wemini-postgres-backup-rpo.service
+
+[Install]
+WantedBy=timers.target

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -9,11 +10,14 @@ from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.adapter.security import create_admin_access_token
+from app.domain.community.src.index import QuizAdminAuditLog
 from app.domain.user.src.index import AdminUser
+from app.port.config import settings
+from app.services.admin_quiz import AdminQuizService
 
 
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
@@ -28,7 +32,7 @@ def _database_url() -> str:
 
 
 @pytest.fixture
-async def quiz_http_env(monkeypatch):
+async def quiz_http_env(monkeypatch, tmp_path):
     engine = create_async_engine(_database_url(), pool_size=5, max_overflow=5)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     prefix = f"aqh_{uuid4().hex[:12]}"
@@ -47,6 +51,8 @@ async def quiz_http_env(monkeypatch):
 
     monkeypatch.setattr("app.services.admin_quiz.get_db_ctx", test_db_ctx)
     monkeypatch.setattr("app.middleware.auth.is_token_revoked", token_is_not_revoked)
+    monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
+    monkeypatch.setattr(settings, "QUIZ_IMPORT_STORAGE_TYPE", "local")
 
     async with factory() as db:
         admin = AdminUser(
@@ -92,7 +98,20 @@ async def quiz_http_env(monkeypatch):
                     )
                 await db.execute(
                     text(
-                        "DELETE FROM quiz_admin_audit_log WHERE admin_id = :admin_id"
+                        "DELETE FROM quiz_admin_audit_log "
+                        "WHERE admin_id = :admin_id OR ("
+                        "  actor_type = 'system' AND object_type = 'import_job' "
+                        "  AND object_id IN ("
+                        "    SELECT id FROM quiz_import_job WHERE admin_id = :admin_id"
+                        "  )"
+                        ")"
+                    ),
+                    {"admin_id": admin.id},
+                )
+                await db.execute(
+                    text(
+                        "DELETE FROM quiz_import_error WHERE job_id IN ("
+                        "SELECT id FROM quiz_import_job WHERE admin_id = :admin_id)"
                     ),
                     {"admin_id": admin.id},
                 )
@@ -151,6 +170,17 @@ async def test_authentication_permission_and_real_route_prefix(quiz_http_env) ->
         env.app.dependency_overrides.pop(get_current_admin, None)
     assert forbidden.status_code == 403
     assert forbidden.json()["code"] == 40101
+    async with env.factory() as db:
+        denial = (
+            await db.execute(
+                select(QuizAdminAuditLog).where(
+                    QuizAdminAuditLog.admin_id == env.admin.id,
+                    QuizAdminAuditLog.action == "permission.denied",
+                    QuizAdminAuditLog.permission == "quiz:list",
+                )
+            )
+        ).scalar_one()
+        assert denial.result == "failed"
 
     actual = await env.client.get("/admin/quiz/categories", headers=env.headers)
     assert actual.status_code == 200
@@ -374,3 +404,237 @@ async def test_batch_contract_and_removed_legacy_routes(quiz_http_env) -> None:
     ):
         response = await env.client.post(path, headers=env.headers, json={})
         assert response.status_code == 404, (path, response.text)
+
+
+async def test_new_admin_quiz_operations_are_mounted_and_strict(quiz_http_env) -> None:
+    env = quiz_http_env
+    category_response = await env.client.post(
+        "/admin/quiz/categories",
+        headers=env.headers,
+        json=_category_payload(env, "new_ops"),
+    )
+    assert category_response.status_code == 200, category_response.text
+    category_id = category_response.json()["data"]["id"]
+
+    preview = await env.client.get(
+        f"/admin/quiz/categories/{category_id}/impact?action=delete",
+        headers=env.headers,
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["data"]["can_execute"] is True
+    assert preview.json()["data"]["history_snapshot_affected"] is False
+
+    invalid_preview = await env.client.get(
+        f"/admin/quiz/categories/{category_id}/impact?action=delete&target_parent_id=1",
+        headers=env.headers,
+    )
+    assert invalid_preview.status_code == 422
+    assert invalid_preview.json()["code"] == 40001
+
+    overview = await env.client.get("/admin/quiz/stats/overview", headers=env.headers)
+    assert overview.status_code == 200, overview.text
+    assert overview.json()["data"]["category_count"] >= 1
+
+    stats = await env.client.get(
+        f"/admin/quiz/stats/questions?category_id={category_id}",
+        headers=env.headers,
+    )
+    assert stats.status_code == 200, stats.text
+    assert stats.json()["data"]["total"] == 0
+
+    too_many = await env.client.post(
+        "/admin/quiz/questions/batch-publish",
+        headers=env.headers,
+        json={
+            "items": [
+                {"question_id": index, "lock_version": 1}
+                for index in range(1, 102)
+            ]
+        },
+    )
+    assert too_many.status_code == 422
+    assert too_many.json()["code"] == 40001
+
+    missing_source = await env.client.get(
+        "/admin/quiz/imports/999999999/source-url", headers=env.headers
+    )
+    assert missing_source.status_code == 404
+    missing_retry = await env.client.post(
+        "/admin/quiz/imports/999999999/retry", headers=env.headers
+    )
+    assert missing_retry.status_code == 404
+
+
+async def test_import_errors_and_category_confirmation_http_workflow(
+    quiz_http_env,
+) -> None:
+    env = quiz_http_env
+    category_response = await env.client.post(
+        "/admin/quiz/categories",
+        headers=env.headers,
+        json=_category_payload(env, "import_confirm"),
+    )
+    assert category_response.status_code == 200, category_response.text
+    category = category_response.json()["data"]
+
+    missing_name = f"{env.prefix}_missing_child"
+    create_response = await env.client.post(
+        "/admin/quiz/imports/json",
+        headers=env.headers,
+        json={
+            "questions": [
+                {
+                    "category_path": [category["name"], missing_name],
+                    "question_type": "judge",
+                    "question_text": f"{env.prefix}_confirm_http_question",
+                    "options": {"A": "正确", "B": "错误"},
+                    "correct_answer": "A",
+                    "explanation": None,
+                }
+            ]
+        },
+    )
+    assert create_response.status_code == 200, create_response.text
+    job = create_response.json()["data"]
+    assert job["status"] == "queued"
+    assert await AdminQuizService().process_import_job(job["id"]) is True
+
+    impact_response = await env.client.get(
+        f"/admin/quiz/imports/{job['id']}/category-impact",
+        headers=env.headers,
+    )
+    assert impact_response.status_code == 200, impact_response.text
+    impact = impact_response.json()["data"]
+    assert impact["new_category_count"] == 1
+    assert impact["affected_question_count"] == 1
+    assert impact["tree"][0]["children"][0]["status"] == "will_create"
+
+    stale_confirm = await env.client.post(
+        f"/admin/quiz/imports/{job['id']}/confirm-categories",
+        headers=env.headers,
+        json={
+            "lock_version": impact["lock_version"] + 1,
+            "impact_version": impact["impact_version"],
+        },
+    )
+    assert stale_confirm.status_code == 409
+    assert stale_confirm.json()["code"] == 40201
+
+    confirm_response = await env.client.post(
+        f"/admin/quiz/imports/{job['id']}/confirm-categories",
+        headers=env.headers,
+        json={
+            "lock_version": impact["lock_version"],
+            "impact_version": impact["impact_version"],
+        },
+    )
+    assert confirm_response.status_code == 200, confirm_response.text
+    assert confirm_response.json()["data"]["status"] == "queued"
+    assert await AdminQuizService().process_import_job(job["id"]) is True
+    completed = await env.client.get(
+        f"/admin/quiz/imports/{job['id']}",
+        headers=env.headers,
+    )
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["data"]["status"] == "succeeded"
+    assert completed.json()["data"]["created_count"] == 1
+
+    duplicate_text = f"{env.prefix}_duplicate_http_question"
+    duplicate_response = await env.client.post(
+        "/admin/quiz/imports/json",
+        headers=env.headers,
+        json={
+            "questions": [
+                {
+                    "category_path": [category["name"]],
+                    "question_type": "judge",
+                    "question_text": duplicate_text,
+                    "options": {"A": "正确", "B": "错误"},
+                    "correct_answer": "A",
+                    "explanation": None,
+                },
+                {
+                    "category_path": [category["name"]],
+                    "question_type": "judge",
+                    "question_text": duplicate_text,
+                    "options": {"A": "正确", "B": "错误"},
+                    "correct_answer": "A",
+                    "explanation": None,
+                },
+            ]
+        },
+    )
+    assert duplicate_response.status_code == 200, duplicate_response.text
+    duplicate_job = duplicate_response.json()["data"]
+    assert await AdminQuizService().process_import_job(duplicate_job["id"]) is True
+    errors_response = await env.client.get(
+        f"/admin/quiz/imports/{duplicate_job['id']}/errors?field=question_text&page=1",
+        headers=env.headers,
+    )
+    assert errors_response.status_code == 200, errors_response.text
+    errors = errors_response.json()["data"]
+    assert errors["page_size"] == 50
+    assert errors["total"] == 1
+    assert errors["available_fields"] == ["question_text"]
+    assert errors["items"][0]["field"] == "question_text"
+    assert duplicate_text not in json.dumps(errors, ensure_ascii=False)
+
+    cancel_response = await env.client.post(
+        "/admin/quiz/imports/json",
+        headers=env.headers,
+        json={
+            "questions": [
+                {
+                    "category_path": [f"{env.prefix}_cancel_http"],
+                    "question_type": "judge",
+                    "question_text": f"{env.prefix}_cancel_http_question",
+                    "options": {"A": "正确", "B": "错误"},
+                    "correct_answer": "B",
+                    "explanation": None,
+                }
+            ]
+        },
+    )
+    cancel_job = cancel_response.json()["data"]
+    assert await AdminQuizService().process_import_job(cancel_job["id"]) is True
+    cancel_impact = (
+        await env.client.get(
+            f"/admin/quiz/imports/{cancel_job['id']}/category-impact",
+            headers=env.headers,
+        )
+    ).json()["data"]
+    cancelled = await env.client.post(
+        f"/admin/quiz/imports/{cancel_job['id']}/cancel",
+        headers=env.headers,
+        json={"lock_version": cancel_impact["lock_version"]},
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["data"]["status"] == "cancelled"
+
+
+async def test_audit_request_id_and_time_filters(quiz_http_env) -> None:
+    env = quiz_http_env
+    request_id = f"req-{env.prefix}"
+    response = await env.client.post(
+        "/admin/quiz/categories",
+        headers={**env.headers, "X-Request-ID": request_id},
+        json=_category_payload(env, "audit_filter"),
+    )
+    assert response.status_code == 200, response.text
+
+    filtered = await env.client.get(
+        f"/admin/quiz/audit-logs?request_id={request_id}",
+        headers=env.headers,
+    )
+    assert filtered.status_code == 200, filtered.text
+    assert filtered.json()["data"]["total"] == 1
+    assert filtered.json()["data"]["items"][0]["request_id"] == request_id
+
+    invalid_range = await env.client.get(
+        "/admin/quiz/audit-logs"
+        "?start_at=2026-08-12T12%3A00%3A00%2B08%3A00"
+        "&end_at=2026-08-12T11%3A00%3A00%2B08%3A00",
+        headers=env.headers,
+    )
+    assert invalid_range.status_code == 422
+    assert invalid_range.json()["code"] == 40001

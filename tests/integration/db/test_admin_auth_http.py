@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
 
-ROLES = ("super_admin", "content_editor", "customer_service", "finance", "auditor")
+ROLES = ("super_admin", "admin")
 
 
 def _make_admin_token(admin_id: int, username: str, role: str) -> str:
@@ -85,16 +85,16 @@ class TestAdminAuthMe:
         assert data["permissions"] == ["*"]
 
     async def test_me_returns_role_specific_permissions(self, test_client):
-        """content_editor gets quiz:write but not order:write in /me."""
+        """admin gets explicit permissions rather than the wildcard grant."""
         from app.domain.user.src.index import AdminUser
 
         client, factory, prefix = test_client
 
         async with factory() as db:
             admin = AdminUser(
-                username=f"{prefix}_ce",
+                username=f"{prefix}_admin",
                 password_hash="ignored_for_test",
-                role="content_editor",
+                role="admin",
             )
             db.add(admin)
             await db.flush()
@@ -105,9 +105,10 @@ class TestAdminAuthMe:
         assert resp.status_code == 200, resp.text
         body = resp.json()
         data = body["data"]
-        assert data["admin"]["role"] == "content_editor"
+        assert data["admin"]["role"] == "admin"
         assert "quiz:write" in data["permissions"]
-        assert "order:write" not in data["permissions"]
+        assert "order:write" in data["permissions"]
+        assert "*" not in data["permissions"]
 
     async def test_me_rejects_invalid_token(self, test_client):
         """Invalid or missing token returns 401."""
@@ -135,13 +136,43 @@ class TestAdminAuthMe:
 
 
 class TestAdminAuthLogout:
-    """POST /admin/auth/logout — stateless logout endpoint."""
+    """POST /admin/auth/logout — revoke the authenticated admin token."""
 
-    async def test_logout_returns_success(self, test_client):
-        """Logout returns code=0 even without auth (stateless endpoint)."""
-        client, _, _ = test_client
-        resp = await client.post("/admin/auth/logout")
+    async def test_logout_returns_success(self, test_client, monkeypatch):
+        """A valid admin token is revoked and receives the success contract."""
+        from app.domain.user.src.index import AdminUser
+        import app.api.admin.auth as admin_auth_api
+
+        client, factory, prefix = test_client
+        async with factory() as db:
+            admin = AdminUser(
+                username=f"{prefix}_logout",
+                password_hash="ignored_for_test",
+                role="admin",
+            )
+            db.add(admin)
+            await db.flush()
+            token = _make_admin_token(admin.id, admin.username, admin.role)
+            await db.commit()
+
+        revoked: list[str] = []
+
+        async def _capture_revoke(value: str) -> None:
+            revoked.append(value)
+
+        monkeypatch.setattr(admin_auth_api, "revoke_token", _capture_revoke)
+        resp = await client.post(
+            "/admin/auth/logout",
+            headers={"Authorization": f"Bearer {token}"},
+        )
         assert resp.status_code == 200
         body = resp.json()
         assert body["code"] == 0
         assert body["message"] == "已退出登录"
+        assert revoked == [token]
+
+    async def test_logout_requires_admin_auth(self, test_client):
+        client, _, _ = test_client
+        resp = await client.post("/admin/auth/logout")
+        assert resp.status_code == 401
+        assert resp.json()["code"] == 40100

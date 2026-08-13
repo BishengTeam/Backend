@@ -91,10 +91,12 @@ def _production_settings(**overrides) -> Settings:
         "ALIYUN_OSS_ACCESS_KEY_ID": "renshe-key",
         "ALIYUN_OSS_ACCESS_KEY_SECRET": "renshe-secret",
         "QUIZ_IMPORT_STORAGE_TYPE": "aliyun_oss",
+        "QUIZ_EMBEDDED_WORKER_ENABLED": False,
         "QUIZ_OSS_ENDPOINT": "https://oss-cn.example.com",
         "QUIZ_OSS_BUCKET": "quiz-private",
         "QUIZ_OSS_ACCESS_KEY_ID": "quiz-key",
         "QUIZ_OSS_ACCESS_KEY_SECRET": "quiz-secret",
+        "QUIZ_METRICS_BEARER_TOKEN": "quiz-metrics-token-that-is-long-enough",
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -176,9 +178,20 @@ def test_submitted_answers_are_canonical_and_exact_match_only() -> None:
 
 
 def test_contract_registry_is_complete_strict_and_machine_readable() -> None:
-    assert len(QUIZ_API_CONTRACTS) == 43
+    assert len(QUIZ_API_CONTRACTS) == 52
     keys = {(entry.method, entry.path) for entry in QUIZ_API_CONTRACTS}
     assert len(keys) == len(QUIZ_API_CONTRACTS)
+    assert {
+        ("GET", "/admin/quiz/categories/{category_id}/impact"),
+        ("GET", "/admin/quiz/imports/{job_id}/source-url"),
+        ("POST", "/admin/quiz/imports/{job_id}/retry"),
+        ("GET", "/admin/quiz/imports/{job_id}/errors"),
+        ("GET", "/admin/quiz/imports/{job_id}/category-impact"),
+        ("POST", "/admin/quiz/imports/{job_id}/confirm-categories"),
+        ("POST", "/admin/quiz/imports/{job_id}/cancel"),
+        ("GET", "/admin/quiz/stats/overview"),
+        ("GET", "/admin/quiz/stats/questions"),
+    }.issubset(set(keys))
     assert ("GET", "/api/quiz/categories") in keys
     assert ("GET", "/admin/quiz/audit-logs") in keys
 
@@ -189,7 +202,12 @@ def test_contract_registry_is_complete_strict_and_machine_readable() -> None:
                 assert isinstance(model, type) and issubclass(model, BaseModel)
                 model.model_json_schema()
         if entry.auth == "admin":
-            assert entry.permission in {"quiz:list", "quiz:write", "quiz:import"}
+            assert entry.permission in {
+                "quiz:list",
+                "quiz:write",
+                "quiz:import",
+                "quiz:import+quiz:write",
+            }
         assert entry.example
 
     question_list = next(
@@ -205,6 +223,20 @@ def test_contract_registry_is_complete_strict_and_machine_readable() -> None:
     assert question_list.rate_limit_per_minute == 60
     assert answer_save.rate_limit_per_minute == 120
     assert QuizErrorCode.RATE_LIMITED in answer_save.errors
+    expected_admin_limits = {
+        ("POST", "/admin/quiz/categories"): 120,
+        ("POST", "/admin/quiz/questions/batch-publish"): 30,
+        ("POST", "/admin/quiz/imports/json"): 10,
+        ("GET", "/admin/quiz/imports/{job_id}/source-url"): 60,
+    }
+    for key, expected in expected_admin_limits.items():
+        contract = next(
+            entry
+            for entry in QUIZ_API_CONTRACTS
+            if (entry.method, entry.path) == key
+        )
+        assert contract.rate_limit_per_minute == expected
+        assert QuizErrorCode.RATE_LIMITED in contract.errors
 
 
 def test_contract_explicitly_deletes_legacy_endpoints() -> None:
@@ -252,7 +284,7 @@ def test_admin_contract_normalizes_judge_drafts_and_requires_versions() -> None:
 
 def test_quiz_metadata_matches_the_rebuilt_domain() -> None:
     migration = _load_migration()
-    expected = set(migration.NEW_TABLES)
+    expected = set(migration.NEW_TABLES) | {"quiz_import_error"}
     actual = {name for name in Base.metadata.tables if name.startswith("quiz_")}
     assert actual == expected
     assert "quiz_record" not in actual
@@ -371,8 +403,19 @@ def test_quiz_settings_are_frozen_and_production_requires_private_oss() -> None:
         _production_settings(QUIZ_IMPORT_STORAGE_TYPE="local")
     with pytest.raises(ValidationError, match="QUIZ_OSS_BUCKET"):
         _production_settings(QUIZ_OSS_BUCKET="")
+    with pytest.raises(ValidationError, match="QUIZ_METRICS_BEARER_TOKEN"):
+        _production_settings(QUIZ_METRICS_BEARER_TOKEN="short")
+    with pytest.raises(ValidationError, match="QUIZ_METRICS_ENABLED"):
+        _production_settings(QUIZ_METRICS_ENABLED=False)
     with pytest.raises(ValidationError, match="REDIS_URL"):
         _production_settings(REDIS_URL="http://redis.internal")
+    with pytest.raises(ValidationError, match="QUIZ_EMBEDDED_WORKER_ENABLED"):
+        _production_settings(QUIZ_EMBEDDED_WORKER_ENABLED=True)
+    with pytest.raises(ValidationError, match="standalone quiz worker"):
+        _production_settings(
+            QUIZ_WORKER_PROCESS=True,
+            QUIZ_EMBEDDED_WORKER_ENABLED=True,
+        )
 
 
 @pytest.mark.asyncio

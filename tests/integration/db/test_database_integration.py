@@ -15,12 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
 
 ALL_TABLES = frozenset({
-    "user", "user_identity", "order", "course", "course_enrollment",
+    "user", "user_profile", "user_realname", "user_student", "order",
+    "course", "course_chapter", "user_chapter_progress", "course_enrollment",
     "certification", "quiz_category", "quiz_question", "quiz_checkin",
     "quiz_practice_session", "quiz_practice_session_question",
     "quiz_practice_attempt", "quiz_wrong_item", "quiz_collection",
     "quiz_exam", "quiz_exam_question", "quiz_exam_answer",
-    "quiz_user_stats", "quiz_question_stats", "quiz_import_job",
+    "quiz_user_stats", "quiz_question_stats", "quiz_import_job", "quiz_import_error",
     "quiz_admin_audit_log", "quick_question", "conversation", "price_config",
     "user_points", "points_history", "coupon", "user_coupon",
     "deleted_openid", "agreement", "competition_reg", "ticket",
@@ -145,17 +146,50 @@ class TestTableStructure:
         names = {c["name"] for c in checks}
         assert "ck_order_status" in names, f"Missing ck_order_status; got: {names}"
 
-    async def test_user_identity_user_id_unique(self, conn_and_session):
+    async def test_course_branch_schema_is_complete(self, conn_and_session):
+        conn, _ = conn_and_session
+
+        def _check(sync_conn):
+            inspector = inspect(sync_conn)
+            return (
+                {column["name"] for column in inspector.get_columns("course")},
+                set(inspector.get_table_names()),
+            )
+
+        course_columns, tables = await conn.run_sync(_check)
+        assert "free_preview_seconds" in course_columns
+        assert {"course_chapter", "user_chapter_progress"} <= tables
+
+    async def test_plan_status_can_store_all_declared_states(self, conn_and_session):
+        conn, _ = conn_and_session
+
+        def _check(sync_conn):
+            inspector = inspect(sync_conn)
+            return next(
+                column
+                for column in inspector.get_columns("plan")
+                if column["name"] == "status"
+            )
+
+        status_column = await conn.run_sync(_check)
+        assert status_column["type"].length == 32
+
+    async def test_split_identity_user_ids_are_unique(self, conn_and_session):
         conn, _ = conn_and_session
         def _check(sync_conn):
             inspector = inspect(sync_conn)
-            return inspector.get_indexes("user_identity")
-        indexes = await conn.run_sync(_check)
-        unique_on_user = [
-            i for i in indexes
-            if "user_id" in [c.strip() for c in i.get("column_names", [])] and i.get("unique")
-        ]
-        assert len(unique_on_user) >= 1, "UserIdentity.user_id should be unique"
+            return {
+                table: inspector.get_indexes(table)
+                for table in ("user_realname", "user_student")
+            }
+        indexes_by_table = await conn.run_sync(_check)
+        for table, indexes in indexes_by_table.items():
+            unique_on_user = [
+                item
+                for item in indexes
+                if "user_id" in item.get("column_names", []) and item.get("unique")
+            ]
+            assert unique_on_user, f"{table}.user_id should be unique"
 
     async def test_price_config_partial_unique_index(self, conn_and_session):
         conn, _ = conn_and_session
@@ -245,7 +279,7 @@ class TestOrderCRUD:
         await db_session.flush()
         for status in ("pending", "paid", "completed", "refunded"):
             order = Order(
-                user_id=user.id, cert_type="H3C-NE",
+                user_id=user.id, order_kind="certification", product_type="H3C-NE",
                 candidate_name="测试", candidate_phone="13800138000",
                 price=9900, status=status,
             )
@@ -260,7 +294,7 @@ class TestOrderCRUD:
         db_session.add(user)
         await db_session.flush()
         order = Order(
-            user_id=user.id, cert_type="H3C-NE",
+            user_id=user.id, order_kind="certification", product_type="H3C-NE",
             candidate_name="测试", candidate_phone="13800138000",
             price=9900, status="cancelled",
         )
@@ -274,11 +308,11 @@ class TestOrderCRUD:
         user = User(openid="trade_no_user")
         db_session.add(user)
         await db_session.flush()
-        db_session.add(Order(user_id=user.id, cert_type="H3C-NE",
+        db_session.add(Order(user_id=user.id, order_kind="certification", product_type="H3C-NE",
                              candidate_name="A", candidate_phone="13801",
                              price=100, out_trade_no="trade_uniq"))
         await db_session.flush()
-        db_session.add(Order(user_id=user.id, cert_type="H3C-NE",
+        db_session.add(Order(user_id=user.id, order_kind="certification", product_type="H3C-NE",
                              candidate_name="B", candidate_phone="13802",
                              price=200, out_trade_no="trade_uniq"))
         with pytest.raises(IntegrityError):
@@ -566,7 +600,7 @@ class TestDeletedOpenidCRUD:
 class TestPriceConfigCRUD:
     async def test_create(self, db_session):
         from app.domain.order.src.index import PriceConfig
-        pc = PriceConfig(cert_type="H3C-NE", user_type="student", price=29900)
+        pc = PriceConfig(product_type="H3C-NE", user_type="student", price=29900)
         db_session.add(pc)
         await db_session.flush()
         assert pc.is_active is True
@@ -574,11 +608,11 @@ class TestPriceConfigCRUD:
     async def test_active_unique_constraint(self, db_session):
         from app.domain.order.src.index import PriceConfig
         db_session.add(PriceConfig(
-            cert_type="H3C-NE", user_type="student", price=29900, is_active=True,
+            product_type="H3C-NE", user_type="student", price=29900, is_active=True,
         ))
         await db_session.flush()
         db_session.add(PriceConfig(
-            cert_type="H3C-NE", user_type="student", price=39900, is_active=True,
+            product_type="H3C-NE", user_type="student", price=39900, is_active=True,
         ))
         with pytest.raises(IntegrityError):
             await db_session.flush()
@@ -607,9 +641,9 @@ class TestConversationCRUD:
 
 
 class TestConstraintEnforcement:
-    async def test_user_identity_fk_enforced(self, db_session):
-        from app.domain.user.src.index import UserIdentity
-        identity = UserIdentity(
+    async def test_user_realname_fk_enforced(self, db_session):
+        from app.domain.user.src.index import UserRealname
+        identity = UserRealname(
             user_id=99999, user_type="student", real_name="张三",
             id_card_number="11010519491231002X",
         )
@@ -620,7 +654,7 @@ class TestConstraintEnforcement:
     async def test_order_fk_enforced(self, db_session):
         from app.domain.order.src.index import Order
         order = Order(
-            user_id=99999, cert_type="H3C-NE", candidate_name="测试",
+            user_id=99999, order_kind="certification", product_type="H3C-NE", candidate_name="测试",
             candidate_phone="13800138000", price=9900,
         )
         db_session.add(order)

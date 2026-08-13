@@ -1,16 +1,20 @@
 import asyncio
+import hashlib
+import hmac
 import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Header, Response
 from fastapi.openapi.utils import get_openapi
+from fastapi.responses import PlainTextResponse
 from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import text
 
 from app.api import router as api_router
 from app.api.admin import router as admin_router
 from app.api.agreement import router as agreement_router
+from app.contracts.quiz import QUIZ_CONTRACT_VERSION
 from app.port.config import settings
 from app.adapter.database import engine, get_db_ctx
 from app.adapter.redis import redis_client, redis_ping
@@ -30,17 +34,22 @@ from app.services.renshe_refund_reconciliation import (
     renshe_refund_reconciliation_worker_loop,
 )
 from app.services.quiz_tasks import (
+    enrich_quiz_task_snapshot,
     ensure_quiz_runtime_ready,
-    quiz_task_registry,
+    quiz_task_snapshot_ready,
     quiz_worker_loop,
+    read_quiz_task_snapshot,
 )
 from app.services.dependency_health import (
     enrich_oss_probe,
+    enrich_quiz_oss_probe,
     inspect_oss_configuration,
+    inspect_quiz_oss_configuration,
     inspect_wechat_login_configuration,
     inspect_wechat_payment_configuration,
     is_ready,
 )
+from app.services.quiz_metrics import QuizMetricsMiddleware, quiz_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +57,15 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
-    await ensure_quiz_runtime_ready()
+    quiz_embedded_enabled = (
+        settings.QUIZ_TASKS_ENABLED and settings.QUIZ_EMBEDDED_WORKER_ENABLED
+    )
+    if quiz_embedded_enabled:
+        await ensure_quiz_runtime_ready()
     cleanup_task = asyncio.create_task(cleanup_loop())
     renshe_export_task = asyncio.create_task(renshe_export_worker_loop())
     renshe_cleanup_task = asyncio.create_task(renshe_cleanup_worker_loop())
-    quiz_task = (
-        asyncio.create_task(quiz_worker_loop()) if settings.QUIZ_TASKS_ENABLED else None
-    )
+    quiz_task = asyncio.create_task(quiz_worker_loop()) if quiz_embedded_enabled else None
     payment_reconciliation_task = (
         asyncio.create_task(payment_reconciliation_worker_loop())
         if settings.WECHAT_PAY_ENABLED
@@ -157,6 +168,26 @@ QUIZ_RATE_LIMITS = {
     ("get", "/api/quiz/questions"): 60,
     ("post", "/api/quiz/practice-sessions/{session_id}/attempts"): 120,
     ("put", "/api/quiz/exams/{exam_id}/answers/{exam_question_id}"): 120,
+    ("post", "/admin/quiz/categories"): 120,
+    ("put", "/admin/quiz/categories/{category_id}"): 120,
+    ("delete", "/admin/quiz/categories/{category_id}"): 120,
+    ("post", "/admin/quiz/categories/{category_id}/status"): 120,
+    ("get", "/admin/quiz/categories/{category_id}/impact"): 120,
+    ("post", "/admin/quiz/questions"): 120,
+    ("put", "/admin/quiz/questions/{question_id}"): 120,
+    ("delete", "/admin/quiz/questions/{question_id}"): 120,
+    ("post", "/admin/quiz/questions/{question_id}/publish"): 120,
+    ("post", "/admin/quiz/questions/{question_id}/disable"): 120,
+    ("post", "/admin/quiz/questions/{question_id}/restore"): 120,
+    ("post", "/admin/quiz/questions/batch-publish"): 30,
+    ("post", "/admin/quiz/questions/batch-disable"): 30,
+    ("post", "/admin/quiz/imports/csv"): 10,
+    ("post", "/admin/quiz/imports/json"): 10,
+    ("post", "/admin/quiz/imports/{job_id}/retry"): 10,
+    ("post", "/admin/quiz/imports/{job_id}/confirm-categories"): 10,
+    ("post", "/admin/quiz/imports/{job_id}/cancel"): 10,
+    ("get", "/admin/quiz/imports/{job_id}/source-url"): 60,
+    ("get", "/admin/quiz/imports/{job_id}/report-url"): 60,
 }
 
 
@@ -232,7 +263,7 @@ def _add_quiz_contract_metadata(schema: dict) -> None:
         for method, operation in path_item.items():
             if method not in {"get", "post", "put", "patch", "delete"}:
                 continue
-            operation["x-quiz-contract-version"] = "2026-08-08"
+            operation["x-quiz-contract-version"] = QUIZ_CONTRACT_VERSION
             operation["x-error-codes"] = sorted(QUIZ_ERROR_CODES)
             limit = QUIZ_RATE_LIMITS.get((method, path))
             if limit is not None:
@@ -302,9 +333,43 @@ app.openapi = custom_openapi
 setup_middleware(app)
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
+# Added last so this pure-ASGI middleware wraps SlowAPI too and therefore
+# counts throttled requests that never reach a route function.
+app.add_middleware(QuizMetricsMiddleware)
 app.include_router(api_router)
 app.include_router(admin_router)
 app.include_router(agreement_router)
+
+
+@app.get(
+    "/internal/metrics",
+    include_in_schema=False,
+    response_class=PlainTextResponse,
+)
+async def internal_metrics(
+    authorization: str | None = Header(default=None, include_in_schema=False),
+):
+    """Prometheus scrape target protected by a dedicated deployment token."""
+
+    if not settings.QUIZ_METRICS_ENABLED:
+        return PlainTextResponse("Not Found\n", status_code=404)
+    expected = settings.QUIZ_METRICS_BEARER_TOKEN
+    supplied = ""
+    if authorization and authorization.startswith("Bearer "):
+        supplied = authorization[7:].strip()
+    if not expected or not hmac.compare_digest(supplied, expected):
+        return PlainTextResponse(
+            "Unauthorized\n",
+            status_code=401,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    quiz_tasks = enrich_quiz_task_snapshot(await read_quiz_task_snapshot())
+    quiz_metrics.update_worker(quiz_tasks)
+    return PlainTextResponse(
+        quiz_metrics.render(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 @app.get(
@@ -317,7 +382,9 @@ app.include_router(agreement_router)
 )
 async def health():
     checks, details = await _dependency_checks(probe_external=False)
-    details["quiz_tasks"] = quiz_task_registry.snapshot()
+    quiz_tasks = enrich_quiz_task_snapshot(await read_quiz_task_snapshot())
+    details["quiz_tasks"] = quiz_tasks
+    checks["quiz_worker"] = "ok" if quiz_task_snapshot_ready(quiz_tasks) else "unavailable"
     details["payment_reconciliation"] = payment_reconciliation_metrics.snapshot()
     details["refund_reconciliation"] = (
         renshe_refund_reconciliation_metrics.snapshot()
@@ -344,7 +411,9 @@ async def health():
 )
 async def ready(response: Response):
     checks, details = await _dependency_checks(probe_external=True)
-    details["quiz_tasks"] = quiz_task_registry.snapshot()
+    quiz_tasks = enrich_quiz_task_snapshot(await read_quiz_task_snapshot())
+    details["quiz_tasks"] = quiz_tasks
+    checks["quiz_worker"] = "ok" if quiz_task_snapshot_ready(quiz_tasks) else "unavailable"
     details["payment_reconciliation"] = payment_reconciliation_metrics.snapshot()
     details["refund_reconciliation"] = (
         renshe_refund_reconciliation_metrics.snapshot()
@@ -369,7 +438,7 @@ async def _dependency_checks(
     diagnostic metadata for the new GOV-08/BE-18 contract.
     """
 
-    async def _bounded(check) -> bool:
+    async def _bounded(check) -> Any:
         try:
             return await asyncio.wait_for(
                 check(), timeout=settings.HEALTH_CHECK_TIMEOUT_SECONDS
@@ -377,21 +446,34 @@ async def _dependency_checks(
         except Exception:
             return False
 
-    db_ok, redis_ok = await asyncio.gather(
-        _bounded(_check_db), _bounded(_check_redis)
+    database_probe, redis_ok = await asyncio.gather(
+        _bounded(_database_probe), _bounded(_check_redis)
     )
+    if isinstance(database_probe, dict):
+        database_details = database_probe
+        db_ok = database_probe.get("status") == "ok"
+    else:
+        # Keep the readiness result fail-closed if a custom deployment probe
+        # still returns only a boolean. Production's built-in probe also
+        # exposes a non-reversible database fingerprint for UAT target binding.
+        db_ok = bool(database_probe)
+        database_details = {"status": "ok" if db_ok else "unavailable"}
     oss_details = inspect_oss_configuration()
+    quiz_oss_details = inspect_quiz_oss_configuration()
     # Staging deployments can use a real private bucket too.  Probe every
     # network-backed OSS configuration; local development storage is handled
     # as an intentional no-network adapter by ``enrich_oss_probe``.
     if probe_external and oss_details.get("mode") == "aliyun_oss":
         oss_details = await enrich_oss_probe(oss_details)
+    if probe_external and quiz_oss_details.get("status") == "ok":
+        quiz_oss_details = await enrich_quiz_oss_probe(quiz_oss_details)
     login_details = inspect_wechat_login_configuration()
     payment_details = inspect_wechat_payment_configuration()
     details: dict[str, dict[str, Any]] = {
-        "database": {"status": "ok" if db_ok else "unavailable"},
+        "database": database_details,
         "redis": {"status": "ok" if redis_ok else "unavailable"},
         "oss": oss_details,
+        "quiz_oss": quiz_oss_details,
         "wechat_login": login_details,
         "wechat_payment": payment_details,
     }
@@ -399,19 +481,33 @@ async def _dependency_checks(
         "database": details["database"]["status"],
         "redis": details["redis"]["status"],
         "oss": oss_details["status"],
+        "quiz_oss": quiz_oss_details["status"],
         "wechat_login": login_details["status"],
         "wechat_payment": payment_details["status"],
     }
     return checks, details
 
 
-async def _check_db() -> bool:
+async def _database_probe() -> dict[str, Any]:
+    """Return readiness plus a one-way database identity for safe UAT binding."""
+
     try:
         async with get_db_ctx() as db:
-            await db.execute(text("SELECT 1"))
-        return True
+            identity = (
+                await db.execute(
+                    text(
+                        "SELECT current_database(), "
+                        "(SELECT system_identifier::text FROM pg_control_system())"
+                    )
+                )
+            ).one()
+        database_name = str(identity[0])
+        fingerprint = hashlib.sha256(
+            f"{identity[1]}/{database_name}".encode("utf-8")
+        ).hexdigest()
+        return {"status": "ok", "fingerprint_sha256": fingerprint}
     except Exception:
-        return False
+        return {"status": "unavailable"}
 
 
 async def _check_redis() -> bool:

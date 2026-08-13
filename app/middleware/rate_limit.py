@@ -65,6 +65,29 @@ def quiz_user_key(request: Request) -> str:
     return _authenticated_user_key(request, "quiz")
 
 
+def quiz_admin_key(request: Request) -> str:
+    """Use the authenticated administrator ID for management quotas."""
+
+    authorization = request.headers.get("authorization", "")
+    if authorization.startswith("Bearer "):
+        token = authorization[7:].strip()
+        if token:
+            try:
+                from app.adapter.security import decode_access_token
+
+                payload = decode_access_token(token)
+                admin_id = payload.get("admin_id")
+                if isinstance(admin_id, bool):
+                    admin_id = None
+                elif isinstance(admin_id, str) and admin_id.isdigit():
+                    admin_id = int(admin_id)
+                if payload.get("type") == "admin" and isinstance(admin_id, int) and admin_id > 0:
+                    return f"quiz:admin:{admin_id}"
+            except Exception:
+                pass
+    return f"quiz:admin:anonymous:{get_remote_address(request)}"
+
+
 def payment_user_key(request: Request) -> str:
     """Use a user bucket for active payment synchronization limits."""
 
@@ -98,7 +121,7 @@ class ResilientLimiter(Limiter):
         except RateLimitExceeded:
             raise
         except Exception:
-            if not self._using_local_fallback:
+            if settings.APP_ENV in {"development", "test"} and not self._using_local_fallback:
                 self._switch_to_local()
                 return super()._check_request_limit(
                     request, endpoint_func, in_middleware
@@ -109,6 +132,8 @@ class ResilientLimiter(Limiter):
         try:
             super().reset()
         except Exception:
+            if settings.APP_ENV not in {"development", "test"}:
+                raise
             self._switch_to_local()
             self._storage.reset()
 
@@ -134,4 +159,4 @@ limiter = ResilientLimiter(
 )
 
 
-__all__ = ["limiter", "payment_user_key", "quiz_user_key"]
+__all__ = ["limiter", "payment_user_key", "quiz_admin_key", "quiz_user_key"]

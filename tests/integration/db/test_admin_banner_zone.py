@@ -221,7 +221,9 @@ async def test_batch_delete_zones(test_context):
         f"Expected 3 deactivated, got {deactivated_count}"
     )
 
-    result = await svc.list_zones(keyword=None, page=1, page_size=100)
+    result = await svc.list_zones(
+        keyword=None, zone_type="test", page=1, page_size=100
+    )
     zone_map = {z.id: z for z in result.items}
     for cid in created_ids:
         assert cid in zone_map, f"Zone {cid} missing from list"
@@ -264,7 +266,9 @@ async def test_update_zones_sort(test_context):
         f"Expected 2 updated, got {updated_count}"
     )
 
-    result = await svc.list_zones(keyword=None, page=1, page_size=100)
+    result = await svc.list_zones(
+        keyword=None, zone_type="test", page=1, page_size=100
+    )
     zone_map = {z.id: z for z in result.items}
     assert zone_map[z1.id].sort_order == 10, (
         f"Expected sort_order=10, got {zone_map[z1.id].sort_order}"

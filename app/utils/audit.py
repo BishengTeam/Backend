@@ -13,7 +13,8 @@ from typing import Any
 _SENSITIVE_KEY = re.compile(
     r"(?:^|[_-])(id[_-]?card|phone|mobile|openid|token|secret|password|"
     r"private[_-]?key|certificate|email|address|real[_-]?name|candidate[_-]?name|"
-    r"storage[_-]?key|oss|source[_-]?storage[_-]?key)"
+    r"storage[_-]?key|object[_-]?key|source[_-]?object[_-]?key|"
+    r"report[_-]?object[_-]?key|signed[_-]?url|url|oss|source[_-]?storage[_-]?key)"
     r"(?:$|[_-])",
     re.IGNORECASE,
 )

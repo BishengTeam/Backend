@@ -1,0 +1,138 @@
+groups:
+  - name: wemini-quiz-api
+    interval: 30s
+    rules:
+      - alert: QuizApiHighErrorRate
+        expr: |
+          (
+            sum(rate(quiz_api_requests_total{status_code=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(quiz_api_requests_total[5m])), 0.001)
+          ) > 0.02
+          and sum(rate(quiz_api_requests_total[5m])) > 0.1
+        for: 10m
+        labels:
+          severity: page
+          service: quiz
+        annotations:
+          summary: "题库 API 五分钟错误率持续超过 2%"
+          description: "先检查 Web 日志、数据库/Redis 状态和最近发布；指标不含用户或题目内容。"
+
+      - alert: QuizApiRateLimitedBurst
+        expr: sum(increase(quiz_api_requests_total{status_code="429"}[5m])) > 30
+        for: 5m
+        labels:
+          severity: warning
+          service: quiz
+        annotations:
+          summary: "题库 API 429 在五分钟内超过 30 次"
+          description: "核对客户端重试策略、单用户热点及 Redis 共享限流状态。"
+
+      - alert: QuizQuestionListP95Slow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(quiz_api_request_duration_seconds_bucket{
+                method="GET",
+                route=~"/api/quiz/questions|/admin/quiz/questions|/admin/quiz/stats/questions"
+              }[5m])
+            )
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          service: quiz
+        annotations:
+          summary: "题库列表或统计接口 P95 超过 500 ms"
+          description: "检查慢查询、题量、索引和统计聚合水位。"
+
+      - alert: QuizAnswerSaveP95Slow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(quiz_api_request_duration_seconds_bucket{
+                route=~"/api/quiz/practice-sessions/\\{session_id\\}/attempts|/api/quiz/exams/\\{exam_id\\}/answers/\\{exam_question_id\\}"
+              }[5m])
+            )
+          ) > 0.3
+        for: 10m
+        labels:
+          severity: page
+          service: quiz
+        annotations:
+          summary: "题库答案保存 P95 超过 300 ms"
+          description: "检查数据库锁等待、Redis 限流和答案写入事务。"
+
+      - alert: QuizSessionCreateP95Slow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(quiz_api_request_duration_seconds_bucket{
+                method="POST",
+                route=~"/api/quiz/practice-sessions|/api/quiz/exams"
+              }[5m])
+            )
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+          service: quiz
+        annotations:
+          summary: "题库会话创建 P95 超过 1 秒"
+          description: "检查随机抽题 SQL、候选题数量、索引和数据库负载。"
+
+  - name: wemini-quiz-worker
+    interval: 30s
+    rules:
+      - alert: QuizWorkerUnavailable
+        expr: quiz_worker_ready == 0 or absent(quiz_worker_ready)
+        for: 2m
+        labels:
+          severity: page
+          service: quiz-worker
+        annotations:
+          summary: "题库 Worker 心跳失联或指标不可采集"
+          description: "检查独立 quiz-worker、Redis TTL 快照及 /ready；Web 不应承接后台循环。"
+
+      - alert: QuizWorkerProcessorStuck
+        expr: quiz_worker_stuck_processors > 0
+        for: 2m
+        labels:
+          severity: page
+          service: quiz-worker
+        annotations:
+          summary: "题库 Worker 存在有积压且心跳过期的处理器"
+          description: "查看任务监控页的处理器名称、队列深度和最近失败类型。"
+
+      - alert: QuizStatsAggregationLag
+        expr: quiz_worker_stats_lagging == 1
+        for: 2m
+        labels:
+          severity: warning
+          service: quiz-worker
+        annotations:
+          summary: "题目聚合统计超过一分钟 SLA"
+          description: "检查 quiz-question-stats 队列、Worker 运行时和数据库负载。"
+
+      - alert: QuizExpiredExamBacklog
+        expr: quiz_worker_exam_timeout_queue_depth > 0
+        for: 2m
+        labels:
+          severity: page
+          service: quiz-worker
+        annotations:
+          summary: "存在持续未结算的到期模拟考试"
+          description: "检查 quiz-exam-timeout 处理器、数据库锁和失败计数。"
+
+      - alert: QuizOssCleanupBacklog
+        expr: quiz_worker_oss_cleanup_queue_depth > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: quiz-worker
+        annotations:
+          summary: "题库导入 OSS 清理持续积压"
+          description: "检查私有 OSS 权限、过期任务及 quiz-import-cleanup 失败计数。"

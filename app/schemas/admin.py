@@ -120,8 +120,10 @@ class AdminOrderReview(BaseModel):
 class AdminUserOrderBrief(BaseModel):
     """管理端用户订单摘要（用户详情页子资源）"""
     id: int
-    cert_type: str
-    candidate_name: str
+    order_kind: str
+    product_type: str
+    out_trade_no: str | None = None
+    candidate_name: str | None = None
     price: int
     status: str
     created_at: datetime
@@ -133,7 +135,7 @@ class AdminUserConversationBrief(BaseModel):
     """管理端用户对话摘要（用户详情页子资源）"""
     id: int
     session_id: str
-    title: str | None = None
+    backend_type: str
     created_at: datetime
 
     model_config = {"from_attributes": True}

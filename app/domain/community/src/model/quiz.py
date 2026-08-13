@@ -21,6 +21,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     func,
     text,
 )
@@ -648,7 +649,8 @@ class QuizImportJob(Base, _QuizTimestampMixin):
         CheckConstraint("source_type IN ('csv', 'json')", name="ck_quiz_import_source_type"),
         CheckConstraint(
             "status IN ('queued', 'validating', 'validation_failed', 'importing', "
-            "'succeeded', 'failed')",
+            "'awaiting_category_confirmation', 'succeeded', 'failed', "
+            "'cancelled', 'expired')",
             name="ck_quiz_import_status",
         ),
         CheckConstraint(
@@ -662,6 +664,15 @@ class QuizImportJob(Base, _QuizTimestampMixin):
             name="ck_quiz_import_counts",
         ),
         CheckConstraint("retry_count >= 0", name="ck_quiz_import_retry_count"),
+        CheckConstraint("lock_version >= 1", name="ck_quiz_import_lock_version"),
+        CheckConstraint(
+            "validation_version >= 0", name="ck_quiz_import_validation_version"
+        ),
+        CheckConstraint(
+            "missing_category_count BETWEEN 0 AND 500 "
+            "AND affected_question_count BETWEEN 0 AND 5000",
+            name="ck_quiz_import_category_counts",
+        ),
         UniqueConstraint("import_batch_key", name="uq_quiz_import_batch_key"),
         Index("ix_quiz_import_job_queue", "status", "created_at", "id"),
         Index("ix_quiz_import_job_admin", "admin_id", "created_at", "id"),
@@ -674,7 +685,7 @@ class QuizImportJob(Base, _QuizTimestampMixin):
     import_batch_key: Mapped[str] = mapped_column(String(64), nullable=False)
     source_type: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(
-        String(24), nullable=False, default="queued", server_default="queued"
+        String(32), nullable=False, default="queued", server_default="queued"
     )
     source_object_key: Mapped[str] = mapped_column(String(512), nullable=False)
     source_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -699,6 +710,27 @@ class QuizImportJob(Base, _QuizTimestampMixin):
     )
     error_message: Mapped[str | None] = mapped_column(String(1024))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    lock_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    validation_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    impact_version: Mapped[str | None] = mapped_column(String(64))
+    category_impact: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    missing_category_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    affected_question_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    confirmed_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("admin_user.id", ondelete="SET NULL")
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    execution_protected_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     @property
     def report_available(self) -> bool:
@@ -710,6 +742,37 @@ class QuizImportJob(Base, _QuizTimestampMixin):
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
         return bool(self.report_object_key) and expires_at > datetime.now(timezone.utc)
+
+
+class QuizImportError(Base, _QuizCreatedAtMixin):
+    __tablename__ = "quiz_import_error"
+    __table_args__ = (
+        CheckConstraint('"row" IS NULL OR "row" >= 1', name="ck_quiz_import_error_row"),
+        CheckConstraint(
+            "question_index IS NULL OR question_index >= 1",
+            name="ck_quiz_import_error_question_index",
+        ),
+        Index("ix_quiz_import_error_page", "job_id", "validation_version", "id"),
+        Index(
+            "ix_quiz_import_error_field",
+            "job_id",
+            "validation_version",
+            "field",
+            "id",
+        ),
+    )
+
+    job_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("quiz_import_job.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    validation_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    row: Mapped[int | None] = mapped_column(Integer)
+    question_index: Mapped[int | None] = mapped_column(Integer)
+    field: Mapped[str | None] = mapped_column(String(128))
+    error_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    message: Mapped[str] = mapped_column(String(1024), nullable=False)
 
 
 class QuizAdminAuditLog(Base, _QuizCreatedAtMixin):
@@ -747,6 +810,28 @@ class QuizAdminAuditLog(Base, _QuizCreatedAtMixin):
     error_summary: Mapped[str | None] = mapped_column(Text)
 
 
+def _sanitize_quiz_audit(target: QuizAdminAuditLog) -> None:
+    from app.utils.audit import redact_sensitive_text, sanitize_audit_value
+
+    target.changed_fields = sanitize_audit_value(target.changed_fields)
+    target.target_ids = sanitize_audit_value(target.target_ids)
+    target.error_summary = redact_sensitive_text(target.error_summary)
+
+
+@event.listens_for(QuizAdminAuditLog, "before_insert")
+def _sanitize_quiz_audit_before_insert(_mapper, _connection, target) -> None:
+    """Enforce the permanent audit redaction boundary before persistence."""
+
+    _sanitize_quiz_audit(target)
+
+
+@event.listens_for(QuizAdminAuditLog, "before_update")
+def _reject_quiz_audit_update(_mapper, _connection, _target) -> None:
+    """Quiz audit rows are append-only even for direct ORM callers."""
+
+    raise ValueError("quiz audit logs are immutable")
+
+
 __all__ = [
     "QuizAdminAuditLog",
     "QuizCategory",
@@ -756,6 +841,7 @@ __all__ = [
     "QuizExamAnswer",
     "QuizExamQuestion",
     "QuizImportJob",
+    "QuizImportError",
     "QuizPracticeAttempt",
     "QuizPracticeSession",
     "QuizPracticeSessionQuestion",

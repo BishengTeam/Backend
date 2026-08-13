@@ -13,7 +13,8 @@ from app.adapter.security import create_access_token
 from app.contracts.quiz import DELETED_QUIZ_ENDPOINTS, QUIZ_API_CONTRACTS
 from app.main import app
 from app.middleware.error_handler import rate_limit_exception_handler
-from app.middleware.rate_limit import ResilientLimiter, quiz_user_key
+from app.middleware.rate_limit import ResilientLimiter, quiz_admin_key, quiz_user_key
+from app.adapter.security import create_admin_access_token
 from app.services.quiz_tasks import QuizTaskRegistry
 
 
@@ -46,6 +47,16 @@ def test_quiz_rate_limit_key_is_per_authenticated_user() -> None:
     assert quiz_user_key(_request(authorization=f"Bearer {same_user}")) == "quiz:user:17"
     assert quiz_user_key(_request(authorization=f"Bearer {other_user}")) == "quiz:user:18"
     assert quiz_user_key(_request(host="192.0.2.9")) == "quiz:anonymous:192.0.2.9"
+
+
+def test_quiz_admin_rate_limit_key_is_per_authenticated_admin() -> None:
+    first = create_admin_access_token(31, "admin-31", "admin")
+    same_admin = create_admin_access_token(31, "renamed-admin-31", "admin")
+    other_admin = create_admin_access_token(32, "admin-32", "super_admin")
+
+    assert quiz_admin_key(_request(authorization=f"Bearer {first}")) == "quiz:admin:31"
+    assert quiz_admin_key(_request(authorization=f"Bearer {same_admin}")) == "quiz:admin:31"
+    assert quiz_admin_key(_request(authorization=f"Bearer {other_admin}")) == "quiz:admin:32"
 
 
 @pytest.mark.asyncio
@@ -91,7 +102,7 @@ def test_runtime_openapi_matches_all_frozen_quiz_operations() -> None:
 
     for contract in QUIZ_API_CONTRACTS:
         operation = paths[contract.path][contract.method.lower()]
-        assert operation["x-quiz-contract-version"] == "2026-08-08"
+        assert operation["x-quiz-contract-version"] == "2026-08-13"
         assert operation["x-error-codes"]
         success_response = operation["responses"]["200"]
         assert success_response["content"]["application/json"]["schema"]

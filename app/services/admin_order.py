@@ -1,8 +1,11 @@
-from datetime import datetime
+from datetime import date as calendar_date
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
+from app.port.config import settings
 from app.port.exceptions import BusinessException, NotFoundException, ThirdPartyException
 from app.integrations.wechat_pay import WechatPayClient
 from app.domain.order.src.index import (
@@ -200,14 +203,22 @@ class AdminOrderService:
             return OrderDetailResponse.model_validate(order)
 
     async def reconciliation(self, date: str) -> dict:
-        from datetime import datetime as dt
-
-        date_start = dt.fromisoformat(date)
-        date_end = dt.fromisoformat(f"{date}T23:59:59")
+        target_date = calendar_date.fromisoformat(date)
+        local_zone = ZoneInfo(settings.APP_TIMEZONE)
+        date_start = datetime.combine(
+            target_date,
+            time.min,
+            tzinfo=local_zone,
+        ).astimezone(timezone.utc)
+        date_end = datetime.combine(
+            target_date + timedelta(days=1),
+            time.min,
+            tzinfo=local_zone,
+        ).astimezone(timezone.utc)
         async with get_db_ctx() as db:
             stmt = select(Order).where(
                 Order.created_at >= date_start,
-                Order.created_at <= date_end,
+                Order.created_at < date_end,
             )
             result = await db.execute(stmt)
             orders = result.scalars().all()

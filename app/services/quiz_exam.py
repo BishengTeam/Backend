@@ -343,6 +343,18 @@ class QuizExamService:
             stats.timed_out_exam_count += 1
             exam.timed_out_at = settled_at
             exam.submitted_at = None
+
+        # Move the exam to one complete, constraint-valid terminal state
+        # before wrong-book synchronization.  That synchronization executes
+        # queries and can therefore trigger autoflush; a partially updated
+        # lifecycle (for example in_progress + submitted_at) is invalid.
+        exam.status = status
+        exam.correct_count = correct_count
+        exam.wrong_count = wrong_count
+        exam.unanswered_count = unanswered_count
+        exam.score = score
+        exam.abandoned_at = None
+        exam.lock_version += 1
         for snapshot in snapshots:
             answer = answers.get(int(snapshot.id))
             if answer is not None and answer.is_correct is False:
@@ -354,13 +366,6 @@ class QuizExamService:
                     settled_at=settled_at,
                     stats=stats,
                 )
-        exam.status = status
-        exam.correct_count = correct_count
-        exam.wrong_count = wrong_count
-        exam.unanswered_count = unanswered_count
-        exam.score = score
-        exam.abandoned_at = None
-        exam.lock_version += 1
         return exam
 
     async def create_exam(

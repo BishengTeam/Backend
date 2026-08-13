@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Literal
 
@@ -78,8 +78,35 @@ class AdminQuizCategoryResponse(QuizContractModel):
     updated_at: datetime
 
 
+class AdminQuizCategoryImpactQuery(QuizContractModel):
+    action: Literal["disable", "move", "delete"]
+    target_parent_id: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_action_parameters(self) -> "AdminQuizCategoryImpactQuery":
+        if self.action != "move" and "target_parent_id" in self.model_fields_set:
+            raise ValueError("target_parent_id is only valid for move")
+        return self
+
+
+class AdminQuizCategoryImpactResponse(QuizContractModel):
+    category_id: int
+    action: Literal["disable", "move", "delete"]
+    target_parent_id: int | None = None
+    descendant_category_count: int = Field(ge=0)
+    draft_question_count: int = Field(ge=0)
+    published_question_count: int = Field(ge=0)
+    disabled_question_count: int = Field(ge=0)
+    affected_new_pool_question_count: int = Field(ge=0)
+    history_snapshot_affected: Literal[False] = False
+    can_execute: bool
+    blocking_reasons: list[str] = Field(default_factory=list)
+    calculated_at: datetime
+
+
 class AdminQuizQuestionQuery(QuizContractModel):
     category_id: int | None = Field(default=None, ge=1)
+    include_descendants: bool = False
     question_type: QuizQuestionType | None = None
     status: QuizQuestionStatus | None = None
     keyword: str | None = Field(default=None, min_length=1, max_length=128)
@@ -159,7 +186,7 @@ class AdminQuizBatchTarget(QuizContractModel):
 
 
 class AdminQuizBatchRequest(QuizContractModel):
-    items: list[AdminQuizBatchTarget] = Field(min_length=1, max_length=5000)
+    items: list[AdminQuizBatchTarget] = Field(min_length=1, max_length=100)
 
     @field_validator("items")
     @classmethod
@@ -187,6 +214,52 @@ class AdminQuizBatchResponse(QuizContractModel):
 
 class AdminQuizQuestionStatsResponse(QuizContractModel):
     question_id: int
+    practice_first_attempts: int = Field(ge=0)
+    practice_first_correct: int = Field(ge=0)
+    practice_first_accuracy: Decimal = Field(ge=0, le=100)
+    exam_answers: int = Field(ge=0)
+    exam_correct: int = Field(ge=0)
+    exam_accuracy: Decimal = Field(ge=0, le=100)
+    aggregated_through: datetime | None = None
+
+
+class AdminQuizStatsOverviewResponse(QuizContractModel):
+    calculated_at: datetime
+    aggregated_through: datetime | None = None
+    category_count: int = Field(ge=0)
+    active_category_count: int = Field(ge=0)
+    disabled_category_count: int = Field(ge=0)
+    question_count: int = Field(ge=0)
+    draft_question_count: int = Field(ge=0)
+    published_question_count: int = Field(ge=0)
+    disabled_question_count: int = Field(ge=0)
+    practice_session_count: int = Field(ge=0)
+    practice_first_attempts: int = Field(ge=0)
+    practice_first_correct: int = Field(ge=0)
+    practice_first_accuracy: Decimal = Field(ge=0, le=100)
+    completed_exam_count: int = Field(ge=0)
+    timed_out_exam_count: int = Field(ge=0)
+    exam_answers: int = Field(ge=0)
+    exam_correct: int = Field(ge=0)
+    exam_accuracy: Decimal = Field(ge=0, le=100)
+
+
+class AdminQuizStatsQuestionQuery(QuizContractModel):
+    category_id: int | None = Field(default=None, ge=1)
+    question_type: QuizQuestionType | None = None
+    status: QuizQuestionStatus | None = None
+    keyword: str | None = Field(default=None, min_length=1, max_length=128)
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=100)
+
+
+class AdminQuizQuestionStatsListItem(QuizContractModel):
+    question_id: int
+    question_text: str
+    category_id: int
+    category_name: str
+    question_type: QuizQuestionType
+    status: QuizQuestionStatus
     practice_first_attempts: int = Field(ge=0)
     practice_first_correct: int = Field(ge=0)
     practice_first_accuracy: Decimal = Field(ge=0, le=100)
@@ -259,6 +332,14 @@ class AdminQuizImportJobResponse(QuizContractModel):
     retry_count: int = Field(ge=0)
     error_message: str | None = None
     report_available: bool
+    lock_version: int = Field(ge=1)
+    validation_version: int = Field(ge=0)
+    impact_version: str | None = Field(default=None, min_length=64, max_length=64)
+    missing_category_count: int = Field(ge=0, le=500)
+    affected_question_count: int = Field(ge=0, le=5000)
+    confirmed_by: int | None = None
+    confirmed_at: datetime | None = None
+    execution_protected_until: datetime | None = None
     expires_at: datetime
     created_at: datetime
     updated_at: datetime
@@ -273,7 +354,9 @@ class AdminQuizImportReportError(QuizContractModel):
     """One row-level validation error in an import report."""
 
     row: int | None = Field(default=None, ge=1)
+    question_index: int | None = Field(default=None, ge=1)
     field: str | None = Field(default=None, min_length=1, max_length=128)
+    error_code: str | None = Field(default=None, min_length=1, max_length=64)
     message: str = Field(min_length=1, max_length=1024)
 
 
@@ -282,14 +365,79 @@ class AdminQuizImportReportResponse(QuizContractModel):
     errors: list[AdminQuizImportReportError]
 
 
+class AdminQuizImportErrorQuery(QuizContractModel):
+    field: str | None = Field(default=None, min_length=1, max_length=128)
+    page: int = Field(default=1, ge=1)
+
+
+class AdminQuizImportErrorPage(QuizContractModel):
+    items: list[AdminQuizImportReportError]
+    total: int = Field(ge=0)
+    page: int = Field(ge=1)
+    page_size: Literal[50] = 50
+    available_fields: list[str] = Field(default_factory=list)
+    validation_version: int = Field(ge=0)
+
+
+class AdminQuizImportCategoryImpactNode(QuizContractModel):
+    name: str = Field(min_length=1, max_length=128)
+    path: list[str] = Field(min_length=1, max_length=3)
+    depth: int = Field(ge=1, le=3)
+    status: Literal["existing", "will_create", "blocked"]
+    category_id: int | None = None
+    direct_question_count: int = Field(ge=0, le=5000)
+    subtree_question_count: int = Field(ge=0, le=5000)
+    blocking_reasons: list[str] = Field(default_factory=list)
+    children: list["AdminQuizImportCategoryImpactNode"] = Field(default_factory=list)
+
+
+class AdminQuizImportCategoryImpactResponse(QuizContractModel):
+    job_id: int = Field(ge=1)
+    status: QuizImportStatus
+    tree: list[AdminQuizImportCategoryImpactNode]
+    new_category_count: int = Field(ge=0, le=500)
+    reused_category_count: int = Field(ge=0)
+    affected_question_count: int = Field(ge=0, le=5000)
+    blocking_reasons: list[str] = Field(default_factory=list)
+    lock_version: int = Field(ge=1)
+    impact_version: str = Field(min_length=64, max_length=64)
+    calculated_at: datetime
+
+
+class AdminQuizImportConfirmCategoriesRequest(QuizContractModel):
+    lock_version: int = Field(ge=1)
+    impact_version: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class AdminQuizImportCancelRequest(QuizContractModel):
+    lock_version: int = Field(ge=1)
+
+
 class AdminQuizAuditQuery(QuizContractModel):
     admin_id: int | None = Field(default=None, ge=1)
     action: str | None = Field(default=None, min_length=1, max_length=64)
     object_type: str | None = Field(default=None, min_length=1, max_length=64)
     object_id: int | None = Field(default=None, ge=1)
     result: Literal["succeeded", "failed"] | None = None
+    request_id: str | None = Field(default=None, min_length=1, max_length=64)
+    start_at: datetime | None = None
+    end_at: datetime | None = None
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
+
+    @field_validator("start_at", "end_at")
+    @classmethod
+    def require_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("audit time filters must include timezone")
+        return value
+
+    @model_validator(mode="after")
+    def validate_time_range(self) -> "AdminQuizAuditQuery":
+        if self.start_at is not None and self.end_at is not None:
+            if self.start_at.astimezone(timezone.utc) > self.end_at.astimezone(timezone.utc):
+                raise ValueError("start_at must be earlier than or equal to end_at")
+        return self
 
 
 class AdminQuizAuditFieldChange(QuizContractModel):

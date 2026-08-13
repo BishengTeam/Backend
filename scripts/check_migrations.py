@@ -128,8 +128,8 @@ def run_offline_sql_check() -> None:
             )
         sql_file.seek(0)
         rendered_sql = sql_file.read()
-    if "version_num='quiz002'" not in rendered_sql:
-        raise RuntimeError("offline SQL did not reach the current Alembic head quiz002")
+    if "version_num='quiz003'" not in rendered_sql:
+        raise RuntimeError("offline SQL did not reach the current Alembic head quiz003")
     print(f"alembic_offline_sql=ok statements_bytes={len(rendered_sql.encode('utf-8'))}")
 
 

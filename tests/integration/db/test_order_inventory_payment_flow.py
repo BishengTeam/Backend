@@ -84,7 +84,7 @@ async def _cleanup_test_data(session_factory, prefix: str) -> None:
                 """
                 DELETE FROM inventory_record
                 WHERE order_id IN (
-                    SELECT id FROM "order" WHERE cert_type LIKE :prefix_like
+                    SELECT id FROM "order" WHERE product_type LIKE :prefix_like
                 )
                 OR inventory_id IN (
                     SELECT id FROM inventory WHERE ref_code LIKE :prefix_like
@@ -94,17 +94,28 @@ async def _cleanup_test_data(session_factory, prefix: str) -> None:
             {"prefix_like": prefix_like},
         )
         await db.execute(
-            text('DELETE FROM "order" WHERE cert_type LIKE :prefix_like'),
+            text('DELETE FROM "order" WHERE product_type LIKE :prefix_like'),
             {"prefix_like": prefix_like},
         )
         await db.execute(
-            text("DELETE FROM price_config WHERE cert_type LIKE :prefix_like"),
+            text("DELETE FROM price_config WHERE product_type LIKE :prefix_like"),
             {"prefix_like": prefix_like},
         )
         await db.execute(
             text(
                 """
-                DELETE FROM user_identity
+                DELETE FROM user_student
+                WHERE user_id IN (
+                    SELECT id FROM "user" WHERE openid LIKE :prefix_like
+                )
+                """
+            ),
+            {"prefix_like": prefix_like},
+        )
+        await db.execute(
+            text(
+                """
+                DELETE FROM user_realname
                 WHERE user_id IN (
                     SELECT id FROM "user" WHERE openid LIKE :prefix_like
                 )
@@ -138,9 +149,9 @@ async def _seed_base_data(
 ) -> SimpleNamespace:
     from app.domain.certification.src.index import Certification
     from app.domain.order.src.index import Inventory, PriceConfig
-    from app.domain.user.src.index import User, UserIdentity
+    from app.domain.user.src.index import User, UserRealname
 
-    cert_type = prefix
+    product_type = prefix
     total_quota = available_quota + locked_quota + sold_quota
 
     async with session_factory() as db:
@@ -150,7 +161,7 @@ async def _seed_base_data(
             db.add(user)
             await db.flush()
             db.add(
-                UserIdentity(
+                UserRealname(
                     user_id=user.id,
                     user_type="student",
                     real_name=f"Test User {index}",
@@ -162,17 +173,24 @@ async def _seed_base_data(
 
         db.add(
             Certification(
-                name=cert_type,
-                chinese_name=cert_type,
-                code=cert_type,
+                name=product_type,
+                chinese_name=product_type,
+                code=product_type,
                 vendor="test",
                 is_active=True,
             )
         )
-        db.add(PriceConfig(cert_type=cert_type, user_type="student", price=100, is_active=True))
+        db.add(
+            PriceConfig(
+                product_type=product_type,
+                user_type="student",
+                price=100,
+                is_active=True,
+            )
+        )
         inventory = Inventory(
             inventory_type="certification",
-            ref_code=cert_type,
+            ref_code=product_type,
             total_quota=total_quota,
             available_quota=available_quota,
             locked_quota=locked_quota,
@@ -185,7 +203,11 @@ async def _seed_base_data(
         inventory_id = inventory.id
         await db.commit()
 
-    return SimpleNamespace(cert_type=cert_type, user_ids=user_ids, inventory_id=inventory_id)
+    return SimpleNamespace(
+        product_type=product_type,
+        user_ids=user_ids,
+        inventory_id=inventory_id,
+    )
 
 
 async def _seed_pending_order(
@@ -209,7 +231,8 @@ async def _seed_pending_order(
         order = Order(
             user_id=data.user_ids[0],
             inventory_id=data.inventory_id,
-            cert_type=data.cert_type,
+            order_kind="certification",
+            product_type=data.product_type,
             candidate_name="Test Candidate",
             candidate_phone="13800000000",
             candidate_idcard=None,
@@ -225,7 +248,7 @@ async def _seed_pending_order(
         await db.commit()
 
     return SimpleNamespace(
-        cert_type=data.cert_type,
+        product_type=data.product_type,
         user_id=data.user_ids[0],
         inventory_id=data.inventory_id,
         order_id=order_id,
@@ -251,7 +274,8 @@ async def test_concurrent_order_creation_does_not_oversell(
         service.create_order(
             user_id,
             OrderCreate(
-                cert_type=data.cert_type,
+                order_kind="certification",
+                product_type=data.product_type,
                 candidate_name=f"Candidate {index}",
                 candidate_phone=f"1380000000{index}",
                 candidate_idcard=None,
@@ -269,10 +293,14 @@ async def test_concurrent_order_creation_does_not_oversell(
 
     async with session_factory() as db:
         inventory = (
-            await db.execute(select(Inventory).where(Inventory.ref_code == data.cert_type))
+            await db.execute(
+                select(Inventory).where(Inventory.ref_code == data.product_type)
+            )
         ).scalar_one()
         order_count = await db.scalar(
-            select(func.count()).select_from(Order).where(Order.cert_type == data.cert_type)
+            select(func.count())
+            .select_from(Order)
+            .where(Order.product_type == data.product_type)
         )
         lock_record_count = await db.scalar(
             select(func.count())
@@ -350,9 +378,13 @@ async def test_timeout_close_releases_locked_inventory(
     test_prefix,
 ):
     from sqlalchemy import func, select
-    from sqlalchemy import text
-
-    from app.domain.order.src.index import Inventory, InventoryRecord, Order, release_inventory_lock
+    from app.domain.order.src.index import (
+        Inventory,
+        InventoryRecord,
+        Order,
+        apply_order_status_transition,
+        release_inventory_lock,
+    )
     from app.schemas.order import OrderCreate
 
     now = datetime.now(timezone.utc)
@@ -368,7 +400,8 @@ async def test_timeout_close_releases_locked_inventory(
     order_resp = await order_svc.create_order(
         data.user_ids[0],
         OrderCreate(
-            cert_type=data.cert_type,
+            order_kind="certification",
+            product_type=data.product_type,
             candidate_name="Test Candidate",
             candidate_phone="13800000000",
         ),
@@ -388,7 +421,6 @@ async def test_timeout_close_releases_locked_inventory(
     close_reason = f"{test_prefix}-timeout"
 
     # 阶段1：关闭订单（手动模拟 close_expired_pending_order + 提交）
-    from app.services.order import apply_order_status_transition
     async with session_factory() as db:
         order = await db.get(Order, order_resp.id)
         changed = apply_order_status_transition(order, "closed")
@@ -408,7 +440,7 @@ async def test_timeout_close_releases_locked_inventory(
     async with session_factory() as db:
         order = await db.get(Order, order_resp.id)
         inventory = (await db.execute(
-            select(Inventory).where(Inventory.ref_code == data.cert_type)
+            select(Inventory).where(Inventory.ref_code == data.product_type)
         )).scalar_one()
         lock_records = await db.scalar(
             select(func.count()).select_from(InventoryRecord)

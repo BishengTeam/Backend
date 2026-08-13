@@ -500,6 +500,20 @@ async def test_exam_http_auth_validation_visibility_conflict_and_ownership(
     transport = ASGITransport(app=app, raise_app_exceptions=False)
     try:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
+            no_current = await client.get(
+                "/api/quiz/exams/current",
+                headers=user_headers,
+            )
+            assert no_current.status_code == 200, no_current.text
+            assert no_current.json()["data"] is None
+
+            empty_history = await client.get(
+                "/api/quiz/exams",
+                headers=user_headers,
+            )
+            assert empty_history.status_code == 200, empty_history.text
+            assert empty_history.json()["data"]["total"] == 0
+
             unauthenticated = await client.post(
                 "/api/quiz/exams",
                 json={"category_id": category.id, "question_count": 10},
@@ -537,6 +551,21 @@ async def test_exam_http_auth_validation_visibility_conflict_and_ownership(
                 for question in exam["questions"]
             )
 
+            current = await client.get(
+                "/api/quiz/exams/current",
+                headers=user_headers,
+            )
+            assert current.status_code == 200, current.text
+            assert current.json()["data"]["id"] == exam["id"]
+
+            in_progress_history = await client.get(
+                "/api/quiz/exams",
+                headers=user_headers,
+                params={"page": 1, "page_size": 20},
+            )
+            assert in_progress_history.status_code == 200, in_progress_history.text
+            assert in_progress_history.json()["data"]["items"][0]["status"] == "in_progress"
+
             hidden = await client.get(
                 f"/api/quiz/exams/{exam['id']}", headers=other_headers
             )
@@ -573,6 +602,48 @@ async def test_exam_http_auth_validation_visibility_conflict_and_ownership(
                 "correct_answer" in question and "explanation" in question
                 for question in settled_questions
             )
+
+            settled_current = await client.get(
+                "/api/quiz/exams/current",
+                headers=user_headers,
+            )
+            assert settled_current.status_code == 200, settled_current.text
+            assert settled_current.json()["data"] is None
+
+            second = await client.post(
+                "/api/quiz/exams",
+                headers=user_headers,
+                json={"category_id": category.id, "question_count": 10},
+            )
+            assert second.status_code == 200, second.text
+            second_exam = second.json()["data"]
+
+            abandoned = await client.post(
+                f"/api/quiz/exams/{second_exam['id']}/abandon",
+                headers=user_headers,
+            )
+            assert abandoned.status_code == 200, abandoned.text
+            assert abandoned.json()["data"]["status"] == "abandoned"
+            assert abandoned.json()["data"]["score"] is None
+
+            abandoned_detail = await client.get(
+                f"/api/quiz/exams/{second_exam['id']}",
+                headers=user_headers,
+            )
+            assert abandoned_detail.status_code == 200, abandoned_detail.text
+            assert abandoned_detail.json()["data"]["status"] == "abandoned"
+            assert all(
+                "correct_answer" not in question and "explanation" not in question
+                for question in abandoned_detail.json()["data"]["questions"]
+            )
+
+            history = await client.get(
+                "/api/quiz/exams",
+                headers=user_headers,
+            )
+            assert history.status_code == 200, history.text
+            statuses = {item["status"] for item in history.json()["data"]["items"]}
+            assert {"completed", "abandoned"}.issubset(statuses)
     finally:
         app.dependency_overrides.clear()
         app.dependency_overrides.update(previous_overrides)
