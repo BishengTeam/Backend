@@ -234,4 +234,4 @@ class PlanAPIRouteUnitTests(unittest.TestCase):
 
     def test_admin_routes_pass_product_code_to_service(self):
         source = (REPO_ROOT / "app/api/admin/plans.py").read_text("utf-8")
-        assert source.count("product_type=code") == 9
+        assert source.count("product_type=code") == 10

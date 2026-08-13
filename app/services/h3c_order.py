@@ -1,6 +1,4 @@
 """H3C 认证报名服务"""
-import time
-import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -16,6 +14,7 @@ from app.domain.order.src.index import (
 )
 from app.domain.user.src.index import User, UserRealname
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException, ValidationException
+from app.utils.payment import generate_out_trade_no
 from app.schemas.h3c import H3cOrderCreate, H3cOrderResponse, H3cProfileDefaults
 from app.services.order import resolve_price_tier
 from app.services.plan_enrollment import PlanEnrollmentService
@@ -153,7 +152,7 @@ class H3cOrderService:
                     candidate_idcard=data.candidate_idcard,
                     price=price_rows[0].price,
                     status="pending",
-                    out_trade_no=f"{user_id}_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}",
+                    out_trade_no=generate_out_trade_no("H3C"),
                     extra_data=extra,
                     attachments=attachments,
                     expires_at=expires_at,

@@ -1,3 +1,12 @@
+"""Deprecated pre-QB-13 quiz service kept only for source-level migrations.
+
+No API router imports this module. New callers must use ``QuizPracticeService``
+or ``QuizExamService``; the old single-question, manual wrong-book/check-in,
+and single ``exam`` endpoints were removed in QB-31. This file is retained
+temporarily because downstream migration scripts and historical tests may
+still import its symbols, but it is not part of the runtime contract.
+"""
+
 from __future__ import annotations
 
 from collections import defaultdict

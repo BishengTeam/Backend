@@ -10,6 +10,7 @@ from app.adapter.security import create_admin_access_token
 from app.domain.user.src.index import AdminUser
 from app.policy.permissions import ROLE_PERMISSIONS
 from app.schemas.admin import AdminInfo, AdminLoginResponse
+from app.services.renshe_audit import record_best_effort_audit
 
 SALT_LENGTH = 32
 HASH_ITERATIONS = 600_000
@@ -31,6 +32,21 @@ class AdminAuthService:
         return secrets.compare_digest(dk.hex(), dk_hex)
 
     async def login(self, username: str, password: str) -> AdminLoginResponse:
+        try:
+            return await self._login(username, password)
+        except Exception as exc:
+            await record_best_effort_audit(
+                actor_type="admin",
+                actor_id=None,
+                action="auth.admin_login",
+                object_type="auth",
+                object_id=0,
+                result="failed",
+                summary={"error_type": type(exc).__name__},
+            )
+            raise
+
+    async def _login(self, username: str, password: str) -> AdminLoginResponse:
         async with get_db_ctx() as db:
             result = await db.execute(
                 select(AdminUser).where(AdminUser.username == username)
@@ -43,9 +59,19 @@ class AdminAuthService:
             if not self.verify_password(password, admin.password_hash):
                 raise UnauthorizedException("账号或密码错误")
             access_token = create_admin_access_token(admin.id, admin.username, admin.role)
-            return AdminLoginResponse(
+            response = AdminLoginResponse(
                 access_token=access_token,
                 expires_in=settings.JWT_EXPIRE_MINUTES * 60,
                 admin=AdminInfo.model_validate(admin),
                 permissions=ROLE_PERMISSIONS.get(admin.role, []),
             )
+        await record_best_effort_audit(
+            actor_type="admin",
+            actor_id=response.admin.id,
+            action="auth.admin_login",
+            object_type="admin_user",
+            object_id=response.admin.id,
+            result="succeeded",
+            summary={"role": response.admin.role},
+        )
+        return response

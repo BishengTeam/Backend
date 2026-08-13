@@ -45,7 +45,9 @@ async def redis_get_safe(key: str) -> str | None:
     try:
         return await redis_client.get(key)
     except Exception:
-        logger.warning("Redis GET failed for key=%s, marking unavailable", key[:30])
+        # Cache keys can contain refresh tokens or JWTs.  Log only the
+        # operation so diagnostics never disclose credential material.
+        logger.warning("Redis GET failed; marking unavailable")
         _redis_available = False
         return None
 
@@ -59,7 +61,7 @@ async def redis_setex_safe(key: str, ttl: int, value: str) -> bool:
         await redis_client.setex(key, ttl, value)
         return True
     except Exception:
-        logger.warning("Redis SETEX failed for key=%s, marking unavailable", key[:30])
+        logger.warning("Redis SETEX failed; marking unavailable")
         _redis_available = False
         return False
 
@@ -72,7 +74,7 @@ async def redis_getdel_safe(key: str) -> str | None:
     try:
         return await redis_client.getdel(key)
     except Exception:
-        logger.warning("Redis GETDEL failed for key=%s, marking unavailable", key[:30])
+        logger.warning("Redis GETDEL failed; marking unavailable")
         _redis_available = False
         return None
 

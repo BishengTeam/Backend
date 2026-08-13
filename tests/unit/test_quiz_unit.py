@@ -31,6 +31,13 @@ EXPECTED_QUIZ_ENDPOINTS = (
     ("GET", "/api/quiz/checkin"),
     ("GET", "/api/quiz/checkin/calendar"),
     ("GET", "/api/quiz/stats"),
+    ("POST", "/api/quiz/exams"),
+    ("GET", "/api/quiz/exams/current"),
+    ("GET", "/api/quiz/exams"),
+    ("GET", "/api/quiz/exams/{exam_id}"),
+    ("PUT", "/api/quiz/exams/{exam_id}/answers/{exam_question_id}"),
+    ("POST", "/api/quiz/exams/{exam_id}/submit"),
+    ("POST", "/api/quiz/exams/{exam_id}/abandon"),
 )
 
 REMOVED_PRACTICE_ENDPOINTS = (

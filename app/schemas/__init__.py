@@ -49,8 +49,9 @@ from app.schemas.order import (
 
 # Payment schemas
 from app.schemas.payment import (
-    PaymentCallbackRequest,
     PaymentCallbackResponse,
+    PaymentSyncResponse,
+    WechatPayNotificationAck,
     PaymentPrepayRequest,
     PaymentPrepayResponse,
 )
@@ -67,21 +68,6 @@ from app.schemas.points import (
 
 # Price config schemas
 from app.schemas.price_config import PriceFilter, PriceResponse
-
-# Quiz schemas
-from app.schemas.quiz import (
-    QuizCategoryResponse,
-    QuizCategoryTreeResponse,
-    QuizCheckinRequest,
-    QuizCheckinResponse,
-    QuizQuestionQuery,
-    QuizQuestionResponse,
-    QuizRecordQuestionResponse,
-    QuizSubmitRequest,
-    QuizSubmitResponse,
-    QuizToggleRequest,
-    QuizToggleResponse,
-)
 
 # Chat schemas
 from app.schemas.chat import ChatRequest, ChatResponse, QuickQuestionResponse

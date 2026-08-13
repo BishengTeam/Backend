@@ -3,10 +3,12 @@ from fastapi import APIRouter, Depends, File, Path, Query, Request, UploadFile
 from app.domain.user.src.index import User
 from app.integrations.renshe_storage import RensheObjectStorage
 from app.middleware.auth import get_current_user
-from app.schemas.common import APIResponse, success
+from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.renshe import (
     RensheApplicationDetailResponse,
+    RensheApplicationListItem,
     RensheApplicationResponse,
+    RensheApplicationStatus,
     RensheApplicationSubmitResponse,
     RensheDraftUpsert,
     RensheMaterialKind,
@@ -16,6 +18,7 @@ from app.schemas.renshe import (
     RensheVerificationMaterialResponse,
 )
 from app.services.renshe_application import RensheApplicationService
+from app.services.renshe_audit import record_best_effort_audit
 
 
 router = APIRouter(prefix="/renshe", tags=["人社报名"])
@@ -38,12 +41,33 @@ async def upload_verification_material(
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[RensheVerificationMaterialResponse]:
     content = await file.read(MAX_MATERIAL_READ_BYTES)
-    stored = await RensheObjectStorage().save_source(
-        user_id=current_user.id,
-        kind=kind,
-        filename=file.filename or "material",
-        content_type=file.content_type,
-        data=content,
+    try:
+        stored = await RensheObjectStorage().save_source(
+            user_id=current_user.id,
+            kind=kind,
+            filename=file.filename or "material",
+            content_type=file.content_type,
+            data=content,
+        )
+    except Exception as exc:
+        await record_best_effort_audit(
+            actor_type="user",
+            actor_id=current_user.id,
+            action="verification_material.upload",
+            object_type="verification_material",
+            object_id=current_user.id,
+            result="failed",
+            summary={"kind": kind, "error_type": type(exc).__name__},
+        )
+        raise
+    await record_best_effort_audit(
+        actor_type="user",
+        actor_id=current_user.id,
+        action="verification_material.upload",
+        object_type="verification_material",
+        object_id=current_user.id,
+        result="succeeded",
+        summary={"kind": kind, "size_bytes": stored.size_bytes},
     )
     return success(
         data=RensheVerificationMaterialResponse(
@@ -91,6 +115,32 @@ async def save_application_draft(
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[RensheApplicationResponse]:
     result = await RensheApplicationService().save_draft(current_user.id, body)
+    return success(data=result)
+
+
+@router.get(
+    "/applications",
+    response_model=APIResponse[PaginatedData[RensheApplicationListItem]],
+    summary="查看本人人社报名列表",
+    description=(
+        "仅返回当前微信账号的草稿、待支付、审核中、驳回、通过及已关闭历史，"
+        "用于换机、重装或 Token 刷新后的报名恢复入口。"
+    ),
+)
+async def list_own_applications(
+    plan_id: int | None = Query(None, ge=1, description="按批次 ID 筛选"),
+    status: RensheApplicationStatus | None = Query(None, description="按报名状态筛选"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[PaginatedData[RensheApplicationListItem]]:
+    result = await RensheApplicationService().list_applications(
+        current_user.id,
+        plan_id=plan_id,
+        status=status,
+        page=page,
+        page_size=page_size,
+    )
     return success(data=result)
 
 

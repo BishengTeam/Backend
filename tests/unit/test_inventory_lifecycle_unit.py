@@ -124,7 +124,7 @@ class InventoryLifecycleStructureTests(unittest.TestCase):
         )
 
         self.assertIn("refund_inventory_sale", payment_source)
-        self.assertIn('elif data.trade_state == "REFUND":', payment_source)
+        self.assertIn('elif transaction.trade_state == "REFUND":', payment_source)
         self.assertIn("refund_inventory_sale", admin_source)
         self.assertNotIn("release_inventory_lock", admin_source)
         self.assertIn("with_for_update()", admin_source)

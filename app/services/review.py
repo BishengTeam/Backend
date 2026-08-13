@@ -7,6 +7,7 @@ from sqlalchemy import select, func
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.domain.review.src.index import Review
+from app.domain.renshe.src.index import RensheAuditLog
 from app.domain.user.src.index import UserRealname, UserStudent
 from app.domain.order.src.index import Order
 from app.schemas.common import PaginatedData
@@ -54,6 +55,26 @@ class ReviewService:
                 comment=data.comment,
             )
             db.add(review)
+            await db.flush()
+            # Keep the human-resources audit trail beside the legacy generic
+            # review row.  Do not copy the free-form comment: it may contain
+            # names, phone numbers or identity details and is already stored
+            # in the dedicated review table.
+            db.add(
+                RensheAuditLog(
+                    actor_type="admin",
+                    actor_id=reviewer_id,
+                    action=f"verification.{data.target_type}.{data.action}",
+                    object_type=data.target_type,
+                    object_id=data.target_id,
+                    result="succeeded",
+                    summary={
+                        "review_id": review.id,
+                        "status": target.status,
+                        "comment_provided": bool(data.comment),
+                    },
+                )
+            )
             await db.commit()
             await db.refresh(review)
 
@@ -98,6 +119,12 @@ class ReviewService:
                 target.snapshot = None
             else:
                 target.verified_at = None
+                if data.target_type == "identity":
+                    # A rejected identity is not an active reservation.  Keep
+                    # the irreversible historical hash, but release the
+                    # unique live-identity slot so another account can submit
+                    # the same document and this user can correct/re-submit.
+                    target.active_id_card_hash = None
 
             review = Review(
                 target_type=data.target_type,
@@ -107,6 +134,24 @@ class ReviewService:
                 comment=data.comment,
             )
             db.add(review)
+            # The dedicated human-resources audit row must be committed in the
+            # same transaction as the profile status transition.  Do not copy
+            # the free-form comment: it can contain PII and remains in the
+            # review table, while the audit summary is intentionally minimal.
+            db.add(
+                RensheAuditLog(
+                    actor_type="admin",
+                    actor_id=reviewer_id,
+                    action=f"verification.{data.target_type}.{data.action}",
+                    object_type=data.target_type,
+                    object_id=data.target_id,
+                    result="succeeded",
+                    summary={
+                        "status": target.status,
+                        "comment_provided": bool(data.comment),
+                    },
+                )
+            )
             await db.commit()
             await db.refresh(review)
             return ReviewResponse.model_validate(review)

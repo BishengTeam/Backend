@@ -1,8 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Path, Query
+from datetime import date
+
+from fastapi import APIRouter, Depends, Path, Query, Request
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 
 from app.middleware.auth import get_current_user
+from app.middleware.rate_limit import limiter, quiz_user_key
 from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.quiz_contract import (
@@ -13,6 +18,13 @@ from app.schemas.quiz_contract import (
     QuizCollectionCreate,
     QuizCollectionItem,
     QuizCollectionMutationResponse,
+    QuizExamActionResponse,
+    QuizExamAnswerSave,
+    QuizExamAnswerSaved,
+    QuizExamCreate,
+    QuizExamDetailResponse,
+    QuizExamListItem,
+    QuizExamListQuery,
     QuizPracticeAbandonResponse,
     QuizPracticeAttemptCreate,
     QuizPracticeAttemptResult,
@@ -26,14 +38,85 @@ from app.schemas.quiz_contract import (
     QuizWrongBookItem,
     QuizWrongBookQuery,
 )
-from app.schemas.quiz import (
-    QuizExamStartRequest,
-    QuizExamSubmitRequest,
-)
-from app.services.quiz import QuizService
+from app.services.quiz_exam import QuizExamService
 from app.services.quiz_practice import QuizPracticeService
+from app.port.config import settings
+from app.domain.community.src.rule.quiz import QuizQuestionType
 
 router = APIRouter(prefix="/quiz", tags=["题库"])
+
+
+def _validated_query(model, values: dict):
+    """Construct a Pydantic query model without FastAPI's body-model quirk."""
+
+    try:
+        return model(**values)
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
+
+
+async def quiz_question_list_query(
+    category_id: int | None = Query(None, ge=1),
+    question_type: QuizQuestionType | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+) -> QuizQuestionListQuery:
+    return _validated_query(
+        QuizQuestionListQuery,
+        {
+            "category_id": category_id,
+            "question_type": question_type,
+            "page": page,
+            "page_size": page_size,
+        },
+    )
+
+
+async def quiz_practice_history_query(
+    category_id: int | None = Query(None, ge=1),
+    question_type: QuizQuestionType | None = Query(None),
+    is_correct: bool | None = Query(None),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+) -> QuizPracticeHistoryQuery:
+    return _validated_query(
+        QuizPracticeHistoryQuery,
+        {
+            "category_id": category_id,
+            "question_type": question_type,
+            "is_correct": is_correct,
+            "date_from": date_from,
+            "date_to": date_to,
+            "page": page,
+            "page_size": page_size,
+        },
+    )
+
+
+async def quiz_page_query(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+) -> QuizWrongBookQuery:
+    return QuizWrongBookQuery(page=page, page_size=page_size)
+
+
+async def quiz_checkin_calendar_query(
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+) -> QuizCheckinCalendarQuery:
+    return _validated_query(
+        QuizCheckinCalendarQuery,
+        {"date_from": date_from, "date_to": date_to},
+    )
+
+
+async def quiz_exam_list_query(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+) -> QuizExamListQuery:
+    return QuizExamListQuery(page=page, page_size=page_size)
 
 
 @router.get("/categories",
@@ -73,8 +156,14 @@ async def list_categories() -> APIResponse[list[QuizCategoryNode]]:
 **认证**: 需登录
     """,
 )
+@limiter.limit(
+    f"{settings.QUIZ_QUESTION_LIST_RATE_PER_MINUTE}/minute",
+    key_func=quiz_user_key,
+    error_message="题目列表请求过于频繁",
+)
 async def list_questions(
-    query: QuizQuestionListQuery = Depends(),
+    request: Request,
+    query: QuizQuestionListQuery = Depends(quiz_question_list_query),
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[PaginatedData[QuizPublicQuestion]]:
     result = await QuizPracticeService().list_questions(current_user.id, query)
@@ -124,7 +213,13 @@ async def get_practice_session(
     response_model=APIResponse[QuizPracticeAttemptResult],
     summary="提交练习作答",
 )
+@limiter.limit(
+    f"{settings.QUIZ_ANSWER_SAVE_RATE_PER_MINUTE}/minute",
+    key_func=quiz_user_key,
+    error_message="练习作答请求过于频繁",
+)
 async def submit_practice_attempt(
+    request: Request,
     body: QuizPracticeAttemptCreate,
     session_id: int = Path(..., ge=1),
     current_user: User = Depends(get_current_user),
@@ -152,7 +247,7 @@ async def abandon_practice_session(
     summary="练习历史",
 )
 async def get_practice_history(
-    query: QuizPracticeHistoryQuery = Depends(),
+    query: QuizPracticeHistoryQuery = Depends(quiz_practice_history_query),
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[PaginatedData[QuizPracticeHistoryItem]]:
     result = await QuizPracticeService().get_history(current_user.id, query)
@@ -177,7 +272,7 @@ async def get_practice_history(
     """,
 )
 async def list_wrong_book(
-    query: QuizWrongBookQuery = Depends(),
+    query: QuizWrongBookQuery = Depends(quiz_page_query),
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[PaginatedData[QuizWrongBookItem]]:
     result = await QuizPracticeService().list_wrong_book(current_user.id, query)
@@ -202,7 +297,7 @@ async def list_wrong_book(
     """,
 )
 async def list_collections(
-    query: QuizWrongBookQuery = Depends(),
+    query: QuizWrongBookQuery = Depends(quiz_page_query),
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[PaginatedData[QuizCollectionItem]]:
     result = await QuizPracticeService().list_collections(current_user.id, query)
@@ -294,7 +389,7 @@ async def get_checkin_status(
     """,
 )
 async def get_checkin_calendar(
-    query: QuizCheckinCalendarQuery = Depends(),
+    query: QuizCheckinCalendarQuery = Depends(quiz_checkin_calendar_query),
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[list[QuizCheckinDay]]:
     result = await QuizPracticeService().get_checkin_calendar(current_user.id, query)
@@ -309,96 +404,111 @@ async def get_checkin_calendar(
 )
 async def get_stats(
     current_user: User = Depends(get_current_user),
-):
+) -> APIResponse[QuizContractStatsResponse]:
     result = await QuizPracticeService().get_stats(current_user.id)
     return success(data=result)
 
 
-# ── 模拟考试 ──────────────────────────────────────────────────
+# ── 新版模拟考试 ───────────────────────────────────────────────
 
-@router.post("/exam/start",
-    response_model=APIResponse,
-    summary="开始模拟考试",
+@router.post(
+    "/exams",
+    response_model=APIResponse[QuizExamDetailResponse],
+    summary="创建模拟考试",
 )
-async def start_exam(
-    body: QuizExamStartRequest,
+async def create_exam(
+    body: QuizExamCreate,
     current_user: User = Depends(get_current_user),
-):
-    result = await QuizService().start_exam(current_user.id, body)
+) -> APIResponse[QuizExamDetailResponse]:
+    result = await QuizExamService().create_exam(current_user.id, body)
     return success(data=result)
 
 
-@router.post("/exam/submit",
-    response_model=APIResponse,
-    summary="提交模拟考试",
+@router.get(
+    "/exams/current",
+    response_model=APIResponse[QuizExamDetailResponse | None],
+    summary="当前模拟考试",
 )
-async def submit_exam(
-    body: QuizExamSubmitRequest,
+async def get_current_exam_v2(
     current_user: User = Depends(get_current_user),
-):
-    result = await QuizService().submit_exam(current_user.id, body)
+) -> APIResponse[QuizExamDetailResponse | None]:
+    result = await QuizExamService().get_current_exam(current_user.id)
     return success(data=result)
 
 
-@router.get("/exam/history",
-    response_model=APIResponse,
-    summary="考试记录",
+@router.get(
+    "/exams",
+    response_model=APIResponse[PaginatedData[QuizExamListItem]],
+    summary="模拟考试历史",
 )
-async def list_exams(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+async def list_exams_v2(
+    query: QuizExamListQuery = Depends(quiz_exam_list_query),
     current_user: User = Depends(get_current_user),
-):
-    result = await QuizService().list_exams(current_user.id, page, page_size)
+) -> APIResponse[PaginatedData[QuizExamListItem]]:
+    result = await QuizExamService().list_exams(current_user.id, query)
     return success(data=result)
 
 
-@router.get("/exam/current",
-    response_model=APIResponse,
-    summary="当前考试（断点续考）",
+@router.get(
+    "/exams/{exam_id}",
+    response_model=APIResponse[QuizExamDetailResponse],
+    summary="模拟考试详情",
 )
-async def get_current_exam(
-    current_user: User = Depends(get_current_user),
-):
-    result = await QuizService().get_current_exam(current_user.id)
-    return success(data=result)
-
-
-@router.get("/exam/{exam_id}",
-    response_model=APIResponse,
-    summary="考试详情",
-)
-async def get_exam(
+async def get_exam_v2(
     exam_id: int = Path(..., ge=1),
     current_user: User = Depends(get_current_user),
-):
-    result = await QuizService().get_exam(current_user.id, exam_id)
+) -> APIResponse[QuizExamDetailResponse]:
+    result = await QuizExamService().get_exam(current_user.id, exam_id)
     return success(data=result)
 
 
-# ── 分类进度 ──────────────────────────────────────────────────
-
-@router.get("/progress",
-    response_model=APIResponse,
-    summary="分类维度进度",
+@router.put(
+    "/exams/{exam_id}/answers/{exam_question_id}",
+    response_model=APIResponse[QuizExamAnswerSaved],
+    summary="保存模拟考试答案",
 )
-async def get_progress(
-    category_id: int | None = Query(None, ge=1),
+@limiter.limit(
+    f"{settings.QUIZ_ANSWER_SAVE_RATE_PER_MINUTE}/minute",
+    key_func=quiz_user_key,
+    error_message="考试答案保存请求过于频繁",
+)
+async def save_exam_answer_v2(
+    request: Request,
+    body: QuizExamAnswerSave,
+    exam_id: int = Path(..., ge=1),
+    exam_question_id: int = Path(..., ge=1),
     current_user: User = Depends(get_current_user),
-):
-    result = await QuizService().get_progress(current_user.id, category_id)
+) -> APIResponse[QuizExamAnswerSaved]:
+    result = await QuizExamService().save_answer(
+        current_user.id,
+        exam_id,
+        exam_question_id,
+        body,
+    )
     return success(data=result)
 
 
-# ── 近期记录 ──────────────────────────────────────────────────
-
-@router.get("/recent",
-    response_model=APIResponse,
-    summary="近期答题记录",
+@router.post(
+    "/exams/{exam_id}/submit",
+    response_model=APIResponse[QuizExamActionResponse],
+    summary="模拟考试交卷",
 )
-async def get_recent(
-    limit: int = Query(10, ge=1, le=50),
+async def submit_exam_v2(
+    exam_id: int = Path(..., ge=1),
     current_user: User = Depends(get_current_user),
-):
-    result = await QuizService().get_recent(current_user.id, limit)
+) -> APIResponse[QuizExamActionResponse]:
+    result = await QuizExamService().submit_exam(current_user.id, exam_id)
+    return success(data=result)
+
+
+@router.post(
+    "/exams/{exam_id}/abandon",
+    response_model=APIResponse[QuizExamActionResponse],
+    summary="放弃模拟考试",
+)
+async def abandon_exam_v2(
+    exam_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[QuizExamActionResponse]:
+    result = await QuizExamService().abandon_exam(current_user.id, exam_id)
     return success(data=result)

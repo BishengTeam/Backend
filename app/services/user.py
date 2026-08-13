@@ -15,6 +15,7 @@ from app.port.exceptions import (
 from app.integrations.wechat import WechatClient
 from app.integrations.identity_verify import IdentityVerifyError, verify_real_name
 from app.integrations.renshe_storage import assert_owned_source_key
+from app.integrations.renshe_storage import RensheObjectStorage
 from app.domain.user.src.index import (
     DeletedIdentityHash,
     DeletedOpenid,
@@ -28,6 +29,7 @@ from app.domain.order.src.index import Order
 from app.domain.renshe.src.index import (
     PROFILE_LOCKING_APPLICATION_STATUSES,
     RensheApplication,
+    RensheAuditLog,
     RensheRefundRequest,
 )
 from app.domain.community.src.index import Conversation
@@ -35,12 +37,15 @@ from app.domain.review.src.index import Review
 from app.utils.validators import validate_id_card
 from app.utils.census import resolve_census
 from app.utils.pii import identity_hash
+from app.services.renshe_source import (
+    delete_unreferenced_source_keys,
+    profile_source_keys,
+)
 from pypinyin import lazy_pinyin
 
 SESSION_KEY_PREFIX = "session_key:"
 MAX_LEVEL2_EDITS = 10
 LEVEL2_RESET_HOURS = 24  # 1 天 = 24 小时
-
 
 # ── 帮助函数 ──
 
@@ -337,6 +342,7 @@ class UserService:
         last_name_en = data.last_name_en or _to_pinyin(data.last_name_zh)
         first_name_en = data.first_name_en or _to_pinyin(data.first_name_zh)
 
+        replaced_source_keys: set[str] = set()
         async with get_db_ctx() as db:
             user = await db.scalar(
                 select(User)
@@ -356,6 +362,11 @@ class UserService:
                 .where(
                     UserRealname.user_id != user_id,
                     User.is_active.is_(True),
+                    # A rejected submission no longer represents a valid
+                    # identity reservation.  Pending and verified rows still
+                    # reserve the digest to prevent concurrent duplicate
+                    # submissions.
+                    UserRealname.status.in_(("pending", "verified")),
                     or_(
                         UserRealname.active_id_card_hash == digest,
                         UserRealname.id_card_number == data.id_card_number,
@@ -370,6 +381,12 @@ class UserService:
                 select(UserRealname).where(UserRealname.user_id == user_id)
             )).scalar_one_or_none()
             snapshot = None
+            if existing_realname is not None:
+                # The previous profile keys may become orphaned when the user
+                # replaces a pending/rejected submission.  Keep them as
+                # candidates and let the post-commit reference check decide
+                # whether they are still needed by a submitted version.
+                replaced_source_keys = profile_source_keys(realname=existing_realname)
             if existing_realname and existing_realname.status == "verified":
                 snapshot = {
                     "real_name": existing_realname.real_name,
@@ -443,6 +460,17 @@ class UserService:
                 db.add(existing_realname)
 
             await _incr_level2_edit(user)
+            db.add(
+                RensheAuditLog(
+                    actor_type="user",
+                    actor_id=user_id,
+                    action="verification.identity.submit",
+                    object_type="identity",
+                    object_id=user_id,
+                    result="succeeded",
+                    summary={"status": "pending", "material_count": 3},
+                )
+            )
             try:
                 await db.commit()
             except IntegrityError as exc:
@@ -451,6 +479,11 @@ class UserService:
                     raise ConflictException("该身份证号已绑定其他有效账号") from exc
                 raise
             await db.refresh(existing_realname)
+
+        if replaced_source_keys:
+            await delete_unreferenced_source_keys(
+                RensheObjectStorage(), replaced_source_keys
+            )
 
         return RealnameResponse(
             user_type=existing_realname.user_type,
@@ -522,6 +555,7 @@ class UserService:
         ):
             assert_owned_source_key(user_id, storage_key)
 
+        replaced_source_keys: set[str] = set()
         async with get_db_ctx() as db:
             user = await db.scalar(
                 select(User)
@@ -546,6 +580,8 @@ class UserService:
             )).scalar_one_or_none()
 
             snapshot = None
+            if existing is not None:
+                replaced_source_keys = profile_source_keys(student=existing)
             if existing and existing.status == "verified":
                 snapshot = {
                     "education": existing.education,
@@ -586,8 +622,24 @@ class UserService:
                 db.add(existing)
 
             await _incr_level2_edit(user)
+            db.add(
+                RensheAuditLog(
+                    actor_type="user",
+                    actor_id=user_id,
+                    action="verification.student.submit",
+                    object_type="student",
+                    object_id=user_id,
+                    result="succeeded",
+                    summary={"status": "pending", "material_count": 3},
+                )
+            )
             await db.commit()
             await db.refresh(existing)
+
+        if replaced_source_keys:
+            await delete_unreferenced_source_keys(
+                RensheObjectStorage(), replaced_source_keys
+            )
 
         return StudentResponse(
             education=existing.education,
@@ -701,6 +753,7 @@ class UserService:
     # ─── 其他 ───
 
     async def delete_account(self, user_id: int) -> None:
+        source_keys_to_reclaim: set[str] = set()
         async with get_db_ctx() as db:
             user = await db.get(User, user_id)
             if user is None or not user.is_active:
@@ -726,6 +779,7 @@ class UserService:
                 select(UserRealname).where(UserRealname.user_id == user_id)
             )
             if realname is not None:
+                source_keys_to_reclaim.update(profile_source_keys(realname=realname))
                 digest = realname.id_card_hash or identity_hash(realname.id_card_number)
                 db.add(
                     DeletedIdentityHash(
@@ -736,14 +790,92 @@ class UserService:
                 )
                 realname.id_card_hash = digest
                 realname.active_id_card_hash = None
+                # Keep only the irreversible equality hash after account
+                # closure.  The user-facing identity row is retained for
+                # referential integrity, but must not remain a second copy of
+                # the full ID number or source object keys.
+                realname.id_card_number = f"DELETED-{digest[:10]}"
+                realname.real_name = "***"
+                realname.last_name_zh = None
+                realname.first_name_zh = None
+                realname.last_name_en = None
+                realname.first_name_en = None
+                realname.id_card_front_oss = None
+                realname.id_card_back_oss = None
+                realname.avatar_oss = None
+                realname.gender = None
+                realname.age = None
+                realname.birth_date = None
+                realname.census_register = None
+                realname.zip_code = None
+                realname.political_status = None
+                realname.ethnicity = None
+                realname.status = "rejected"
+                realname.snapshot = None
+                realname.verified_at = None
+
+            student = await db.scalar(
+                select(UserStudent).where(UserStudent.user_id == user_id)
+            )
+            if student is not None:
+                source_keys_to_reclaim.update(profile_source_keys(student=student))
+                # ``student_card_oss`` is historically non-null, so use a
+                # non-addressable sentinel rather than weakening the live
+                # schema in an account-closure transaction.
+                student.education = "deleted"
+                student.school = "***"
+                student.major = "***"
+                student.enrollment_date = None
+                student.student_card_oss = "deleted"
+                student.enrollment_pdf_oss = None
+                student.degree_cert_oss = None
+                student.status = "rejected"
+                student.snapshot = None
+                student.verified_at = None
+
+            enterprise = await db.scalar(
+                select(UserEnterprise).where(UserEnterprise.user_id == user_id)
+            )
+            if enterprise is not None:
+                enterprise.organization = "***"
+                enterprise.status = "rejected"
+                enterprise.snapshot = None
+                enterprise.verified_at = None
+
+            profile = await db.scalar(
+                select(UserProfile).where(UserProfile.user_id == user_id)
+            )
+            if profile is not None:
+                profile.phone = None
+                profile.email = None
+                profile.address = None
+                profile.province = None
+                profile.city = None
             db.add(DeletedOpenid(openid=user.openid))
             await db.execute(
                 update(Order)
                 .where(Order.user_id == user.id)
                 .values(candidate_name="***", candidate_phone="***", candidate_idcard="***")
             )
+            user.phone = None
             user.is_active = False
+            db.add(
+                RensheAuditLog(
+                    actor_type="user",
+                    actor_id=user_id,
+                    action="user_account.delete",
+                    object_type="user",
+                    object_id=user_id,
+                    result="succeeded",
+                    summary={"identity_hash_released": realname is not None},
+                )
+            )
             await db.commit()
+
+        if source_keys_to_reclaim:
+            await delete_unreferenced_source_keys(
+                RensheObjectStorage(), source_keys_to_reclaim
+            )
 
     async def unbind(self, user_id: int, unbind_type: str) -> None:
         """解绑手机号或微信"""

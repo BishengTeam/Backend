@@ -31,6 +31,7 @@ from app.main import app  # noqa: E402
 
 
 EXPECTED_PATHS: dict[str, set[str]] = {
+    "/api/renshe/applications": {"get"},
     "/api/renshe/applications/draft": {"post"},
     "/api/renshe/applications/{application_id}": {"get"},
     "/api/renshe/applications/{application_id}/cancel-payment": {"post"},
@@ -39,6 +40,10 @@ EXPECTED_PATHS: dict[str, set[str]] = {
     "/api/renshe/refunds/{refund_id}": {"get"},
     "/api/renshe/verification-materials/{kind}": {"post"},
     "/api/renshe/verification-materials/{kind}/signed-url": {"get"},
+    "/api/payment/prepay": {"post"},
+    "/api/payment/orders/{order_id}/sync": {"post"},
+    "/api/payment/callback": {"post"},
+    "/api/payment/refund-callback": {"post"},
     "/admin/renshe/applications": {"get"},
     "/admin/renshe/applications/{application_id}": {"get"},
     "/admin/renshe/applications/{application_id}/external-review": {"post"},
@@ -52,10 +57,24 @@ EXPECTED_PATHS: dict[str, set[str]] = {
     "/admin/renshe/plans/{plan_id}/exports": {"get", "post"},
     "/admin/renshe/refunds": {"get"},
     "/admin/renshe/refunds/{refund_id}/decision": {"post"},
+    "/admin/renshe/audit-logs": {"get"},
     "/admin/renshe/reviews/{review_id}/corrections": {"post"},
     "/admin/renshe/users/{user_id}/verification-materials/{kind}/signed-url": {
         "get"
     },
+    "/admin/certifications/{code}/plans/{plan_id}/impact": {"get"},
+}
+
+ADDITIONAL_RENSHE_PATHS = {
+    "/admin/certifications/{code}/plans/{plan_id}/impact",
+    "/api/payment/prepay",
+    "/api/payment/orders/{order_id}/sync",
+    "/api/payment/callback",
+    "/api/payment/refund-callback",
+}
+PUBLIC_CALLBACK_PATHS = {
+    "/api/payment/callback",
+    "/api/payment/refund-callback",
 }
 
 EXPECTED_MATERIAL_KINDS = [
@@ -90,12 +109,20 @@ def build_report() -> tuple[dict, list[str]]:
             if operation is None:
                 errors.append(f"missing operation: {method.upper()} {path}")
                 continue
-            if not operation.get("security"):
+            if path not in PUBLIC_CALLBACK_PATHS and not operation.get("security"):
                 errors.append(f"missing Bearer security: {method.upper()} {path}")
+            if path in PUBLIC_CALLBACK_PATHS and operation.get("security"):
+                errors.append(f"callback must not require Bearer security: {method.upper()} {path}")
             if "200" not in operation.get("responses", {}):
                 errors.append(f"missing success response: {method.upper()} {path}")
-            if operation.get("x-contract-version") != "2026-08-07":
+            if operation.get("x-contract-version") != "2026-08-10":
                 errors.append(f"missing contract version: {method.upper()} {path}")
+            if path in PUBLIC_CALLBACK_PATHS:
+                if operation.get("x-wechat-pay-api-version") != "v3":
+                    errors.append(f"callback is not marked V3: {method.upper()} {path}")
+                if operation.get("x-error-codes"):
+                    errors.append(f"callback must use V3 ACK errors: {method.upper()} {path}")
+                continue
             if operation.get("x-error-codes") != [
                 "40001",
                 "40100",
@@ -111,7 +138,11 @@ def build_report() -> tuple[dict, list[str]]:
     human_operations = [
         (path, method, operation)
         for path, method, operation in _operations(paths)
-        if "/api/renshe" in path or "/admin/renshe" in path
+        if (
+            "/api/renshe" in path
+            or "/admin/renshe" in path
+            or path in ADDITIONAL_RENSHE_PATHS
+        )
     ]
     unexpected = {
         (path, method)

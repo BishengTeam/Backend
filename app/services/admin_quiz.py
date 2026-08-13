@@ -35,6 +35,8 @@ from app.domain.community.src.index import (
     QuizImportJob,
     QuizPracticeAttempt,
     QuizPracticeSessionQuestion,
+    QuizCollection,
+    QuizWrongItem,
     QuizQuestion,
     QuizQuestionStats,
 )
@@ -46,6 +48,9 @@ from app.domain.community.src.rule.quiz import (
     normalize_question_payload,
 )
 from app.schemas.admin_quiz import (
+    # This import is used only by the deprecated, unmounted helper methods at
+    # the bottom of this module. The active `/admin/quiz/imports/*` routes use
+    # `app.schemas.admin_quiz_contract` exclusively.
     AdminQuizImportJsonRequest as LegacyAdminQuizImportJsonRequest,
 )
 from app.schemas.common import PaginatedData
@@ -794,14 +799,40 @@ class AdminQuizService:
                 raise NotFoundException("题目")
             self._check_lock_version(question, lock_version)
             # Historical snapshots/reference rows deliberately keep published
-            # questions alive. Only a never-published draft can be physical
-            # deleted; no legacy quiz_record lookup is valid after QB-00.
-            # ``record_count`` was part of the removed legacy quiz_record
-            # check. Historical答题记录 now live in immutable snapshot tables,
-            # so the draft/ever_published lifecycle check is the only deletion
-            # guard.
+            # questions alive. Only a never-published draft can be physically
+            # deleted. Historical answers live in immutable session snapshot
+            # tables, so the draft/ever_published lifecycle check is the only
+            # deletion guard.
             if question.status != QuizQuestionStatus.DRAFT.value or question.ever_published:
                 raise BusinessException("仅未发布草稿题目允许物理删除")
+            # A draft normally cannot be referenced by a session, wrong-book
+            # row or collection because those rows are created from published
+            # questions.  Keep an explicit guard nevertheless: it protects a
+            # manually repaired database (and gives the administrator a
+            # useful error) before PostgreSQL's RESTRICT foreign keys reject
+            # the delete.  ``record_count`` is deliberately a generic
+            # historical-reference count; it is not the removed quiz_record
+            # table and does not reintroduce that legacy coupling.
+            record_count = 0
+            if hasattr(db, "execute"):
+                for reference_model in (
+                    QuizPracticeSessionQuestion,
+                    QuizExamQuestion,
+                    QuizWrongItem,
+                    QuizCollection,
+                ):
+                    record_count += int(
+                        (
+                            await db.execute(
+                                select(func.count())
+                                .select_from(reference_model)
+                                .where(reference_model.question_id == question_id)
+                            )
+                        ).scalar()
+                        or 0
+                    )
+            if record_count > 0:
+                raise BusinessException("该题目已有答题记录或历史引用，不可删除")
             self._add_audit(
                 db,
                 admin_id=admin_id,
@@ -1528,7 +1559,12 @@ class AdminQuizService:
 
         def _delete() -> None:
             try:
-                self._quiz_oss_bucket().delete_object(object_key)
+                result = self._quiz_oss_bucket().delete_object(object_key)
+                status = int(getattr(result, "status", 204) or 204)
+                if status // 100 != 2:
+                    raise ThirdPartyException("阿里云 OSS 删除导入文件失败")
+            except ThirdPartyException:
+                raise
             except Exception as exc:
                 raise ThirdPartyException("阿里云 OSS 删除导入文件失败") from exc
 
@@ -1537,6 +1573,12 @@ class AdminQuizService:
     async def _signed_import_url(
         self, job: QuizImportJob, *, expires_at: datetime
     ) -> str:
+        if not job.report_object_key:
+            raise NotFoundException("错误报告")
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= datetime.now(timezone.utc):
+            raise ValidationException("错误报告链接已过期")
         if settings.QUIZ_IMPORT_STORAGE_TYPE == "aliyun_oss":
             expires = max(1, int((expires_at - datetime.now(timezone.utc)).total_seconds()))
 
@@ -1591,19 +1633,20 @@ class AdminQuizService:
         )
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(days=settings.QUIZ_IMPORT_RETENTION_DAYS)
-        async with get_db_ctx() as db:
-            job = QuizImportJob(
-                admin_id=admin_id,
-                import_batch_key=batch_key,
-                source_type=source_type,
-                status="queued",
-                source_object_key=source_key,
-                source_size_bytes=len(content),
-                expires_at=expires_at,
-                heartbeat_at=now,
-            )
-            db.add(job)
-            try:
+        persisted = False
+        try:
+            async with get_db_ctx() as db:
+                job = QuizImportJob(
+                    admin_id=admin_id,
+                    import_batch_key=batch_key,
+                    source_type=source_type,
+                    status="queued",
+                    source_object_key=source_key,
+                    source_size_bytes=len(content),
+                    expires_at=expires_at,
+                    heartbeat_at=now,
+                )
+                db.add(job)
                 await db.flush()
                 self._add_audit(
                     db,
@@ -1619,12 +1662,27 @@ class AdminQuizService:
                     permission="quiz:import",
                 )
                 await db.commit()
-            except IntegrityError as exc:
-                await db.rollback()
-                await self._delete_import_object(source_key)
-                raise ValidationException("导入任务创建失败，请重试") from exc
-            await db.refresh(job)
-            return job
+                persisted = True
+                await db.refresh(job)
+                return job
+        except IntegrityError as exc:
+            raise ValidationException("导入任务创建失败，请重试") from exc
+        except Exception:
+            # The source object is uploaded before the DB row so the worker can
+            # consume it asynchronously. If row creation fails for any reason
+            # (not only a uniqueness violation), remove the orphan immediately;
+            # the seven-day cleanup is a safety net, not the primary rollback.
+            raise
+        finally:
+            if not persisted:
+                try:
+                    await self._delete_import_object(source_key)
+                except Exception:
+                    # Preserve the original database/storage exception. The
+                    # cleanup worker will retry object deletion when metadata
+                    # exists; a row-less orphan is also safe to remove by the
+                    # provider's lifecycle policy.
+                    pass
 
     async def list_import_jobs(
         self, query: AdminQuizImportJobQuery | None = None
@@ -1781,6 +1839,7 @@ class AdminQuizService:
         cutoff = now or datetime.now(timezone.utc)
         if cutoff.tzinfo is None:
             cutoff = cutoff.replace(tzinfo=timezone.utc)
+        stale_before = cutoff - timedelta(seconds=settings.QUIZ_WORKER_STALE_SECONDS)
         async with get_db_ctx() as db:
             already_cleaned = exists(
                 select(1).where(
@@ -1793,10 +1852,19 @@ class AdminQuizService:
             stmt = (
                 select(QuizImportJob)
                 .where(
-                    QuizImportJob.status.in_(
-                        ("validation_failed", "succeeded", "failed")
-                    ),
                     QuizImportJob.expires_at <= cutoff,
+                    or_(
+                        QuizImportJob.status.in_(
+                            ("validation_failed", "succeeded", "failed")
+                        ),
+                        (
+                            QuizImportJob.status.in_(("queued", "validating", "importing"))
+                            & (
+                                QuizImportJob.heartbeat_at.is_(None)
+                                | (QuizImportJob.heartbeat_at < stale_before)
+                            )
+                        ),
+                    ),
                     ~already_cleaned,
                 )
             )
@@ -1813,7 +1881,9 @@ class AdminQuizService:
             try:
                 await self._delete_import_object(job.source_object_key)
                 await self._delete_import_object(job.report_object_key)
-            except Exception as exc:
+            except Exception:
+                job.retry_count = (job.retry_count or 0) + 1
+                job.heartbeat_at = cutoff
                 self._add_audit(
                     db,
                     admin_id=None,
@@ -1821,11 +1891,20 @@ class AdminQuizService:
                     object_type="import_job",
                     object_id=job.id,
                     result="failed",
+                    changed_fields={
+                        "retry_count": {
+                            "before": job.retry_count - 1,
+                            "after": job.retry_count,
+                        }
+                    },
                     error_summary="题库导入对象清理失败",
                     permission="quiz:import",
                 )
                 await db.commit()
-                return False
+                # Preserve the failed audit/retry counter, then let the task
+                # registry observe this run as a failure. The shared loop will
+                # retry the same expired job on a later poll.
+                raise
             self._add_audit(
                 db,
                 admin_id=None,
@@ -2038,15 +2117,70 @@ class AdminQuizService:
             valid.append((row_no, item, category_id))
         return valid, errors
 
-    async def process_import_job(self, job_id: int) -> bool:
+    async def process_import_job(
+        self,
+        job_id: int,
+        *,
+        already_claimed: bool = False,
+    ) -> bool:
         """Validate and atomically import one queued job."""
+        now = datetime.now(timezone.utc)
+        stale_before = now - timedelta(seconds=settings.QUIZ_WORKER_STALE_SECONDS)
         async with get_db_ctx() as db:
-            job = await db.get(QuizImportJob, job_id)
+            job = (
+                await db.execute(
+                    select(QuizImportJob)
+                    .where(QuizImportJob.id == job_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
             if job is None or job.status in {"succeeded", "validation_failed", "failed"}:
                 return False
+            if already_claimed:
+                # ``process_next_import_job`` commits the validating claim
+                # before any file I/O. A second worker therefore cannot select
+                # the same fresh row; only a stale heartbeat can reclaim it.
+                if job.status != "validating":
+                    return False
+            elif job.status in {"validating", "importing"}:
+                heartbeat = job.heartbeat_at
+                if heartbeat is not None and heartbeat.tzinfo is None:
+                    heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+                if heartbeat is not None and heartbeat >= stale_before:
+                    return False
+                before_retry_count = job.retry_count or 0
+                job.retry_count = before_retry_count + 1
+                if job.retry_count >= settings.QUIZ_WORKER_MAX_RETRIES:
+                    before_status = job.status
+                    job.status = "failed"
+                    job.error_message = "导入任务重试次数已耗尽"
+                    job.finished_at = now
+                    job.heartbeat_at = now
+                    job.expires_at = self._terminal_import_expiry(now)
+                    self._add_audit(
+                        db,
+                        admin_id=None,
+                        action="import.retry_exhausted",
+                        object_type="import_job",
+                        object_id=job.id,
+                        result="failed",
+                        changed_fields={
+                            "status": {"before": before_status, "after": "failed"},
+                            "retry_count": {
+                                "before": before_retry_count,
+                                "after": job.retry_count,
+                            },
+                        },
+                        error_summary=job.error_message,
+                        permission="quiz:import",
+                    )
+                    await db.commit()
+                    return True
             job.status = "validating"
-            job.started_at = job.started_at or datetime.now(timezone.utc)
-            job.heartbeat_at = datetime.now(timezone.utc)
+            job.started_at = job.started_at or now
+            job.heartbeat_at = now
+            job.finished_at = None
+            job.error_message = None
             await db.commit()
 
         try:
@@ -2170,31 +2304,58 @@ class AdminQuizService:
                 )
                 await db.commit()
                 return True
-        except Exception as exc:
+        except Exception:
             # A failed import never leaves a partial question batch behind.
+            # Infrastructure failures are returned to the queue until the
+            # frozen retry budget is exhausted; validation failures are
+            # handled in the earlier ``validation_failed`` branch and are
+            # terminal with a row-level report.  Re-queueing uses the same
+            # import_batch_key and the question transaction is all-or-nothing,
+            # so a retry cannot duplicate a successful batch.
             async with get_db_ctx() as db:
                 current = await db.get(QuizImportJob, job_id)
                 if current is not None and current.status not in {"succeeded", "validation_failed"}:
-                    current.status = "failed"
-                    current.error_message = "导入任务执行失败"
-                    current.finished_at = datetime.now(timezone.utc)
-                    current.heartbeat_at = current.finished_at
-                    current.expires_at = self._terminal_import_expiry(
-                        current.finished_at
+                    now = datetime.now(timezone.utc)
+                    before_status = current.status
+                    before_retry_count = current.retry_count or 0
+                    current.retry_count = before_retry_count + 1
+                    retryable = current.retry_count < settings.QUIZ_WORKER_MAX_RETRIES
+                    current.status = "queued" if retryable else "failed"
+                    current.error_message = (
+                        "导入任务执行失败，等待自动重试"
+                        if retryable
+                        else "导入任务重试次数已耗尽"
                     )
-                    current.retry_count = (current.retry_count or 0) + 1
+                    current.finished_at = None if retryable else now
+                    current.heartbeat_at = now
+                    if not retryable:
+                        current.expires_at = self._terminal_import_expiry(now)
                     self._add_audit(
                         db,
                         admin_id=current.admin_id,
-                        action="import.failed",
+                        action="import.retry" if retryable else "import.failed",
                         object_type="import_job",
                         object_id=current.id,
                         result="failed",
+                        changed_fields={
+                            "status": {
+                                "before": before_status,
+                                "after": current.status,
+                            },
+                            "retry_count": {
+                                "before": before_retry_count,
+                                "after": current.retry_count,
+                            },
+                        },
                         error_summary="导入任务执行失败",
                         permission="quiz:import",
                     )
                     await db.commit()
-            return False
+            # The row now records either a queued retry or an exhausted
+            # terminal failure. Propagate the infrastructure exception so the
+            # task registry records a failed run/retry instead of a false
+            # success; the worker loop isolates it and continues.
+            raise
 
     async def process_next_import_job(self) -> bool:
         """Claim one queued/stale job; safe for multiple workers."""
@@ -2206,8 +2367,22 @@ class AdminQuizService:
                 .where(
                     or_(
                         QuizImportJob.status == "queued",
-                        (QuizImportJob.status.in_(("validating", "importing"))
-                         & (QuizImportJob.heartbeat_at < stale_before)),
+                        (
+                            (QuizImportJob.status == "failed")
+                            & (
+                                QuizImportJob.retry_count
+                                < settings.QUIZ_WORKER_MAX_RETRIES
+                            )
+                        ),
+                        (
+                            QuizImportJob.status.in_(
+                                ("validating", "importing")
+                            )
+                            & (
+                                QuizImportJob.heartbeat_at.is_(None)
+                                | (QuizImportJob.heartbeat_at < stale_before)
+                            )
+                        ),
                     )
                 )
                 .order_by(QuizImportJob.created_at.asc(), QuizImportJob.id.asc())
@@ -2244,14 +2419,46 @@ class AdminQuizService:
                 return True
             was_stale = bool(
                 job.status in {"validating", "importing"}
-                and job.heartbeat_at
-                and job.heartbeat_at < stale_before
+                and (
+                    job.heartbeat_at is None
+                    or job.heartbeat_at < stale_before
+                )
             )
             before_status = job.status
             before_retry_count = job.retry_count or 0
-            job.status = "queued"
             job.retry_count = before_retry_count + (1 if was_stale else 0)
             job.heartbeat_at = now
+            if job.retry_count >= settings.QUIZ_WORKER_MAX_RETRIES:
+                job.status = "failed"
+                job.error_message = "导入任务重试次数已耗尽"
+                job.finished_at = now
+                job.expires_at = self._terminal_import_expiry(now)
+                self._add_audit(
+                    db,
+                    admin_id=None,
+                    action="import.retry_exhausted",
+                    object_type="import_job",
+                    object_id=job.id,
+                    result="failed",
+                    changed_fields={
+                        "status": {"before": before_status, "after": "failed"},
+                        "retry_count": {
+                            "before": before_retry_count,
+                            "after": job.retry_count,
+                        },
+                    },
+                    error_summary=job.error_message,
+                    permission="quiz:import",
+                )
+                await db.commit()
+                return True
+            # Publish the claim before reading OSS/local storage. Other
+            # workers only select queued or stale rows, so this closes the
+            # previous window where two workers could process one queued job.
+            job.status = "validating"
+            job.started_at = job.started_at or now
+            job.finished_at = None
+            job.error_message = None
             if was_stale:
                 self._add_audit(
                     db,
@@ -2260,7 +2467,7 @@ class AdminQuizService:
                     object_type="import_job",
                     object_id=job.id,
                     changed_fields={
-                        "status": {"before": before_status, "after": "queued"},
+                        "status": {"before": before_status, "after": "validating"},
                         "retry_count": {
                             "before": before_retry_count,
                             "after": job.retry_count,
@@ -2270,8 +2477,7 @@ class AdminQuizService:
                 )
             await db.commit()
             job_id = job.id
-        await self.process_import_job(job_id)
-        return True
+        return await self.process_import_job(job_id, already_claimed=True)
 
     async def import_questions_csv(
         self,

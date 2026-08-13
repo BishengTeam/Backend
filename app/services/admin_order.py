@@ -20,6 +20,59 @@ class AdminOrderService:
     def __init__(self) -> None:
         self.fulfillment = OrderFulfillmentService()
 
+    @staticmethod
+    async def _submit_wechat_v3_refund(
+        order: Order, *, reason: str | None = None
+    ) -> bool:
+        """Submit/retry a full V3 refund; return true only when final SUCCESS.
+
+        A successful HTTP response commonly means ``PROCESSING``.  Persisting
+        that as a final local refund would revoke access and release inventory
+        before the provider has actually returned the money.
+        """
+
+        if not order.transaction_id or not order.out_trade_no:
+            raise BusinessException("订单缺少微信支付交易信息，无法退款")
+        out_refund_no = f"RF{order.id}"
+        existing_metadata = (order.extra_data or {}).get("_wechat_refund_v3")
+        wechat_pay = WechatPayClient()
+        if (
+            isinstance(existing_metadata, dict)
+            and existing_metadata.get("out_refund_no") == out_refund_no
+            and existing_metadata.get("status") == "PROCESSING"
+        ):
+            response = await wechat_pay.query_refund(out_refund_no=out_refund_no)
+        else:
+            response = await wechat_pay.refund(
+                out_trade_no=order.out_trade_no,
+                out_refund_no=out_refund_no,
+                amount_total=order.price,
+                refund_amount=order.price,
+                reason=reason,
+            )
+        status = response.get("status")
+        if status not in {"SUCCESS", "PROCESSING"}:
+            raise ThirdPartyException("微信支付 V3 返回异常退款状态")
+        response_refund_no = response.get("out_refund_no")
+        if response_refund_no is not None and response_refund_no != out_refund_no:
+            raise ThirdPartyException("微信支付 V3 退款单号不一致")
+        amount = response.get("amount")
+        if isinstance(amount, dict):
+            if amount.get("total") != order.price or amount.get("refund") != order.price:
+                raise ThirdPartyException("微信支付 V3 退款金额不一致")
+
+        extra = dict(order.extra_data or {})
+        refund_metadata = {
+            "out_refund_no": out_refund_no,
+            "status": status,
+        }
+        refund_id = response.get("refund_id")
+        if isinstance(refund_id, str) and refund_id:
+            refund_metadata["refund_id"] = refund_id
+        extra["_wechat_refund_v3"] = refund_metadata
+        order.extra_data = extra
+        return status == "SUCCESS"
+
     async def list_orders(
         self,
         filters: OrderFilter | None,
@@ -89,40 +142,24 @@ class AdminOrderService:
                 extra["_reject_comment"] = data.comment
                 order.extra_data = extra
             elif data.action == "reject_and_refund":
-                apply_order_status_transition(order, "refunded")
-                # 尝试微信退款
-                wechat_pay = WechatPayClient()
-                if wechat_pay._is_configured() and order.transaction_id:
-                    out_refund_no = f"RF{order.id}"
-                    try:
-                        await wechat_pay.refund(
-                            out_trade_no=order.out_trade_no,
-                            out_refund_no=out_refund_no,
-                            total_fee=order.price,
-                            refund_fee=order.price,
-                        )
-                    except ThirdPartyException:
-                        raise
-                else:
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        "微信支付未配置，订单 %s 仅本地标记退款", order_id
-                    )
-                await refund_inventory_sale(
-                    db,
+                refund_succeeded = await self._submit_wechat_v3_refund(
                     order,
-                    reason="review_reject_refund",
+                    reason=data.comment,
                 )
-                await self.fulfillment.on_refunded(db, order)
+                if refund_succeeded:
+                    apply_order_status_transition(order, "refunded")
+                    await refund_inventory_sale(
+                        db,
+                        order,
+                        reason="review_reject_refund",
+                    )
+                    await self.fulfillment.on_refunded(db, order)
 
             await db.commit()
             await db.refresh(order)
             return OrderDetailResponse.model_validate(order)
 
     async def refund_order(self, order_id: int) -> OrderDetailResponse:
-        import logging
-
-        logger = logging.getLogger(__name__)
         async with get_db_ctx() as db:
             order = (
                 await db.execute(
@@ -149,21 +186,11 @@ class AdminOrderService:
             if not order.transaction_id:
                 raise BusinessException("订单未支付，无法退款")
 
-            # 尝试微信退款
-            wechat_pay = WechatPayClient()
-            if wechat_pay._is_configured():
-                out_refund_no = f"RF{order.id}"
-                try:
-                    await wechat_pay.refund(
-                        out_trade_no=order.out_trade_no,
-                        out_refund_no=out_refund_no,
-                        total_fee=order.price,
-                        refund_fee=order.price,
-                    )
-                except ThirdPartyException:
-                    raise  # 微信退款失败，不修改本地状态
-            else:
-                logger.warning("微信支付未配置，订单 %s 仅本地标记退款", order_id)
+            refund_succeeded = await self._submit_wechat_v3_refund(order)
+            if not refund_succeeded:
+                await db.commit()
+                await db.refresh(order)
+                return OrderDetailResponse.model_validate(order)
 
             apply_order_status_transition(order, "refunded")
             await refund_inventory_sale(db, order, reason="admin_refund")

@@ -89,7 +89,9 @@ async def export_users(
 ):
     has_filters = openid or phone or created_at_start or created_at_end
     filters = AdminUserFilter(openid=openid, phone=phone, created_at_start=created_at_start, created_at_end=created_at_end) if has_filters else None
-    csv_content = await AdminUserService().import_users_csv(filters)
+    csv_content = await AdminUserService().export_users(
+        filters, actor_id=_admin.id
+    )
     return Response(content=csv_content, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=users.csv"})
 
 
@@ -108,7 +110,7 @@ async def get_user(
     user_id: int = Path(..., description="用户 ID"),
     _admin=Depends(require_permission("user:list")),
 ) -> APIResponse[AdminUserListItem]:
-    result = await AdminUserService().get_user(user_id)
+    result = await AdminUserService().get_user(user_id, actor_id=_admin.id)
     return success(data=result)
 
 
@@ -128,7 +130,9 @@ async def toggle_user_status(
     user_id: int = Path(..., description="用户 ID"),
     _admin=Depends(require_permission("user:write")),
 ) -> APIResponse[AdminUserListItem]:
-    result = await AdminUserService().toggle_user_status(user_id, body.is_active)
+    result = await AdminUserService().toggle_user_status(
+        user_id, body.is_active, actor_id=_admin.id
+    )
     return success(data=result, message="用户状态已更新")
 
 
@@ -149,7 +153,7 @@ async def batch_delete_users(
     body: AdminBatchDeleteRequest,
     _admin=Depends(require_permission("user:delete")),
 ):
-    count = await AdminUserService().batch_delete(body.ids)
+    count = await AdminUserService().batch_delete(body.ids, actor_id=_admin.id)
     return success(data=count, message=f"已删除 {count} 个用户")
 
 
@@ -168,7 +172,7 @@ async def get_user_orders(
     user_id: int = Path(..., description="用户 ID"),
     _admin=Depends(require_permission("user:list")),
 ):
-    result = await AdminUserService().get_user_orders(user_id)
+    result = await AdminUserService().get_user_orders(user_id, actor_id=_admin.id)
     return success(data=result)
 
 
@@ -187,7 +191,9 @@ async def get_user_conversations(
     user_id: int = Path(..., description="用户 ID"),
     _admin=Depends(require_permission("user:list")),
 ):
-    result = await AdminUserService().get_user_conversations(user_id)
+    result = await AdminUserService().get_user_conversations(
+        user_id, actor_id=_admin.id
+    )
     return success(data=result)
 
 
@@ -247,7 +253,9 @@ async def update_user_profile(
     user_id: int = Path(..., description="用户 ID"),
     _admin=Depends(require_permission("user:write")),
 ) -> APIResponse[UserProfileDetail]:
-    result = await AdminUserService().update_user_profile(user_id, body)
+    result = await AdminUserService().update_user_profile(
+        user_id, body, actor_id=_admin.id
+    )
     return success(data=result)
 
 
@@ -271,7 +279,7 @@ async def get_user_profile(
     user_id: int = Path(..., description="用户 ID"),
     _admin=Depends(require_permission("user:list")),
 ) -> APIResponse[UserProfileDetail]:
-    result = await AdminUserService().get_user_profile(user_id)
+    result = await AdminUserService().get_user_profile(user_id, actor_id=_admin.id)
     return success(data=result)
 
 @router.get("/{user_id}/identity",
@@ -294,7 +302,7 @@ async def get_user_identity(
     user_id: int = Path(..., description="用户 ID"),
     _admin=Depends(require_permission("user:list")),
 ) -> APIResponse[RealnameAdminResponse]:
-    result = await AdminUserService().get_user_identity(user_id)
+    result = await AdminUserService().get_user_identity(user_id, actor_id=_admin.id)
     return success(data=result)
 
 
@@ -308,7 +316,7 @@ async def get_user_student(
     user_id: int = Path(..., description="用户 ID"),
     _admin=Depends(require_permission("user:list")),
 ) -> APIResponse[StudentResponse]:
-    result = await AdminUserService().get_user_student(user_id)
+    result = await AdminUserService().get_user_student(user_id, actor_id=_admin.id)
     return success(data=result)
 
 

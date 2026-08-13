@@ -5,6 +5,7 @@ from sqlalchemy import func, or_, select
 from app.adapter.database import get_db_ctx
 from app.domain.order.src.index import Order
 from app.domain.renshe.src.index import (
+    assert_application_transition,
     RensheApplication,
     RensheApplicationVersion,
     RensheAuditLog,
@@ -13,7 +14,7 @@ from app.domain.renshe.src.index import (
     RensheReviewCorrection,
 )
 from app.domain.user.src.index import UserRealname
-from app.port.exceptions import ConflictException, NotFoundException
+from app.port.exceptions import ConflictException, NotFoundException, ValidationException
 from app.schemas.common import PaginatedData
 from app.schemas.renshe import (
     RensheAdminApplicationDetailResponse,
@@ -26,6 +27,7 @@ from app.schemas.renshe import (
     RensheReviewCreate,
     RensheReviewResponse,
 )
+from app.services.renshe_audit import record_best_effort_audit
 
 
 class RensheReviewService:
@@ -165,7 +167,7 @@ class RensheReviewService:
         return f"{value[:3]}****{value[-4:]}"
 
     async def get_application(
-        self, application_id: int
+        self, application_id: int, *, actor_id: int | None = None
     ) -> RensheAdminApplicationDetailResponse:
         async with get_db_ctx() as db:
             application = await db.get(RensheApplication, application_id)
@@ -208,7 +210,7 @@ class RensheReviewService:
                 .order_by(Order.id.desc())
                 .limit(1)
             )
-            return RensheAdminApplicationDetailResponse(
+            payload = RensheAdminApplicationDetailResponse(
                 **RensheApplicationResponse.model_validate(application).model_dump(),
                 versions=[
                     RensheAdminVersionDetailResponse(
@@ -233,6 +235,18 @@ class RensheReviewService:
                 current_order_id=order.id if order else None,
                 current_order_status=order.status if order else None,
             )
+        if actor_id is not None:
+            await record_best_effort_audit(
+                actor_type="admin",
+                actor_id=actor_id,
+                action="application.view",
+                object_type="application",
+                object_id=application_id,
+                application_id=application_id,
+                result="succeeded",
+                summary={"version_count": len(payload.versions)},
+            )
+        return payload
 
     async def review(
         self,
@@ -242,6 +256,8 @@ class RensheReviewService:
         stage: str,
         data: RensheReviewCreate,
     ) -> RensheReviewResponse:
+        if stage not in {"initial", "external"}:
+            raise ValidationException("不支持的审核阶段")
         expected_status = {
             "initial": "pending_initial_review",
             "external": "pending_external_review",
@@ -292,6 +308,10 @@ class RensheReviewService:
                 reviewed_at=now,
             )
             db.add(review)
+            try:
+                assert_application_transition(application.status, target_status)
+            except ValueError as exc:
+                raise ConflictException("当前报名状态不允许推进审核结果") from exc
             application.status = target_status
             if stage == "initial":
                 application.initial_reviewed_at = now

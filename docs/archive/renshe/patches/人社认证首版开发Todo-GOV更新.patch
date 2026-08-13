@@ -1,0 +1,20 @@
+# 归档于 2026-08-09，仅保留只读主 Todo 的历史同步记录。
+diff --git a/docs/renshe/人社认证首版开发Todo.md b/docs/renshe/人社认证首版开发Todo.md
+--- a/docs/renshe/人社认证首版开发Todo.md
++++ b/docs/renshe/人社认证首版开发Todo.md
+@@ -219,10 +219,10 @@
+ | ID | 状态 | 任务 | 负责人 | 优先级 | 估算 | 依赖 | 验收标准 |
+ |---|---|---|---|---|---:|---|---|
+ | GOV-01 | DONE | 冻结首版业务范围 | PO | P0 | 0.5 人日 | 无 | 本文第 1 至 3 节覆盖认证、批次、审核、材料、退款、角色、存储和数据清理，且无互相冲突规则 |
+-| GOV-02 | TODO | 建立唯一数据字典和状态机 | BE 主责，AD/MP 参与 | P0 | 1 人日 | GOV-01 | 字段名、枚举、时间单位、金额单位、空值规则和状态转换形成文档；三端评审通过；不再用订单状态代表审核状态 |
+-| GOV-03 | TODO | 冻结 OpenAPI 和错误码 | BE 主责，AD/MP 参与 | P0 | 1 人日 | GOV-02 | OpenAPI 可生成；每个接口包含请求、响应、权限、错误码和示例；AD/MP 可据此生成或维护类型 |
+-| GOV-04 | TODO | 修复后端测试基线 | BE | P0 | 1 人日 | 无 | 默认测试命令不再依赖不存在的 `.env.development`；删除或更新 `UserIdentityCreate` 旧引用；244 项测试可正常收集并得到可解释结果 |
+-| GOV-05 | TODO | 固化三项目质量命令 | BE/AD/MP | P0 | 0.5 人日/项目 | GOV-04 | 每个项目各有一条文档化命令完成测试和构建；CI 或本地执行返回 0；Admin 现有 16 项测试和生产构建持续通过 |
+-| GOV-06 | TODO | 清理迁移策略 | BE | P0 | 0.5 人日 | 无 | 禁止迁移失败后自动 `stamp head`；空库从 base 升至 head 成功；任何失败立即终止并保留日志 |
++| GOV-02 | DOING | 建立唯一数据字典和状态机 | BE 主责，AD/MP 参与 | P0 | 1 人日 | GOV-01 | Backend 唯一字典和状态机已落地并通过契约检查；待 AD/MP 按同一字段、枚举、状态完成评审后标记 DONE |
++| GOV-03 | DOING | 冻结 OpenAPI 和错误码 | BE 主责，AD/MP 参与 | P0 | 1 人日 | GOV-02 | 24 个人社操作已带 Bearer、版本和统一错误码元数据，契约检查通过；待 AD/MP 生成或维护类型并完成评审后标记 DONE |
++| GOV-04 | DONE | 修复后端测试基线 | BE | P0 | 1 人日 | 无 | 默认命令不依赖 `.env.development`；无独立测试库时仅跳过 `integration_db`；2026-08-08 结果为 370 passed、116 skipped |
++| GOV-05 | DOING | 固化三项目质量命令 | BE/AD/MP | P0 | 0.5 人日/项目 | GOV-04 | Backend 一条命令已返回 0；Admin 单测 35 项通过但需在可写目录完成生产构建；Platform 需安装依赖并执行微信小程序构建 |
++| GOV-06 | DOING | 清理迁移策略 | BE | P0 | 0.5 人日 | 无 | 已禁止部署脚本 `stamp`、验证唯一 head 和 base 到 head 离线 SQL；待专用 PostgreSQL 空库执行 upgrade→downgrade→upgrade 后标记 DONE |
+ | GOV-07 | TODO | 建立任务板、风险表和决策日志 | PO | P0 | 0.5 人日 | GOV-01 | 本文所有 P0 ID 进入任务板；每项有唯一负责人和目标日期；阻塞超过 1 个工作日自动升级给 PO |
+ | GOV-08 | TODO | 固化环境与配置矩阵 | PO/BE | P0 | 0.5 人日 | 无 | 开发、测试、生产的域名、数据库、Redis、OSS、微信和日志配置边界明确；仓库不再保存真实密钥；启动时校验必填配置 |

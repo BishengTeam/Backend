@@ -1,6 +1,6 @@
 # GOV-02 至 GOV-06 实施记录
 
-> 记录日期：2026-08-07
+> 记录日期：2026-08-08（复核）
 
 ## 已完成
 
@@ -13,15 +13,18 @@
 ## 当前证据
 
 ```text
-Backend unit: 335 passed
-Backend default pytest: 335 passed, 99 skipped (缺少独立 PostgreSQL 测试库)
+Backend unit: 370 passed
+Backend default pytest: 370 passed, 116 skipped (缺少独立 PostgreSQL 测试库)
 Renshe contract: 23 paths / 24 operations, enterprise paths 0, materials 6
 Alembic static: one head quiz002, 48 revisions
 Alembic offline SQL: base -> head generated successfully with a verified quiz backup reference
 ```
 
+本次复核另补充了实名驳回后释放当前身份证摘要占用、清理队列跳过导出阻塞批次、审核更正原因非空校验和导出下载失败审计。
+
 ## 尚待外部条件
 
-- 提供专用 PostgreSQL 测试库后执行 `scripts/check_migrations.py --full-cycle`，验证真实升级、降级和再次升级。
+- 当前沙箱禁止 TCP/Unix Socket，无法连接 3306 或启动隔离 PostgreSQL；提供专用 PostgreSQL 测试库后执行 `scripts/check_migrations.py --full-cycle`，验证真实升级、降级和再次升级。
 - Admin 和 Platform 需在各自可写、依赖完整的项目环境执行质量命令；本 Backend 变更不修改两个项目的业务代码。
 - 三端负责人完成契约评审后，才能把 GOV-02/GOV-03 标记为最终 `DONE`。
+- 根目录主 Todo 在当前环境只读；历史状态更新补丁已归档至 `docs/archive/renshe/patches/人社认证首版开发Todo-GOV更新.patch`。
