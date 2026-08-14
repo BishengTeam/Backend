@@ -7,6 +7,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.domain.plan.src.index import Plan  # noqa: F401 - resolve Order.plan_id FK
+
 
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
 
@@ -73,12 +75,16 @@ async def course_context(monkeypatch, tmp_path):
         yield context
     finally:
         from app.domain.certification.src.index import Course, CourseAsset, CourseEnrollment
+        from app.domain.community.src.index import QuizCourseLibraryBinding, QuizLibrary
         from app.domain.order.src.index import Order
         from app.domain.user.src.index import User
 
         async with factory() as db:
             course_ids = select(Course.id).where(Course.title.like(f"{prefix}%"))
             user_ids = select(User.id).where(User.openid.like(f"{prefix}%"))
+            library_ids = select(QuizLibrary.id).where(
+                QuizLibrary.name.like(f"{prefix}%")
+            )
             await db.execute(delete(CourseAsset).where(CourseAsset.course_id.in_(course_ids)))
             await db.execute(
                 delete(CourseEnrollment).where(CourseEnrollment.course_id.in_(course_ids))
@@ -89,6 +95,12 @@ async def course_context(monkeypatch, tmp_path):
                     Order.order_kind == "course",
                 )
             )
+            await db.execute(
+                delete(QuizCourseLibraryBinding).where(
+                    QuizCourseLibraryBinding.library_id.in_(library_ids)
+                )
+            )
+            await db.execute(delete(QuizLibrary).where(QuizLibrary.id.in_(library_ids)))
             await db.execute(delete(Course).where(Course.id.in_(course_ids)))
             await db.execute(delete(User).where(User.id.in_(user_ids)))
             await db.commit()
@@ -380,6 +392,73 @@ async def test_expired_course_order_cancels_pending_enrollment(course_context):
         assert order.status == "closed"
         assert enrollment.status == "cancelled"
         assert enrollment.learning_access is False
+
+
+async def test_course_detail_returns_current_included_quiz_library_display_data(
+    course_context,
+) -> None:
+    from app.domain.community.src.index import QuizCourseLibraryBinding, QuizLibrary
+
+    data = await _seed_courses(course_context)
+    async with course_context.factory() as db:
+        library = QuizLibrary(
+            name=f"{course_context.prefix}赠送题库",
+            normalized_name=f"{course_context.prefix}赠送题库",
+            description="当前题库简介",
+            cover_url="https://example.invalid/current.png",
+            access_mode="course_entitlement",
+            system_kind="none",
+            migration_state="ready",
+            status="published",
+            v2_enabled=True,
+            published_at=datetime.now(timezone.utc),
+        )
+        db.add(library)
+        await db.flush()
+        db.add(
+            QuizCourseLibraryBinding(
+                course_id=data.paid_course_id,
+                library_id=library.id,
+                status="active",
+                lock_version=1,
+            )
+        )
+        await db.commit()
+        library_id = int(library.id)
+        library_code = library.library_code
+
+    detail = await course_context.course_service.get_course(
+        data.paid_course_id, data.other_user_id
+    )
+    assert [item.model_dump() for item in detail.included_quiz_libraries] == [
+        {
+            "id": library_id,
+            "library_code": library_code,
+            "name": f"{course_context.prefix}赠送题库",
+            "description": "当前题库简介",
+            "cover_url": "https://example.invalid/current.png",
+            "status": "published",
+            "available": True,
+        }
+    ]
+
+    async with course_context.factory() as db:
+        current = await db.get(QuizLibrary, library_id)
+        current.name = f"{course_context.prefix}更新后题库"
+        current.normalized_name = current.name
+        current.description = "更新后的实时简介"
+        current.status = "suspended"
+        current.suspended_at = datetime.now(timezone.utc)
+        current.v2_enabled = False
+        await db.commit()
+
+    refreshed = await course_context.course_service.get_course(
+        data.paid_course_id, data.other_user_id
+    )
+    assert refreshed.included_quiz_libraries[0].name.endswith("更新后题库")
+    assert refreshed.included_quiz_libraries[0].description == "更新后的实时简介"
+    assert refreshed.included_quiz_libraries[0].status == "suspended"
+    assert refreshed.included_quiz_libraries[0].available is False
 
 
 async def _get_order(context, order_id):

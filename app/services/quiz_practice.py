@@ -12,6 +12,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, select, union
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
 from app.adapter.database import get_db_ctx
@@ -26,6 +27,7 @@ from app.domain.community.src.index import (
     QuizPracticeSession,
     QuizPracticeSessionQuestion,
     QuizQuestion,
+    QuizQuestionRevisionStats,
     QuizUserStats,
     QuizWrongItem,
 )
@@ -59,6 +61,8 @@ from app.schemas.quiz_contract import (
     QuizCollectionMutationResponse,
     QuizExamStats,
     QuizPracticeAbandonResponse,
+    QuizPracticeAnswerSave,
+    QuizPracticeAnswerSaved,
     QuizPracticeAttemptCreate,
     QuizPracticeAttemptResult,
     QuizPracticeHistoryItem,
@@ -267,9 +271,25 @@ class QuizPracticeService:
 
     @staticmethod
     def _public_question_from_snapshot(snapshot: dict[str, object]) -> QuizPublicQuestion:
+        category_id = snapshot.get("category_id")
         return QuizPublicQuestion(
             id=int(snapshot["question_id"]),
-            category_id=int(snapshot["category_id"]),
+            category_id=int(category_id) if category_id is not None else None,
+            library_id=(
+                int(snapshot["library_id"])
+                if snapshot.get("library_id") is not None
+                else None
+            ),
+            knowledge_point_id=(
+                int(snapshot["knowledge_point_id"])
+                if snapshot.get("knowledge_point_id") is not None
+                else None
+            ),
+            question_revision_id=(
+                int(snapshot["question_revision_id"])
+                if snapshot.get("question_revision_id") is not None
+                else None
+            ),
             question_type=str(snapshot["question_type"]),
             question_text=str(snapshot["question_text"]),
             options=dict(snapshot.get("options") or {}),
@@ -279,7 +299,22 @@ class QuizPracticeService:
     def _public_question(question: QuizQuestion) -> QuizPublicQuestion:
         return QuizPublicQuestion(
             id=int(question.id),
-            category_id=int(question.category_id),
+            category_id=(
+                int(question.category_id) if question.category_id is not None else None
+            ),
+            library_id=(
+                int(question.library_id) if question.library_id is not None else None
+            ),
+            knowledge_point_id=(
+                int(question.knowledge_point_id)
+                if question.knowledge_point_id is not None
+                else None
+            ),
+            question_revision_id=(
+                int(question.current_revision_id)
+                if question.current_revision_id is not None
+                else None
+            ),
             question_type=str(question.question_type),
             question_text=question.question_text,
             options=dict(question.options or {}),
@@ -581,7 +616,7 @@ class QuizPracticeService:
                     select(QuizPracticeSession)
                     .where(
                         QuizPracticeSession.user_id == user_id,
-                        QuizPracticeSession.status == _PRACTICE_IN_PROGRESS,
+                        QuizPracticeSession.status.in_(("in_progress", "paused")),
                     )
                     .order_by(QuizPracticeSession.started_at.desc(), QuizPracticeSession.id.desc())
                     .limit(1)
@@ -614,6 +649,19 @@ class QuizPracticeService:
         db,
         session: QuizPracticeSession,
     ) -> QuizPracticeSessionResponse:
+        if session.scope_type is not None:
+            from app.services.quiz_v2 import QuizV2Service
+
+            changed = await QuizV2Service()._sync_session_access(db, session)
+            if session.status == "expired":
+                await db.commit()
+                raise QuizV2Service._session_expired()
+            if session.status == "terminated":
+                await db.commit()
+                raise QuizV2Service._session_terminated()
+            if changed:
+                await db.commit()
+            return await QuizV2Service()._serialize_practice_session(db, session)
         snapshots = list(
             (
                 await db.execute(
@@ -644,6 +692,9 @@ class QuizPracticeService:
         questions: list[QuizPracticeQuestionState] = []
         for snapshot in snapshots:
             attempt = latest.get(int(snapshot.id))
+            user_answer = (
+                attempt.user_answer if attempt is not None else snapshot.user_answer
+            )
             result = None
             if attempt is not None:
                 result = QuizPracticeAttemptResult(
@@ -668,11 +719,31 @@ class QuizPracticeService:
                         QuizCategoryPathItem.model_validate(item)
                         for item in snapshot.category_path
                     ],
-                    answered=attempt is not None,
+                    answered=user_answer is not None,
+                    user_answer=user_answer,
+                    answer_lock_version=int(snapshot.answer_lock_version),
+                    correct_answer=(
+                        snapshot.correct_answer
+                        if session.status == _PRACTICE_COMPLETED
+                        else None
+                    ),
+                    explanation=(
+                        snapshot.explanation
+                        if session.status == _PRACTICE_COMPLETED
+                        else None
+                    ),
+                    is_correct=(
+                        bool(attempt.is_correct)
+                        if session.status == _PRACTICE_COMPLETED
+                        and attempt is not None
+                        else None
+                    ),
                     attempt_count=counts.get(int(snapshot.id), 0),
                     latest_result=result,
                 )
             )
+        answered_count = sum(question.answered for question in questions)
+        current = next((question for question in questions if not question.answered), None)
         return QuizPracticeSessionResponse(
             id=int(session.id),
             mode=session.mode,
@@ -683,6 +754,13 @@ class QuizPracticeService:
             started_at=session.started_at,
             completed_at=session.completed_at,
             abandoned_at=session.abandoned_at,
+            answered_count=answered_count,
+            remaining_count=max(0, int(session.actual_count) - answered_count),
+            current_position=(
+                int(current.position)
+                if current is not None and session.status == _PRACTICE_IN_PROGRESS
+                else None
+            ),
             lock_version=int(session.lock_version),
             questions=questions,
         )
@@ -724,6 +802,105 @@ class QuizPracticeService:
             raise ValidationException(str(exc)) from exc
         return canonical_answer, correct
 
+    async def _record_attempt_locked(
+        self,
+        db,
+        *,
+        user_id: int,
+        session: QuizPracticeSession,
+        snapshot: QuizPracticeSessionQuestion,
+        user_answer: object,
+        idempotency_key: str,
+        now: datetime,
+        stats: QuizUserStats | None = None,
+    ) -> QuizPracticeAttempt:
+        """Create one immutable graded attempt inside the caller transaction."""
+
+        canonical_answer, correct = self._grade_snapshot_answer(
+            snapshot,
+            user_answer,
+        )
+        attempt_no = int(
+            (
+                await db.execute(
+                    select(func.count())
+                    .select_from(QuizPracticeAttempt)
+                    .where(QuizPracticeAttempt.session_question_id == snapshot.id)
+                )
+            ).scalar()
+            or 0
+        ) + 1
+        attempt = QuizPracticeAttempt(
+            user_id=user_id,
+            session_id=session.id,
+            session_question_id=snapshot.id,
+            idempotency_key=idempotency_key,
+            attempt_no=attempt_no,
+            is_first_attempt=attempt_no == 1,
+            user_answer=canonical_answer,
+            is_correct=correct,
+            submitted_at=now,
+        )
+        db.add(attempt)
+        await db.flush()
+        active_stats = stats or await self._ensure_stats(db, user_id)
+        await self._apply_attempt_stats(
+            db,
+            active_stats,
+            session,
+            snapshot,
+            attempt,
+            correct,
+            now,
+        )
+        if attempt.is_first_attempt and snapshot.question_revision_id is not None:
+            statement = pg_insert(QuizQuestionRevisionStats).values(
+                question_id=snapshot.question_id,
+                question_revision_id=snapshot.question_revision_id,
+                practice_first_attempts=1,
+                practice_first_correct=1 if correct else 0,
+                exam_answers=0,
+                exam_correct=0,
+                aggregated_through=now,
+            )
+            await db.execute(
+                statement.on_conflict_do_update(
+                    index_elements=[QuizQuestionRevisionStats.question_revision_id],
+                    set_={
+                        "practice_first_attempts": QuizQuestionRevisionStats.practice_first_attempts
+                        + 1,
+                        "practice_first_correct": QuizQuestionRevisionStats.practice_first_correct
+                        + (1 if correct else 0),
+                        "aggregated_through": now,
+                    },
+                )
+            )
+        if attempt.is_first_attempt:
+            await self._apply_wrong_book(
+                db,
+                user_id,
+                session,
+                snapshot,
+                correct,
+                now,
+                active_stats,
+            )
+            if session.mode == QuizPracticeMode.WRONG_ONLY.value:
+                reviewed = (
+                    await db.execute(
+                        select(QuizWrongItem)
+                        .where(
+                            QuizWrongItem.user_id == user_id,
+                            QuizWrongItem.question_id == snapshot.question_id,
+                        )
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if reviewed is not None:
+                    reviewed.review_count += 1
+                    reviewed.last_reviewed_at = now
+        return attempt
+
     async def submit_attempt(
         self,
         user_id: int,
@@ -757,6 +934,10 @@ class QuizPracticeService:
                 if canonical_answer != existing.user_answer:
                     raise ConflictException("幂等键已用于不同答案")
                 return self._attempt_result(existing, snapshot)
+            if session.scope_type is not None:
+                from app.services.quiz_v2 import QuizV2Service
+
+                await QuizV2Service()._require_usable_session(db, session)
             if session.status != _PRACTICE_IN_PROGRESS:
                 raise ConflictException("当前练习会话已结束，不能继续作答")
 
@@ -772,55 +953,17 @@ class QuizPracticeService:
             ).scalar_one_or_none()
             if snapshot is None:
                 raise NotFoundException("练习题目")
-            canonical_answer, correct = self._grade_snapshot_answer(
-                snapshot,
-                data.user_answer,
-            )
-
-            attempt_no = int(
-                (
-                    await db.execute(
-                        select(func.count())
-                        .select_from(QuizPracticeAttempt)
-                        .where(QuizPracticeAttempt.session_question_id == snapshot.id)
-                    )
-                ).scalar()
-                or 0
-            ) + 1
             now = self._now()
-            attempt = QuizPracticeAttempt(
-                user_id=user_id,
-                session_id=session_id,
-                session_question_id=snapshot.id,
-                idempotency_key=data.idempotency_key,
-                attempt_no=attempt_no,
-                is_first_attempt=attempt_no == 1,
-                user_answer=canonical_answer,
-                is_correct=correct,
-                submitted_at=now,
-            )
-            db.add(attempt)
-            await db.flush()
-            stats = await self._ensure_stats(db, user_id)
-            await self._apply_attempt_stats(
+            attempt = await self._record_attempt_locked(
                 db,
-                stats,
-                session,
-                snapshot,
-                attempt,
-                correct,
-                now,
+                user_id=user_id,
+                session=session,
+                snapshot=snapshot,
+                user_answer=data.user_answer,
+                idempotency_key=data.idempotency_key,
+                now=now,
             )
             if attempt.is_first_attempt:
-                await self._apply_wrong_book(
-                    db,
-                    user_id,
-                    session,
-                    snapshot,
-                    correct,
-                    now,
-                    stats,
-                )
                 first_answered = (
                     await db.execute(
                         select(func.count())
@@ -835,8 +978,145 @@ class QuizPracticeService:
                     session.status = _PRACTICE_COMPLETED
                     session.completed_at = now
                     session.lock_version += 1
+            if session.scope_type is not None:
+                session.last_answered_at = now
+                session.expires_at = now + timedelta(days=7)
             await db.commit()
             return self._attempt_result(attempt, snapshot)
+
+    async def save_answer(
+        self,
+        user_id: int,
+        session_id: int,
+        session_question_id: int,
+        data: QuizPracticeAnswerSave,
+    ) -> QuizPracticeAnswerSaved:
+        async with get_db_ctx() as db:
+            await self._lock_user(db, user_id)
+            session = await self._get_session(db, user_id, session_id, lock=True)
+            if session.scope_type is not None:
+                from app.services.quiz_v2 import QuizV2Service
+
+                await QuizV2Service()._require_usable_session(db, session)
+            if session.status != _PRACTICE_IN_PROGRESS:
+                raise ConflictException("当前练习会话已结束，不能保存答案")
+            snapshot = (
+                await db.execute(
+                    select(QuizPracticeSessionQuestion)
+                    .where(
+                        QuizPracticeSessionQuestion.id == session_question_id,
+                        QuizPracticeSessionQuestion.session_id == session_id,
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if snapshot is None:
+                raise NotFoundException("练习题目")
+            submitted = (
+                await db.execute(
+                    select(QuizPracticeAttempt.id)
+                    .where(
+                        QuizPracticeAttempt.session_id == session_id,
+                        QuizPracticeAttempt.session_question_id == session_question_id,
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if submitted is not None:
+                raise ConflictException("该题已经生成正式作答，不能修改答案")
+            canonical_answer, _correct = self._grade_snapshot_answer(
+                snapshot,
+                data.user_answer,
+            )
+            current_version = int(snapshot.answer_lock_version)
+            if data.lock_version != current_version:
+                raise ConflictException(
+                    f"答案版本冲突，当前版本为 {current_version}"
+                )
+            now = self._now()
+            snapshot.user_answer = canonical_answer
+            snapshot.answer_lock_version = current_version + 1
+            snapshot.answer_saved_at = now
+            if session.scope_type is not None:
+                session.last_answered_at = now
+                session.expires_at = now + timedelta(days=7)
+            await db.commit()
+            return QuizPracticeAnswerSaved(
+                session_id=int(session.id),
+                session_question_id=int(snapshot.id),
+                user_answer=snapshot.user_answer,
+                lock_version=int(snapshot.answer_lock_version),
+                saved_at=snapshot.answer_saved_at,
+            )
+
+    async def submit_session(
+        self,
+        user_id: int,
+        session_id: int,
+    ) -> QuizPracticeSessionResponse:
+        """Grade every saved answer and settle the practice in one transaction."""
+
+        async with get_db_ctx() as db:
+            await self._lock_user(db, user_id)
+            session = await self._get_session(db, user_id, session_id, lock=True)
+            if session.status == _PRACTICE_COMPLETED:
+                return await self._serialize_session(db, session)
+            if session.scope_type is not None:
+                from app.services.quiz_v2 import QuizV2Service
+
+                await QuizV2Service()._require_usable_session(db, session)
+            if session.status == _PRACTICE_ABANDONED:
+                raise ConflictException("已放弃的练习会话不能交卷")
+            if session.status != _PRACTICE_IN_PROGRESS:
+                raise ConflictException("当前练习会话已结束，不能交卷")
+
+            snapshots = list(
+                (
+                    await db.execute(
+                        select(QuizPracticeSessionQuestion)
+                        .where(QuizPracticeSessionQuestion.session_id == session_id)
+                        .order_by(QuizPracticeSessionQuestion.position.asc())
+                        .with_for_update()
+                    )
+                ).scalars()
+            )
+            attempted_ids = set(
+                (
+                    await db.execute(
+                        select(QuizPracticeAttempt.session_question_id)
+                        .where(QuizPracticeAttempt.session_id == session_id)
+                        .with_for_update()
+                    )
+                ).scalars()
+            )
+            now = self._now()
+            answered = [
+                snapshot
+                for snapshot in snapshots
+                if snapshot.user_answer is not None
+                and int(snapshot.id) not in attempted_ids
+            ]
+            stats = await self._ensure_stats(db, user_id) if answered else None
+            for snapshot in answered:
+                await self._record_attempt_locked(
+                    db,
+                    user_id=user_id,
+                    session=session,
+                    snapshot=snapshot,
+                    user_answer=snapshot.user_answer,
+                    idempotency_key=f"practice-submit:{session_id}:{int(snapshot.id)}",
+                    now=now,
+                    stats=stats,
+                )
+
+            session.status = _PRACTICE_COMPLETED
+            session.completed_at = now
+            session.abandoned_at = None
+            if answered:
+                session.last_answered_at = now
+            session.lock_version += 1
+            await db.commit()
+            return await self._serialize_session(db, session)
 
     async def _ensure_stats(self, db, user_id: int) -> QuizUserStats:
         stats = (
@@ -999,7 +1279,11 @@ class QuizPracticeService:
     def _wrong_book_snapshot(snapshot) -> dict[str, object]:
         return {
             "question_id": int(snapshot.question_id),
-            "category_id": int(snapshot.category_id),
+            "category_id": (
+                int(snapshot.category_id)
+                if snapshot.category_id is not None
+                else None
+            ),
             "category_path": snapshot.category_path,
             "question_type": snapshot.question_type,
             "question_text": snapshot.question_text,
@@ -1075,6 +1359,16 @@ class QuizPracticeService:
         async with get_db_ctx() as db:
             await self._lock_user(db, user_id)
             session = await self._get_session(db, user_id, session_id, lock=True)
+            if session.scope_type is not None:
+                from app.services.quiz_v2 import QuizV2Service
+
+                await QuizV2Service()._sync_session_access(db, session)
+                if session.status == "expired":
+                    await db.commit()
+                    raise QuizV2Service._session_expired()
+                if session.status == "terminated":
+                    await db.commit()
+                    raise QuizV2Service._session_terminated()
             if session.status == _PRACTICE_ABANDONED:
                 return QuizPracticeAbandonResponse(
                     session_id=session.id,
@@ -1083,6 +1377,8 @@ class QuizPracticeService:
                 )
             if session.status == _PRACTICE_COMPLETED:
                 raise ConflictException("已完成的练习会话不能放弃")
+            if session.status in {"expired", "terminated"}:
+                raise ConflictException("已结束的练习会话不能放弃")
             now = self._now()
             session.status = _PRACTICE_ABANDONED
             session.abandoned_at = now

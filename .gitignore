@@ -14,3 +14,4 @@ build/
 .codewhale
 .deepseek
 .pytest_cache/
+docs/certfile

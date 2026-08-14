@@ -160,12 +160,15 @@ QUIZ_ERROR_CODES = {
     "40200": {"status": 422, "description": "业务规则不允许"},
     "40201": {"status": 409, "description": "版本或状态冲突"},
     "40202": {"status": 429, "description": "请求过于频繁"},
+    "40203": {"status": 423, "description": "题库或权益临时不可用"},
+    "40204": {"status": 410, "description": "练习已过期或永久终止"},
     "40300": {"status": 404, "description": "资源不存在"},
     "50000": {"status": 500, "description": "服务内部错误"},
 }
 
 QUIZ_RATE_LIMITS = {
     ("get", "/api/quiz/questions"): 60,
+    ("put", "/api/quiz/practice-sessions/{session_id}/answers/{session_question_id}"): 120,
     ("post", "/api/quiz/practice-sessions/{session_id}/attempts"): 120,
     ("put", "/api/quiz/exams/{exam_id}/answers/{exam_question_id}"): 120,
     ("post", "/admin/quiz/categories"): 120,

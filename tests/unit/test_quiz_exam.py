@@ -60,6 +60,15 @@ def test_exam_request_is_strictly_bounded_and_duration_is_frozen() -> None:
         QuizExamCreate(category_id=1, question_count=9)
     with pytest.raises(ValidationError):
         QuizExamCreate(category_id=1, question_count=101)
+    v2 = QuizExamCreate(
+        scope_type="knowledge_point", scope_id=3, question_count=10
+    )
+    assert v2.category_id is None
+    assert str(v2.scope_type) == "knowledge_point"
+    with pytest.raises(ValidationError):
+        QuizExamCreate(category_id=1, scope_type="library", scope_id=2, question_count=10)
+    with pytest.raises(ValidationError):
+        QuizExamCreate(scope_type="library", question_count=10)
 
     # The response models make the fixed duration and state-specific fields
     # explicit, preventing accidental leakage through a generic dict response.
@@ -107,6 +116,9 @@ def test_public_exam_projections_never_expose_answers_before_settlement() -> Non
     assert payload == {
         "id": 1,
         "category_id": 9,
+        "library_id": None,
+        "knowledge_point_id": None,
+        "question_revision_id": None,
         "question_type": "single_choice",
         "question_text": "题目 1",
         "options": {"A": "一", "B": "二", "C": "三", "D": "四"},

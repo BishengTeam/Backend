@@ -39,6 +39,7 @@ WECHAT_PAY_CURRENCY = "CNY"
 WECHAT_PAY_NOTIFICATION_ALGORITHM = "AEAD_AES_256_GCM"
 WECHAT_PAY_NOTIFICATION_TYPE = "transaction"
 WECHAT_PAY_REFUND_NOTIFICATION_TYPE = "refund"
+WECHAT_PAY_PUBLIC_KEY_ID_PREFIX = "PUB_KEY_ID_"
 WECHAT_PAY_REFUND_STATUSES = frozenset(
     {"PROCESSING", "SUCCESS", "CLOSED", "ABNORMAL"}
 )
@@ -253,14 +254,14 @@ class WechatPayClient:
         self.merchant_serial_no = settings.WECHAT_PAY_CERT_SERIAL_NO
         self.private_key_material = settings.WECHAT_PAY_PRIVATE_KEY
         self.api_v3_key = settings.WECHAT_PAY_API_V3_KEY
-        self.platform_certificate_material = settings.WECHAT_PAY_PLATFORM_CERTIFICATE
-        self.platform_serial_no = settings.WECHAT_PAY_PLATFORM_CERT_SERIAL_NO
+        self.public_key_material = settings.WECHAT_PAY_PUBLIC_KEY
+        self.public_key_id = settings.WECHAT_PAY_PUBLIC_KEY_ID.strip()
         self.notification_tolerance_seconds = (
             settings.WECHAT_PAY_NOTIFICATION_TOLERANCE_SECONDS
         )
         self.api_base = WECHAT_PAY_API_BASE
         self._merchant_private_key: RSA.RsaKey | None = None
-        self._platform_public_key: RSA.RsaKey | None = None
+        self._wechat_pay_public_key: RSA.RsaKey | None = None
 
     def _missing_configuration(self) -> list[str]:
         values = {
@@ -271,8 +272,8 @@ class WechatPayClient:
             "WECHAT_PAY_CERT_SERIAL_NO": self.merchant_serial_no,
             "WECHAT_PAY_PRIVATE_KEY": self.private_key_material,
             "WECHAT_PAY_API_V3_KEY": self.api_v3_key,
-            "WECHAT_PAY_PLATFORM_CERTIFICATE": self.platform_certificate_material,
-            "WECHAT_PAY_PLATFORM_CERT_SERIAL_NO": self.platform_serial_no,
+            "WECHAT_PAY_PUBLIC_KEY": self.public_key_material,
+            "WECHAT_PAY_PUBLIC_KEY_ID": self.public_key_id,
         }
         return [name for name, value in values.items() if not value]
 
@@ -281,12 +282,15 @@ class WechatPayClient:
 
     def _ensure_configured(self) -> None:
         missing = self._missing_configuration()
-        if not missing:
-            return
-        logger.error("Wechat Pay V3 configuration is incomplete: %s", missing)
-        raise ThirdPartyException(
-            f"微信支付 V3 配置不完整，缺少: {', '.join(missing)}"
-        )
+        if missing:
+            logger.error("Wechat Pay V3 configuration is incomplete: %s", missing)
+            raise ThirdPartyException(
+                f"微信支付 V3 配置不完整，缺少: {', '.join(missing)}"
+            )
+        if not self.public_key_id.startswith(WECHAT_PAY_PUBLIC_KEY_ID_PREFIX):
+            raise ThirdPartyException(
+                "WECHAT_PAY_PUBLIC_KEY_ID 必须以 PUB_KEY_ID_ 开头"
+            )
 
     def ensure_configured(self) -> None:
         """Public fail-fast guard used before a business state transition."""
@@ -329,20 +333,23 @@ class WechatPayClient:
                 raise ThirdPartyException("微信支付商户私钥必须为 RSA 2048 位")
         return self._merchant_private_key
 
-    def _platform_key(self) -> RSA.RsaKey:
-        if self._platform_public_key is None:
+    def _wechat_pay_key(self) -> RSA.RsaKey:
+        if self._wechat_pay_public_key is None:
             try:
-                self._platform_public_key = RSA.import_key(
+                imported_key = RSA.import_key(
                     self._read_key_material(
-                        self.platform_certificate_material,
-                        "WECHAT_PAY_PLATFORM_CERTIFICATE",
+                        self.public_key_material,
+                        "WECHAT_PAY_PUBLIC_KEY",
                     )
-                ).public_key()
+                )
             except (ValueError, IndexError, TypeError) as exc:
-                raise ThirdPartyException("微信支付平台证书格式无效") from exc
-            if self._platform_public_key.size_in_bits() != 2048:
-                raise ThirdPartyException("微信支付平台证书必须为 RSA 2048 位")
-        return self._platform_public_key
+                raise ThirdPartyException("微信支付公钥格式无效") from exc
+            if imported_key.has_private():
+                raise ThirdPartyException("微信支付公钥配置不得包含私钥")
+            if imported_key.size_in_bits() != 2048:
+                raise ThirdPartyException("微信支付公钥必须为 RSA 2048 位")
+            self._wechat_pay_public_key = imported_key
+        return self._wechat_pay_public_key
 
     @staticmethod
     def _nonce() -> str:
@@ -404,13 +411,13 @@ class WechatPayClient:
         serial: str,
         now: int | None = None,
     ) -> None:
-        """Verify a V3 platform signature and reject stale/future messages."""
+        """Verify a V3 WeChat Pay public-key signature and reject stale input."""
 
         self._ensure_configured()
-        expected_serial = self.platform_serial_no.strip().upper()
-        supplied_serial = serial.strip().upper()
-        if not hmac.compare_digest(expected_serial, supplied_serial):
-            raise ThirdPartyException("微信支付平台证书序列号不匹配")
+        expected_key_id = self.public_key_id.strip()
+        supplied_key_id = serial.strip()
+        if not hmac.compare_digest(expected_key_id, supplied_key_id):
+            raise ThirdPartyException("微信支付公钥 ID 不匹配")
         if not timestamp.isascii() or not timestamp.isdecimal():
             raise ThirdPartyException("微信支付签名时间戳无效")
         try:
@@ -425,14 +432,21 @@ class WechatPayClient:
         try:
             decoded_signature = base64.b64decode(signature, validate=True)
         except (ValueError, binascii.Error) as exc:
-            raise ThirdPartyException("微信支付平台签名格式无效") from exc
-        message = timestamp.encode("ascii") + b"\n" + nonce.encode("utf-8") + b"\n" + body + b"\n"
+            raise ThirdPartyException("微信支付签名格式无效") from exc
+        message = (
+            timestamp.encode("ascii")
+            + b"\n"
+            + nonce.encode("utf-8")
+            + b"\n"
+            + body
+            + b"\n"
+        )
         try:
-            pkcs1_15.new(self._platform_key()).verify(
+            pkcs1_15.new(self._wechat_pay_key()).verify(
                 SHA256.new(message), decoded_signature
             )
         except (ValueError, TypeError) as exc:
-            raise ThirdPartyException("微信支付平台签名验证失败") from exc
+            raise ThirdPartyException("微信支付签名验证失败") from exc
 
     def _verify_signed_body(
         self, headers: Mapping[str, str], body: bytes, *, now: int | None = None
@@ -464,6 +478,7 @@ class WechatPayClient:
             "Authorization": authorization,
             "Content-Type": "application/json",
             "User-Agent": "weMiniApp-wechat-pay-v3/1.0",
+            "Wechatpay-Serial": self.public_key_id,
         }
         try:
             async with httpx.AsyncClient(

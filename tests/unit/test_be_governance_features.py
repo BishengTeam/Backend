@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from Crypto.PublicKey import RSA
 from httpx import ASGITransport, AsyncClient
 
 from app.main import _dependency_checks, ready
@@ -15,6 +16,7 @@ from app.services.dependency_health import is_ready
 from app.services.dependency_health import (
     enrich_quiz_oss_probe,
     inspect_quiz_oss_configuration,
+    inspect_wechat_payment_configuration,
     probe_quiz_oss,
 )
 from app.utils.audit import (
@@ -375,8 +377,8 @@ def test_production_settings_require_explicit_wechat_v3_configuration() -> None:
         "WECHAT_PAY_CERT_SERIAL_NO": "serial",
         "WECHAT_PAY_PRIVATE_KEY": "private-key",
         "WECHAT_PAY_API_V3_KEY": "0123456789abcdef0123456789abcdef",
-        "WECHAT_PAY_PLATFORM_CERTIFICATE": "platform-cert",
-        "WECHAT_PAY_PLATFORM_CERT_SERIAL_NO": "platform-serial",
+        "WECHAT_PAY_PUBLIC_KEY": "public-key",
+        "WECHAT_PAY_PUBLIC_KEY_ID": "PUB_KEY_ID_test",
         "RENSHE_STORAGE_TYPE": "aliyun_oss",
         "ALIYUN_OSS_ENDPOINT": "https://oss.example",
         "ALIYUN_OSS_BUCKET": "private-bucket",
@@ -437,9 +439,11 @@ def test_settings_load_secrets_from_read_only_files(tmp_path, monkeypatch) -> No
     jwt_file = tmp_path / "jwt"
     pii_file = tmp_path / "pii"
     redis_file = tmp_path / "redis"
+    wechat_pay_public_key_file = tmp_path / "wechat-pay-public-key"
     jwt_file.write_text("j" * 40 + "\n", encoding="utf-8")
     pii_file.write_text("p" * 40 + "\n", encoding="utf-8")
     redis_file.write_text("redis://redis.internal:6379/0\n", encoding="utf-8")
+    wechat_pay_public_key_file.write_text("public-key\n", encoding="utf-8")
 
     file_settings = Settings(
         _env_file=None,
@@ -447,13 +451,70 @@ def test_settings_load_secrets_from_read_only_files(tmp_path, monkeypatch) -> No
         JWT_SECRET_FILE=str(jwt_file),
         PII_HASH_KEY_FILE=str(pii_file),
         REDIS_URL_FILE=str(redis_file),
+        WECHAT_PAY_PUBLIC_KEY_FILE=str(wechat_pay_public_key_file),
     )
 
     assert file_settings.JWT_SECRET == "j" * 40
     assert file_settings.PII_HASH_KEY == "p" * 40
     assert file_settings.REDIS_URL == "redis://redis.internal:6379/0"
+    assert file_settings.WECHAT_PAY_PUBLIC_KEY == "public-key"
     assert "JWT_SECRET_FILE" not in file_settings.model_dump()
     assert "REDIS_URL_FILE" not in file_settings.model_dump()
+    assert "WECHAT_PAY_PUBLIC_KEY_FILE" not in file_settings.model_dump()
+
+
+def test_wechat_payment_health_requires_public_key_id_and_rsa_public_key(
+    monkeypatch,
+) -> None:
+    wechat_pay_key = RSA.generate(2048)
+    configured_values = {
+        "APP_ENV": "test",
+        "WECHAT_PAY_ENABLED": True,
+        "WECHAT_PAY_API_VERSION": "v3",
+        "WECHAT_PAY_MCHID": "1900000001",
+        "WECHAT_PAY_APPID": "wx-test-appid",
+        "WECHAT_PAY_CERT_SERIAL_NO": "merchant-serial",
+        "WECHAT_PAY_PRIVATE_KEY": "merchant-private-key",
+        "WECHAT_PAY_API_V3_KEY": "0123456789abcdef0123456789abcdef",
+        "WECHAT_PAY_PUBLIC_KEY": wechat_pay_key.public_key()
+        .export_key()
+        .decode("ascii"),
+        "WECHAT_PAY_PUBLIC_KEY_ID": (
+            "PUB_KEY_ID_0000000000000024101100397200000006"
+        ),
+        "WECHAT_PAY_NOTIFY_URL": "https://example.test/payment/callback",
+        "WECHAT_PAY_REFUND_NOTIFY_URL": (
+            "https://example.test/payment/refund-callback"
+        ),
+    }
+    for name, value in configured_values.items():
+        monkeypatch.setattr(settings, name, value)
+
+    assert inspect_wechat_payment_configuration() == {
+        "status": "ok",
+        "configured": True,
+        "required": True,
+        "api": "v3",
+    }
+
+    monkeypatch.setattr(settings, "WECHAT_PAY_PUBLIC_KEY_ID", "wrong-id")
+    assert inspect_wechat_payment_configuration()["reason"] == (
+        "invalid_wechat_pay_public_key_id"
+    )
+
+    monkeypatch.setattr(
+        settings,
+        "WECHAT_PAY_PUBLIC_KEY_ID",
+        configured_values["WECHAT_PAY_PUBLIC_KEY_ID"],
+    )
+    monkeypatch.setattr(
+        settings,
+        "WECHAT_PAY_PUBLIC_KEY",
+        wechat_pay_key.export_key().decode("ascii"),
+    )
+    assert inspect_wechat_payment_configuration()["reason"] == (
+        "invalid_wechat_pay_public_key"
+    )
 
 
 def test_settings_reject_ambiguous_or_empty_secret_files(tmp_path, monkeypatch) -> None:

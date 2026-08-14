@@ -103,6 +103,20 @@ class CourseSchedule(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class CourseQuizLibrarySummary(BaseModel):
+    """Current display data for a quiz library included with the course."""
+
+    id: int
+    library_code: str
+    name: str
+    description: str | None = None
+    cover_url: str | None = None
+    status: Literal["draft", "published", "suspended"]
+    available: bool = Field(
+        description="题库当前是否已发布并开放 V2 用户入口"
+    )
+
+
 class CourseDetailResponse(BaseModel):
     id: int
     title: str = Field(..., description="课程标题")
@@ -116,6 +130,10 @@ class CourseDetailResponse(BaseModel):
     enrollment_id: int | None = Field(None, description="报名记录 ID（已报名时返回）")
     chapters: list[ChapterResponse] = Field(default_factory=list)
     free_preview_seconds: int | None = Field(None)
+    included_quiz_libraries: list[CourseQuizLibrarySummary] = Field(
+        default_factory=list,
+        description="当前有效绑定的课程赠送题库展示资料",
+    )
 
     @field_validator("batches", mode="before")
     @classmethod

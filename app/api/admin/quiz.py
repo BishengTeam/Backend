@@ -33,15 +33,34 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizQuestionCreate,
     AdminQuizQuestionQuery,
     AdminQuizQuestionResponse,
+    AdminQuizQuestionRevisionResponse,
     AdminQuizQuestionStatsResponse,
     AdminQuizQuestionStatsListItem,
     AdminQuizStatsOverviewResponse,
     AdminQuizStatsQuestionQuery,
     AdminQuizQuestionUpdate,
     AdminQuizVersionRequest,
+    AdminQuizContentStatusUpdate,
+    AdminQuizCourseBindingCreate,
+    AdminQuizCourseBindingResponse,
+    AdminQuizCourseBindingStatusUpdate,
+    AdminQuizContentTreeResponse,
+    AdminQuizKnowledgePointCreate,
+    AdminQuizKnowledgePointResponse,
+    AdminQuizKnowledgePointUpdate,
+    AdminQuizLibraryCreate,
+    AdminQuizLibraryQuery,
+    AdminQuizLibraryResponse,
+    AdminQuizLibraryStatusUpdate,
+    AdminQuizLibraryUpdate,
+    AdminQuizMigrationReportResponse,
+    AdminQuizModuleCreate,
+    AdminQuizModuleResponse,
+    AdminQuizModuleUpdate,
 )
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.services.admin_quiz import AdminQuizService
+from app.services.admin_quiz_v2 import AdminQuizV2Service
 from app.domain.community.src.rule.quiz import (
     QuizCategoryStatus,
     QuizImportSourceType,
@@ -54,6 +73,324 @@ router = APIRouter(prefix="/quiz", tags=["管理后台-题库管理"])
 
 CATEGORY = "/categories"
 QUESTION = "/questions"
+
+
+# ── Fixed hierarchy V2 routes ──
+
+
+@router.get(
+    "/libraries",
+    response_model=APIResponse[list[AdminQuizLibraryResponse]],
+    summary="V2 题库列表",
+)
+async def list_libraries(
+    status: str | None = Query(None),
+    access_mode: str | None = Query(None),
+    keyword: str | None = Query(None, min_length=1, max_length=128),
+    include_deleted: bool = Query(False),
+    _admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[list[AdminQuizLibraryResponse]]:
+    query = _validated_query(
+        AdminQuizLibraryQuery,
+        {
+            "status": status,
+            "access_mode": access_mode,
+            "keyword": keyword,
+            "include_deleted": include_deleted,
+        },
+    )
+    return success(data=await AdminQuizV2Service().list_libraries(query))
+
+
+@router.post(
+    "/libraries",
+    response_model=APIResponse[AdminQuizLibraryResponse],
+    summary="创建 V2 题库",
+)
+async def create_library(
+    body: AdminQuizLibraryCreate,
+    admin=Depends(require_permission("quiz_library_manage")),
+) -> APIResponse[AdminQuizLibraryResponse]:
+    return success(
+        data=await AdminQuizV2Service().create_library(body, admin_id=admin.id)
+    )
+
+
+@router.get(
+    "/libraries/{library_id}",
+    response_model=APIResponse[AdminQuizLibraryResponse],
+    summary="V2 题库详情",
+)
+async def get_library(
+    library_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[AdminQuizLibraryResponse]:
+    return success(data=await AdminQuizV2Service().get_library(library_id))
+
+
+@router.put(
+    "/libraries/{library_id}",
+    response_model=APIResponse[AdminQuizLibraryResponse],
+    summary="编辑 V2 题库",
+)
+async def update_library(
+    body: AdminQuizLibraryUpdate,
+    library_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz_library_manage")),
+) -> APIResponse[AdminQuizLibraryResponse]:
+    if "access_mode" in body.model_fields_set and admin.role != "super_admin":
+        raise BusinessException("只有超级管理员可以变更题库访问模式")
+    return success(
+        data=await AdminQuizV2Service().update_library(
+            library_id, body, admin_id=admin.id
+        )
+    )
+
+
+@router.post(
+    "/libraries/{library_id}/lifecycle",
+    response_model=APIResponse[AdminQuizLibraryResponse],
+    summary="变更 V2 题库生命周期",
+)
+async def transition_library(
+    body: AdminQuizLibraryStatusUpdate,
+    library_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz_library_manage")),
+) -> APIResponse[AdminQuizLibraryResponse]:
+    return success(
+        data=await AdminQuizV2Service().transition_library(
+            library_id, body, admin_id=admin.id
+        )
+    )
+
+
+@router.get(
+    "/libraries/{library_id}/course-bindings",
+    response_model=APIResponse[list[AdminQuizCourseBindingResponse]],
+    summary="题库课程绑定列表",
+)
+async def list_library_course_bindings(
+    library_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[list[AdminQuizCourseBindingResponse]]:
+    return success(
+        data=await AdminQuizV2Service().list_course_bindings(library_id)
+    )
+
+
+@router.post(
+    "/libraries/{library_id}/course-bindings",
+    response_model=APIResponse[AdminQuizCourseBindingResponse],
+    summary="绑定课程与题库",
+)
+async def create_library_course_binding(
+    body: AdminQuizCourseBindingCreate,
+    library_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("course_quiz_bind")),
+) -> APIResponse[AdminQuizCourseBindingResponse]:
+    return success(
+        data=await AdminQuizV2Service().create_course_binding(
+            library_id, body, admin_id=admin.id
+        )
+    )
+
+
+@router.post(
+    "/course-bindings/{binding_id}/status",
+    response_model=APIResponse[AdminQuizCourseBindingResponse],
+    summary="启停课程题库绑定",
+)
+async def set_library_course_binding_status(
+    body: AdminQuizCourseBindingStatusUpdate,
+    binding_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("course_quiz_bind")),
+) -> APIResponse[AdminQuizCourseBindingResponse]:
+    return success(
+        data=await AdminQuizV2Service().set_course_binding_status(
+            binding_id, body, admin_id=admin.id
+        )
+    )
+
+
+@router.get(
+    "/libraries/{library_id}/content-tree",
+    response_model=APIResponse[AdminQuizContentTreeResponse],
+    summary="V2 模块与知识点树",
+)
+async def get_content_tree(
+    library_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[AdminQuizContentTreeResponse]:
+    return success(data=await AdminQuizV2Service().get_content_tree(library_id))
+
+
+@router.post(
+    "/modules",
+    response_model=APIResponse[AdminQuizModuleResponse],
+    summary="创建模块",
+)
+async def create_module(
+    body: AdminQuizModuleCreate,
+    admin=Depends(require_permission("quiz_content_edit")),
+) -> APIResponse[AdminQuizModuleResponse]:
+    return success(data=await AdminQuizV2Service().create_module(body, admin_id=admin.id))
+
+
+@router.put(
+    "/modules/{module_id}",
+    response_model=APIResponse[AdminQuizModuleResponse],
+    summary="编辑模块",
+)
+async def update_module(
+    body: AdminQuizModuleUpdate,
+    module_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz_content_edit")),
+) -> APIResponse[AdminQuizModuleResponse]:
+    return success(
+        data=await AdminQuizV2Service().update_module(module_id, body, admin_id=admin.id)
+    )
+
+
+@router.post(
+    "/modules/{module_id}/status",
+    response_model=APIResponse[AdminQuizModuleResponse],
+    summary="启停模块",
+)
+async def set_module_status(
+    body: AdminQuizContentStatusUpdate,
+    module_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz_content_edit")),
+) -> APIResponse[AdminQuizModuleResponse]:
+    return success(
+        data=await AdminQuizV2Service().set_module_status(
+            module_id, body, admin_id=admin.id
+        )
+    )
+
+
+@router.delete(
+    "/modules/{module_id}",
+    response_model=APIResponse[None],
+    summary="逻辑删除模块",
+)
+async def delete_module_v2(
+    body: AdminQuizVersionRequest,
+    module_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz_content_edit")),
+) -> APIResponse[None]:
+    await AdminQuizV2Service().delete_module(module_id, body, admin_id=admin.id)
+    return success(message="模块已删除，可在 7 天内撤销")
+
+
+@router.post(
+    "/modules/{module_id}/undo-delete",
+    response_model=APIResponse[AdminQuizModuleResponse],
+    summary="撤销模块删除",
+)
+async def undo_delete_module_v2(
+    body: AdminQuizVersionRequest,
+    module_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz_content_edit")),
+) -> APIResponse[AdminQuizModuleResponse]:
+    return success(
+        data=await AdminQuizV2Service().undo_delete_module(
+            module_id, body, admin_id=admin.id
+        )
+    )
+
+
+@router.post(
+    "/knowledge-points",
+    response_model=APIResponse[AdminQuizKnowledgePointResponse],
+    summary="创建知识点",
+)
+async def create_knowledge_point(
+    body: AdminQuizKnowledgePointCreate,
+    admin=Depends(require_permission("quiz_content_edit")),
+) -> APIResponse[AdminQuizKnowledgePointResponse]:
+    return success(
+        data=await AdminQuizV2Service().create_knowledge_point(
+            body, admin_id=admin.id
+        )
+    )
+
+
+@router.put(
+    "/knowledge-points/{point_id}",
+    response_model=APIResponse[AdminQuizKnowledgePointResponse],
+    summary="编辑或移动知识点",
+)
+async def update_knowledge_point(
+    body: AdminQuizKnowledgePointUpdate,
+    point_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz_content_edit")),
+) -> APIResponse[AdminQuizKnowledgePointResponse]:
+    return success(
+        data=await AdminQuizV2Service().update_knowledge_point(
+            point_id, body, admin_id=admin.id
+        )
+    )
+
+
+@router.post(
+    "/knowledge-points/{point_id}/status",
+    response_model=APIResponse[AdminQuizKnowledgePointResponse],
+    summary="启停知识点",
+)
+async def set_knowledge_point_status(
+    body: AdminQuizContentStatusUpdate,
+    point_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz_content_edit")),
+) -> APIResponse[AdminQuizKnowledgePointResponse]:
+    return success(
+        data=await AdminQuizV2Service().set_knowledge_point_status(
+            point_id, body, admin_id=admin.id
+        )
+    )
+
+
+@router.delete(
+    "/knowledge-points/{point_id}",
+    response_model=APIResponse[None],
+    summary="逻辑删除知识点",
+)
+async def delete_knowledge_point(
+    body: AdminQuizVersionRequest,
+    point_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz_content_edit")),
+) -> APIResponse[None]:
+    await AdminQuizV2Service().delete_knowledge_point(
+        point_id, body, admin_id=admin.id
+    )
+    return success(message="知识点已删除，可在 7 天内撤销")
+
+
+@router.post(
+    "/knowledge-points/{point_id}/undo-delete",
+    response_model=APIResponse[AdminQuizKnowledgePointResponse],
+    summary="撤销知识点删除",
+)
+async def undo_delete_knowledge_point_v2(
+    body: AdminQuizVersionRequest,
+    point_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz_content_edit")),
+) -> APIResponse[AdminQuizKnowledgePointResponse]:
+    return success(
+        data=await AdminQuizV2Service().undo_delete_knowledge_point(
+            point_id, body, admin_id=admin.id
+        )
+    )
+
+
+@router.get(
+    "/migration-report",
+    response_model=APIResponse[AdminQuizMigrationReportResponse],
+    summary="V2 迁移预检与问题报告",
+)
+async def get_migration_report(
+    _admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[AdminQuizMigrationReportResponse]:
+    return success(data=await AdminQuizV2Service().migration_report())
 
 
 def _validated_query(model, values: dict):
@@ -75,9 +412,13 @@ async def admin_category_query(
 async def admin_question_query(
     category_id: int | None = Query(None, ge=1),
     include_descendants: bool = Query(False),
+    library_id: int | None = Query(None, ge=1),
+    module_id: int | None = Query(None, ge=1),
+    knowledge_point_id: int | None = Query(None, ge=1),
     question_type: QuizQuestionType | None = Query(None),
     status: QuizQuestionStatus | None = Query(None),
     keyword: str | None = Query(None, min_length=1, max_length=128),
+    include_deleted: bool = Query(False),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ) -> AdminQuizQuestionQuery:
@@ -86,9 +427,13 @@ async def admin_question_query(
         {
             "category_id": category_id,
             "include_descendants": include_descendants,
+            "library_id": library_id,
+            "module_id": module_id,
+            "knowledge_point_id": knowledge_point_id,
             "question_type": question_type,
             "status": status,
             "keyword": keyword,
+            "include_deleted": include_deleted,
             "page": page,
             "page_size": page_size,
         },
@@ -135,9 +480,12 @@ async def admin_category_impact_query(
 
 
 async def admin_stats_question_query(
-    category_id: int | None = Query(None, ge=1),
+    library_id: int | None = Query(None, ge=1),
+    module_id: int | None = Query(None, ge=1),
+    knowledge_point_id: int | None = Query(None, ge=1),
     question_type: QuizQuestionType | None = Query(None),
     status: QuizQuestionStatus | None = Query(None),
+    include_deleted: bool = Query(False),
     keyword: str | None = Query(None, min_length=1, max_length=128),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -145,9 +493,12 @@ async def admin_stats_question_query(
     return _validated_query(
         AdminQuizStatsQuestionQuery,
         {
-            "category_id": category_id,
+            "library_id": library_id,
+            "module_id": module_id,
+            "knowledge_point_id": knowledge_point_id,
             "question_type": question_type,
             "status": status,
+            "include_deleted": include_deleted,
             "keyword": keyword,
             "page": page,
             "page_size": page_size,
@@ -248,6 +599,11 @@ async def list_questions(
     query: AdminQuizQuestionQuery = Depends(admin_question_query),
     _admin=Depends(require_permission("quiz:list")),
 ) -> APIResponse[PaginatedData[AdminQuizQuestionResponse]]:
+    if any(
+        value is not None
+        for value in (query.library_id, query.module_id, query.knowledge_point_id)
+    ) or query.include_deleted:
+        return success(data=await AdminQuizV2Service().list_questions(query))
     result = await AdminQuizService().list_questions(
         category_id=query.category_id,
         include_descendants=query.include_descendants,
@@ -380,7 +736,10 @@ async def create_question(
     body: AdminQuizQuestionCreate,
     admin=Depends(require_permission("quiz:write")),
 ) -> APIResponse[AdminQuizQuestionResponse]:
-    result = await AdminQuizService().create_question(body, admin_id=admin.id)
+    if body.knowledge_point_id is not None:
+        result = await AdminQuizV2Service().create_question(body, admin_id=admin.id)
+    else:
+        result = await AdminQuizService().create_question(body, admin_id=admin.id)
     return success(data=result)
 
 
@@ -405,9 +764,14 @@ async def update_question(
     question_id: int = Path(..., ge=1),
     admin=Depends(require_permission("quiz:write")),
 ) -> APIResponse[AdminQuizQuestionResponse]:
-    result = await AdminQuizService().update_question(
-        question_id, body, admin_id=admin.id
-    )
+    if await AdminQuizV2Service().is_v2_question(question_id):
+        result = await AdminQuizV2Service().update_question(
+            question_id, body, admin_id=admin.id
+        )
+    else:
+        result = await AdminQuizService().update_question(
+            question_id, body, admin_id=admin.id
+        )
     return success(data=result)
 
 
@@ -431,7 +795,16 @@ async def delete_question(
     body: AdminQuizVersionRequest,
     question_id: int = Path(..., ge=1),
     admin=Depends(require_permission("quiz:write")),
-):
+) -> APIResponse[None]:
+    if await AdminQuizV2Service().is_v2_question(question_id):
+        await AdminQuizV2Service().transition_question(
+            question_id, body, "delete", admin_id=admin.id
+        )
+        # The frozen DELETE contract is APIResponse[None].  The service returns
+        # the transitioned entity for internal callers, but exposing it here
+        # makes FastAPI fail response validation after the delete has already
+        # committed (the client then sees a misleading 500/version conflict).
+        return success(message="题目已删除，可在 7 天内撤销")
     await AdminQuizService().delete_question(
         question_id, body.lock_version, admin_id=admin.id
     )
@@ -452,9 +825,14 @@ async def publish_question(
     question_id: int = Path(..., ge=1),
     admin=Depends(require_permission("quiz:write")),
 ) -> APIResponse[AdminQuizQuestionResponse]:
-    result = await AdminQuizService().publish_question(
-        question_id, body, admin_id=admin.id
-    )
+    if await AdminQuizV2Service().is_v2_question(question_id):
+        result = await AdminQuizV2Service().publish_question_revision(
+            question_id, body, admin_id=admin.id
+        )
+    else:
+        result = await AdminQuizService().publish_question(
+            question_id, body, admin_id=admin.id
+        )
     return success(data=result)
 
 
@@ -472,9 +850,14 @@ async def disable_question(
     question_id: int = Path(..., ge=1),
     admin=Depends(require_permission("quiz:write")),
 ) -> APIResponse[AdminQuizQuestionResponse]:
-    result = await AdminQuizService().disable_question(
-        question_id, body, admin_id=admin.id
-    )
+    if await AdminQuizV2Service().is_v2_question(question_id):
+        result = await AdminQuizV2Service().transition_question(
+            question_id, body, "disable", admin_id=admin.id
+        )
+    else:
+        result = await AdminQuizService().disable_question(
+            question_id, body, admin_id=admin.id
+        )
     return success(data=result)
 
 
@@ -492,10 +875,46 @@ async def restore_question(
     question_id: int = Path(..., ge=1),
     admin=Depends(require_permission("quiz:write")),
 ) -> APIResponse[AdminQuizQuestionResponse]:
-    result = await AdminQuizService().restore_question(
-        question_id, body, admin_id=admin.id
-    )
+    if await AdminQuizV2Service().is_v2_question(question_id):
+        result = await AdminQuizV2Service().transition_question(
+            question_id, body, "restore", admin_id=admin.id
+        )
+    else:
+        result = await AdminQuizService().restore_question(
+            question_id, body, admin_id=admin.id
+        )
     return success(data=result)
+
+
+@router.get(
+    f"{QUESTION}/{{question_id}}/revisions",
+    response_model=APIResponse[list[AdminQuizQuestionRevisionResponse]],
+    summary="题目不可变版本列表",
+)
+async def list_question_revisions(
+    question_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[list[AdminQuizQuestionRevisionResponse]]:
+    return success(
+        data=await AdminQuizV2Service().list_question_revisions(question_id)
+    )
+
+
+@router.post(
+    f"{QUESTION}/{{question_id}}/undo-delete",
+    response_model=APIResponse[AdminQuizQuestionResponse],
+    summary="撤销 V2 题目删除",
+)
+async def undo_delete_question(
+    body: AdminQuizVersionRequest,
+    question_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz_content_edit")),
+) -> APIResponse[AdminQuizQuestionResponse]:
+    return success(
+        data=await AdminQuizV2Service().transition_question(
+            question_id, body, "undo_delete", admin_id=admin.id
+        )
+    )
 
 
 @router.post(f"{QUESTION}/batch-publish",
@@ -511,7 +930,14 @@ async def batch_publish_questions(
     body: AdminQuizBatchRequest,
     admin=Depends(require_permission("quiz:write")),
 ) -> APIResponse[AdminQuizBatchResponse]:
-    result = await AdminQuizService().batch_publish_questions(body, admin_id=admin.id)
+    v2_flags = [await AdminQuizV2Service().is_v2_question(item.question_id) for item in body.items]
+    if any(v2_flags) and not all(v2_flags):
+        raise BusinessException("批量操作不能混合旧分类题目和 V2 题目")
+    result = (
+        await AdminQuizV2Service().batch_transition_questions(body, "publish", admin_id=admin.id)
+        if all(v2_flags)
+        else await AdminQuizService().batch_publish_questions(body, admin_id=admin.id)
+    )
     return success(data=result)
 
 
@@ -528,7 +954,14 @@ async def batch_disable_questions(
     body: AdminQuizBatchRequest,
     admin=Depends(require_permission("quiz:write")),
 ) -> APIResponse[AdminQuizBatchResponse]:
-    result = await AdminQuizService().batch_disable_questions(body, admin_id=admin.id)
+    v2_flags = [await AdminQuizV2Service().is_v2_question(item.question_id) for item in body.items]
+    if any(v2_flags) and not all(v2_flags):
+        raise BusinessException("批量操作不能混合旧分类题目和 V2 题目")
+    result = (
+        await AdminQuizV2Service().batch_transition_questions(body, "disable", admin_id=admin.id)
+        if all(v2_flags)
+        else await AdminQuizService().batch_disable_questions(body, admin_id=admin.id)
+    )
     return success(data=result)
 
 
@@ -594,6 +1027,7 @@ async def create_csv_import(
     file: UploadFile = File(..., description="CSV 文件"),
     filename: str = Form(..., min_length=1, max_length=255),
     size_bytes: int = Form(..., ge=1, le=10 * 1024 * 1024),
+    library_id: int | None = Form(None, ge=1),
     admin=Depends(require_permission("quiz:import")),
 ) -> APIResponse[AdminQuizImportJobResponse]:
     content = await file.read(settings.QUIZ_IMPORT_MAX_FILE_BYTES + 1)
@@ -608,6 +1042,7 @@ async def create_csv_import(
         content=content,
         admin_id=admin.id,
         filename=filename,
+        library_id=library_id,
     )
     return success(data=result)
 
@@ -625,12 +1060,15 @@ async def create_json_import(
     body: AdminQuizJsonImportRequest,
     admin=Depends(require_permission("quiz:import")),
 ) -> APIResponse[AdminQuizImportJobResponse]:
-    content = body.model_dump_json(exclude_none=False).encode("utf-8")
+    content = body.model_dump_json(
+        exclude_none=False, exclude={"library_id"}
+    ).encode("utf-8")
     result = await AdminQuizService().create_import_job(
         source_type="json",
         content=content,
         admin_id=admin.id,
         filename="quiz-import.json",
+        library_id=body.library_id,
     )
     return success(data=result)
 

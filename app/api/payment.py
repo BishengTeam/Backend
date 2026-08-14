@@ -71,7 +71,7 @@ async def sync_order(
     },
     summary="微信支付 V3 支付结果通知",
     description=(
-        "验证平台证书序列号、时间戳和 RSA 签名，随后使用 API V3 Key "
+        "验证微信支付公钥 ID、时间戳和 RSA 签名，随后使用 API V3 Key "
         "AES-GCM 解密 resource。响应遵循微信支付 V3 通知协议，不套业务响应壳。"
     ),
 )
@@ -126,7 +126,7 @@ async def payment_callback(request: Request) -> JSONResponse:
     },
     summary="微信支付 V3 退款结果通知",
     description=(
-        "验证微信支付平台签名并使用 API V3 Key 解密退款 resource；"
+        "使用微信支付公钥验证签名并使用 API V3 Key 解密退款 resource；"
         "与退款主动查询和对账 Worker 共用同一行锁事务。"
     ),
 )

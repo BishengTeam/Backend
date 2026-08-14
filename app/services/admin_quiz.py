@@ -35,6 +35,10 @@ from app.domain.community.src.index import (
     QuizExamQuestion,
     QuizImportError,
     QuizImportJob,
+    QuizKnowledgePoint,
+    QuizLibrary,
+    QuizModule,
+    QuizQuestionRevision,
     QuizPracticeAttempt,
     QuizPracticeSession,
     QuizPracticeSessionQuestion,
@@ -1484,16 +1488,64 @@ class AdminQuizService:
         """Return anonymous aggregate counters for the admin overview."""
 
         async with get_db_ctx() as db:
-            category_row = (
+            library_row = (
                 await db.execute(
                     select(
-                        func.count(QuizCategory.id),
-                        func.count(QuizCategory.id).filter(
-                            QuizCategory.status == "active"
+                        func.count(QuizLibrary.id),
+                        func.count(QuizLibrary.id).filter(
+                            QuizLibrary.status == "draft"
                         ),
-                        func.count(QuizCategory.id).filter(
-                            QuizCategory.status == "disabled"
+                        func.count(QuizLibrary.id).filter(
+                            QuizLibrary.status == "published"
                         ),
+                        func.count(QuizLibrary.id).filter(
+                            QuizLibrary.status == "suspended"
+                        ),
+                        func.count(QuizLibrary.id).filter(
+                            QuizLibrary.status == "archived"
+                        ),
+                    )
+                    .where(QuizLibrary.status != "deleted")
+                )
+            ).one()
+            module_row = (
+                await db.execute(
+                    select(
+                        func.count(QuizModule.id),
+                        func.count(QuizModule.id).filter(
+                            QuizModule.status == "active"
+                        ),
+                        func.count(QuizModule.id).filter(
+                            QuizModule.status == "disabled"
+                        ),
+                    )
+                    .select_from(QuizModule)
+                    .join(QuizLibrary, QuizLibrary.id == QuizModule.library_id)
+                    .where(
+                        QuizLibrary.status != "deleted",
+                        QuizModule.status != "deleted",
+                    )
+                )
+            ).one()
+            knowledge_point_row = (
+                await db.execute(
+                    select(
+                        func.count(QuizKnowledgePoint.id),
+                        func.count(QuizKnowledgePoint.id).filter(
+                            QuizKnowledgePoint.status == "active"
+                        ),
+                        func.count(QuizKnowledgePoint.id).filter(
+                            QuizKnowledgePoint.status == "disabled"
+                        ),
+                    )
+                    .select_from(QuizKnowledgePoint)
+                    .join(
+                        QuizLibrary,
+                        QuizLibrary.id == QuizKnowledgePoint.library_id,
+                    )
+                    .where(
+                        QuizLibrary.status != "deleted",
+                        QuizKnowledgePoint.status != "deleted",
                     )
                 )
             ).one()
@@ -1510,6 +1562,12 @@ class AdminQuizService:
                         func.count(QuizQuestion.id).filter(
                             QuizQuestion.status == "disabled"
                         ),
+                    )
+                    .select_from(QuizQuestion)
+                    .join(QuizLibrary, QuizLibrary.id == QuizQuestion.library_id)
+                    .where(
+                        QuizLibrary.status != "deleted",
+                        QuizQuestion.status != "deleted",
                     )
                 )
             ).one()
@@ -1544,9 +1602,17 @@ class AdminQuizService:
         return AdminQuizStatsOverviewResponse(
             calculated_at=calculated_at,
             aggregated_through=stats_row[4],
-            category_count=int(category_row[0] or 0),
-            active_category_count=int(category_row[1] or 0),
-            disabled_category_count=int(category_row[2] or 0),
+            library_count=int(library_row[0] or 0),
+            draft_library_count=int(library_row[1] or 0),
+            published_library_count=int(library_row[2] or 0),
+            suspended_library_count=int(library_row[3] or 0),
+            archived_library_count=int(library_row[4] or 0),
+            module_count=int(module_row[0] or 0),
+            active_module_count=int(module_row[1] or 0),
+            disabled_module_count=int(module_row[2] or 0),
+            knowledge_point_count=int(knowledge_point_row[0] or 0),
+            active_knowledge_point_count=int(knowledge_point_row[1] or 0),
+            disabled_knowledge_point_count=int(knowledge_point_row[2] or 0),
             question_count=int(question_row[0] or 0),
             draft_question_count=int(question_row[1] or 0),
             published_question_count=int(question_row[2] or 0),
@@ -1568,15 +1634,23 @@ class AdminQuizService:
         """Return filtered per-question aggregates without any user dimension."""
 
         async with get_db_ctx() as db:
-            filters = []
-            if query.category_id is not None:
-                filters.append(QuizQuestion.category_id == query.category_id)
+            filters = [QuizLibrary.status != "deleted"]
+            if query.library_id is not None:
+                filters.append(QuizLibrary.id == query.library_id)
+            if query.module_id is not None:
+                filters.append(QuizModule.id == query.module_id)
+            if query.knowledge_point_id is not None:
+                filters.append(
+                    QuizKnowledgePoint.id == query.knowledge_point_id
+                )
             if query.question_type is not None:
                 filters.append(
                     QuizQuestion.question_type == self._enum_value(query.question_type)
                 )
             if query.status is not None:
                 filters.append(QuizQuestion.status == self._enum_value(query.status))
+            elif not query.include_deleted:
+                filters.append(QuizQuestion.status != "deleted")
             if query.keyword:
                 keyword = f"%{query.keyword.strip()}%"
                 filters.append(
@@ -1587,14 +1661,44 @@ class AdminQuizService:
                 )
             total = int(
                 await db.scalar(
-                    select(func.count(QuizQuestion.id)).where(*filters)
+                    select(func.count(QuizQuestion.id))
+                    .select_from(QuizQuestion)
+                    .join(QuizLibrary, QuizLibrary.id == QuizQuestion.library_id)
+                    .join(
+                        QuizKnowledgePoint,
+                        (QuizKnowledgePoint.id == QuizQuestion.knowledge_point_id)
+                        & (QuizKnowledgePoint.library_id == QuizQuestion.library_id),
+                    )
+                    .join(
+                        QuizModule,
+                        (QuizModule.id == QuizKnowledgePoint.module_id)
+                        & (QuizModule.library_id == QuizLibrary.id),
+                    )
+                    .where(*filters)
                 )
                 or 0
             )
             rows = (
                 await db.execute(
-                    select(QuizQuestion, QuizCategory, QuizQuestionStats)
-                    .join(QuizCategory, QuizCategory.id == QuizQuestion.category_id)
+                    select(
+                        QuizQuestion,
+                        QuizLibrary,
+                        QuizModule,
+                        QuizKnowledgePoint,
+                        QuizQuestionStats,
+                    )
+                    .select_from(QuizQuestion)
+                    .join(QuizLibrary, QuizLibrary.id == QuizQuestion.library_id)
+                    .join(
+                        QuizKnowledgePoint,
+                        (QuizKnowledgePoint.id == QuizQuestion.knowledge_point_id)
+                        & (QuizKnowledgePoint.library_id == QuizQuestion.library_id),
+                    )
+                    .join(
+                        QuizModule,
+                        (QuizModule.id == QuizKnowledgePoint.module_id)
+                        & (QuizModule.library_id == QuizLibrary.id),
+                    )
                     .outerjoin(
                         QuizQuestionStats,
                         QuizQuestionStats.question_id == QuizQuestion.id,
@@ -1607,7 +1711,7 @@ class AdminQuizService:
             ).all()
 
         items: list[AdminQuizQuestionStatsListItem] = []
-        for question, category, stats in rows:
+        for question, library, module, knowledge_point, stats in rows:
             practice_attempts = int(
                 getattr(stats, "practice_first_attempts", 0) or 0
             )
@@ -1620,8 +1724,12 @@ class AdminQuizService:
                 AdminQuizQuestionStatsListItem(
                     question_id=question.id,
                     question_text=question.question_text,
-                    category_id=category.id,
-                    category_name=category.name,
+                    library_id=library.id,
+                    library_name=library.name,
+                    module_id=module.id,
+                    module_name=module.name,
+                    knowledge_point_id=knowledge_point.id,
+                    knowledge_point_name=knowledge_point.name,
                     question_type=question.question_type,
                     status=question.status,
                     practice_first_attempts=practice_attempts,
@@ -2174,6 +2282,7 @@ class AdminQuizService:
         content: bytes,
         admin_id: int,
         filename: str,
+        library_id: int | None = None,
     ) -> QuizImportJob:
         if source_type not in {"csv", "json"}:
             raise ValidationException("导入类型必须为 csv 或 json")
@@ -2195,8 +2304,15 @@ class AdminQuizService:
         persisted = False
         try:
             async with get_db_ctx() as db:
+                if library_id is not None:
+                    library = await db.get(QuizLibrary, library_id)
+                    if library is None:
+                        raise NotFoundException("题库")
+                    if library.status in {"archived", "deleted"}:
+                        raise BusinessException("已归档或删除题库不可导入")
                 job = QuizImportJob(
                     admin_id=admin_id,
+                    library_id=library_id,
                     import_batch_key=batch_key,
                     source_type=source_type,
                     status="queued",
@@ -2215,6 +2331,7 @@ class AdminQuizService:
                     object_id=job.id,
                     changed_fields={
                         "source_type": {"before": None, "after": source_type},
+                        "library_id": {"before": None, "after": library_id},
                         "source_size_bytes": {"before": None, "after": len(content)},
                         "status": {"before": None, "after": "queued"},
                     },
@@ -3055,7 +3172,10 @@ class AdminQuizService:
                 message = str(item.get("msg", "参数校验失败"))
             errors.append(
                 cls._import_error(
-                    row=locator if source_type == "csv" else None,
+                    # Reports use a user-facing one-based row locator for both
+                    # JSON question arrays and CSV files. question_index keeps
+                    # the source-specific machine locator for compatibility.
+                    row=locator,
                     question_index=locator - 1 if source_type == "csv" else locator,
                     field=field,
                     error_code="schema_validation",
@@ -3221,6 +3341,18 @@ class AdminQuizService:
         lock_version: int,
         lock_categories: bool = False,
     ) -> ImportValidationResult:
+        job = await db.get(QuizImportJob, job_id)
+        if job is not None and job.library_id is not None:
+            return await self._validate_v2_import_rows(
+                db,
+                rows,
+                initial_errors,
+                source_type=source_type,
+                job_id=job_id,
+                lock_version=lock_version,
+                library_id=int(job.library_id),
+                lock_content=lock_categories,
+            )
         valid: list[tuple[int, AdminQuizImportQuestion, int | tuple[str, ...]]] = []
         errors = list(initial_errors)
         missing_errors: list[dict[str, object]] = []
@@ -3250,7 +3382,7 @@ class AdminQuizService:
         def location(locator: int) -> tuple[int | None, int]:
             if source_type == "csv":
                 return locator, locator - 1
-            return None, locator
+            return locator, locator
 
         for locator, item in rows:
             path_key = tuple(item.category_path)
@@ -3432,6 +3564,301 @@ class AdminQuizService:
             impact=impact,
         )
 
+    async def _validate_v2_import_rows(
+        self,
+        db,
+        rows: list[tuple[int, AdminQuizImportQuestion]],
+        initial_errors: list[dict[str, object]],
+        *,
+        source_type: str,
+        job_id: int,
+        lock_version: int,
+        library_id: int,
+        lock_content: bool,
+    ) -> ImportValidationResult:
+        """Validate a fixed two-level module/knowledge-point import."""
+
+        errors = list(initial_errors)
+        missing_errors: list[dict[str, object]] = []
+        valid: list[tuple[int, AdminQuizImportQuestion, int | tuple[str, ...]]] = []
+
+        library_stmt = select(QuizLibrary).where(QuizLibrary.id == library_id)
+        if lock_content:
+            library_stmt = library_stmt.with_for_update()
+        library = (await db.execute(library_stmt)).scalar_one_or_none()
+        if library is None or library.status in {"archived", "deleted"}:
+            errors.append(
+                self._import_error(
+                    row=None,
+                    question_index=None,
+                    field="library_id",
+                    error_code="library_unavailable",
+                    message="目标题库不存在或已归档",
+                )
+            )
+            return ImportValidationResult(
+                valid=[], errors=errors, missing_errors=[], impact=None
+            )
+
+        module_stmt = select(QuizModule).where(QuizModule.library_id == library_id)
+        point_stmt = select(QuizKnowledgePoint).where(
+            QuizKnowledgePoint.library_id == library_id
+        )
+        if lock_content:
+            module_stmt = module_stmt.with_for_update()
+            point_stmt = point_stmt.with_for_update()
+        modules = list((await db.execute(module_stmt)).scalars())
+        points = list((await db.execute(point_stmt)).scalars())
+        module_by_name = {
+            item.normalized_name: item for item in modules if item.status != "deleted"
+        }
+        point_by_parent_name = {
+            (int(item.module_id), item.normalized_name): item
+            for item in points
+            if item.status != "deleted"
+        }
+        entity_by_prefix: dict[tuple[str, ...], object] = {}
+        missing_prefixes: set[tuple[str, ...]] = set()
+        path_rows: list[tuple[tuple[str, ...], int]] = []
+        candidates: list[
+            tuple[int, AdminQuizImportQuestion, int | tuple[str, ...], str]
+        ] = []
+        seen_hashes: set[str] = set()
+
+        def location(locator: int) -> tuple[int, int]:
+            return (locator, locator - 1) if source_type == "csv" else (locator, locator)
+
+        for locator, item in rows:
+            row_no, question_index = location(locator)
+            path = tuple(item.category_path)
+            if len(path) != 2:
+                errors.append(
+                    self._import_error(
+                        row=row_no,
+                        question_index=question_index,
+                        field="category_path",
+                        error_code="invalid_v2_path",
+                        message="V2 导入路径必须严格为模块、知识点两级",
+                    )
+                )
+                continue
+            path_rows.append((path, locator))
+            module = module_by_name.get(path[0])
+            point = None
+            if module is None:
+                missing_prefixes.update({path[:1], path})
+                target: int | tuple[str, ...] = path
+                first_missing = path[0]
+            elif module.status != "active":
+                errors.append(
+                    self._import_error(
+                        row=row_no,
+                        question_index=question_index,
+                        field="category_path",
+                        error_code="module_disabled",
+                        message=f"模块已停用: {module.name}",
+                    )
+                )
+                continue
+            else:
+                entity_by_prefix[path[:1]] = module
+                point = point_by_parent_name.get((int(module.id), path[1]))
+                if point is None:
+                    missing_prefixes.add(path)
+                    target = path
+                    first_missing = path[1]
+                elif point.status != "active":
+                    errors.append(
+                        self._import_error(
+                            row=row_no,
+                            question_index=question_index,
+                            field="category_path",
+                            error_code="knowledge_point_disabled",
+                            message=f"知识点已停用: {point.name}",
+                        )
+                    )
+                    continue
+                else:
+                    entity_by_prefix[path] = point
+                    target = int(point.id)
+                    first_missing = ""
+            if isinstance(target, tuple):
+                missing_errors.append(
+                    self._import_error(
+                        row=row_no,
+                        question_index=question_index,
+                        field="category_path",
+                        error_code="category_missing",
+                        message=f"结构不存在: {first_missing}",
+                    )
+                )
+            try:
+                normalized = normalize_question_payload(
+                    question_type=item.question_type,
+                    question_text=item.question_text,
+                    options=item.options,
+                    correct_answer=item.correct_answer,
+                    explanation=item.explanation,
+                    require_publishable=False,
+                )
+            except QuizRuleViolation as exc:
+                errors.append(
+                    self._import_error(
+                        row=row_no,
+                        question_index=question_index,
+                        field=exc.field,
+                        error_code="question_validation",
+                        message=exc.message,
+                    )
+                )
+                continue
+            if normalized.question_text_hash in seen_hashes:
+                errors.append(
+                    self._import_error(
+                        row=row_no,
+                        question_index=question_index,
+                        field="question_text",
+                        error_code="duplicate_question_in_batch",
+                        message="同一题库内本批次题干重复",
+                    )
+                )
+                continue
+            seen_hashes.add(normalized.question_text_hash)
+            candidates.append(
+                (locator, item, target, normalized.question_text_hash)
+            )
+
+        if len(missing_prefixes) > 500:
+            errors.append(
+                self._import_error(
+                    row=None,
+                    question_index=None,
+                    field="category_path",
+                    error_code="category_creation_limit_exceeded",
+                    message="单个导入任务最多新建 500 个模块或知识点",
+                )
+            )
+            return ImportValidationResult(
+                valid=[], errors=errors, missing_errors=missing_errors, impact=None
+            )
+
+        candidate_hashes = {item[3] for item in candidates}
+        existing_hashes: set[str] = set()
+        if candidate_hashes:
+            existing_hashes = set(
+                (
+                    await db.execute(
+                        select(QuizQuestion.question_text_hash).where(
+                            QuizQuestion.library_id == library_id,
+                            QuizQuestion.stem_reserved.is_(True),
+                            QuizQuestion.question_text_hash.in_(candidate_hashes),
+                        )
+                    )
+                ).scalars()
+            )
+        for locator, item, target, question_hash in candidates:
+            row_no, question_index = location(locator)
+            if question_hash in existing_hashes:
+                errors.append(
+                    self._import_error(
+                        row=row_no,
+                        question_index=question_index,
+                        field="question_text",
+                        error_code="duplicate_question",
+                        message="同一题库内规范化题干已存在",
+                    )
+                )
+                continue
+            valid.append((locator, item, target))
+
+        impact = (
+            self._build_v2_import_impact(
+                job_id=job_id,
+                lock_version=lock_version,
+                entity_by_prefix=entity_by_prefix,
+                missing_prefixes=missing_prefixes,
+                path_rows=path_rows,
+            )
+            if missing_prefixes or lock_content
+            else None
+        )
+        return ImportValidationResult(
+            valid=valid,
+            errors=errors,
+            missing_errors=missing_errors,
+            impact=impact,
+        )
+
+    def _build_v2_import_impact(
+        self,
+        *,
+        job_id: int,
+        lock_version: int,
+        entity_by_prefix: dict[tuple[str, ...], object],
+        missing_prefixes: set[tuple[str, ...]],
+        path_rows: list[tuple[tuple[str, ...], int]],
+    ) -> AdminQuizImportCategoryImpactResponse:
+        direct_counts: dict[tuple[str, ...], int] = {}
+        subtree_counts: dict[tuple[str, ...], int] = {}
+        prefixes: set[tuple[str, ...]] = set()
+        for path, _locator in path_rows:
+            direct_counts[path] = direct_counts.get(path, 0) + 1
+            for depth in (1, 2):
+                prefix = path[:depth]
+                prefixes.add(prefix)
+                subtree_counts[prefix] = subtree_counts.get(prefix, 0) + 1
+        nodes: dict[tuple[str, ...], dict[str, object]] = {}
+        for prefix in sorted(prefixes, key=lambda item: (len(item), item)):
+            entity = entity_by_prefix.get(prefix)
+            nodes[prefix] = {
+                "name": prefix[-1],
+                "path": list(prefix),
+                "depth": len(prefix),
+                "status": (
+                    "will_create"
+                    if prefix in missing_prefixes or entity is None
+                    else "existing"
+                ),
+                "category_id": getattr(entity, "id", None),
+                "direct_question_count": direct_counts.get(prefix, 0),
+                "subtree_question_count": subtree_counts.get(prefix, 0),
+                "blocking_reasons": [],
+                "children": [],
+            }
+        roots: list[dict[str, object]] = []
+        for prefix in sorted(nodes, key=lambda item: (len(item), item)):
+            if len(prefix) == 1:
+                roots.append(nodes[prefix])
+            else:
+                parent_children = nodes[prefix[:1]]["children"]
+                assert isinstance(parent_children, list)
+                parent_children.append(nodes[prefix])
+        calculated_at = datetime.now(timezone.utc)
+        new_count = sum(
+            1 for node in nodes.values() if node["status"] == "will_create"
+        )
+        reused_count = len(nodes) - new_count
+        payload = self._impact_snapshot_payload(
+            tree=roots,
+            new_category_count=new_count,
+            reused_category_count=reused_count,
+            affected_question_count=len(path_rows),
+            blocking_reasons=[],
+            calculated_at=calculated_at,
+        )
+        return AdminQuizImportCategoryImpactResponse(
+            job_id=job_id,
+            status="awaiting_category_confirmation",
+            tree=roots,
+            new_category_count=new_count,
+            reused_category_count=reused_count,
+            affected_question_count=len(path_rows),
+            blocking_reasons=[],
+            lock_version=lock_version,
+            impact_version=self._impact_version(payload),
+            calculated_at=calculated_at,
+        )
+
     def _build_import_category_impact(
         self,
         *,
@@ -3579,6 +4006,9 @@ class AdminQuizService:
         valid: list[tuple[int, AdminQuizImportQuestion, int | tuple[str, ...]]],
     ) -> None:
         assert current.admin_id is not None
+        if current.library_id is not None:
+            await self._create_v2_import_questions(db, current=current, valid=valid)
+            return
         path_categories: dict[tuple[str, ...], int] = {}
         for _, item, target in valid:
             if not isinstance(target, int):
@@ -3614,6 +4044,69 @@ class AdminQuizService:
             if category is not None:
                 category.ever_had_question = True
 
+    async def _create_v2_import_questions(
+        self,
+        db,
+        *,
+        current: QuizImportJob,
+        valid: list[tuple[int, AdminQuizImportQuestion, int | tuple[str, ...]]],
+    ) -> None:
+        assert current.admin_id is not None and current.library_id is not None
+        for _, item, target in valid:
+            if not isinstance(target, int):
+                raise ValidationException("导入模块和知识点尚未确认")
+            point = await db.get(QuizKnowledgePoint, target)
+            if (
+                point is None
+                or int(point.library_id) != int(current.library_id)
+                or point.status != "active"
+            ):
+                raise ValidationException("导入目标知识点不可用")
+            normalized = normalize_question_payload(
+                question_type=item.question_type,
+                question_text=item.question_text,
+                options=item.options,
+                correct_answer=item.correct_answer,
+                explanation=item.explanation,
+                require_publishable=False,
+            )
+            question = QuizQuestion(
+                library_id=current.library_id,
+                knowledge_point_id=target,
+                category_id=None,
+                question_type=normalized.question_type.value,
+                status="draft",
+                question_text=normalized.question_text,
+                normalized_question_text=normalized.normalized_question_text,
+                question_text_hash=normalized.question_text_hash,
+                options=normalized.options,
+                correct_answer=normalized.correct_answer,
+                explanation=normalized.explanation,
+                ever_published=False,
+                stem_reserved=True,
+                lock_version=1,
+                created_by=current.admin_id,
+                updated_by=current.admin_id,
+            )
+            db.add(question)
+            await db.flush()
+            revision = QuizQuestionRevision(
+                question_id=question.id,
+                revision_no=1,
+                status="draft",
+                question_type=normalized.question_type.value,
+                question_text=normalized.question_text,
+                normalized_question_text=normalized.normalized_question_text,
+                question_text_hash=normalized.question_text_hash,
+                options=normalized.options,
+                correct_answer=normalized.correct_answer,
+                explanation=normalized.explanation,
+                created_by=current.admin_id,
+            )
+            db.add(revision)
+            await db.flush()
+            question.pending_revision_id = revision.id
+
     async def _create_confirmed_categories_and_questions(
         self,
         db,
@@ -3622,6 +4115,10 @@ class AdminQuizService:
         valid: list[tuple[int, AdminQuizImportQuestion, int | tuple[str, ...]]],
     ) -> list[tuple[int, AdminQuizImportQuestion, int]]:
         assert current.admin_id is not None
+        if current.library_id is not None:
+            return await self._create_confirmed_v2_content_and_questions(
+                db, current=current, valid=valid
+            )
         categories = list(
             (
                 await db.execute(
@@ -3676,6 +4173,107 @@ class AdminQuizService:
             category = resolved[tuple(item.category_path)]
             final.append((locator, item, category.id))
         await self._create_import_questions(db, current=current, valid=final)
+        return final
+
+    async def _create_confirmed_v2_content_and_questions(
+        self,
+        db,
+        *,
+        current: QuizImportJob,
+        valid: list[tuple[int, AdminQuizImportQuestion, int | tuple[str, ...]]],
+    ) -> list[tuple[int, AdminQuizImportQuestion, int]]:
+        assert current.admin_id is not None and current.library_id is not None
+        library = (
+            await db.execute(
+                select(QuizLibrary)
+                .where(QuizLibrary.id == current.library_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if library is None or library.status in {"archived", "deleted"}:
+            raise ValidationException("目标题库不可用")
+        modules = list(
+            (
+                await db.execute(
+                    select(QuizModule)
+                    .where(QuizModule.library_id == current.library_id)
+                    .with_for_update()
+                )
+            ).scalars()
+        )
+        points = list(
+            (
+                await db.execute(
+                    select(QuizKnowledgePoint)
+                    .where(QuizKnowledgePoint.library_id == current.library_id)
+                    .with_for_update()
+                )
+            ).scalars()
+        )
+        module_by_name = {
+            item.normalized_name: item for item in modules if item.status != "deleted"
+        }
+        point_by_parent_name = {
+            (int(item.module_id), item.normalized_name): item
+            for item in points
+            if item.status != "deleted"
+        }
+        created_count = 0
+        resolved: dict[tuple[str, ...], QuizKnowledgePoint] = {}
+        for path in sorted(
+            {tuple(item.category_path) for _, item, _ in valid}
+        ):
+            if len(path) != 2:
+                raise ValidationException("V2 导入路径必须严格为模块、知识点两级")
+            module = module_by_name.get(path[0])
+            if module is None:
+                created_count += 1
+                module = QuizModule(
+                    library_id=current.library_id,
+                    name=path[0],
+                    normalized_name=path[0],
+                    status="active",
+                    system_kind="none",
+                    name_reserved=True,
+                    sort_order=0,
+                    lock_version=1,
+                    created_by=current.admin_id,
+                    updated_by=current.admin_id,
+                )
+                db.add(module)
+                await db.flush()
+                module_by_name[path[0]] = module
+            if module.status != "active":
+                raise ValidationException(f"模块已停用: {module.name}")
+            point = point_by_parent_name.get((int(module.id), path[1]))
+            if point is None:
+                created_count += 1
+                point = QuizKnowledgePoint(
+                    library_id=current.library_id,
+                    module_id=module.id,
+                    name=path[1],
+                    normalized_name=path[1],
+                    status="active",
+                    system_kind="none",
+                    name_reserved=True,
+                    sort_order=0,
+                    lock_version=1,
+                    created_by=current.admin_id,
+                    updated_by=current.admin_id,
+                )
+                db.add(point)
+                await db.flush()
+                point_by_parent_name[(int(module.id), path[1])] = point
+            if point.status != "active":
+                raise ValidationException(f"知识点已停用: {point.name}")
+            resolved[path] = point
+        if created_count > 500:
+            raise ValidationException("单个导入任务最多新建 500 个模块或知识点")
+        final = [
+            (locator, item, int(resolved[tuple(item.category_path)].id))
+            for locator, item, _target in valid
+        ]
+        await self._create_v2_import_questions(db, current=current, valid=final)
         return final
 
     @staticmethod

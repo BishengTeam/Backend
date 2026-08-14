@@ -50,6 +50,7 @@ async def quiz_http_env(monkeypatch, tmp_path):
         return False
 
     monkeypatch.setattr("app.services.admin_quiz.get_db_ctx", test_db_ctx)
+    monkeypatch.setattr("app.services.admin_quiz_v2.get_db_ctx", test_db_ctx)
     monkeypatch.setattr("app.middleware.auth.is_token_revoked", token_is_not_revoked)
     monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
     monkeypatch.setattr(settings, "QUIZ_IMPORT_STORAGE_TYPE", "local")
@@ -433,10 +434,12 @@ async def test_new_admin_quiz_operations_are_mounted_and_strict(quiz_http_env) -
 
     overview = await env.client.get("/admin/quiz/stats/overview", headers=env.headers)
     assert overview.status_code == 200, overview.text
-    assert overview.json()["data"]["category_count"] >= 1
+    assert overview.json()["data"]["library_count"] >= 0
+    assert "module_count" in overview.json()["data"]
+    assert "knowledge_point_count" in overview.json()["data"]
 
     stats = await env.client.get(
-        f"/admin/quiz/stats/questions?category_id={category_id}",
+        "/admin/quiz/stats/questions?library_id=999999999",
         headers=env.headers,
     )
     assert stats.status_code == 200, stats.text

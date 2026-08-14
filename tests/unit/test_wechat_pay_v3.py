@@ -48,7 +48,7 @@ def rsa_keys():
 
 
 def _client(rsa_keys) -> tuple[WechatPayClient, RSA.RsaKey, RSA.RsaKey]:
-    merchant_key, platform_key = rsa_keys
+    merchant_key, wechat_pay_key = rsa_keys
     client = WechatPayClient()
     client.enabled = True
     client.appid = "wx-test-appid"
@@ -58,16 +58,16 @@ def _client(rsa_keys) -> tuple[WechatPayClient, RSA.RsaKey, RSA.RsaKey]:
     client.merchant_serial_no = "MERCHANT-SERIAL"
     client.private_key_material = "configured"
     client.api_v3_key = "0123456789abcdef0123456789abcdef"
-    client.platform_certificate_material = "configured"
-    client.platform_serial_no = "PLATFORM-SERIAL"
+    client.public_key_material = "configured"
+    client.public_key_id = "PUB_KEY_ID_0000000000000024101100397200000006"
     client.notification_tolerance_seconds = 300
     client._merchant_private_key = merchant_key
-    client._platform_public_key = platform_key.public_key()
-    return client, merchant_key, platform_key
+    client._wechat_pay_public_key = wechat_pay_key.public_key()
+    return client, merchant_key, wechat_pay_key
 
 
-def _platform_signature(platform_key: RSA.RsaKey, message: bytes) -> str:
-    signature = pkcs1_15.new(platform_key).sign(SHA256.new(message))
+def _wechat_pay_signature(wechat_pay_key: RSA.RsaKey, message: bytes) -> str:
+    signature = pkcs1_15.new(wechat_pay_key).sign(SHA256.new(message))
     return base64.b64encode(signature).decode("ascii")
 
 
@@ -89,7 +89,7 @@ def _transaction_payload(**overrides):
 
 def _notification(
     client: WechatPayClient,
-    platform_key: RSA.RsaKey,
+    wechat_pay_key: RSA.RsaKey,
     *,
     timestamp: int,
     transaction: dict | None = None,
@@ -133,8 +133,10 @@ def _notification(
     return raw_body, {
         "Wechatpay-Timestamp": str(timestamp),
         "Wechatpay-Nonce": header_nonce,
-        "Wechatpay-Signature": _platform_signature(platform_key, signed_message),
-        "Wechatpay-Serial": client.platform_serial_no,
+        "Wechatpay-Signature": _wechat_pay_signature(
+            wechat_pay_key, signed_message
+        ),
+        "Wechatpay-Serial": client.public_key_id,
     }
 
 
@@ -155,7 +157,7 @@ def _refund_payload(**overrides):
 
 def _refund_notification(
     client: WechatPayClient,
-    platform_key: RSA.RsaKey,
+    wechat_pay_key: RSA.RsaKey,
     *,
     timestamp: int,
     refund: dict | None = None,
@@ -199,11 +201,15 @@ def _refund_notification(
     return raw_body, {
         "Wechatpay-Timestamp": str(timestamp),
         "Wechatpay-Nonce": header_nonce,
-        "Wechatpay-Signature": _platform_signature(platform_key, signed_message),
-        "Wechatpay-Serial": client.platform_serial_no,
+        "Wechatpay-Signature": _wechat_pay_signature(
+            wechat_pay_key, signed_message
+        ),
+        "Wechatpay-Serial": client.public_key_id,
     }
+
+
 def test_v3_authorization_and_jsapi_parameters_use_rsa(rsa_keys) -> None:
-    client, merchant_key, _platform_key = _client(rsa_keys)
+    client, merchant_key, _wechat_pay_key = _client(rsa_keys)
     authorization = client._build_authorization(
         method="POST",
         request_target="/v3/pay/transactions/jsapi",
@@ -240,6 +246,36 @@ def test_v3_authorization_and_jsapi_parameters_use_rsa(rsa_keys) -> None:
     )
 
 
+def test_v3_public_key_mode_loads_pem_and_rejects_private_material(
+    rsa_keys, tmp_path
+) -> None:
+    client, _merchant_key, wechat_pay_key = _client(rsa_keys)
+    public_key_file = tmp_path / "wechatpay_public_key.pem"
+    public_key_file.write_bytes(wechat_pay_key.public_key().export_key())
+    client.public_key_material = str(public_key_file)
+    client._wechat_pay_public_key = None
+
+    loaded_key = client._wechat_pay_key()
+
+    assert not loaded_key.has_private()
+    assert loaded_key.export_key() == wechat_pay_key.public_key().export_key()
+
+    private_key_file = tmp_path / "wrong_private_key.pem"
+    private_key_file.write_bytes(wechat_pay_key.export_key())
+    client.public_key_material = str(private_key_file)
+    client._wechat_pay_public_key = None
+    with pytest.raises(ThirdPartyException, match="不得包含私钥"):
+        client._wechat_pay_key()
+
+
+def test_v3_public_key_id_must_use_official_prefix(rsa_keys) -> None:
+    client, _merchant_key, _wechat_pay_key = _client(rsa_keys)
+    client.public_key_id = "PLATFORM-CERT-SERIAL"
+
+    with pytest.raises(ThirdPartyException, match="PUB_KEY_ID_"):
+        client.ensure_configured()
+
+
 def test_all_business_order_numbers_fit_wechat_v3_limit() -> None:
     values = {generate_out_trade_no("RS-ZY") for _ in range(100)}
     assert len(values) == 100
@@ -251,7 +287,7 @@ def test_all_business_order_numbers_fit_wechat_v3_limit() -> None:
 async def test_v3_jsapi_prepay_sends_frozen_server_values(
     rsa_keys, monkeypatch
 ) -> None:
-    client, _merchant_key, platform_key = _client(rsa_keys)
+    client, _merchant_key, wechat_pay_key = _client(rsa_keys)
     captured = {}
 
     class FakeAsyncClient:
@@ -274,8 +310,8 @@ async def test_v3_jsapi_prepay_sends_frozen_server_values(
             response_body = b'{"prepay_id":"prepay-id-1"}'
             response_timestamp = str(int(time.time()))
             response_nonce = "response-nonce"
-            signature = _platform_signature(
-                platform_key,
+            signature = _wechat_pay_signature(
+                wechat_pay_key,
                 response_timestamp.encode()
                 + b"\n"
                 + response_nonce.encode()
@@ -290,7 +326,7 @@ async def test_v3_jsapi_prepay_sends_frozen_server_values(
                     "Wechatpay-Timestamp": response_timestamp,
                     "Wechatpay-Nonce": response_nonce,
                     "Wechatpay-Signature": signature,
-                    "Wechatpay-Serial": client.platform_serial_no,
+                    "Wechatpay-Serial": client.public_key_id,
                 },
                 request=httpx.Request(method, url),
             )
@@ -312,6 +348,7 @@ async def test_v3_jsapi_prepay_sends_frozen_server_values(
     assert captured["headers"]["Authorization"].startswith(
         WECHAT_PAY_AUTH_SCHEMA
     )
+    assert captured["headers"]["Wechatpay-Serial"] == client.public_key_id
     assert sent == {
         "appid": client.appid,
         "mchid": client.mch_id,
@@ -328,9 +365,9 @@ async def test_v3_jsapi_prepay_sends_frozen_server_values(
 
 
 def test_v3_notification_verifies_signature_and_decrypts_aes_gcm(rsa_keys) -> None:
-    client, _merchant_key, platform_key = _client(rsa_keys)
+    client, _merchant_key, wechat_pay_key = _client(rsa_keys)
     now = int(time.time())
-    raw_body, headers = _notification(client, platform_key, timestamp=now)
+    raw_body, headers = _notification(client, wechat_pay_key, timestamp=now)
     transaction = client.parse_payment_notification(
         headers=headers, raw_body=raw_body, now=now
     )
@@ -342,11 +379,11 @@ def test_v3_notification_verifies_signature_and_decrypts_aes_gcm(rsa_keys) -> No
 
 
 def test_v3_refund_notification_verifies_decrypts_and_normalizes(rsa_keys) -> None:
-    client, _merchant_key, platform_key = _client(rsa_keys)
+    client, _merchant_key, wechat_pay_key = _client(rsa_keys)
     now = int(time.time())
     raw_body, headers = _refund_notification(
         client,
-        platform_key,
+        wechat_pay_key,
         timestamp=now,
     )
 
@@ -364,11 +401,11 @@ def test_v3_refund_notification_verifies_decrypts_and_normalizes(rsa_keys) -> No
 
 
 def test_v3_refund_notification_rejects_event_status_mismatch(rsa_keys) -> None:
-    client, _merchant_key, platform_key = _client(rsa_keys)
+    client, _merchant_key, wechat_pay_key = _client(rsa_keys)
     now = int(time.time())
     raw_body, headers = _refund_notification(
         client,
-        platform_key,
+        wechat_pay_key,
         timestamp=now,
         event_type="REFUND.CLOSED",
     )
@@ -382,11 +419,11 @@ def test_v3_refund_notification_rejects_event_status_mismatch(rsa_keys) -> None:
 
 
 def test_v3_refund_notification_rejects_forged_signature(rsa_keys) -> None:
-    client, _merchant_key, platform_key = _client(rsa_keys)
+    client, _merchant_key, wechat_pay_key = _client(rsa_keys)
     now = int(time.time())
     raw_body, headers = _refund_notification(
         client,
-        platform_key,
+        wechat_pay_key,
         timestamp=now,
     )
     headers["Wechatpay-Signature"] = base64.b64encode(b"forged").decode()
@@ -401,12 +438,12 @@ def test_v3_refund_notification_rejects_forged_signature(rsa_keys) -> None:
 
 @pytest.mark.parametrize("failure", ["serial", "signature", "timestamp", "ciphertext"])
 def test_v3_notification_rejects_forged_or_stale_input(rsa_keys, failure) -> None:
-    client, _merchant_key, platform_key = _client(rsa_keys)
+    client, _merchant_key, wechat_pay_key = _client(rsa_keys)
     now = int(time.time())
     encryption_key = b"x" * 32 if failure == "ciphertext" else None
     raw_body, headers = _notification(
         client,
-        platform_key,
+        wechat_pay_key,
         timestamp=now - 301 if failure == "timestamp" else now,
         encryption_key=encryption_key,
     )
@@ -421,7 +458,7 @@ def test_v3_notification_rejects_forged_or_stale_input(rsa_keys, failure) -> Non
 
 @pytest.mark.asyncio
 async def test_v3_client_exposes_query_close_refund_and_refund_query(rsa_keys) -> None:
-    client, _merchant_key, _platform_key = _client(rsa_keys)
+    client, _merchant_key, _wechat_pay_key = _client(rsa_keys)
     request = AsyncMock(
         side_effect=[
             _transaction_payload(),
@@ -468,7 +505,7 @@ async def test_v3_client_exposes_query_close_refund_and_refund_query(rsa_keys) -
 async def test_v3_timeout_reports_unknown_result_for_safe_same_order_retry(
     rsa_keys, monkeypatch
 ) -> None:
-    client, _merchant_key, _platform_key = _client(rsa_keys)
+    client, _merchant_key, _wechat_pay_key = _client(rsa_keys)
 
     class TimeoutAsyncClient:
         def __init__(self, **_kwargs):

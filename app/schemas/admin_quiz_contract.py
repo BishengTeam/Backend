@@ -14,6 +14,9 @@ from app.domain.community.src.rule.quiz import (
     QuizImportStatus,
     QuizQuestionStatus,
     QuizQuestionType,
+    QuizContentStatus,
+    QuizLibraryAccessMode,
+    QuizLibraryStatus,
     normalize_category_name,
     normalize_question_payload,
 )
@@ -107,15 +110,27 @@ class AdminQuizCategoryImpactResponse(QuizContractModel):
 class AdminQuizQuestionQuery(QuizContractModel):
     category_id: int | None = Field(default=None, ge=1)
     include_descendants: bool = False
+    library_id: int | None = Field(default=None, ge=1)
+    module_id: int | None = Field(default=None, ge=1)
+    knowledge_point_id: int | None = Field(default=None, ge=1)
     question_type: QuizQuestionType | None = None
     status: QuizQuestionStatus | None = None
     keyword: str | None = Field(default=None, min_length=1, max_length=128)
+    include_deleted: bool = False
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
 
+    @model_validator(mode="after")
+    def validate_hierarchy_filters(self) -> "AdminQuizQuestionQuery":
+        v2_filters = [self.library_id, self.module_id, self.knowledge_point_id]
+        if self.category_id is not None and any(value is not None for value in v2_filters):
+            raise ValueError("legacy category_id cannot be combined with V2 hierarchy filters")
+        return self
+
 
 class AdminQuizQuestionCreate(QuizContractModel):
-    category_id: int = Field(ge=1)
+    category_id: int | None = Field(default=None, ge=1)
+    knowledge_point_id: int | None = Field(default=None, ge=1)
     question_type: QuizQuestionType
     question_text: str = Field(min_length=1, max_length=1024)
     options: dict[str, str] | None = None
@@ -124,6 +139,8 @@ class AdminQuizQuestionCreate(QuizContractModel):
 
     @model_validator(mode="after")
     def normalize_draft(self) -> "AdminQuizQuestionCreate":
+        if (self.category_id is None) == (self.knowledge_point_id is None):
+            raise ValueError("exactly one of category_id or knowledge_point_id is required")
         normalized = normalize_question_payload(
             question_type=self.question_type,
             question_text=self.question_text,
@@ -143,6 +160,7 @@ class AdminQuizQuestionCreate(QuizContractModel):
 class AdminQuizQuestionUpdate(QuizContractModel):
     lock_version: int = Field(ge=1)
     category_id: int | None = Field(default=None, ge=1)
+    knowledge_point_id: int | None = Field(default=None, ge=1)
     question_type: QuizQuestionType | None = None
     question_text: str | None = Field(default=None, min_length=1, max_length=1024)
     options: dict[str, str] | None = None
@@ -153,12 +171,16 @@ class AdminQuizQuestionUpdate(QuizContractModel):
     def require_change(self) -> "AdminQuizQuestionUpdate":
         if not (self.model_fields_set - {"lock_version"}):
             raise ValueError("at least one question field must be supplied")
+        if self.category_id is not None and self.knowledge_point_id is not None:
+            raise ValueError("category_id and knowledge_point_id cannot be supplied together")
         return self
 
 
 class AdminQuizQuestionResponse(QuizContractModel):
     id: int
-    category_id: int
+    category_id: int | None = None
+    library_id: int | None = None
+    knowledge_point_id: int | None = None
     question_type: QuizQuestionType
     status: QuizQuestionStatus
     question_text: str
@@ -169,11 +191,34 @@ class AdminQuizQuestionResponse(QuizContractModel):
     ever_published: bool
     published_at: datetime | None = None
     disabled_at: datetime | None = None
+    deleted_at: datetime | None = None
+    restore_until: datetime | None = None
+    current_revision_id: int | None = None
+    current_revision_no: int | None = None
+    pending_revision_id: int | None = None
+    pending_revision_no: int | None = None
+    has_pending_revision: bool = False
     lock_version: int = Field(ge=1)
     created_by: int
     updated_by: int
     created_at: datetime
     updated_at: datetime
+
+
+class AdminQuizQuestionRevisionResponse(QuizContractModel):
+    id: int
+    question_id: int
+    revision_no: int = Field(ge=1)
+    status: Literal["draft", "published", "superseded", "discarded"]
+    question_type: QuizQuestionType
+    question_text: str
+    normalized_question_text: str
+    options: dict[str, str] | None = None
+    correct_answer: QuizAnswer | None = None
+    explanation: str | None = None
+    published_at: datetime | None = None
+    created_by: int | None = None
+    created_at: datetime
 
 
 class AdminQuizVersionRequest(QuizContractModel):
@@ -226,9 +271,17 @@ class AdminQuizQuestionStatsResponse(QuizContractModel):
 class AdminQuizStatsOverviewResponse(QuizContractModel):
     calculated_at: datetime
     aggregated_through: datetime | None = None
-    category_count: int = Field(ge=0)
-    active_category_count: int = Field(ge=0)
-    disabled_category_count: int = Field(ge=0)
+    library_count: int = Field(ge=0)
+    draft_library_count: int = Field(ge=0)
+    published_library_count: int = Field(ge=0)
+    suspended_library_count: int = Field(ge=0)
+    archived_library_count: int = Field(ge=0)
+    module_count: int = Field(ge=0)
+    active_module_count: int = Field(ge=0)
+    disabled_module_count: int = Field(ge=0)
+    knowledge_point_count: int = Field(ge=0)
+    active_knowledge_point_count: int = Field(ge=0)
+    disabled_knowledge_point_count: int = Field(ge=0)
     question_count: int = Field(ge=0)
     draft_question_count: int = Field(ge=0)
     published_question_count: int = Field(ge=0)
@@ -245,9 +298,12 @@ class AdminQuizStatsOverviewResponse(QuizContractModel):
 
 
 class AdminQuizStatsQuestionQuery(QuizContractModel):
-    category_id: int | None = Field(default=None, ge=1)
+    library_id: int | None = Field(default=None, ge=1)
+    module_id: int | None = Field(default=None, ge=1)
+    knowledge_point_id: int | None = Field(default=None, ge=1)
     question_type: QuizQuestionType | None = None
     status: QuizQuestionStatus | None = None
+    include_deleted: bool = False
     keyword: str | None = Field(default=None, min_length=1, max_length=128)
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
@@ -256,8 +312,12 @@ class AdminQuizStatsQuestionQuery(QuizContractModel):
 class AdminQuizQuestionStatsListItem(QuizContractModel):
     question_id: int
     question_text: str
-    category_id: int
-    category_name: str
+    library_id: int
+    library_name: str
+    module_id: int
+    module_name: str
+    knowledge_point_id: int
+    knowledge_point_name: str
     question_type: QuizQuestionType
     status: QuizQuestionStatus
     practice_first_attempts: int = Field(ge=0)
@@ -306,6 +366,7 @@ class AdminQuizImportQuestion(QuizContractModel):
 
 
 class AdminQuizJsonImportRequest(QuizContractModel):
+    library_id: int | None = Field(default=None, ge=1)
     questions: list[AdminQuizImportQuestion] = Field(min_length=1, max_length=5000)
 
 
@@ -319,6 +380,7 @@ class AdminQuizImportJobQuery(QuizContractModel):
 class AdminQuizImportJobResponse(QuizContractModel):
     id: int
     admin_id: int | None = None
+    library_id: int | None = None
     source_type: QuizImportSourceType
     status: QuizImportStatus
     source_size_bytes: int = Field(ge=1, le=10 * 1024 * 1024)
@@ -460,3 +522,245 @@ class AdminQuizAuditLogResponse(QuizContractModel):
     target_ids: list[int] | None = None
     error_summary: str | None = None
     created_at: datetime
+
+
+# ── Fixed hierarchy V2 ──
+
+
+class AdminQuizLibraryQuery(QuizContractModel):
+    status: QuizLibraryStatus | None = None
+    access_mode: QuizLibraryAccessMode | None = None
+    keyword: str | None = Field(default=None, min_length=1, max_length=128)
+    include_deleted: bool = False
+
+
+class AdminQuizLibraryCreate(QuizContractModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    cover_url: str | None = Field(default=None, max_length=512)
+    details: str | None = Field(default=None, max_length=10000)
+    access_mode: QuizLibraryAccessMode = QuizLibraryAccessMode.PENDING
+    sort_order: int = 0
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        return normalize_category_name(value)
+
+
+class AdminQuizLibraryUpdate(QuizContractModel):
+    lock_version: int = Field(ge=1)
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    cover_url: str | None = Field(default=None, max_length=512)
+    details: str | None = Field(default=None, max_length=10000)
+    access_mode: QuizLibraryAccessMode | None = None
+    v2_enabled: bool | None = None
+    sort_order: int | None = None
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        return normalize_category_name(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def require_change(self) -> "AdminQuizLibraryUpdate":
+        if not (self.model_fields_set - {"lock_version"}):
+            raise ValueError("at least one library field must be supplied")
+        return self
+
+
+class AdminQuizLibraryStatusUpdate(QuizContractModel):
+    action: Literal[
+        "publish",
+        "suspend",
+        "restore",
+        "archive",
+        "delete",
+        "undo_delete",
+        "reconcile_migration",
+    ]
+    lock_version: int = Field(ge=1)
+
+
+class AdminQuizCourseBindingCreate(QuizContractModel):
+    course_id: int = Field(ge=1)
+
+
+class AdminQuizCourseBindingStatusUpdate(QuizContractModel):
+    status: Literal["active", "inactive"]
+    lock_version: int = Field(ge=1)
+
+
+class AdminQuizCourseBindingResponse(QuizContractModel):
+    id: int
+    course_id: int
+    library_id: int
+    status: Literal["active", "inactive"]
+    lock_version: int = Field(ge=1)
+    created_by: int | None = None
+    updated_by: int | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminQuizLibraryResponse(QuizContractModel):
+    id: int
+    library_code: str
+    name: str
+    normalized_name: str
+    description: str | None = None
+    cover_url: str | None = None
+    details: str | None = None
+    access_mode: QuizLibraryAccessMode
+    system_kind: Literal["none", "migration_quarantine"]
+    migration_state: Literal["pending_review", "needs_organization", "ready"]
+    status: QuizLibraryStatus
+    v2_enabled: bool
+    sort_order: int
+    lock_version: int = Field(ge=1)
+    published_at: datetime | None = None
+    suspended_at: datetime | None = None
+    archived_at: datetime | None = None
+    deleted_at: datetime | None = None
+    restore_until: datetime | None = None
+    open_migration_issue_count: int = Field(default=0, ge=0)
+    module_count: int = Field(default=0, ge=0)
+    knowledge_point_count: int = Field(default=0, ge=0)
+    question_count: int = Field(default=0, ge=0)
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminQuizModuleCreate(QuizContractModel):
+    library_id: int = Field(ge=1)
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=256)
+    sort_order: int = 0
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        return normalize_category_name(value)
+
+
+class AdminQuizModuleUpdate(QuizContractModel):
+    lock_version: int = Field(ge=1)
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=256)
+    sort_order: int | None = None
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        return normalize_category_name(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def require_change(self) -> "AdminQuizModuleUpdate":
+        if not (self.model_fields_set - {"lock_version"}):
+            raise ValueError("at least one module field must be supplied")
+        return self
+
+
+class AdminQuizKnowledgePointCreate(QuizContractModel):
+    module_id: int = Field(ge=1)
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=256)
+    sort_order: int = 0
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        return normalize_category_name(value)
+
+
+class AdminQuizKnowledgePointUpdate(QuizContractModel):
+    lock_version: int = Field(ge=1)
+    module_id: int | None = Field(default=None, ge=1)
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=256)
+    sort_order: int | None = None
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        return normalize_category_name(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def require_change(self) -> "AdminQuizKnowledgePointUpdate":
+        if not (self.model_fields_set - {"lock_version"}):
+            raise ValueError("at least one knowledge point field must be supplied")
+        return self
+
+
+class AdminQuizContentStatusUpdate(QuizContractModel):
+    status: Literal[QuizContentStatus.ACTIVE, QuizContentStatus.DISABLED]
+    lock_version: int = Field(ge=1)
+
+
+class AdminQuizKnowledgePointResponse(QuizContractModel):
+    id: int
+    library_id: int
+    module_id: int
+    name: str
+    normalized_name: str
+    description: str | None = None
+    status: QuizContentStatus
+    system_kind: Literal["none", "uncategorized"]
+    sort_order: int
+    lock_version: int = Field(ge=1)
+    question_count: int = Field(default=0, ge=0)
+    disabled_at: datetime | None = None
+    deleted_at: datetime | None = None
+    restore_until: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminQuizModuleResponse(QuizContractModel):
+    id: int
+    library_id: int
+    name: str
+    normalized_name: str
+    description: str | None = None
+    status: QuizContentStatus
+    system_kind: Literal["none", "pending_organization"]
+    sort_order: int
+    lock_version: int = Field(ge=1)
+    question_count: int = Field(default=0, ge=0)
+    knowledge_points: list[AdminQuizKnowledgePointResponse] = Field(default_factory=list)
+    disabled_at: datetime | None = None
+    deleted_at: datetime | None = None
+    restore_until: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminQuizContentTreeResponse(QuizContractModel):
+    library_id: int
+    modules: list[AdminQuizModuleResponse]
+
+
+class AdminQuizMigrationIssueResponse(QuizContractModel):
+    id: int
+    library_id: int
+    severity: Literal["warning", "blocking"]
+    status: Literal["open", "resolved"]
+    issue_code: str
+    legacy_object_type: Literal["category", "question"]
+    legacy_id: int
+    original_path: list[dict[str, JsonValue]]
+    resolution: str
+    resolved_at: datetime | None = None
+    created_at: datetime
+
+
+class AdminQuizMigrationReportResponse(QuizContractModel):
+    generated_at: datetime
+    library_count: int = Field(ge=0)
+    ready_library_count: int = Field(ge=0)
+    pending_library_count: int = Field(ge=0)
+    open_blocking_issue_count: int = Field(ge=0)
+    mapped_category_count: int = Field(ge=0)
+    mapped_question_count: int = Field(ge=0)
+    issues: list[AdminQuizMigrationIssueResponse]

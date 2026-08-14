@@ -1,7 +1,7 @@
 {
-  "admin_operation_count": 30,
-  "fingerprint_sha256": "c86056b3076d7bd3798c525db55e9228680ae40da2ade683cc904f264904ab67",
-  "operation_count": 52,
+  "admin_operation_count": 52,
+  "fingerprint_sha256": "6552cee33a6e6f6025a00910d7549167ef32b9ce39f9d4f7bf5e15733ccc44c4",
+  "operation_count": 80,
   "operations": [
     {
       "auth": "admin",
@@ -51,6 +51,13 @@
       "path": "/admin/quiz/categories/{category_id}/status",
       "permission": "quiz:write",
       "rate_limit_per_minute": 120
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/course-bindings/{binding_id}/status",
+      "permission": "course_quiz_bind",
+      "rate_limit_per_minute": null
     },
     {
       "auth": "admin",
@@ -131,6 +138,139 @@
     },
     {
       "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/knowledge-points",
+      "permission": "quiz_content_edit",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "DELETE",
+      "path": "/admin/quiz/knowledge-points/{point_id}",
+      "permission": "quiz_content_edit",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "PUT",
+      "path": "/admin/quiz/knowledge-points/{point_id}",
+      "permission": "quiz_content_edit",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/knowledge-points/{point_id}/status",
+      "permission": "quiz_content_edit",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/knowledge-points/{point_id}/undo-delete",
+      "permission": "quiz_content_edit",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "GET",
+      "path": "/admin/quiz/libraries",
+      "permission": "quiz:list",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/libraries",
+      "permission": "quiz_library_manage",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "GET",
+      "path": "/admin/quiz/libraries/{library_id}",
+      "permission": "quiz:list",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "PUT",
+      "path": "/admin/quiz/libraries/{library_id}",
+      "permission": "quiz_library_manage",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "GET",
+      "path": "/admin/quiz/libraries/{library_id}/content-tree",
+      "permission": "quiz:list",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "GET",
+      "path": "/admin/quiz/libraries/{library_id}/course-bindings",
+      "permission": "quiz:list",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/libraries/{library_id}/course-bindings",
+      "permission": "course_quiz_bind",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/libraries/{library_id}/lifecycle",
+      "permission": "quiz_library_manage",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "GET",
+      "path": "/admin/quiz/migration-report",
+      "permission": "quiz:list",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/modules",
+      "permission": "quiz_content_edit",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "DELETE",
+      "path": "/admin/quiz/modules/{module_id}",
+      "permission": "quiz_content_edit",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "PUT",
+      "path": "/admin/quiz/modules/{module_id}",
+      "permission": "quiz_content_edit",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/modules/{module_id}/status",
+      "permission": "quiz_content_edit",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/modules/{module_id}/undo-delete",
+      "permission": "quiz_content_edit",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
       "method": "GET",
       "path": "/admin/quiz/questions",
       "permission": "quiz:list",
@@ -195,8 +335,22 @@
     {
       "auth": "admin",
       "method": "GET",
+      "path": "/admin/quiz/questions/{question_id}/revisions",
+      "permission": "quiz:list",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "GET",
       "path": "/admin/quiz/questions/{question_id}/stats",
       "permission": "quiz:list",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/questions/{question_id}/undo-delete",
+      "permission": "quiz_content_edit",
       "rate_limit_per_minute": null
     },
     {
@@ -307,7 +461,28 @@
     {
       "auth": "user",
       "method": "GET",
+      "path": "/api/quiz/libraries",
+      "permission": null,
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "user",
+      "method": "GET",
+      "path": "/api/quiz/libraries/{library_id}",
+      "permission": null,
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "user",
+      "method": "GET",
       "path": "/api/quiz/practice-history",
+      "permission": null,
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "user",
+      "method": "GET",
+      "path": "/api/quiz/practice-scopes/preview",
       "permission": null,
       "rate_limit_per_minute": null
     },
@@ -341,10 +516,31 @@
     },
     {
       "auth": "user",
+      "method": "PUT",
+      "path": "/api/quiz/practice-sessions/{session_id}/answers/{session_question_id}",
+      "permission": null,
+      "rate_limit_per_minute": 120
+    },
+    {
+      "auth": "user",
       "method": "POST",
       "path": "/api/quiz/practice-sessions/{session_id}/attempts",
       "permission": null,
       "rate_limit_per_minute": 120
+    },
+    {
+      "auth": "user",
+      "method": "POST",
+      "path": "/api/quiz/practice-sessions/{session_id}/questions/{session_question_id}/skip",
+      "permission": null,
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "user",
+      "method": "POST",
+      "path": "/api/quiz/practice-sessions/{session_id}/submit",
+      "permission": null,
+      "rate_limit_per_minute": null
     },
     {
       "auth": "user",
@@ -368,7 +564,7 @@
       "rate_limit_per_minute": null
     }
   ],
-  "quiz_contract_version": "2026-08-13",
+  "quiz_contract_version": "2026-08-14",
   "removed_operation_count": 14,
   "removed_operations": [
     {
@@ -429,5 +625,5 @@
     }
   ],
   "schema_version": 1,
-  "user_operation_count": 22
+  "user_operation_count": 28
 }

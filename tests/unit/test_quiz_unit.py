@@ -16,11 +16,17 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 ALLOWED_QUESTION_TYPES = ("single_choice", "multiple_choice", "judge")
 
 EXPECTED_QUIZ_ENDPOINTS = (
+    ("GET", "/api/quiz/libraries"),
+    ("GET", "/api/quiz/libraries/{library_id}"),
+    ("GET", "/api/quiz/practice-scopes/preview"),
     ("GET", "/api/quiz/categories"),
     ("GET", "/api/quiz/questions"),
     ("POST", "/api/quiz/practice-sessions"),
     ("GET", "/api/quiz/practice-sessions/current"),
     ("GET", "/api/quiz/practice-sessions/{session_id}"),
+    ("POST", "/api/quiz/practice-sessions/{session_id}/questions/{session_question_id}/skip"),
+    ("PUT", "/api/quiz/practice-sessions/{session_id}/answers/{session_question_id}"),
+    ("POST", "/api/quiz/practice-sessions/{session_id}/submit"),
     ("POST", "/api/quiz/practice-sessions/{session_id}/attempts"),
     ("POST", "/api/quiz/practice-sessions/{session_id}/abandon"),
     ("GET", "/api/quiz/practice-history"),

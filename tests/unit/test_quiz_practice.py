@@ -97,6 +97,9 @@ def test_public_question_projection_never_contains_answer_or_explanation() -> No
     assert payload == {
         "id": 9,
         "category_id": 1,
+        "library_id": None,
+        "knowledge_point_id": None,
+        "question_revision_id": None,
         "question_type": "single_choice",
         "question_text": "Which option is correct?",
         "options": {"A": "One", "B": "Two", "C": "Three"},

@@ -38,6 +38,24 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizStatsOverviewResponse,
     AdminQuizStatsQuestionQuery,
     AdminQuizVersionRequest,
+    AdminQuizContentStatusUpdate,
+    AdminQuizContentTreeResponse,
+    AdminQuizCourseBindingCreate,
+    AdminQuizCourseBindingResponse,
+    AdminQuizCourseBindingStatusUpdate,
+    AdminQuizKnowledgePointCreate,
+    AdminQuizKnowledgePointResponse,
+    AdminQuizKnowledgePointUpdate,
+    AdminQuizLibraryCreate,
+    AdminQuizLibraryQuery,
+    AdminQuizLibraryResponse,
+    AdminQuizLibraryStatusUpdate,
+    AdminQuizLibraryUpdate,
+    AdminQuizMigrationReportResponse,
+    AdminQuizModuleCreate,
+    AdminQuizModuleResponse,
+    AdminQuizModuleUpdate,
+    AdminQuizQuestionRevisionResponse,
 )
 from app.schemas.common import APIResponse, PaginatedData
 from app.schemas.quiz_contract import (
@@ -56,21 +74,27 @@ from app.schemas.quiz_contract import (
     QuizExamListItem,
     QuizExamListQuery,
     QuizPracticeAbandonResponse,
+    QuizPracticeAnswerSave,
+    QuizPracticeAnswerSaved,
     QuizPracticeAttemptCreate,
     QuizPracticeAttemptResult,
     QuizPracticeHistoryItem,
     QuizPracticeHistoryQuery,
+    QuizPracticeScopePreview,
+    QuizPracticeSkipResponse,
     QuizPracticeSessionCreate,
     QuizPracticeSessionResponse,
     QuizPublicQuestion,
     QuizQuestionListQuery,
     QuizStatsResponse,
+    QuizLibraryCatalogDetail,
+    QuizLibraryCatalogItem,
     QuizWrongBookItem,
     QuizWrongBookQuery,
 )
 
 
-QUIZ_CONTRACT_VERSION = "2026-08-13"
+QUIZ_CONTRACT_VERSION = "2026-08-14"
 
 
 class QuizErrorCode(IntEnum):
@@ -80,6 +104,8 @@ class QuizErrorCode(IntEnum):
     BUSINESS_RULE = 40200
     VERSION_CONFLICT = 40201
     RATE_LIMITED = 40202
+    LOCKED = 40203
+    GONE = 40204
     NOT_FOUND = 40300
     INTERNAL_ERROR = 50000
 
@@ -122,6 +148,8 @@ _CONFLICT_ERRORS = (
     QuizErrorCode.FORBIDDEN,
     QuizErrorCode.BUSINESS_RULE,
     QuizErrorCode.VERSION_CONFLICT,
+    QuizErrorCode.LOCKED,
+    QuizErrorCode.GONE,
     QuizErrorCode.NOT_FOUND,
     QuizErrorCode.INTERNAL_ERROR,
 )
@@ -129,6 +157,15 @@ _RATE_ERRORS = (*_CONFLICT_ERRORS, QuizErrorCode.RATE_LIMITED)
 
 
 QUIZ_API_CONTRACTS: tuple[QuizEndpointContract, ...] = (
+    QuizEndpointContract(
+        "GET", "/api/quiz/libraries", "user", APIResponse[list[QuizLibraryCatalogItem]]
+    ),
+    QuizEndpointContract(
+        "GET", "/api/quiz/libraries/{library_id}", "user", APIResponse[QuizLibraryCatalogDetail]
+    ),
+    QuizEndpointContract(
+        "GET", "/api/quiz/practice-scopes/preview", "user", APIResponse[QuizPracticeScopePreview]
+    ),
     QuizEndpointContract(
         "GET", "/api/quiz/categories", "public", APIResponse[list[QuizCategoryNode]]
     ),
@@ -163,6 +200,32 @@ QUIZ_API_CONTRACTS: tuple[QuizEndpointContract, ...] = (
         "/api/quiz/practice-sessions/{session_id}",
         "user",
         APIResponse[QuizPracticeSessionResponse],
+    ),
+    QuizEndpointContract(
+        "POST",
+        "/api/quiz/practice-sessions/{session_id}/questions/{session_question_id}/skip",
+        "user",
+        APIResponse[QuizPracticeSkipResponse],
+        errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "PUT",
+        "/api/quiz/practice-sessions/{session_id}/answers/{session_question_id}",
+        "user",
+        APIResponse[QuizPracticeAnswerSaved],
+        body_model=QuizPracticeAnswerSave,
+        rate_limit_per_minute=120,
+        errors=_RATE_ERRORS,
+        example={
+            "request": {"user_answer": ["A", "C"], "lock_version": 0}
+        },
+    ),
+    QuizEndpointContract(
+        "POST",
+        "/api/quiz/practice-sessions/{session_id}/submit",
+        "user",
+        APIResponse[QuizPracticeSessionResponse],
+        errors=_CONFLICT_ERRORS,
     ),
     QuizEndpointContract(
         "POST",
@@ -288,6 +351,101 @@ QUIZ_API_CONTRACTS: tuple[QuizEndpointContract, ...] = (
         "user",
         APIResponse[QuizExamActionResponse],
         errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "GET", "/admin/quiz/libraries", "admin",
+        APIResponse[list[AdminQuizLibraryResponse]],
+        query_model=AdminQuizLibraryQuery, permission="quiz:list",
+    ),
+    QuizEndpointContract(
+        "POST", "/admin/quiz/libraries", "admin",
+        APIResponse[AdminQuizLibraryResponse], body_model=AdminQuizLibraryCreate,
+        permission="quiz_library_manage", errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "GET", "/admin/quiz/libraries/{library_id}", "admin",
+        APIResponse[AdminQuizLibraryResponse], permission="quiz:list",
+    ),
+    QuizEndpointContract(
+        "PUT", "/admin/quiz/libraries/{library_id}", "admin",
+        APIResponse[AdminQuizLibraryResponse], body_model=AdminQuizLibraryUpdate,
+        permission="quiz_library_manage", errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "POST", "/admin/quiz/libraries/{library_id}/lifecycle", "admin",
+        APIResponse[AdminQuizLibraryResponse], body_model=AdminQuizLibraryStatusUpdate,
+        permission="quiz_library_manage", errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "GET", "/admin/quiz/libraries/{library_id}/course-bindings", "admin",
+        APIResponse[list[AdminQuizCourseBindingResponse]], permission="quiz:list",
+    ),
+    QuizEndpointContract(
+        "POST", "/admin/quiz/libraries/{library_id}/course-bindings", "admin",
+        APIResponse[AdminQuizCourseBindingResponse], body_model=AdminQuizCourseBindingCreate,
+        permission="course_quiz_bind", errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "POST", "/admin/quiz/course-bindings/{binding_id}/status", "admin",
+        APIResponse[AdminQuizCourseBindingResponse], body_model=AdminQuizCourseBindingStatusUpdate,
+        permission="course_quiz_bind", errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "GET", "/admin/quiz/libraries/{library_id}/content-tree", "admin",
+        APIResponse[AdminQuizContentTreeResponse], permission="quiz:list",
+    ),
+    QuizEndpointContract(
+        "POST", "/admin/quiz/modules", "admin", APIResponse[AdminQuizModuleResponse],
+        body_model=AdminQuizModuleCreate, permission="quiz_content_edit", errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "PUT", "/admin/quiz/modules/{module_id}", "admin", APIResponse[AdminQuizModuleResponse],
+        body_model=AdminQuizModuleUpdate, permission="quiz_content_edit", errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "POST", "/admin/quiz/modules/{module_id}/status", "admin", APIResponse[AdminQuizModuleResponse],
+        body_model=AdminQuizContentStatusUpdate, permission="quiz_content_edit", errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "DELETE", "/admin/quiz/modules/{module_id}", "admin", APIResponse[None],
+        body_model=AdminQuizVersionRequest, permission="quiz_content_edit", errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "POST", "/admin/quiz/modules/{module_id}/undo-delete", "admin", APIResponse[AdminQuizModuleResponse],
+        body_model=AdminQuizVersionRequest, permission="quiz_content_edit", errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "POST", "/admin/quiz/knowledge-points", "admin", APIResponse[AdminQuizKnowledgePointResponse],
+        body_model=AdminQuizKnowledgePointCreate, permission="quiz_content_edit", errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "PUT", "/admin/quiz/knowledge-points/{point_id}", "admin", APIResponse[AdminQuizKnowledgePointResponse],
+        body_model=AdminQuizKnowledgePointUpdate, permission="quiz_content_edit", errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "POST", "/admin/quiz/knowledge-points/{point_id}/status", "admin", APIResponse[AdminQuizKnowledgePointResponse],
+        body_model=AdminQuizContentStatusUpdate, permission="quiz_content_edit", errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "DELETE", "/admin/quiz/knowledge-points/{point_id}", "admin", APIResponse[None],
+        body_model=AdminQuizVersionRequest, permission="quiz_content_edit", errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "POST", "/admin/quiz/knowledge-points/{point_id}/undo-delete", "admin", APIResponse[AdminQuizKnowledgePointResponse],
+        body_model=AdminQuizVersionRequest, permission="quiz_content_edit", errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "GET", "/admin/quiz/migration-report", "admin", APIResponse[AdminQuizMigrationReportResponse],
+        permission="quiz:list",
+    ),
+    QuizEndpointContract(
+        "GET", "/admin/quiz/questions/{question_id}/revisions", "admin",
+        APIResponse[list[AdminQuizQuestionRevisionResponse]], permission="quiz:list",
+    ),
+    QuizEndpointContract(
+        "POST", "/admin/quiz/questions/{question_id}/undo-delete", "admin",
+        APIResponse[AdminQuizQuestionResponse], body_model=AdminQuizVersionRequest,
+        permission="quiz_content_edit", errors=_CONFLICT_ERRORS,
     ),
     QuizEndpointContract(
         "GET",

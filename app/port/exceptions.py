@@ -1,8 +1,16 @@
 class AppException(Exception):
-    def __init__(self, code: int, message: str, http_status_code: int = 400):
+    def __init__(
+        self,
+        code: int,
+        message: str,
+        http_status_code: int = 400,
+        *,
+        detail: object | None = None,
+    ):
         self.code = code
         self.message = message
         self.http_status_code = http_status_code
+        self.detail = detail
 
 
 class NotFoundException(AppException):
@@ -46,3 +54,24 @@ class ValidationException(AppException):
     def __init__(self, message: str = "参数校验失败", detail: list[dict] | None = None):
         super().__init__(code=40001, message=message, http_status_code=422)
         self.detail = detail or []
+
+
+class QuizV2Exception(AppException):
+    """Stable V2 quiz error used for client state decisions."""
+
+    def __init__(
+        self,
+        *,
+        reason: str,
+        message: str,
+        http_status_code: int,
+        code: int,
+        detail: dict[str, object] | None = None,
+    ) -> None:
+        payload = {"reason": reason, **(detail or {})}
+        super().__init__(
+            code=code,
+            message=message,
+            http_status_code=http_status_code,
+            detail=payload,
+        )

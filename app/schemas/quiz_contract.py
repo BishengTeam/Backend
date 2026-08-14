@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.domain.community.src.rule.quiz import (
     QuizExamStatus,
     QuizPracticeMode,
+    QuizPracticeScopeType,
     QuizPracticeSessionStatus,
     QuizQuestionStatus,
     QuizQuestionType,
@@ -61,6 +62,41 @@ class QuizCategoryNode(QuizContractModel):
     children: list[QuizCategoryNode] = Field(default_factory=list)
 
 
+class QuizKnowledgePointCatalogItem(QuizContractModel):
+    id: int
+    module_id: int
+    name: str
+    description: str | None = None
+    sort_order: int
+    question_count: int = Field(ge=1)
+
+
+class QuizModuleCatalogItem(QuizContractModel):
+    id: int
+    library_id: int
+    name: str
+    description: str | None = None
+    sort_order: int
+    question_count: int = Field(ge=1)
+    knowledge_points: list[QuizKnowledgePointCatalogItem]
+
+
+class QuizLibraryCatalogItem(QuizContractModel):
+    id: int
+    library_code: str
+    name: str
+    description: str
+    cover_url: str
+    access_mode: Literal["free", "course_entitlement"]
+    question_count: int = Field(ge=1)
+    module_count: int = Field(ge=1)
+
+
+class QuizLibraryCatalogDetail(QuizLibraryCatalogItem):
+    details: str | None = None
+    modules: list[QuizModuleCatalogItem]
+
+
 class QuizQuestionListQuery(QuizContractModel):
     category_id: int | None = Field(default=None, ge=1)
     question_type: QuizQuestionType | None = None
@@ -70,7 +106,10 @@ class QuizQuestionListQuery(QuizContractModel):
 
 class QuizPublicQuestion(QuizContractModel):
     id: int
-    category_id: int
+    category_id: int | None = None
+    library_id: int | None = None
+    knowledge_point_id: int | None = None
+    question_revision_id: int | None = None
     question_type: QuizQuestionType
     question_text: str
     options: dict[str, str]
@@ -79,23 +118,52 @@ class QuizPublicQuestion(QuizContractModel):
 class QuizCategoryPathItem(QuizContractModel):
     id: int
     name: str
+    kind: Literal["library", "module", "knowledge_point", "category"] | None = None
 
 
 class QuizPracticeSessionCreate(QuizContractModel):
     mode: QuizPracticeMode = QuizPracticeMode.NORMAL
     category_id: int | None = Field(default=None, ge=1)
     question_count: int | None = Field(default=None, ge=10, le=100)
+    scope_type: QuizPracticeScopeType | None = None
+    scope_id: int | None = Field(default=None, ge=1)
+    restart_existing: bool = False
+    confirm_large_scope: bool = False
 
     @model_validator(mode="after")
     def validate_mode_fields(self) -> "QuizPracticeSessionCreate":
         if self.mode is QuizPracticeMode.NORMAL:
             if self.category_id is None or self.question_count is None:
                 raise ValueError("normal practice requires category_id and question_count")
-        else:
+            if self.scope_type is not None or self.scope_id is not None:
+                raise ValueError("legacy normal practice does not accept V2 scope")
+        elif self.mode is QuizPracticeMode.WRONG:
             if self.category_id is not None:
                 raise ValueError("wrong practice does not accept category_id")
+            if self.scope_type is not None or self.scope_id is not None:
+                raise ValueError("legacy wrong practice does not accept V2 scope")
             self.question_count = 20
+        elif self.mode in {QuizPracticeMode.FULL, QuizPracticeMode.WRONG_ONLY}:
+            if self.scope_type is None or self.scope_id is None:
+                raise ValueError("V2 full practice requires scope_type and scope_id")
+            if self.category_id is not None or self.question_count is not None:
+                raise ValueError("V2 full practice does not accept category_id or question_count")
+        else:
+            raise ValueError("legacy_limited sessions cannot be created by clients")
         return self
+
+
+class QuizPracticeScopePreview(QuizContractModel):
+    library_id: int
+    scope_type: QuizPracticeScopeType
+    scope_id: int
+    mode: Literal[QuizPracticeMode.FULL, QuizPracticeMode.WRONG_ONLY]
+    question_count: int = Field(ge=0)
+    estimated_minutes: int = Field(ge=0)
+    valid_days: Literal[7] = 7
+    requires_large_scope_confirmation: bool
+    unfinished_session_id: int | None = None
+    unfinished_session_expires_at: datetime | None = None
 
 
 class QuizPracticeAttemptResult(QuizContractModel):
@@ -113,6 +181,11 @@ class QuizPracticeQuestionState(QuizPublicQuestion):
     position: int = Field(ge=1)
     category_path: list[QuizCategoryPathItem]
     answered: bool
+    user_answer: QuizAnswer | None = None
+    answer_lock_version: int = Field(default=0, ge=0)
+    correct_answer: QuizAnswer | None = None
+    explanation: str | None = None
+    is_correct: bool | None = None
     attempt_count: int = Field(ge=0)
     latest_result: QuizPracticeAttemptResult | None = None
 
@@ -122,13 +195,57 @@ class QuizPracticeSessionResponse(QuizContractModel):
     mode: QuizPracticeMode
     category_id: int | None = None
     requested_count: int
-    actual_count: int = Field(ge=1, le=100)
+    actual_count: int = Field(ge=1)
+    library_id: int | None = None
+    scope_type: QuizPracticeScopeType | None = None
+    scope_id: int | None = None
     status: QuizPracticeSessionStatus
     started_at: datetime
     completed_at: datetime | None = None
     abandoned_at: datetime | None = None
+    expires_at: datetime | None = None
+    paused_at: datetime | None = None
+    pause_reason: str | None = None
+    answered_count: int = Field(default=0, ge=0)
+    remaining_count: int = Field(default=0, ge=0)
+    current_position: int | None = Field(default=None, ge=1)
+    created_new: bool = True
+    resume_available: bool = False
     lock_version: int = Field(ge=1)
     questions: list[QuizPracticeQuestionState]
+
+    @model_validator(mode="after")
+    def validate_result_visibility(self) -> "QuizPracticeSessionResponse":
+        settled = self.status == QuizPracticeSessionStatus.COMPLETED
+        for question in self.questions:
+            if not settled and any(
+                value is not None
+                for value in (
+                    question.correct_answer,
+                    question.explanation,
+                    question.is_correct,
+                )
+            ):
+                raise ValueError(
+                    "practice results are visible only after final submission"
+                )
+            if settled:
+                if question.correct_answer is None or question.explanation is None:
+                    raise ValueError(
+                        "completed practice questions require answer and explanation"
+                    )
+                if (question.user_answer is None) != (question.is_correct is None):
+                    raise ValueError(
+                        "practice correctness must match whether the question was answered"
+                    )
+        return self
+
+
+class QuizPracticeSkipResponse(QuizContractModel):
+    session_id: int
+    session_question_id: int
+    skip_count: Literal[1]
+    next_question: QuizPracticeQuestionState | None = None
 
 
 class QuizPracticeAttemptCreate(QuizContractModel):
@@ -140,6 +257,24 @@ class QuizPracticeAttemptCreate(QuizContractModel):
     @classmethod
     def normalize_answer(cls, value: object) -> QuizAnswer:
         return _canonical_answer_shape(value)
+
+
+class QuizPracticeAnswerSave(QuizContractModel):
+    user_answer: QuizAnswer
+    lock_version: int = Field(ge=0)
+
+    @field_validator("user_answer")
+    @classmethod
+    def normalize_answer(cls, value: object) -> QuizAnswer:
+        return _canonical_answer_shape(value)
+
+
+class QuizPracticeAnswerSaved(QuizContractModel):
+    session_id: int
+    session_question_id: int
+    user_answer: QuizAnswer
+    lock_version: int = Field(ge=1)
+    saved_at: datetime
 
 
 class QuizPracticeAbandonResponse(QuizContractModel):
@@ -274,8 +409,22 @@ class QuizStatsResponse(QuizContractModel):
 
 
 class QuizExamCreate(QuizContractModel):
-    category_id: int = Field(ge=1)
+    category_id: int | None = Field(default=None, ge=1)
+    scope_type: QuizPracticeScopeType | None = None
+    scope_id: int | None = Field(default=None, ge=1)
     question_count: int = Field(ge=10, le=100)
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> "QuizExamCreate":
+        legacy = self.category_id is not None
+        v2 = self.scope_type is not None or self.scope_id is not None
+        if legacy == v2:
+            raise ValueError(
+                "exactly one of category_id or scope_type + scope_id is required"
+            )
+        if v2 and (self.scope_type is None or self.scope_id is None):
+            raise ValueError("V2 exam requires scope_type and scope_id")
+        return self
 
 
 class QuizExamListQuery(QuizContractModel):
@@ -285,7 +434,10 @@ class QuizExamListQuery(QuizContractModel):
 
 class QuizExamListItem(QuizContractModel):
     id: int
-    category_id: int
+    category_id: int | None = None
+    library_id: int | None = None
+    scope_type: QuizPracticeScopeType | None = None
+    scope_id: int | None = None
     question_count: int = Field(ge=10, le=100)
     duration_seconds: Literal[3600]
     status: QuizExamStatus
@@ -306,7 +458,10 @@ class QuizExamQuestionState(QuizPublicQuestion):
 class QuizExamInProgressDetail(QuizContractModel):
     id: int
     status: Literal[QuizExamStatus.IN_PROGRESS]
-    category_id: int
+    category_id: int | None = None
+    library_id: int | None = None
+    scope_type: QuizPracticeScopeType | None = None
+    scope_id: int | None = None
     question_count: int = Field(ge=10, le=100)
     duration_seconds: Literal[3600]
     started_at: datetime
@@ -324,7 +479,10 @@ class QuizExamAbandonedQuestion(QuizPublicQuestion):
 class QuizExamAbandonedDetail(QuizContractModel):
     id: int
     status: Literal[QuizExamStatus.ABANDONED]
-    category_id: int
+    category_id: int | None = None
+    library_id: int | None = None
+    scope_type: QuizPracticeScopeType | None = None
+    scope_id: int | None = None
     question_count: int = Field(ge=10, le=100)
     duration_seconds: Literal[3600]
     started_at: datetime
@@ -345,7 +503,10 @@ class QuizExamQuestionResult(QuizPublicQuestion):
 class QuizExamSettledDetail(QuizContractModel):
     id: int
     status: Literal[QuizExamStatus.COMPLETED, QuizExamStatus.TIMED_OUT]
-    category_id: int
+    category_id: int | None = None
+    library_id: int | None = None
+    scope_type: QuizPracticeScopeType | None = None
+    scope_id: int | None = None
     question_count: int = Field(ge=10, le=100)
     duration_seconds: Literal[3600]
     started_at: datetime

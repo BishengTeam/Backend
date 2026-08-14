@@ -12,6 +12,8 @@ from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.quiz_contract import (
     QuizCategoryNode,
+    QuizLibraryCatalogDetail,
+    QuizLibraryCatalogItem,
     QuizCheckinCalendarQuery,
     QuizCheckinDay,
     QuizCheckinStatusResponse,
@@ -26,12 +28,16 @@ from app.schemas.quiz_contract import (
     QuizExamListItem,
     QuizExamListQuery,
     QuizPracticeAbandonResponse,
+    QuizPracticeAnswerSave,
+    QuizPracticeAnswerSaved,
     QuizPracticeAttemptCreate,
     QuizPracticeAttemptResult,
     QuizPracticeHistoryItem,
     QuizPracticeHistoryQuery,
     QuizPracticeSessionCreate,
     QuizPracticeSessionResponse,
+    QuizPracticeScopePreview,
+    QuizPracticeSkipResponse,
     QuizPublicQuestion,
     QuizQuestionListQuery,
     QuizStatsResponse as QuizContractStatsResponse,
@@ -40,8 +46,10 @@ from app.schemas.quiz_contract import (
 )
 from app.services.quiz_exam import QuizExamService
 from app.services.quiz_practice import QuizPracticeService
+from app.services.quiz_v2 import QuizV2Service
 from app.port.config import settings
 from app.domain.community.src.rule.quiz import QuizQuestionType
+from app.domain.community.src.rule.quiz import QuizPracticeMode, QuizPracticeScopeType
 
 router = APIRouter(prefix="/quiz", tags=["题库"])
 
@@ -119,6 +127,31 @@ async def quiz_exam_list_query(
     return QuizExamListQuery(page=page, page_size=page_size)
 
 
+@router.get(
+    "/libraries",
+    response_model=APIResponse[list[QuizLibraryCatalogItem]],
+    summary="当前用户可见的 V2 题库",
+)
+async def list_quiz_libraries(
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[list[QuizLibraryCatalogItem]]:
+    return success(data=await QuizV2Service().list_libraries(current_user.id))
+
+
+@router.get(
+    "/libraries/{library_id}",
+    response_model=APIResponse[QuizLibraryCatalogDetail],
+    summary="V2 题库固定层级目录",
+)
+async def get_quiz_library(
+    library_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[QuizLibraryCatalogDetail]:
+    return success(
+        data=await QuizV2Service().get_library(current_user.id, library_id)
+    )
+
+
 @router.get("/categories",
     response_model=APIResponse[list[QuizCategoryNode]],
     summary="题库分类树",
@@ -179,8 +212,29 @@ async def create_practice_session(
     body: QuizPracticeSessionCreate,
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[QuizPracticeSessionResponse]:
-    result = await QuizPracticeService().create_session(current_user.id, body)
+    if body.scope_type is not None:
+        result = await QuizV2Service().create_practice_session(current_user.id, body)
+    else:
+        result = await QuizPracticeService().create_session(current_user.id, body)
     return success(data=result)
+
+
+@router.get(
+    "/practice-scopes/preview",
+    response_model=APIResponse[QuizPracticeScopePreview],
+    summary="预览 V2 全量练习范围",
+)
+async def preview_practice_scope(
+    scope_type: QuizPracticeScopeType = Query(...),
+    scope_id: int = Query(..., ge=1),
+    mode: QuizPracticeMode = Query(QuizPracticeMode.FULL),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[QuizPracticeScopePreview]:
+    return success(
+        data=await QuizV2Service().preview_practice_scope(
+            current_user.id, str(scope_type), scope_id, str(mode)
+        )
+    )
 
 
 @router.get(
@@ -204,7 +258,68 @@ async def get_practice_session(
     session_id: int = Path(..., ge=1),
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[QuizPracticeSessionResponse]:
-    result = await QuizPracticeService().get_session(current_user.id, session_id)
+    v2 = QuizV2Service()
+    result = (
+        await v2.get_practice_session(current_user.id, session_id)
+        if await v2.is_v2_session(current_user.id, session_id)
+        else await QuizPracticeService().get_session(current_user.id, session_id)
+    )
+    return success(data=result)
+
+
+@router.post(
+    "/practice-sessions/{session_id}/questions/{session_question_id}/skip",
+    response_model=APIResponse[QuizPracticeSkipResponse],
+    summary="V2 练习跳过当前题（每题一次）",
+)
+async def skip_practice_question(
+    session_id: int = Path(..., ge=1),
+    session_question_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[QuizPracticeSkipResponse]:
+    return success(
+        data=await QuizV2Service().skip_practice_question(
+            current_user.id, session_id, session_question_id
+        )
+    )
+
+
+@router.put(
+    "/practice-sessions/{session_id}/answers/{session_question_id}",
+    response_model=APIResponse[QuizPracticeAnswerSaved],
+    summary="暂存练习答案",
+)
+@limiter.limit(
+    f"{settings.QUIZ_ANSWER_SAVE_RATE_PER_MINUTE}/minute",
+    key_func=quiz_user_key,
+    error_message="练习答案保存请求过于频繁",
+)
+async def save_practice_answer(
+    request: Request,
+    body: QuizPracticeAnswerSave,
+    session_id: int = Path(..., ge=1),
+    session_question_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[QuizPracticeAnswerSaved]:
+    result = await QuizPracticeService().save_answer(
+        current_user.id,
+        session_id,
+        session_question_id,
+        body,
+    )
+    return success(data=result)
+
+
+@router.post(
+    "/practice-sessions/{session_id}/submit",
+    response_model=APIResponse[QuizPracticeSessionResponse],
+    summary="交卷并统一结算练习",
+)
+async def submit_practice_session(
+    session_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[QuizPracticeSessionResponse]:
+    result = await QuizPracticeService().submit_session(current_user.id, session_id)
     return success(data=result)
 
 
@@ -224,7 +339,12 @@ async def submit_practice_attempt(
     session_id: int = Path(..., ge=1),
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[QuizPracticeAttemptResult]:
-    result = await QuizPracticeService().submit_attempt(current_user.id, session_id, body)
+    # V2 currently shares the immutable attempt/statistics transaction with
+    # the legacy-compatible service, whose V2 branch enforces pause/expiry and
+    # revision-snapshot semantics before accepting the answer.
+    result = await QuizPracticeService().submit_attempt(
+        current_user.id, session_id, body
+    )
     return success(data=result)
 
 
