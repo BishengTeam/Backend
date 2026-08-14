@@ -94,6 +94,11 @@ def run_full_cycle(sync_url: str) -> None:
 def run_offline_sql_check() -> None:
     """Render the whole chain without a live DB and verify the final revision."""
 
+    config = Config(str(ROOT / "alembic.ini"))
+    expected_head = ScriptDirectory.from_config(config).get_current_head()
+    if expected_head is None:
+        raise RuntimeError("cannot determine the current Alembic head")
+
     environment = os.environ.copy()
     environment.update(
         {
@@ -128,8 +133,10 @@ def run_offline_sql_check() -> None:
             )
         sql_file.seek(0)
         rendered_sql = sql_file.read()
-    if "version_num='quiz003'" not in rendered_sql:
-        raise RuntimeError("offline SQL did not reach the current Alembic head quiz003")
+    if f"version_num='{expected_head}'" not in rendered_sql:
+        raise RuntimeError(
+            f"offline SQL did not reach the current Alembic head {expected_head}"
+        )
     print(f"alembic_offline_sql=ok statements_bytes={len(rendered_sql.encode('utf-8'))}")
 
 

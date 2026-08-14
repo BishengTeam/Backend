@@ -15,10 +15,10 @@ from scripts.quiz_contract_manifest import (
 
 def test_canonical_manifest_has_frozen_counts_and_stable_fingerprint() -> None:
     manifest = canonical_manifest()
-    assert manifest["quiz_contract_version"] == "2026-08-13"
-    assert manifest["operation_count"] == 52
-    assert manifest["user_operation_count"] == 22
-    assert manifest["admin_operation_count"] == 30
+    assert manifest["quiz_contract_version"] == "2026-08-14"
+    assert manifest["operation_count"] == 80
+    assert manifest["user_operation_count"] == 28
+    assert manifest["admin_operation_count"] == 52
     assert manifest["removed_operation_count"] == 14
     assert len(manifest["fingerprint_sha256"]) == 64
 

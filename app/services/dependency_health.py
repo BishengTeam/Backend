@@ -14,6 +14,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from Crypto.PublicKey import RSA
+
 from app.integrations.renshe_storage import RensheObjectStorage
 from app.port.config import settings
 
@@ -37,8 +39,8 @@ WECHAT_PAY_V3_REQUIRED_SETTINGS = (
     "WECHAT_PAY_CERT_SERIAL_NO",
     "WECHAT_PAY_PRIVATE_KEY",
     "WECHAT_PAY_API_V3_KEY",
-    "WECHAT_PAY_PLATFORM_CERTIFICATE",
-    "WECHAT_PAY_PLATFORM_CERT_SERIAL_NO",
+    "WECHAT_PAY_PUBLIC_KEY",
+    "WECHAT_PAY_PUBLIC_KEY_ID",
     "WECHAT_PAY_NOTIFY_URL",
     "WECHAT_PAY_REFUND_NOTIFY_URL",
 )
@@ -249,6 +251,29 @@ def inspect_wechat_payment_configuration() -> dict[str, Any]:
             "configured": False,
             "required": True,
             "reason": "invalid_api_v3_key_length",
+        }
+    if not settings.WECHAT_PAY_PUBLIC_KEY_ID.strip().startswith("PUB_KEY_ID_"):
+        return {
+            "status": "unavailable",
+            "configured": False,
+            "required": True,
+            "reason": "invalid_wechat_pay_public_key_id",
+        }
+    try:
+        public_key = RSA.import_key(settings.WECHAT_PAY_PUBLIC_KEY)
+    except (ValueError, IndexError, TypeError):
+        return {
+            "status": "unavailable",
+            "configured": False,
+            "required": True,
+            "reason": "invalid_wechat_pay_public_key",
+        }
+    if public_key.has_private() or public_key.size_in_bits() != 2048:
+        return {
+            "status": "unavailable",
+            "configured": False,
+            "required": True,
+            "reason": "invalid_wechat_pay_public_key",
         }
     if settings.APP_ENV == "production" and (
         not settings.WECHAT_PAY_NOTIFY_URL.startswith("https://")

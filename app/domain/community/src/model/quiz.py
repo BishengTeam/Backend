@@ -104,6 +104,228 @@ class QuizCategory(Base, _QuizTimestampMixin):
     )
 
 
+class QuizLibrary(Base, _QuizTimestampMixin):
+    """The fixed V2 quiz ownership and entitlement boundary."""
+
+    __tablename__ = "quiz_library"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'published', 'suspended', 'archived', 'deleted')",
+            name="ck_quiz_library_status",
+        ),
+        CheckConstraint(
+            "access_mode IN ('access_mode_pending', 'free', 'course_entitlement')",
+            name="ck_quiz_library_access_mode",
+        ),
+        CheckConstraint(
+            "system_kind IN ('none', 'migration_quarantine')",
+            name="ck_quiz_library_system_kind",
+        ),
+        CheckConstraint(
+            "migration_state IN ('pending_review', 'needs_organization', 'ready')",
+            name="ck_quiz_library_migration_state",
+        ),
+        CheckConstraint("lock_version >= 1", name="ck_quiz_library_lock_version"),
+        CheckConstraint(
+            "((status = 'draft' AND published_at IS NULL AND suspended_at IS NULL "
+            "AND archived_at IS NULL AND deleted_at IS NULL) OR "
+            "(status = 'published' AND published_at IS NOT NULL "
+            "AND suspended_at IS NULL AND archived_at IS NULL AND deleted_at IS NULL) OR "
+            "(status = 'suspended' AND published_at IS NOT NULL "
+            "AND suspended_at IS NOT NULL AND archived_at IS NULL AND deleted_at IS NULL) OR "
+            "(status = 'archived' AND archived_at IS NOT NULL AND deleted_at IS NULL) OR "
+            "(status = 'deleted' AND archived_at IS NOT NULL AND deleted_at IS NOT NULL))",
+            name="ck_quiz_library_lifecycle",
+        ),
+        Index(
+            "uq_quiz_library_reserved_name",
+            "normalized_name",
+            unique=True,
+            postgresql_where=text("name_reserved = true"),
+            sqlite_where=text("name_reserved = true"),
+        ),
+        Index("ix_quiz_library_catalog", "v2_enabled", "status", "sort_order", "id"),
+        Index("ix_quiz_library_cleanup", "status", "restore_until", "id"),
+    )
+
+    library_code: Mapped[str] = mapped_column(
+        String(32), nullable=False, unique=True, server_default=text("quiz_library_code()")
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(512))
+    cover_url: Mapped[str | None] = mapped_column(String(512))
+    details: Mapped[str | None] = mapped_column(Text)
+    access_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="access_mode_pending", server_default="access_mode_pending"
+    )
+    system_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="none", server_default="none"
+    )
+    migration_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending_review", server_default="pending_review"
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="draft", server_default="draft"
+    )
+    v2_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    name_reserved: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    lock_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    restore_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("admin_user.id", ondelete="SET NULL")
+    )
+    updated_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("admin_user.id", ondelete="SET NULL")
+    )
+
+
+class QuizModule(Base, _QuizTimestampMixin):
+    __tablename__ = "quiz_module"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'disabled', 'deleted')",
+            name="ck_quiz_module_status",
+        ),
+        CheckConstraint(
+            "system_kind IN ('none', 'pending_organization')",
+            name="ck_quiz_module_system_kind",
+        ),
+        CheckConstraint("lock_version >= 1", name="ck_quiz_module_lock_version"),
+        CheckConstraint(
+            "((status = 'active' AND disabled_at IS NULL AND deleted_at IS NULL) OR "
+            "(status = 'disabled' AND disabled_at IS NOT NULL AND deleted_at IS NULL) OR "
+            "(status = 'deleted' AND disabled_at IS NOT NULL AND deleted_at IS NOT NULL))",
+            name="ck_quiz_module_lifecycle",
+        ),
+        UniqueConstraint("id", "library_id", name="uq_quiz_module_id_library"),
+        Index(
+            "uq_quiz_module_reserved_name",
+            "library_id",
+            "normalized_name",
+            unique=True,
+            postgresql_where=text("name_reserved = true"),
+            sqlite_where=text("name_reserved = true"),
+        ),
+        Index("ix_quiz_module_tree", "library_id", "sort_order", "id"),
+        Index("ix_quiz_module_cleanup", "status", "restore_until", "id"),
+    )
+
+    library_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("quiz_library.id", ondelete="RESTRICT"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(256))
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active", server_default="active"
+    )
+    system_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="none", server_default="none"
+    )
+    name_reserved: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    lock_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    restore_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("admin_user.id", ondelete="SET NULL")
+    )
+    updated_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("admin_user.id", ondelete="SET NULL")
+    )
+
+
+class QuizKnowledgePoint(Base, _QuizTimestampMixin):
+    __tablename__ = "quiz_knowledge_point"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'disabled', 'deleted')",
+            name="ck_quiz_knowledge_point_status",
+        ),
+        CheckConstraint(
+            "system_kind IN ('none', 'uncategorized')",
+            name="ck_quiz_knowledge_point_system_kind",
+        ),
+        CheckConstraint(
+            "lock_version >= 1", name="ck_quiz_knowledge_point_lock_version"
+        ),
+        CheckConstraint(
+            "((status = 'active' AND disabled_at IS NULL AND deleted_at IS NULL) OR "
+            "(status = 'disabled' AND disabled_at IS NOT NULL AND deleted_at IS NULL) OR "
+            "(status = 'deleted' AND disabled_at IS NOT NULL AND deleted_at IS NOT NULL))",
+            name="ck_quiz_knowledge_point_lifecycle",
+        ),
+        ForeignKeyConstraint(
+            ["module_id", "library_id"],
+            ["quiz_module.id", "quiz_module.library_id"],
+            name="fk_quiz_knowledge_point_module_library",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("id", "library_id", name="uq_quiz_knowledge_point_id_library"),
+        Index(
+            "uq_quiz_knowledge_point_reserved_name",
+            "module_id",
+            "normalized_name",
+            unique=True,
+            postgresql_where=text("name_reserved = true"),
+            sqlite_where=text("name_reserved = true"),
+        ),
+        Index("ix_quiz_knowledge_point_tree", "library_id", "module_id", "sort_order", "id"),
+        Index("ix_quiz_knowledge_point_cleanup", "status", "restore_until", "id"),
+    )
+
+    library_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    module_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(256))
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active", server_default="active"
+    )
+    system_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="none", server_default="none"
+    )
+    name_reserved: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    lock_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    restore_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("admin_user.id", ondelete="SET NULL")
+    )
+    updated_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("admin_user.id", ondelete="SET NULL")
+    )
+
+
 class QuizQuestion(Base, _QuizTimestampMixin):
     __tablename__ = "quiz_question"
     __table_args__ = (
@@ -112,23 +334,49 @@ class QuizQuestion(Base, _QuizTimestampMixin):
             name="ck_quiz_question_type",
         ),
         CheckConstraint(
-            "status IN ('draft', 'published', 'disabled')",
+            "status IN ('draft', 'published', 'disabled', 'deleted')",
             name="ck_quiz_question_status",
         ),
         CheckConstraint(
             "((status = 'draft' AND ever_published = false "
-            "AND published_at IS NULL AND disabled_at IS NULL) OR "
+            "AND published_at IS NULL AND disabled_at IS NULL AND deleted_at IS NULL) OR "
             "(status = 'published' AND ever_published = true "
-            "AND published_at IS NOT NULL) OR "
+            "AND published_at IS NOT NULL AND deleted_at IS NULL) OR "
             "(status = 'disabled' AND ever_published = true "
-            "AND published_at IS NOT NULL AND disabled_at IS NOT NULL))",
+            "AND published_at IS NOT NULL AND disabled_at IS NOT NULL AND deleted_at IS NULL) OR "
+            "(status = 'deleted' AND deleted_at IS NOT NULL))",
             name="ck_quiz_question_lifecycle",
         ),
         CheckConstraint("lock_version >= 1", name="ck_quiz_question_lock_version"),
+        CheckConstraint(
+            "(library_id IS NULL AND knowledge_point_id IS NULL) OR "
+            "(library_id IS NOT NULL AND knowledge_point_id IS NOT NULL)",
+            name="ck_quiz_question_v2_assignment",
+        ),
         UniqueConstraint(
             "category_id",
             "question_text_hash",
             name="uq_quiz_question_category_text_hash",
+        ),
+        ForeignKeyConstraint(
+            ["knowledge_point_id", "library_id"],
+            ["quiz_knowledge_point.id", "quiz_knowledge_point.library_id"],
+            name="fk_quiz_question_knowledge_point_library",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["current_revision_id", "id"],
+            ["quiz_question_revision.id", "quiz_question_revision.question_id"],
+            name="fk_quiz_question_current_revision",
+            ondelete="RESTRICT",
+            use_alter=True,
+        ),
+        ForeignKeyConstraint(
+            ["pending_revision_id", "id"],
+            ["quiz_question_revision.id", "quiz_question_revision.question_id"],
+            name="fk_quiz_question_pending_revision",
+            ondelete="RESTRICT",
+            use_alter=True,
         ),
         Index(
             "ix_quiz_question_pool",
@@ -138,12 +386,33 @@ class QuizQuestion(Base, _QuizTimestampMixin):
             "id",
         ),
         Index("ix_quiz_question_updated", "updated_at", "id"),
+        Index(
+            "uq_quiz_question_library_text_hash",
+            "library_id",
+            "question_text_hash",
+            unique=True,
+            postgresql_where=text("library_id IS NOT NULL AND stem_reserved = true"),
+            sqlite_where=text("library_id IS NOT NULL AND stem_reserved = true"),
+        ),
+        Index(
+            "ix_quiz_question_v2_pool",
+            "library_id",
+            "knowledge_point_id",
+            "status",
+            "id",
+        ),
     )
 
-    category_id: Mapped[int] = mapped_column(
+    library_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("quiz_library.id", ondelete="RESTRICT")
+    )
+    knowledge_point_id: Mapped[int | None] = mapped_column(
+        BigInteger
+    )
+    category_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("quiz_category.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     question_type: Mapped[str] = mapped_column(String(24), nullable=False)
     status: Mapped[str] = mapped_column(
@@ -160,6 +429,13 @@ class QuizQuestion(Base, _QuizTimestampMixin):
     )
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    restore_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    stem_reserved: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    current_revision_id: Mapped[int | None] = mapped_column(BigInteger)
+    pending_revision_id: Mapped[int | None] = mapped_column(BigInteger)
     lock_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )
@@ -171,31 +447,266 @@ class QuizQuestion(Base, _QuizTimestampMixin):
     )
 
 
+class QuizQuestionRevision(Base, _QuizCreatedAtMixin):
+    """Immutable content of a logical question."""
+
+    __tablename__ = "quiz_question_revision"
+    __table_args__ = (
+        CheckConstraint(
+            "question_type IN ('single_choice', 'multiple_choice', 'judge')",
+            name="ck_quiz_question_revision_type",
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'published', 'superseded', 'discarded')",
+            name="ck_quiz_question_revision_status",
+        ),
+        CheckConstraint("revision_no >= 1", name="ck_quiz_question_revision_no"),
+        CheckConstraint(
+            "((status = 'published' AND published_at IS NOT NULL) OR "
+            "(status <> 'published'))",
+            name="ck_quiz_question_revision_lifecycle",
+        ),
+        UniqueConstraint(
+            "question_id", "revision_no", name="uq_quiz_question_revision_number"
+        ),
+        UniqueConstraint(
+            "id", "question_id", name="uq_quiz_question_revision_id_question"
+        ),
+        Index(
+            "uq_quiz_question_pending_revision",
+            "question_id",
+            unique=True,
+            postgresql_where=text("status = 'draft'"),
+            sqlite_where=text("status = 'draft'"),
+        ),
+        Index("ix_quiz_question_revision_question", "question_id", "revision_no"),
+    )
+
+    question_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("quiz_question.id", ondelete="RESTRICT"), nullable=False
+    )
+    revision_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    question_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    question_text: Mapped[str] = mapped_column(String(1024), nullable=False)
+    normalized_question_text: Mapped[str] = mapped_column(String(1024), nullable=False)
+    question_text_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    options: Mapped[dict[str, str] | None] = mapped_column(JSONB)
+    correct_answer: Mapped[str | list[str] | None] = mapped_column(JSONB)
+    explanation: Mapped[str | None] = mapped_column(String(1024))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("admin_user.id", ondelete="SET NULL")
+    )
+
+
+class QuizCourseLibraryBinding(Base, _QuizTimestampMixin):
+    __tablename__ = "quiz_course_library_binding"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'inactive')",
+            name="ck_quiz_course_library_binding_status",
+        ),
+        CheckConstraint(
+            "lock_version >= 1", name="ck_quiz_course_library_binding_lock_version"
+        ),
+        UniqueConstraint(
+            "course_id", "library_id", name="uq_quiz_course_library_binding"
+        ),
+        Index(
+            "ix_quiz_course_library_binding_active",
+            "course_id",
+            "status",
+            "library_id",
+        ),
+    )
+
+    course_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("course.id", ondelete="RESTRICT"), nullable=False
+    )
+    library_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("quiz_library.id", ondelete="RESTRICT"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active", server_default="active"
+    )
+    lock_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    created_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("admin_user.id", ondelete="SET NULL")
+    )
+    updated_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("admin_user.id", ondelete="SET NULL")
+    )
+
+
+class QuizLibraryEntitlement(Base, _QuizTimestampMixin):
+    __tablename__ = "quiz_library_entitlement"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'revoked', 'expired')",
+            name="ck_quiz_library_entitlement_status",
+        ),
+        CheckConstraint(
+            "source_type = 'course_order'",
+            name="ck_quiz_library_entitlement_source_type",
+        ),
+        CheckConstraint(
+            "ends_at IS NULL OR ends_at > starts_at",
+            name="ck_quiz_library_entitlement_period",
+        ),
+        UniqueConstraint(
+            "order_id", "library_id", name="uq_quiz_library_entitlement_order_library"
+        ),
+        Index(
+            "ix_quiz_library_entitlement_access",
+            "user_id",
+            "library_id",
+            "status",
+            "starts_at",
+            "ends_at",
+        ),
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("user.id", ondelete="RESTRICT"), nullable=False
+    )
+    library_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("quiz_library.id", ondelete="RESTRICT"), nullable=False
+    )
+    course_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("course.id", ondelete="RESTRICT"), nullable=False
+    )
+    order_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("order.id", ondelete="RESTRICT"), nullable=False
+    )
+    source_type: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="course_order", server_default="course_order"
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active", server_default="active"
+    )
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    snapshot: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+
+
+class QuizLegacyMigrationMap(Base, _QuizCreatedAtMixin):
+    """Permanent, idempotent mapping from the old recursive model to V2."""
+
+    __tablename__ = "quiz_legacy_migration_map"
+    __table_args__ = (
+        CheckConstraint(
+            "legacy_object_type IN ('category', 'question')",
+            name="ck_quiz_legacy_migration_object_type",
+        ),
+        CheckConstraint(
+            "target_object_type IN ('library', 'module', 'knowledge_point', 'question')",
+            name="ck_quiz_legacy_migration_target_type",
+        ),
+        CheckConstraint(
+            "migration_status IN ('mapped', 'quarantined')",
+            name="ck_quiz_legacy_migration_status",
+        ),
+        UniqueConstraint(
+            "legacy_object_type", "legacy_id", name="uq_quiz_legacy_migration_source"
+        ),
+        Index("ix_quiz_legacy_migration_target", "target_object_type", "target_id"),
+    )
+
+    legacy_object_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    legacy_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    target_object_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    target_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    library_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("quiz_library.id", ondelete="RESTRICT"), nullable=False
+    )
+    migration_status: Mapped[str] = mapped_column(String(24), nullable=False)
+    original_path: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+    issue_code: Mapped[str | None] = mapped_column(String(64))
+
+
+class QuizMigrationIssue(Base, _QuizCreatedAtMixin):
+    __tablename__ = "quiz_migration_issue"
+    __table_args__ = (
+        CheckConstraint(
+            "severity IN ('warning', 'blocking')",
+            name="ck_quiz_migration_issue_severity",
+        ),
+        CheckConstraint(
+            "legacy_object_type IN ('category', 'question')",
+            name="ck_quiz_migration_issue_object_type",
+        ),
+        CheckConstraint(
+            "status IN ('open', 'resolved')",
+            name="ck_quiz_migration_issue_status",
+        ),
+        UniqueConstraint(
+            "issue_code",
+            "legacy_object_type",
+            "legacy_id",
+            name="uq_quiz_migration_issue_source",
+        ),
+        Index("ix_quiz_migration_issue_library", "library_id", "status", "id"),
+    )
+
+    library_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("quiz_library.id", ondelete="RESTRICT"), nullable=False
+    )
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="open", server_default="open"
+    )
+    issue_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    legacy_object_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    legacy_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    original_path: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
+    resolution: Mapped[str] = mapped_column(String(256), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class QuizPracticeSession(Base, _QuizTimestampMixin):
     __tablename__ = "quiz_practice_session"
     __table_args__ = (
         CheckConstraint(
-            "mode IN ('normal', 'wrong')", name="ck_quiz_practice_session_mode"
+            "mode IN ('normal', 'wrong', 'full', 'wrong_only', 'legacy_limited')",
+            name="ck_quiz_practice_session_mode",
         ),
         CheckConstraint(
-            "status IN ('in_progress', 'completed', 'abandoned')",
+            "status IN ('in_progress', 'paused', 'completed', 'abandoned', "
+            "'expired', 'terminated')",
             name="ck_quiz_practice_session_status",
         ),
         CheckConstraint(
             "((mode = 'normal' AND category_id IS NOT NULL "
             "AND requested_count BETWEEN 10 AND 100) OR "
-            "(mode = 'wrong' AND category_id IS NULL AND requested_count = 20))",
+            "(mode = 'wrong' AND category_id IS NULL AND requested_count = 20) OR "
+            "(mode = 'legacy_limited' AND requested_count BETWEEN 1 AND 100) OR "
+            "(mode IN ('full', 'wrong_only') AND scope_type IS NOT NULL "
+            "AND scope_id IS NOT NULL AND requested_count >= 1))",
             name="ck_quiz_practice_session_request",
         ),
         CheckConstraint(
-            "actual_count BETWEEN 1 AND 100",
+            "actual_count >= 1",
             name="ck_quiz_practice_session_actual_count",
         ),
         CheckConstraint(
-            "((status = 'in_progress' AND completed_at IS NULL AND abandoned_at IS NULL) OR "
+            "((status IN ('in_progress', 'paused') AND completed_at IS NULL "
+            "AND abandoned_at IS NULL AND terminated_at IS NULL) OR "
             "(status = 'completed' AND completed_at IS NOT NULL AND abandoned_at IS NULL) OR "
-            "(status = 'abandoned' AND completed_at IS NULL AND abandoned_at IS NOT NULL))",
+            "(status = 'abandoned' AND completed_at IS NULL AND abandoned_at IS NOT NULL) OR "
+            "(status = 'expired' AND expired_at IS NOT NULL) OR "
+            "(status = 'terminated' AND terminated_at IS NOT NULL))",
             name="ck_quiz_practice_session_lifecycle",
+        ),
+        CheckConstraint(
+            "scope_type IS NULL OR scope_type IN ('library', 'module', 'knowledge_point')",
+            name="ck_quiz_practice_session_scope_type",
+        ),
+        CheckConstraint(
+            "paused_seconds >= 0", name="ck_quiz_practice_session_paused_seconds"
         ),
         CheckConstraint(
             "lock_version >= 1", name="ck_quiz_practice_session_lock_version"
@@ -204,10 +715,26 @@ class QuizPracticeSession(Base, _QuizTimestampMixin):
             "uq_quiz_practice_session_active_user",
             "user_id",
             unique=True,
-            postgresql_where=text("status = 'in_progress'"),
-            sqlite_where=text("status = 'in_progress'"),
+            postgresql_where=text(
+                "status = 'in_progress' AND scope_type IS NULL"
+            ),
+            sqlite_where=text("status = 'in_progress' AND scope_type IS NULL"),
         ),
         Index("ix_quiz_practice_session_user_history", "user_id", "started_at", "id"),
+        Index(
+            "uq_quiz_practice_session_active_scope",
+            "user_id",
+            "scope_type",
+            "scope_id",
+            "mode",
+            unique=True,
+            postgresql_where=text(
+                "status IN ('in_progress', 'paused') AND scope_type IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "status IN ('in_progress', 'paused') AND scope_type IS NOT NULL"
+            ),
+        ),
     )
 
     user_id: Mapped[int] = mapped_column(
@@ -217,6 +744,11 @@ class QuizPracticeSession(Base, _QuizTimestampMixin):
     category_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("quiz_category.id", ondelete="RESTRICT")
     )
+    library_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("quiz_library.id", ondelete="RESTRICT")
+    )
+    scope_type: Mapped[str | None] = mapped_column(String(24))
+    scope_id: Mapped[int | None] = mapped_column(BigInteger)
     requested_count: Mapped[int] = mapped_column(Integer, nullable=False)
     actual_count: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(
@@ -225,6 +757,16 @@ class QuizPracticeSession(Base, _QuizTimestampMixin):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     abandoned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pause_reason: Mapped[str | None] = mapped_column(String(64))
+    paused_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    expired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    terminated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    termination_reason: Mapped[str | None] = mapped_column(String(64))
     lock_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )
@@ -237,6 +779,16 @@ class QuizPracticeSessionQuestion(Base, _QuizTimestampMixin):
         CheckConstraint(
             "question_type IN ('single_choice', 'multiple_choice', 'judge')",
             name="ck_quiz_practice_question_type",
+        ),
+        CheckConstraint(
+            "skip_count BETWEEN 0 AND 1", name="ck_quiz_practice_question_skip_count"
+        ),
+        CheckConstraint(
+            "((user_answer IS NULL AND answer_lock_version = 0 "
+            "AND answer_saved_at IS NULL) OR "
+            "(user_answer IS NOT NULL AND answer_lock_version >= 1 "
+            "AND answer_saved_at IS NOT NULL))",
+            name="ck_quiz_practice_question_saved_answer",
         ),
         UniqueConstraint(
             "session_id", "position", name="uq_quiz_practice_question_position"
@@ -258,8 +810,11 @@ class QuizPracticeSessionQuestion(Base, _QuizTimestampMixin):
     question_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("quiz_question.id", ondelete="RESTRICT"), nullable=False
     )
+    question_revision_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("quiz_question_revision.id", ondelete="RESTRICT")
+    )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
-    category_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    category_id: Mapped[int | None] = mapped_column(BigInteger)
     category_path: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
     question_type: Mapped[str] = mapped_column(String(24), nullable=False)
     question_text: Mapped[str] = mapped_column(String(1024), nullable=False)
@@ -267,6 +822,15 @@ class QuizPracticeSessionQuestion(Base, _QuizTimestampMixin):
     correct_answer: Mapped[str | list[str]] = mapped_column(JSONB, nullable=False)
     explanation: Mapped[str] = mapped_column(String(1024), nullable=False)
     question_lock_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    skip_count: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=0, server_default="0"
+    )
+    user_answer: Mapped[str | list[str] | None] = mapped_column(JSONB)
+    answer_lock_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    answer_saved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class QuizPracticeAttempt(Base, _QuizTimestampMixin):
@@ -330,6 +894,9 @@ class QuizWrongItem(Base, _QuizTimestampMixin):
             "(status = 'cleared' AND cleared_at IS NOT NULL))",
             name="ck_quiz_wrong_item_lifecycle",
         ),
+        CheckConstraint(
+            "review_count >= 0", name="ck_quiz_wrong_item_review_count"
+        ),
         UniqueConstraint("user_id", "question_id", name="uq_quiz_wrong_item_user_question"),
         Index("ix_quiz_wrong_item_recent", "user_id", "status", "latest_wrong_at", "id"),
     )
@@ -347,6 +914,48 @@ class QuizWrongItem(Base, _QuizTimestampMixin):
     latest_wrong_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     latest_wrong_snapshot: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    review_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    last_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class QuizQuestionRevisionStats(Base, _QuizTimestampMixin):
+    __tablename__ = "quiz_question_revision_stats"
+    __table_args__ = (
+        UniqueConstraint(
+            "question_revision_id", name="uq_quiz_question_revision_stats_revision"
+        ),
+        CheckConstraint(
+            "practice_first_attempts >= 0 AND practice_first_correct >= 0 "
+            "AND exam_answers >= 0 AND exam_correct >= 0 "
+            "AND practice_first_correct <= practice_first_attempts "
+            "AND exam_correct <= exam_answers",
+            name="ck_quiz_question_revision_stats_nonnegative",
+        ),
+    )
+
+    question_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("quiz_question.id", ondelete="RESTRICT"), nullable=False
+    )
+    question_revision_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("quiz_question_revision.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    practice_first_attempts: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    practice_first_correct: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    exam_answers: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    exam_correct: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    aggregated_through: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class QuizCollection(Base, _QuizTimestampMixin):
@@ -405,6 +1014,18 @@ class QuizExam(Base, _QuizTimestampMixin):
             name="ck_quiz_exam_status",
         ),
         CheckConstraint(
+            "scope_type IS NULL OR scope_type IN "
+            "('library', 'module', 'knowledge_point')",
+            name="ck_quiz_exam_scope_type",
+        ),
+        CheckConstraint(
+            "((scope_type IS NULL AND scope_id IS NULL AND library_id IS NULL "
+            "AND category_id IS NOT NULL) OR "
+            "(scope_type IS NOT NULL AND scope_id IS NOT NULL "
+            "AND library_id IS NOT NULL AND category_id IS NULL))",
+            name="ck_quiz_exam_scope",
+        ),
+        CheckConstraint(
             "question_count BETWEEN 10 AND 100", name="ck_quiz_exam_question_count"
         ),
         CheckConstraint("duration_seconds = 3600", name="ck_quiz_exam_duration"),
@@ -448,16 +1069,30 @@ class QuizExam(Base, _QuizTimestampMixin):
         Index("ix_quiz_exam_deadline", "status", "deadline_at", "id"),
         Index("ix_quiz_exam_status_updated", "status", "updated_at", "id"),
         Index("ix_quiz_exam_user_history", "user_id", "started_at", "id"),
+        Index(
+            "ix_quiz_exam_scope_history",
+            "user_id",
+            "library_id",
+            "scope_type",
+            "scope_id",
+            "started_at",
+            "id",
+        ),
     )
 
     user_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
     )
-    category_id: Mapped[int] = mapped_column(
+    category_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("quiz_category.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
+    library_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("quiz_library.id", ondelete="RESTRICT")
+    )
+    scope_type: Mapped[str | None] = mapped_column(String(24))
+    scope_id: Mapped[int | None] = mapped_column(BigInteger)
     question_count: Mapped[int] = mapped_column(Integer, nullable=False)
     duration_seconds: Mapped[int] = mapped_column(
         Integer, nullable=False, default=3600, server_default="3600"
@@ -490,6 +1125,12 @@ class QuizExamQuestion(Base, _QuizTimestampMixin):
         UniqueConstraint("exam_id", "position", name="uq_quiz_exam_question_position"),
         UniqueConstraint("exam_id", "question_id", name="uq_quiz_exam_question_question"),
         UniqueConstraint("exam_id", "id", name="uq_quiz_exam_question_exam_id"),
+        ForeignKeyConstraint(
+            ["question_revision_id", "question_id"],
+            ["quiz_question_revision.id", "quiz_question_revision.question_id"],
+            name="fk_quiz_exam_question_revision_question",
+            ondelete="RESTRICT",
+        ),
         Index("ix_quiz_exam_question_exam", "exam_id", "position"),
     )
 
@@ -500,7 +1141,10 @@ class QuizExamQuestion(Base, _QuizTimestampMixin):
         BigInteger, ForeignKey("quiz_question.id", ondelete="RESTRICT"), nullable=False
     )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
-    category_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    question_revision_id: Mapped[int | None] = mapped_column(
+        BigInteger
+    )
+    category_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     category_path: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False)
     question_type: Mapped[str] = mapped_column(String(24), nullable=False)
     question_text: Mapped[str] = mapped_column(String(1024), nullable=False)
@@ -682,6 +1326,9 @@ class QuizImportJob(Base, _QuizTimestampMixin):
     admin_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("admin_user.id", ondelete="SET NULL")
     )
+    library_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("quiz_library.id", ondelete="RESTRICT")
+    )
     import_batch_key: Mapped[str] = mapped_column(String(64), nullable=False)
     source_type: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(
@@ -837,15 +1484,24 @@ __all__ = [
     "QuizCategory",
     "QuizCheckin",
     "QuizCollection",
+    "QuizCourseLibraryBinding",
     "QuizExam",
     "QuizExamAnswer",
     "QuizExamQuestion",
     "QuizImportJob",
     "QuizImportError",
+    "QuizKnowledgePoint",
+    "QuizLegacyMigrationMap",
+    "QuizLibrary",
+    "QuizLibraryEntitlement",
+    "QuizMigrationIssue",
+    "QuizModule",
     "QuizPracticeAttempt",
     "QuizPracticeSession",
     "QuizPracticeSessionQuestion",
     "QuizQuestion",
+    "QuizQuestionRevision",
+    "QuizQuestionRevisionStats",
     "QuizQuestionStats",
     "QuizUserStats",
     "QuizWrongItem",

@@ -24,11 +24,10 @@ _log = logging.getLogger(__name__)
 
 
 def _safe_create_index(index_name, table, columns, **kw):
-    """幂等创建索引"""
-    try:
+    """Create an index idempotently without poisoning PostgreSQL transactions."""
+
+    if _offline_mode() or not _has_index(index_name, table):
         op.create_index(index_name, table, columns, **kw)
-    except Exception:
-        pass
 
 
 def _offline_mode() -> bool:
@@ -86,23 +85,24 @@ def _safe_drop_constraint(constraint_name, table_name, **kw):
 def _safe_drop_index(index_name, **kw):
     """幂等删除索引 — 先检查再删除"""
     table_name = kw.get('table_name', '')
-    if table_name and _has_index(index_name, table_name):
+    if _offline_mode():
         op.drop_index(index_name, **kw)
-    else:
-        try:
+    elif table_name:
+        if _has_index(index_name, table_name):
             op.drop_index(index_name, **kw)
-        except Exception:
-            pass
+    else:
+        exists = op.get_bind().execute(
+            sa.text("SELECT 1 FROM pg_indexes WHERE indexname = :name"),
+            {"name": index_name},
+        ).fetchone()
+        if exists is not None:
+            op.drop_index(index_name, **kw)
 
 
 def _safe_alter_column(table, column, **kw):
-    """幂等修改列 — 简单 try/except（alter 不回滚事务? 用检查）"""
-    try:
-        op.alter_column(table, column, **kw)
-    except Exception:
-        # alter column 失败也可能中止事务，回滚
-        op.get_bind().execute(sa.text("ROLLBACK"))
-        op.get_bind().execute(sa.text("BEGIN"))
+    """Alter a column and surface real migration errors immediately."""
+
+    op.alter_column(table, column, **kw)
 
 
 def upgrade() -> None:

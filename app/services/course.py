@@ -10,6 +10,7 @@ from app.domain.certification.src.index import (
     CourseEnrollment,
     UserChapterProgress,
 )
+from app.domain.community.src.index import QuizCourseLibraryBinding, QuizLibrary
 from app.schemas.common import PaginatedData
 from app.schemas.course import (
     ChapterProgressResponse,
@@ -23,6 +24,7 @@ from app.schemas.course import (
     CourseEnrollmentResponse,
     CourseFilter,
     CourseListResponse,
+    CourseQuizLibrarySummary,
 )
 from app.services.course_purchase import CoursePurchaseService
 
@@ -67,6 +69,39 @@ class CourseService:
                 raise NotFoundException("课程")
 
             response = CourseDetailResponse.model_validate(course)
+
+            bound_libraries = list(
+                (
+                    await db.execute(
+                        select(QuizLibrary)
+                        .join(
+                            QuizCourseLibraryBinding,
+                            QuizCourseLibraryBinding.library_id == QuizLibrary.id,
+                        )
+                        .where(
+                            QuizCourseLibraryBinding.course_id == course_id,
+                            QuizCourseLibraryBinding.status == "active",
+                            QuizLibrary.access_mode == "course_entitlement",
+                            QuizLibrary.status.in_(("draft", "published", "suspended")),
+                        )
+                        .order_by(QuizLibrary.sort_order.asc(), QuizLibrary.id.asc())
+                    )
+                ).scalars()
+            )
+            response.included_quiz_libraries = [
+                CourseQuizLibrarySummary(
+                    id=int(library.id),
+                    library_code=library.library_code,
+                    name=library.name,
+                    description=library.description,
+                    cover_url=library.cover_url,
+                    status=library.status,
+                    available=(
+                        library.status == "published" and bool(library.v2_enabled)
+                    ),
+                )
+                for library in bound_libraries
+            ]
 
             # 过滤活跃章节并按 sort_order 排序
             active_chapters = [ch for ch in course.chapters if ch.is_active]

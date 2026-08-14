@@ -43,7 +43,6 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizImportErrorQuery,
     AdminQuizQuestionCreate,
     AdminQuizQuestionUpdate,
-    AdminQuizStatsQuestionQuery,
     AdminQuizVersionRequest,
 )
 from app.services.admin_quiz import AdminQuizService
@@ -1001,7 +1000,7 @@ async def test_import_error_page_is_redacted_fixed_size_and_filterable(quiz_env)
     assert "question_text" not in serialized
     assert "correct_answer" not in serialized
     assert f"{env.prefix}_error_" not in serialized
-    assert all(item.row is None for item in first.items)
+    assert [item.row for item in first.items[:2]] == [1, 2]
     assert [item.question_index for item in first.items[:2]] == [1, 2]
 
 
@@ -1450,18 +1449,6 @@ async def test_question_stats_aggregate_first_attempts_and_settled_exams(quiz_en
     assert overview.exam_answers >= 2
     assert overview.calculated_at is not None
     assert overview.aggregated_through is not None
-    page = await env.service.list_question_stats(
-        AdminQuizStatsQuestionQuery(
-            category_id=category.id,
-            keyword="stats_question",
-            page=1,
-            page_size=10,
-        )
-    )
-    assert page.total == 1
-    assert page.items[0].question_id == question.id
-    assert page.items[0].exam_answers == 2
-    assert page.items[0].aggregated_through is not None
 
     async with env.factory() as db:
         rows = list(

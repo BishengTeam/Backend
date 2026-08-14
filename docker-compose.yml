@@ -68,8 +68,8 @@ services:
       - WECHAT_PAY_CERT_SERIAL_NO=${WECHAT_PAY_CERT_SERIAL_NO:-}
       - WECHAT_PAY_PRIVATE_KEY_FILE=/run/secrets/wechat_pay_private_key
       - WECHAT_PAY_API_V3_KEY_FILE=/run/secrets/wechat_pay_api_v3_key
-      - WECHAT_PAY_PLATFORM_CERTIFICATE_FILE=/run/secrets/wechat_pay_platform_certificate
-      - WECHAT_PAY_PLATFORM_CERT_SERIAL_NO=${WECHAT_PAY_PLATFORM_CERT_SERIAL_NO:-}
+      - WECHAT_PAY_PUBLIC_KEY_FILE=/run/secrets/wechat_pay_public_key
+      - WECHAT_PAY_PUBLIC_KEY_ID=${WECHAT_PAY_PUBLIC_KEY_ID:-}
       - WECHAT_PAY_NOTIFICATION_TOLERANCE_SECONDS=${WECHAT_PAY_NOTIFICATION_TOLERANCE_SECONDS:-300}
       - WECHAT_PAY_RECONCILE_POLL_SECONDS=${WECHAT_PAY_RECONCILE_POLL_SECONDS:-30}
       - WECHAT_PAY_RECONCILE_BATCH_SIZE=${WECHAT_PAY_RECONCILE_BATCH_SIZE:-100}
@@ -118,7 +118,7 @@ services:
       - source: wechat_secret
       - source: wechat_pay_private_key
       - source: wechat_pay_api_v3_key
-      - source: wechat_pay_platform_certificate
+      - source: wechat_pay_public_key
       - source: aliyun_oss_access_key_id
       - source: aliyun_oss_access_key_secret
       - source: quiz_oss_access_key_id
@@ -160,8 +160,8 @@ services:
       - WECHAT_PAY_CERT_SERIAL_NO=${WECHAT_PAY_CERT_SERIAL_NO:-}
       - WECHAT_PAY_PRIVATE_KEY_FILE=/run/secrets/wechat_pay_private_key
       - WECHAT_PAY_API_V3_KEY_FILE=/run/secrets/wechat_pay_api_v3_key
-      - WECHAT_PAY_PLATFORM_CERTIFICATE_FILE=/run/secrets/wechat_pay_platform_certificate
-      - WECHAT_PAY_PLATFORM_CERT_SERIAL_NO=${WECHAT_PAY_PLATFORM_CERT_SERIAL_NO:-}
+      - WECHAT_PAY_PUBLIC_KEY_FILE=/run/secrets/wechat_pay_public_key
+      - WECHAT_PAY_PUBLIC_KEY_ID=${WECHAT_PAY_PUBLIC_KEY_ID:-}
       - RENSHE_STORAGE_TYPE=aliyun_oss
       - ALIYUN_OSS_ENDPOINT=${ALIYUN_OSS_ENDPOINT:?ALIYUN_OSS_ENDPOINT is required}
       - ALIYUN_OSS_BUCKET=${ALIYUN_OSS_BUCKET:?ALIYUN_OSS_BUCKET is required}
@@ -259,8 +259,8 @@ secrets:
     file: ${SECRETS_DIR:?SECRETS_DIR is required}/wechat_pay_private_key
   wechat_pay_api_v3_key:
     file: ${SECRETS_DIR:?SECRETS_DIR is required}/wechat_pay_api_v3_key
-  wechat_pay_platform_certificate:
-    file: ${SECRETS_DIR:?SECRETS_DIR is required}/wechat_pay_platform_certificate
+  wechat_pay_public_key:
+    file: ${SECRETS_DIR:?SECRETS_DIR is required}/wechat_pay_public_key
   aliyun_oss_access_key_id:
     file: ${SECRETS_DIR:?SECRETS_DIR is required}/aliyun_oss_access_key_id
   aliyun_oss_access_key_secret:

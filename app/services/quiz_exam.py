@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
 from app.adapter.database import get_db_ctx
@@ -14,6 +15,8 @@ from app.domain.community.src.index import (
     QuizExam,
     QuizExamAnswer,
     QuizExamQuestion,
+    QuizQuestionRevision,
+    QuizQuestionRevisionStats,
     QuizQuestion,
 )
 from app.domain.community.src.rule.quiz import (
@@ -49,6 +52,7 @@ from app.schemas.quiz_contract import (
     QuizPublicQuestion,
 )
 from app.services.quiz_practice import QuizPracticeService
+from app.services.quiz_v2 import QuizV2Service
 
 
 _IN_PROGRESS = QuizExamStatus.IN_PROGRESS.value
@@ -68,6 +72,7 @@ class QuizExamService:
 
     def __init__(self) -> None:
         self.practice = QuizPracticeService()
+        self.v2 = QuizV2Service()
 
     @staticmethod
     def _now() -> datetime:
@@ -77,7 +82,14 @@ class QuizExamService:
     def _snapshot_dict(snapshot: QuizExamQuestion) -> dict[str, object]:
         return {
             "question_id": int(snapshot.question_id),
-            "category_id": int(snapshot.category_id),
+            "question_revision_id": (
+                int(getattr(snapshot, "question_revision_id"))
+                if getattr(snapshot, "question_revision_id", None) is not None
+                else None
+            ),
+            "category_id": (
+                int(snapshot.category_id) if snapshot.category_id is not None else None
+            ),
             "category_path": list(snapshot.category_path or []),
             "question_type": str(snapshot.question_type),
             "question_text": snapshot.question_text,
@@ -89,9 +101,31 @@ class QuizExamService:
 
     @staticmethod
     def _public_question(snapshot: QuizExamQuestion) -> QuizPublicQuestion:
+        path = list(snapshot.category_path or [])
+        library_id = next(
+            (int(item["id"]) for item in path if item.get("kind") == "library"),
+            None,
+        )
+        point_id = next(
+            (
+                int(item["id"])
+                for item in reversed(path)
+                if item.get("kind") == "knowledge_point"
+            ),
+            None,
+        )
         return QuizPublicQuestion(
             id=int(snapshot.question_id),
-            category_id=int(snapshot.category_id),
+            category_id=(
+                int(snapshot.category_id) if snapshot.category_id is not None else None
+            ),
+            library_id=library_id,
+            knowledge_point_id=point_id,
+            question_revision_id=(
+                int(getattr(snapshot, "question_revision_id"))
+                if getattr(snapshot, "question_revision_id", None) is not None
+                else None
+            ),
             question_type=snapshot.question_type,
             question_text=snapshot.question_text,
             options=dict(sorted((snapshot.options or {}).items())),
@@ -107,6 +141,19 @@ class QuizExamService:
     @staticmethod
     def _finished_at(exam: QuizExam) -> datetime | None:
         return exam.submitted_at or exam.timed_out_at or exam.abandoned_at
+
+    @staticmethod
+    def _scope_fields(exam: QuizExam) -> dict[str, object]:
+        return {
+            "category_id": (
+                int(exam.category_id) if exam.category_id is not None else None
+            ),
+            "library_id": (
+                int(exam.library_id) if exam.library_id is not None else None
+            ),
+            "scope_type": exam.scope_type,
+            "scope_id": int(exam.scope_id) if exam.scope_id is not None else None,
+        }
 
     async def _lock_user_any(self, db, user_id: int) -> User:
         result = await db.execute(
@@ -223,7 +270,7 @@ class QuizExamService:
             return QuizExamInProgressDetail(
                 id=int(exam.id),
                 status=_IN_PROGRESS,
-                category_id=int(exam.category_id),
+                **self._scope_fields(exam),
                 question_count=int(exam.question_count),
                 duration_seconds=_DURATION_SECONDS,
                 started_at=exam.started_at,
@@ -245,7 +292,7 @@ class QuizExamService:
             return QuizExamAbandonedDetail(
                 id=int(exam.id),
                 status=_ABANDONED,
-                category_id=int(exam.category_id),
+                **self._scope_fields(exam),
                 question_count=int(exam.question_count),
                 duration_seconds=_DURATION_SECONDS,
                 started_at=exam.started_at,
@@ -279,7 +326,7 @@ class QuizExamService:
         return QuizExamSettledDetail(
             id=int(exam.id),
             status=exam.status,
-            category_id=int(exam.category_id),
+            **self._scope_fields(exam),
             question_count=int(exam.question_count),
             duration_seconds=_DURATION_SECONDS,
             started_at=exam.started_at,
@@ -323,6 +370,30 @@ class QuizExamService:
                 correct_count += 1
             else:
                 wrong_count += 1
+            if snapshot.question_revision_id is not None:
+                statement = pg_insert(QuizQuestionRevisionStats).values(
+                    question_id=snapshot.question_id,
+                    question_revision_id=snapshot.question_revision_id,
+                    practice_first_attempts=0,
+                    practice_first_correct=0,
+                    exam_answers=1,
+                    exam_correct=1 if correct else 0,
+                    aggregated_through=settled_at,
+                )
+                await db.execute(
+                    statement.on_conflict_do_update(
+                        index_elements=[
+                            QuizQuestionRevisionStats.question_revision_id
+                        ],
+                        set_={
+                            "exam_answers": QuizQuestionRevisionStats.exam_answers
+                            + 1,
+                            "exam_correct": QuizQuestionRevisionStats.exam_correct
+                            + (1 if correct else 0),
+                            "aggregated_through": settled_at,
+                        },
+                    )
+                )
 
         stats = await self.practice._ensure_stats(db, int(exam.user_id))
         stats.exam_total_questions += len(snapshots)
@@ -408,48 +479,94 @@ class QuizExamService:
                 else:
                     return await self._serialize_exam(db, existing, server_time=now)
 
-            categories = await self.practice._load_categories(db)
-            by_id, scope_ids = self.practice._effective_category_ids(
-                categories,
-                data.category_id,
-            )
-            available = int(
-                (
-                    await db.execute(
-                        select(func.count(QuizQuestion.id)).where(
-                            QuizQuestion.status == _PUBLISHED,
-                            QuizQuestion.category_id.in_(scope_ids),
+            is_v2 = data.scope_type is not None
+            if is_v2:
+                assert data.scope_id is not None
+                library, point_ids, paths = await self.v2._resolve_scope(
+                    db, user_id, str(data.scope_type), int(data.scope_id)
+                )
+                path_by_point = {
+                    int(item["point_id"]): item["path"] for item in paths
+                }
+                rows = list(
+                    (
+                        await db.execute(
+                            select(QuizQuestion, QuizQuestionRevision)
+                            .join(
+                                QuizQuestionRevision,
+                                QuizQuestionRevision.id
+                                == QuizQuestion.current_revision_id,
+                            )
+                            .where(
+                                QuizQuestion.library_id == library.id,
+                                QuizQuestion.knowledge_point_id.in_(point_ids),
+                                QuizQuestion.status == _PUBLISHED,
+                                QuizQuestionRevision.status == "published",
+                            )
+                            .order_by(func.random())
+                            .limit(data.question_count)
+                        )
+                    ).all()
+                )
+                available = int(
+                    (
+                        await db.execute(
+                            select(func.count(QuizQuestion.id)).where(
+                                QuizQuestion.library_id == library.id,
+                                QuizQuestion.knowledge_point_id.in_(point_ids),
+                                QuizQuestion.status == _PUBLISHED,
+                                QuizQuestion.current_revision_id.is_not(None),
+                            )
+                        )
+                    ).scalar()
+                    or 0
+                )
+                questions = [question for question, _revision in rows]
+            else:
+                assert data.category_id is not None
+                categories = await self.practice._load_categories(db)
+                by_id, scope_ids = self.practice._effective_category_ids(
+                    categories,
+                    data.category_id,
+                )
+                available = int(
+                    (
+                        await db.execute(
+                            select(func.count(QuizQuestion.id)).where(
+                                QuizQuestion.status == _PUBLISHED,
+                                QuizQuestion.category_id.in_(scope_ids),
+                            )
+                        )
+                    ).scalar()
+                    or 0
+                )
+                questions = list(
+                    (
+                        await db.execute(
+                            select(QuizQuestion)
+                            .where(
+                                QuizQuestion.status == _PUBLISHED,
+                                QuizQuestion.category_id.in_(scope_ids),
+                            )
+                            .order_by(func.random())
+                            .limit(data.question_count)
                         )
                     )
-                ).scalar()
-                or 0
-            )
-            if available < data.question_count:
-                raise BusinessException(
-                    f"当前分类最大可选数为 {available}，无法创建 {data.question_count} 题考试"
+                    .scalars()
+                    .all()
                 )
-            questions = list(
-                (
-                    await db.execute(
-                        select(QuizQuestion)
-                        .where(
-                            QuizQuestion.status == _PUBLISHED,
-                            QuizQuestion.category_id.in_(scope_ids),
-                        )
-                        .order_by(func.random())
-                        .limit(data.question_count)
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            if len(questions) < data.question_count:
+                rows = [(question, None) for question in questions]
+            if available < data.question_count or len(questions) < data.question_count:
+                label = "当前范围" if is_v2 else "当前分类"
                 raise BusinessException(
-                    f"当前分类最大可选数为 {len(questions)}，无法创建 {data.question_count} 题考试"
+                    f"{label}最大可选数为 {available}，无法创建 {data.question_count} 题考试"
                 )
             exam = QuizExam(
                 user_id=user_id,
                 category_id=data.category_id,
+                library_id=(int(library.id) if is_v2 else None),
+                scope_type=(str(data.scope_type) if is_v2 else None),
+                scope_id=(int(data.scope_id) if is_v2 else None),
                 question_count=data.question_count,
                 duration_seconds=_DURATION_SECONDS,
                 status=_IN_PROGRESS,
@@ -459,13 +576,28 @@ class QuizExamService:
             )
             db.add(exam)
             await db.flush()
-            for position, question in enumerate(questions, start=1):
-                snapshot = self.practice._question_snapshot(question, by_id)
+            for position, (question, revision) in enumerate(rows, start=1):
+                if revision is not None:
+                    snapshot = {
+                        "category_id": None,
+                        "category_path": path_by_point[
+                            int(question.knowledge_point_id)
+                        ],
+                        "question_type": revision.question_type,
+                        "question_text": revision.question_text,
+                        "options": dict(revision.options or {}),
+                        "correct_answer": revision.correct_answer,
+                        "explanation": revision.explanation or "",
+                        "question_lock_version": int(question.lock_version),
+                    }
+                else:
+                    snapshot = self.practice._question_snapshot(question, by_id)
                 snapshot["options"] = dict(sorted((snapshot["options"] or {}).items()))
                 db.add(
                     QuizExamQuestion(
                         exam_id=exam.id,
                         question_id=question.id,
+                        question_revision_id=(revision.id if revision is not None else None),
                         position=position,
                         category_id=snapshot["category_id"],
                         category_path=snapshot["category_path"],
@@ -583,7 +715,7 @@ class QuizExamService:
             items = [
                 QuizExamListItem(
                     id=int(exam.id),
-                    category_id=int(exam.category_id),
+                    **self._scope_fields(exam),
                     question_count=int(exam.question_count),
                     duration_seconds=_DURATION_SECONDS,
                     status=exam.status,

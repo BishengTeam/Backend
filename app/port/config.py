@@ -16,7 +16,7 @@ SECRET_FILE_FIELDS = (
     "WECHAT_SECRET",
     "WECHAT_PAY_PRIVATE_KEY",
     "WECHAT_PAY_API_V3_KEY",
-    "WECHAT_PAY_PLATFORM_CERTIFICATE",
+    "WECHAT_PAY_PUBLIC_KEY",
     "ALIYUN_OSS_ACCESS_KEY_ID",
     "ALIYUN_OSS_ACCESS_KEY_SECRET",
     "QUIZ_OSS_ACCESS_KEY_ID",
@@ -125,7 +125,7 @@ class Settings(BaseSettings):
     WECHAT_SECRET_FILE: str = ""
     WECHAT_PAY_PRIVATE_KEY_FILE: str = ""
     WECHAT_PAY_API_V3_KEY_FILE: str = ""
-    WECHAT_PAY_PLATFORM_CERTIFICATE_FILE: str = ""
+    WECHAT_PAY_PUBLIC_KEY_FILE: str = ""
     ALIYUN_OSS_ACCESS_KEY_ID_FILE: str = ""
     ALIYUN_OSS_ACCESS_KEY_SECRET_FILE: str = ""
     QUIZ_OSS_ACCESS_KEY_ID_FILE: str = ""
@@ -244,8 +244,8 @@ class Settings(BaseSettings):
     WECHAT_PAY_CERT_SERIAL_NO: str = ""
     WECHAT_PAY_PRIVATE_KEY: str = ""
     WECHAT_PAY_API_V3_KEY: str = ""
-    WECHAT_PAY_PLATFORM_CERTIFICATE: str = ""
-    WECHAT_PAY_PLATFORM_CERT_SERIAL_NO: str = ""
+    WECHAT_PAY_PUBLIC_KEY: str = ""
+    WECHAT_PAY_PUBLIC_KEY_ID: str = ""
     WECHAT_PAY_NOTIFICATION_TOLERANCE_SECONDS: int = 300
     WECHAT_PAY_RECONCILE_POLL_SECONDS: int = 30
     WECHAT_PAY_RECONCILE_BATCH_SIZE: int = 100
@@ -416,8 +416,8 @@ class Settings(BaseSettings):
                 "WECHAT_PAY_CERT_SERIAL_NO": self.WECHAT_PAY_CERT_SERIAL_NO,
                 "WECHAT_PAY_PRIVATE_KEY": self.WECHAT_PAY_PRIVATE_KEY,
                 "WECHAT_PAY_API_V3_KEY": self.WECHAT_PAY_API_V3_KEY,
-                "WECHAT_PAY_PLATFORM_CERTIFICATE": self.WECHAT_PAY_PLATFORM_CERTIFICATE,
-                "WECHAT_PAY_PLATFORM_CERT_SERIAL_NO": self.WECHAT_PAY_PLATFORM_CERT_SERIAL_NO,
+                "WECHAT_PAY_PUBLIC_KEY": self.WECHAT_PAY_PUBLIC_KEY,
+                "WECHAT_PAY_PUBLIC_KEY_ID": self.WECHAT_PAY_PUBLIC_KEY_ID,
                 "WECHAT_PAY_NOTIFY_URL": self.WECHAT_PAY_NOTIFY_URL,
                 "WECHAT_PAY_REFUND_NOTIFY_URL": self.WECHAT_PAY_REFUND_NOTIFY_URL,
             }.items()
@@ -437,6 +437,12 @@ class Settings(BaseSettings):
         if self.WECHAT_PAY_ENABLED and self.WECHAT_PAY_API_V3_KEY:
             if len(self.WECHAT_PAY_API_V3_KEY.encode("utf-8")) != 32:
                 raise ValueError("WECHAT_PAY_API_V3_KEY must be exactly 32 bytes")
+        if (
+            self.WECHAT_PAY_ENABLED
+            and self.WECHAT_PAY_PUBLIC_KEY_ID
+            and not self.WECHAT_PAY_PUBLIC_KEY_ID.strip().startswith("PUB_KEY_ID_")
+        ):
+            raise ValueError("WECHAT_PAY_PUBLIC_KEY_ID must start with PUB_KEY_ID_")
         if (
             self.WECHAT_PAY_ENABLED
             and self.WECHAT_PAY_NOTIFY_URL

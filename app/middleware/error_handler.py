@@ -35,6 +35,9 @@ async def app_exception_handler(request: Request, exc: AppException) -> JSONResp
     content = {"code": exc.code, "message": exc.message, "data": None}
     if hasattr(exc, "detail") and exc.detail:
         content["detail"] = exc.detail
+    request_id = getattr(request.state, "request_id", None)
+    if request_id:
+        content["request_id"] = request_id
     return JSONResponse(status_code=exc.http_status_code, content=content)
 
 

@@ -236,6 +236,7 @@ class CoursesSystemTests(unittest.TestCase):
         self.assertFalse(hasattr(r, "video_url"))
         self.assertFalse(hasattr(r, "teacher_contact"))
         self.assertEqual(r.batches, None)
+        self.assertEqual(r.included_quiz_libraries, [])
 
     def test_course_detail_response_normalizes_empty_list_batches(self):
         """历史数据可能把空班次存成 []，应自动转成 {} 避免校验失败。"""

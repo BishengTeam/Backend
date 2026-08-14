@@ -32,17 +32,50 @@ class QuizQuestionStatus(StrEnum):
     DRAFT = "draft"
     PUBLISHED = "published"
     DISABLED = "disabled"
+    DELETED = "deleted"
+
+
+class QuizLibraryStatus(StrEnum):
+    DRAFT = "draft"
+    PUBLISHED = "published"
+    SUSPENDED = "suspended"
+    ARCHIVED = "archived"
+    DELETED = "deleted"
+
+
+class QuizLibraryAccessMode(StrEnum):
+    PENDING = "access_mode_pending"
+    FREE = "free"
+    COURSE_ENTITLEMENT = "course_entitlement"
+
+
+class QuizContentStatus(StrEnum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+    DELETED = "deleted"
 
 
 class QuizPracticeMode(StrEnum):
     NORMAL = "normal"
     WRONG = "wrong"
+    FULL = "full"
+    WRONG_ONLY = "wrong_only"
+    LEGACY_LIMITED = "legacy_limited"
+
+
+class QuizPracticeScopeType(StrEnum):
+    LIBRARY = "library"
+    MODULE = "module"
+    KNOWLEDGE_POINT = "knowledge_point"
 
 
 class QuizPracticeSessionStatus(StrEnum):
     IN_PROGRESS = "in_progress"
+    PAUSED = "paused"
     COMPLETED = "completed"
     ABANDONED = "abandoned"
+    EXPIRED = "expired"
+    TERMINATED = "terminated"
 
 
 class QuizWrongStatus(StrEnum):

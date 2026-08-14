@@ -14,14 +14,14 @@
 - `app/schemas/admin_quiz_contract.py`：管理端严格 Pydantic 模型。
 - `app/domain/community/src/rule/quiz.py`：题型、选项、答案、题干规范化和判分规则。
 
-当前机器契约和 Backend 运行时均注册 52 个 operation：用户端 22 个、管理端 30 个。2026-08-13 在原 48 个基线上新增的 4 个导入确认接口为：
+当前机器契约和 Backend 运行时均注册 78 个 operation：用户端 26 个、管理端 52 个。题库 V2 在原 52 个 operation 基线上新增 4 个用户端目录/范围/跳题接口和 22 个管理端题库、内容树、修订、生命周期及课程绑定接口。此前新增的 4 个导入确认接口仍为：
 
 - `GET /admin/quiz/imports/{job_id}/errors`
 - `GET /admin/quiz/imports/{job_id}/category-impact`
 - `POST /admin/quiz/imports/{job_id}/confirm-categories`
 - `POST /admin/quiz/imports/{job_id}/cancel`
 
-这 4 个接口已进入 `app/contracts/quiz.py`、严格 Schema 和运行时路由。Admin 已接入严格类型、页内错误、分类影响树及确认/取消交互，Backend/Admin/Platform manifest 已同步，`joint_release_gate.sh check` 通过。2026-08-13 Admin 12 项契约 Mock 浏览器用例已在宿主机实际执行并全部通过；当前仍没有显式 `TEST_DATABASE_URL` 对新增 PostgreSQL 用例重跑，且契约 Mock 不等同真实 Backend/OSS 联调，因此 52 个 operation 一致不代表三端联合验收已完成。
+全部 78 个接口均已进入 `app/contracts/quiz.py`、严格 Schema 和运行时路由。Backend、Admin、Platform manifest 已同步；契约一致不代表三端联合验收、真实 OSS 或生产环境部署已经完成。
 
 所有新版路由必须直接使用统一严格模型，不得重新定义同义 Schema。旧路由已从 Backend 运行时删除，不提供字段别名、双写、重定向或兼容响应；历史迁移中的旧表名仅用于破坏性迁移审计。
 
@@ -59,6 +59,8 @@
 | 422 | `40200` | 题量、状态、分类、题型等业务规则不满足 |
 | 409 | `40201` | 乐观锁版本冲突或并发状态冲突 |
 | 429 | `40202` | 用户或管理员题库接口限流 |
+| 423 | `40203` | 题库停用或课程权益暂时失效，练习会话已暂停 |
+| 410 | `40204` | 练习会话已过期，或因题库归档/删除永久终止 |
 | 404 | `40300` | 资源不存在或资源不属于当前用户 |
 | 500 | `50000` | 未处理的服务端错误 |
 
@@ -68,7 +70,7 @@
 
 - `GET /api/quiz/categories` 公开访问。
 - 其余 `/api/quiz/*` 接口必须使用用户 Bearer Token。
-- `/admin/quiz/*` 必须使用管理员 Bearer Token，并按注册表要求检查 `quiz:list`、`quiz:write` 或 `quiz:import`。
+- `/admin/quiz/*` 必须使用管理员 Bearer Token，并按注册表要求检查 `quiz:list`、`quiz:write`、`quiz:import`、`quiz_library_manage`、`quiz_content_edit` 或 `course_quiz_bind`。
 - `GET /api/quiz/questions`：每用户每分钟 60 次。
 - 练习作答和考试答案保存：每用户每分钟 120 次。
 - 管理普通写操作：每管理员每分钟 120 次。
@@ -77,7 +79,7 @@
 - OSS 源文件/错误报告短签：每管理员每分钟 60 次。
 - 超限不写业务数据。
 
-实现状态（2026-08-13）：52 个 operation、管理端分级限流、分类影响预览、导入人工重试/源文件短签、统计总览/分页、审计筛选和缺失分类确认流程已接入；Admin 新页面交互和三端 manifest 已同步，宿主机契约 Mock Playwright 为 `12 passed`。历史 `tests/integration/db` PostgreSQL 3306 基线为 `131 passed`；2026-08-13 新增迁移与导入确认用例尚需在显式隔离测试库上重跑。独立 `quiz-worker`、Redis 共享指标、鉴权 Prometheus 出口和 Web 就绪门禁已进入代码，但真实 Backend E2E、生产 Redis 多实例、真实阿里云 OSS、Worker 重启/扩容及真实告警通知仍需联调，不得据此宣称全链路已上线。
+实现状态（2026-08-13）：78 个 operation、固定“题库 → 模块 → 知识点”目录、不可变题目修订、题库生命周期、课程权益、全量练习、管理端分级限流、导入确认、统计及审计均已进入代码；三端 manifest 已同步。独立 `quiz-worker`、Redis 共享指标、鉴权 Prometheus 出口和 Web 就绪门禁已进入代码，但全量 PostgreSQL 回归、真实 Backend E2E、生产 Redis 多实例、真实阿里云 OSS、Worker 重启/扩容及真实告警通知仍须以本轮实际验证结果为准，不得据此宣称全链路已上线。
 
 后台任务状态可从 `/health` 与 `/ready` 的 `details.quiz_tasks` 查看。每个处理器返回队列深度、运行次数/耗时、成功失败数、重试数、最近心跳和最近异常类型；`source` 标识进程内或 Redis 共享来源，`signals` 提供 Worker 新鲜度、总积压/失败、卡死处理器、统计滞后、考试超时和 OSS 清理积压。`details.database.fingerprint_sha256` 是 PostgreSQL 集群 system identifier 与库名组合的不可逆 SHA-256，仅用于验收工具确认 HTTP 服务与显式指定的隔离数据库一致，不暴露数据库地址、库名或凭据。`checks.quiz_oss`/`details.quiz_oss` 独立表示题库导入 Bucket 的配置与私有 ACL 探测结果，不能用人社材料 Bucket 的健康状态代替。Worker 失联、共享指标过期或题库 Bucket 非私有/不可达都会使 `/ready` 返回 503；导入及 OSS 清理失败会保留审计并在后续轮次重试。
 
@@ -87,11 +89,17 @@
 
 | 方法 | 路径 | 请求模型 | 响应数据模型 |
 |---|---|---|---|
+| GET | `/api/quiz/libraries` | 无 | `list[QuizLibraryCatalogItem]` |
+| GET | `/api/quiz/libraries/{library_id}` | 无 | `QuizLibraryCatalogDetail` |
+| GET | `/api/quiz/practice-scopes/preview` | 范围查询参数 | `QuizPracticeScopePreview` |
 | GET | `/api/quiz/categories` | 无 | `list[QuizCategoryNode]` |
 | GET | `/api/quiz/questions` | `QuizQuestionListQuery` | `PaginatedData[QuizPublicQuestion]` |
 | POST | `/api/quiz/practice-sessions` | `QuizPracticeSessionCreate` | `QuizPracticeSessionResponse` |
 | GET | `/api/quiz/practice-sessions/current` | 无 | `QuizPracticeSessionResponse/null` |
 | GET | `/api/quiz/practice-sessions/{session_id}` | 无 | `QuizPracticeSessionResponse` |
+| POST | `/api/quiz/practice-sessions/{session_id}/questions/{session_question_id}/skip` | 无 | `QuizPracticeSkipResponse` |
+| PUT | `/api/quiz/practice-sessions/{session_id}/answers/{session_question_id}` | `QuizPracticeAnswerSave` | `QuizPracticeAnswerSaved` |
+| POST | `/api/quiz/practice-sessions/{session_id}/submit` | 无 | `QuizPracticeSessionResponse` |
 | POST | `/api/quiz/practice-sessions/{session_id}/attempts` | `QuizPracticeAttemptCreate` | `QuizPracticeAttemptResult` |
 | POST | `/api/quiz/practice-sessions/{session_id}/abandon` | 无 | `QuizPracticeAbandonResponse` |
 | GET | `/api/quiz/practice-history` | `QuizPracticeHistoryQuery` | `PaginatedData[QuizPracticeHistoryItem]` |
@@ -114,11 +122,17 @@
 `METHOD /path` 索引。它与上表和 `app/contracts/quiz.py` 必须保持同步：
 
 ```text
+GET /api/quiz/libraries
+GET /api/quiz/libraries/{library_id}
+GET /api/quiz/practice-scopes/preview
 GET /api/quiz/categories
 GET /api/quiz/questions
 POST /api/quiz/practice-sessions
 GET /api/quiz/practice-sessions/current
 GET /api/quiz/practice-sessions/{session_id}
+POST /api/quiz/practice-sessions/{session_id}/questions/{session_question_id}/skip
+PUT /api/quiz/practice-sessions/{session_id}/answers/{session_question_id}
+POST /api/quiz/practice-sessions/{session_id}/submit
 POST /api/quiz/practice-sessions/{session_id}/attempts
 POST /api/quiz/practice-sessions/{session_id}/abandon
 GET /api/quiz/practice-history
@@ -153,10 +167,32 @@ POST /api/quiz/exams/{exam_id}/abandon
 
 ## 6. 管理端接口
 
-下表是当前 Backend 运行时的 30 个管理端 operation；三端同步和外部依赖联调仍按全链路 Todo 验收。
+下表是当前 Backend 运行时的 52 个管理端 operation；三端同步和外部依赖联调仍按全链路 Todo 验收。
 
 | 方法 | 路径 | 权限 | 请求模型 | 响应数据模型 |
 |---|---|---|---|---|
+| GET | `/admin/quiz/libraries` | `quiz:list` | `AdminQuizLibraryQuery` | `list[AdminQuizLibraryResponse]` |
+| POST | `/admin/quiz/libraries` | `quiz_library_manage` | `AdminQuizLibraryCreate` | `AdminQuizLibraryResponse` |
+| GET | `/admin/quiz/libraries/{library_id}` | `quiz:list` | 无 | `AdminQuizLibraryResponse` |
+| PUT | `/admin/quiz/libraries/{library_id}` | `quiz_library_manage` | `AdminQuizLibraryUpdate` | `AdminQuizLibraryResponse` |
+| POST | `/admin/quiz/libraries/{library_id}/lifecycle` | `quiz_library_manage` | `AdminQuizLibraryStatusUpdate` | `AdminQuizLibraryResponse` |
+| GET | `/admin/quiz/libraries/{library_id}/course-bindings` | `quiz:list` | 无 | `list[AdminQuizCourseBindingResponse]` |
+| POST | `/admin/quiz/libraries/{library_id}/course-bindings` | `course_quiz_bind` | `AdminQuizCourseBindingCreate` | `AdminQuizCourseBindingResponse` |
+| POST | `/admin/quiz/course-bindings/{binding_id}/status` | `course_quiz_bind` | `AdminQuizCourseBindingStatusUpdate` | `AdminQuizCourseBindingResponse` |
+| GET | `/admin/quiz/libraries/{library_id}/content-tree` | `quiz:list` | 无 | `AdminQuizContentTreeResponse` |
+| POST | `/admin/quiz/modules` | `quiz_content_edit` | `AdminQuizModuleCreate` | `AdminQuizModuleResponse` |
+| PUT | `/admin/quiz/modules/{module_id}` | `quiz_content_edit` | `AdminQuizModuleUpdate` | `AdminQuizModuleResponse` |
+| POST | `/admin/quiz/modules/{module_id}/status` | `quiz_content_edit` | `AdminQuizContentStatusUpdate` | `AdminQuizModuleResponse` |
+| DELETE | `/admin/quiz/modules/{module_id}` | `quiz_content_edit` | `AdminQuizVersionRequest` | `null` |
+| POST | `/admin/quiz/modules/{module_id}/undo-delete` | `quiz_content_edit` | `AdminQuizVersionRequest` | `AdminQuizModuleResponse` |
+| POST | `/admin/quiz/knowledge-points` | `quiz_content_edit` | `AdminQuizKnowledgePointCreate` | `AdminQuizKnowledgePointResponse` |
+| PUT | `/admin/quiz/knowledge-points/{point_id}` | `quiz_content_edit` | `AdminQuizKnowledgePointUpdate` | `AdminQuizKnowledgePointResponse` |
+| POST | `/admin/quiz/knowledge-points/{point_id}/status` | `quiz_content_edit` | `AdminQuizContentStatusUpdate` | `AdminQuizKnowledgePointResponse` |
+| DELETE | `/admin/quiz/knowledge-points/{point_id}` | `quiz_content_edit` | `AdminQuizVersionRequest` | `null` |
+| POST | `/admin/quiz/knowledge-points/{point_id}/undo-delete` | `quiz_content_edit` | `AdminQuizVersionRequest` | `AdminQuizKnowledgePointResponse` |
+| GET | `/admin/quiz/migration-report` | `quiz:list` | 无 | `AdminQuizMigrationReportResponse` |
+| GET | `/admin/quiz/questions/{question_id}/revisions` | `quiz:list` | 无 | `list[AdminQuizQuestionRevisionResponse]` |
+| POST | `/admin/quiz/questions/{question_id}/undo-delete` | `quiz_content_edit` | `AdminQuizVersionRequest` | `AdminQuizQuestionResponse` |
 | GET | `/admin/quiz/categories` | `quiz:list` | `AdminQuizCategoryQuery` | `list[AdminQuizCategoryResponse]` |
 | POST | `/admin/quiz/categories` | `quiz:write` | `AdminQuizCategoryCreate` | `AdminQuizCategoryResponse` |
 | PUT | `/admin/quiz/categories/{category_id}` | `quiz:write` | `AdminQuizCategoryUpdate` | `AdminQuizCategoryResponse` |
@@ -211,12 +247,13 @@ POST /api/quiz/exams/{exam_id}/abandon
 `AdminQuizStatsOverviewResponse` 包含：
 
 - `calculated_at`（本次查询时间）和 `aggregated_through`（聚合水位，可为空）。
-- 分类总数及 active/disabled 数。
-- 题目总数及 draft/published/disabled 数。
+- 题库总数及 draft/published/suspended/archived 数；所有口径排除 deleted 题库。
+- 模块、知识点总数及 active/disabled 数；排除逻辑删除项和已删除题库中的内容。
+- 题目总数及 draft/published/disabled 数；默认排除逻辑删除题目和已删除题库中的内容。
 - 练习会话数、练习首答数/正确数/正确率。
 - completed/timed_out 考试场次、考试已答数/正确数/正确率。
 
-`AdminQuizStatsQuestionQuery` 支持 `category_id`、`question_type`、`status`、`keyword`、`page`、`page_size`。每个 `AdminQuizQuestionStatsListItem` 返回题目 ID、题干、分类、题型、状态、练习首答次数/正确率、考试作答次数/正确率和 `aggregated_through`。统计不返回用户 ID，不提供用户下钻或导出。
+`AdminQuizStatsQuestionQuery` 支持 `library_id`、`module_id`、`knowledge_point_id`、`question_type`、`status`、`include_deleted`、`keyword`、`page`、`page_size`。默认不返回逻辑删除题目；明确传 `status=deleted` 或 `include_deleted=true` 时可以查看仍属于未删除题库的删除题目。每个 `AdminQuizQuestionStatsListItem` 返回题目 ID、题干、题库/模块/知识点固定归属、题型、状态、练习首答次数/正确率、考试作答次数/正确率和 `aggregated_through`。统计不返回用户 ID，不提供用户下钻或导出。练习和考试指标保留全历史口径，不因内容逻辑删除被抹除。
 
 `AdminQuizAuditQuery` 在现有字段上新增 `request_id`、`start_at` 和 `end_at`；时间使用带时区 ISO 8601，且 `start_at <= end_at`。审计响应必须脱敏，不返回 Token、完整签名 URL、异常堆栈或批量标准答案正文。
 

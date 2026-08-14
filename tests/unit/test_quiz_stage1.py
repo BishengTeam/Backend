@@ -54,6 +54,12 @@ STATS_INDEX_MIGRATION_PATH = (
 QUIZ_MIGRATION_PATHS = tuple(
     sorted((REPO_ROOT / "alembic/versions").glob("quiz*.py"))
 )
+V2_MIGRATION_PATH = (
+    REPO_ROOT / "alembic/versions/quiz004_expand_quiz_v2_domain.py"
+)
+V2_PRACTICE_MIGRATION_PATH = (
+    REPO_ROOT / "alembic/versions/quiz005_add_v2_practice_revision_stats.py"
+)
 
 
 def _load_migration(path: Path = MIGRATION_PATH):
@@ -83,8 +89,8 @@ def _production_settings(**overrides) -> Settings:
         "WECHAT_PAY_CERT_SERIAL_NO": "stage-one-serial",
         "WECHAT_PAY_PRIVATE_KEY": "stage-one-private-key",
         "WECHAT_PAY_API_V3_KEY": "0123456789abcdef0123456789abcdef",
-        "WECHAT_PAY_PLATFORM_CERTIFICATE": "stage-one-platform-cert",
-        "WECHAT_PAY_PLATFORM_CERT_SERIAL_NO": "stage-one-platform-serial",
+        "WECHAT_PAY_PUBLIC_KEY": "stage-one-public-key",
+        "WECHAT_PAY_PUBLIC_KEY_ID": "PUB_KEY_ID_stage-one",
         "RENSHE_STORAGE_TYPE": "aliyun_oss",
         "ALIYUN_OSS_ENDPOINT": "https://oss-cn.example.com",
         "ALIYUN_OSS_BUCKET": "renshe-private",
@@ -178,7 +184,7 @@ def test_submitted_answers_are_canonical_and_exact_match_only() -> None:
 
 
 def test_contract_registry_is_complete_strict_and_machine_readable() -> None:
-    assert len(QUIZ_API_CONTRACTS) == 52
+    assert len(QUIZ_API_CONTRACTS) == 80
     keys = {(entry.method, entry.path) for entry in QUIZ_API_CONTRACTS}
     assert len(keys) == len(QUIZ_API_CONTRACTS)
     assert {
@@ -191,6 +197,11 @@ def test_contract_registry_is_complete_strict_and_machine_readable() -> None:
         ("POST", "/admin/quiz/imports/{job_id}/cancel"),
         ("GET", "/admin/quiz/stats/overview"),
         ("GET", "/admin/quiz/stats/questions"),
+        ("GET", "/api/quiz/libraries"),
+        ("GET", "/api/quiz/practice-scopes/preview"),
+        ("POST", "/api/quiz/practice-sessions/{session_id}/questions/{session_question_id}/skip"),
+        ("GET", "/admin/quiz/libraries/{library_id}/content-tree"),
+        ("POST", "/admin/quiz/questions/{question_id}/undo-delete"),
     }.issubset(set(keys))
     assert ("GET", "/api/quiz/categories") in keys
     assert ("GET", "/admin/quiz/audit-logs") in keys
@@ -207,6 +218,9 @@ def test_contract_registry_is_complete_strict_and_machine_readable() -> None:
                 "quiz:write",
                 "quiz:import",
                 "quiz:import+quiz:write",
+                "quiz_library_manage",
+                "quiz_content_edit",
+                "course_quiz_bind",
             }
         assert entry.example
 
@@ -284,7 +298,14 @@ def test_admin_contract_normalizes_judge_drafts_and_requires_versions() -> None:
 
 def test_quiz_metadata_matches_the_rebuilt_domain() -> None:
     migration = _load_migration()
-    expected = set(migration.NEW_TABLES) | {"quiz_import_error"}
+    v2_migration = _load_migration(V2_MIGRATION_PATH)
+    v2_practice_migration = _load_migration(V2_PRACTICE_MIGRATION_PATH)
+    expected = (
+        set(migration.NEW_TABLES)
+        | {"quiz_import_error"}
+        | set(v2_migration.V2_TABLES)
+        | set(v2_practice_migration.V2_PRACTICE_TABLES)
+    )
     actual = {name for name in Base.metadata.tables if name.startswith("quiz_")}
     assert actual == expected
     assert "quiz_record" not in actual
@@ -323,7 +344,7 @@ def test_reactivation_and_retention_constraints_match_frozen_lifecycle() -> None
     )
     exam_deadline = constraint_sql(QuizExam, "ck_quiz_exam_deadline")
 
-    assert "published_at IS NOT NULL) OR" in question_lifecycle
+    assert "status = 'deleted' AND deleted_at IS NOT NULL" in question_lifecycle
     assert "published_at IS NOT NULL AND disabled_at IS NULL" not in question_lifecycle
     assert "status = 'active' OR" in wrong_lifecycle
     assert "status = 'active' AND cleared_at IS NULL" not in wrong_lifecycle
