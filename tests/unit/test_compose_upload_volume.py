@@ -9,10 +9,16 @@ import yaml
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
-COMPOSE_FILES = (
+COMPOSE_FILES = [
     (BACKEND_ROOT / "docker-compose.yml", ("app",)),
-    (BACKEND_ROOT.parent / "docker-compose.yml", ("backend", "quiz-worker")),
-)
+]
+
+# The development monorepo Compose lives outside the Backend repository.  Keep
+# validating it when the sibling checkout is present without making an
+# isolated Backend checkout (for example GitHub Actions) depend on that layout.
+MONOREPO_COMPOSE = BACKEND_ROOT.parent / "docker-compose.yml"
+if MONOREPO_COMPOSE.is_file():
+    COMPOSE_FILES.append((MONOREPO_COMPOSE, ("backend", "quiz-worker")))
 
 
 @pytest.mark.parametrize(("compose_path", "dependent_services"), COMPOSE_FILES)
