@@ -111,6 +111,7 @@ jobs:
           DATABASE_URL_SYNC: postgresql://test:isolated-test-password@127.0.0.1:5432/wemini_app_test
         run: |
           scripts/quality_gate.sh backend
+          python -m alembic upgrade head
           python -m pytest -q -p no:cacheprovider tests/integration/db
 
       - name: Set up Node.js

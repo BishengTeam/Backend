@@ -83,7 +83,18 @@ def main() -> None:
     require(release_packager, "MAX_RELEASE_ASSET_BYTES", "GitHub asset size guard")
     require(release_packager, "SHA256SUMS", "release checksum manifest")
     require(image_workflow, "contents: write", "Release publish permission")
+    require(
+        image_workflow,
+        "python -m alembic upgrade head",
+        "CI PostgreSQL migration before integration tests",
+    )
     require(image_workflow, "tests/integration/db", "CI PostgreSQL integration tests")
+    if image_workflow.index("python -m alembic upgrade head") > image_workflow.index(
+        "tests/integration/db"
+    ):
+        raise SystemExit(
+            "CI PostgreSQL migration must run before the integration tests"
+        )
     require(image_workflow, "docker save", "Docker image archive export")
     require(image_workflow, "gh release create", "GitHub Release creation")
     require(image_workflow, "SHA256SUMS", "GitHub Release checksums")
