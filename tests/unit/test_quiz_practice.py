@@ -10,6 +10,7 @@ from app.main import app
 from app.schemas.quiz_contract import (
     QuizCollectionItem,
     QuizPracticeAttemptCreate,
+    QuizPracticeQuestionState,
     QuizPracticeSessionCreate,
     QuizPublicQuestion,
     QuizWrongBookItem,
@@ -108,6 +109,42 @@ def test_public_question_projection_never_contains_answer_or_explanation() -> No
     assert "explanation" not in QuizPublicQuestion.model_fields
     assert "correct_answer" not in QuizWrongBookItem.model_fields
     assert "explanation" not in QuizCollectionItem.model_fields
+
+
+def test_pending_practice_question_omits_answer_key_fields_from_wire_payload() -> None:
+    pending = QuizPracticeQuestionState(
+        id=9,
+        category_id=1,
+        question_type="single_choice",
+        question_text="Which option is correct?",
+        options={"A": "One", "B": "Two", "C": "Three"},
+        session_question_id=19,
+        position=1,
+        category_path=[],
+        answered=False,
+        attempt_count=0,
+    )
+
+    payload = pending.model_dump()
+
+    assert payload["latest_result"] is None
+    assert "correct_answer" not in payload
+    assert "explanation" not in payload
+    assert "is_correct" not in payload
+
+    settled_data = pending.model_dump()
+    settled_data.update(
+        answered=True,
+        user_answer="A",
+        correct_answer="A",
+        explanation="Because A is correct.",
+        is_correct=True,
+    )
+    settled = QuizPracticeQuestionState(**settled_data)
+    settled_payload = settled.model_dump()
+    assert settled_payload["correct_answer"] == "A"
+    assert settled_payload["explanation"] == "Because A is correct."
+    assert settled_payload["is_correct"] is True
 
 
 def test_practice_request_rules_and_answer_canonicalization() -> None:

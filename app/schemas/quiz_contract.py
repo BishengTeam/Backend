@@ -6,7 +6,14 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from app.domain.community.src.rule.quiz import (
     QuizExamStatus,
@@ -189,6 +196,16 @@ class QuizPracticeQuestionState(QuizPublicQuestion):
     is_correct: bool | None = None
     attempt_count: int = Field(ge=0)
     latest_result: QuizPracticeAttemptResult | None = None
+
+    @model_serializer(mode="wrap")
+    def hide_unsettled_result_fields(self, handler):
+        """Omit answer keys until final submission instead of emitting null keys."""
+
+        payload = handler(self)
+        for field_name in ("correct_answer", "explanation", "is_correct"):
+            if getattr(self, field_name) is None:
+                payload.pop(field_name, None)
+        return payload
 
 
 class QuizPracticeSessionResponse(QuizContractModel):

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>weMiniApp 一次性初始化</title>
+    <link rel="stylesheet" href="/assets/bootstrap.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">LOCAL BOOTSTRAP</p>
+        <h1>weMiniApp 一次性初始化</h1>
+        <p>此页面只能通过服务器环回地址或 SSH 隧道访问。初始化完成后入口永久关闭。</p>
+      </header>
+
+      <section id="session-card" class="card">
+        <h2>连接初始化会话</h2>
+        <label>一次性 Token
+          <input id="token" type="password" autocomplete="off" spellcheck="false">
+        </label>
+        <button id="connect" type="button">连接</button>
+      </section>
+
+      <section id="status-card" class="card hidden" aria-live="polite">
+        <div class="status-row">
+          <div>
+            <span class="label">当前阶段</span>
+            <strong id="phase">—</strong>
+          </div>
+          <div>
+            <span class="label">安装 ID</span>
+            <code id="installation-id">—</code>
+          </div>
+        </div>
+        <p id="failure" class="error hidden"></p>
+        <button id="retry" type="button" class="secondary hidden">重试当前步骤</button>
+      </section>
+
+      <form id="configuration" class="card hidden" autocomplete="off">
+        <h2>部署配置</h2>
+        <div class="grid">
+          <label>基础设施模式
+            <select name="deployment_mode">
+              <option value="internal">Compose 内置 PostgreSQL / Redis</option>
+              <option value="external">外部 PostgreSQL / Redis</option>
+            </select>
+          </label>
+          <label>Backend HTTPS Origin
+            <input name="api_origin" type="url" placeholder="https://api.example.com" required>
+          </label>
+          <label>Admin HTTPS Origin
+            <input name="admin_origin" type="url" placeholder="https://admin.example.com" required>
+          </label>
+        </div>
+
+        <fieldset>
+          <legend>PostgreSQL / Redis</legend>
+          <div class="grid">
+            <label>PostgreSQL Host<input name="postgres_host" value="db" required></label>
+            <label>PostgreSQL Port<input name="postgres_port" type="number" value="5432" min="1" max="65535" required></label>
+            <label>PostgreSQL User<input name="postgres_user" value="wemini" required></label>
+            <label>PostgreSQL Database<input name="postgres_database" value="wemini_app" required></label>
+            <label>外部 PostgreSQL Password<input name="postgres_password" type="password"></label>
+            <label>外部 Redis URL<input name="redis_url" type="password" placeholder="rediss://..."></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>微信登录与支付 V3</legend>
+          <div class="grid">
+            <label>小程序 AppID<input name="wechat_appid" required></label>
+            <label>小程序 Secret<input name="wechat_secret" type="password" required></label>
+            <label>支付 AppID<input name="wechat_pay_appid" required></label>
+            <label>商户号<input name="wechat_pay_mchid" required></label>
+            <label>商户证书序列号<input name="wechat_pay_cert_serial_no" required></label>
+            <label>微信支付公钥 ID<input name="wechat_pay_public_key_id" required></label>
+            <label>API V3 Key<input name="wechat_pay_api_v3_key" type="password" required></label>
+            <label>商户私钥 PEM 文件<input name="wechat_pay_private_key_file" type="file" accept=".pem,.key" required></label>
+            <label>微信支付公钥 PEM 文件<input name="wechat_pay_public_key_file" type="file" accept=".pem" required></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>私有 OSS</legend>
+          <div class="grid">
+            <label>人社 Endpoint<input name="renshe_oss_endpoint" type="url" required></label>
+            <label>人社 Bucket<input name="renshe_oss_bucket" required></label>
+            <label>人社 AccessKey ID<input name="renshe_oss_access_key_id" type="password" required></label>
+            <label>人社 AccessKey Secret<input name="renshe_oss_access_key_secret" type="password" required></label>
+            <label>题库 Endpoint<input name="quiz_oss_endpoint" type="url" required></label>
+            <label>题库 Bucket<input name="quiz_oss_bucket" required></label>
+            <label>题库 AccessKey ID<input name="quiz_oss_access_key_id" type="password" required></label>
+            <label>题库 AccessKey Secret<input name="quiz_oss_access_key_secret" type="password" required></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>独立恢复 OSS</legend>
+          <div class="grid">
+            <label>恢复 Endpoint<input name="recovery_oss_endpoint" type="url" required></label>
+            <label>恢复 Bucket<input name="recovery_oss_bucket" required></label>
+            <label>对象前缀<input name="recovery_oss_prefix" value="wemini-recovery" required></label>
+            <label>恢复 AccessKey ID<input name="recovery_oss_access_key_id" type="password" required></label>
+            <label>恢复 AccessKey Secret<input name="recovery_oss_access_key_secret" type="password" required></label>
+            <label>恢复 RSA 公钥 PEM 文件<input name="recovery_public_key_file" type="file" accept=".pem" required></label>
+          </div>
+        </fieldset>
+
+        <p class="notice">提交后 Secret 不会再次显示。请先确认所有字段和文件来自正确环境。</p>
+        <button type="submit">验证并提交配置</button>
+      </form>
+
+      <form id="administrator" class="card hidden" autocomplete="off">
+        <h2>创建首位超级管理员</h2>
+        <p>数据库迁移已完成。密码只用于本次请求，不会写入文件、日志或恢复包。</p>
+        <div class="grid">
+          <label>用户名<input name="username" minlength="3" maxlength="64" required></label>
+          <label>最终强密码<input name="password" type="password" minlength="12" maxlength="256" required></label>
+          <label>再次输入密码<input name="password_confirm" type="password" minlength="12" maxlength="256" required></label>
+        </div>
+        <button type="submit">创建超级管理员</button>
+      </form>
+
+      <p id="message" class="message" aria-live="polite"></p>
+    </main>
+    <script src="/assets/bootstrap.js" defer></script>
+  </body>
+</html>

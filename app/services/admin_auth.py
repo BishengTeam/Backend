@@ -1,6 +1,3 @@
-import hashlib
-import secrets
-
 from sqlalchemy import select
 
 from app.port.config import settings
@@ -11,25 +8,18 @@ from app.domain.user.src.index import AdminUser
 from app.policy.permissions import ROLE_PERMISSIONS
 from app.schemas.admin import AdminInfo, AdminLoginResponse
 from app.services.renshe_audit import record_best_effort_audit
-
-SALT_LENGTH = 32
-HASH_ITERATIONS = 600_000
+from app.utils.passwords import hash_admin_password, verify_admin_password
 
 
 class AdminAuthService:
 
     @staticmethod
     def hash_password(password: str) -> str:
-        salt = secrets.token_bytes(SALT_LENGTH)
-        dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, HASH_ITERATIONS)
-        return salt.hex() + ":" + dk.hex()
+        return hash_admin_password(password)
 
     @staticmethod
     def verify_password(password: str, stored_hash: str) -> bool:
-        salt_hex, dk_hex = stored_hash.split(":")
-        salt = bytes.fromhex(salt_hex)
-        dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, HASH_ITERATIONS)
-        return secrets.compare_digest(dk.hex(), dk_hex)
+        return verify_admin_password(password, stored_hash)
 
     async def login(self, username: str, password: str) -> AdminLoginResponse:
         try:

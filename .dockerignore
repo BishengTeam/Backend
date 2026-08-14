@@ -4,13 +4,17 @@ __pycache__/
 .venv/
 .idea/
 .vscode/
+.agents/
+.codex/
 .git/
 .gitignore
 .env*
+data/config/.env*
 *.egg-info/
 dist/
 build/
 tests/
 docs/
+docs/certfile/
 uploads/*
 !uploads/.gitkeep

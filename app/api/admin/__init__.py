@@ -7,6 +7,7 @@ from app.api.admin.banners import router as banners_router
 from app.api.admin.certifications import router as cert_router
 from app.api.admin.competition import router as competition_router
 from app.api.admin.coupons import router as coupons_router
+from app.api.admin.deployment_acceptance import router as deployment_acceptance_router
 from app.api.admin.jobs import router as jobs_router
 from app.api.admin.courses import router as courses_router
 from app.api.admin.orders import router as orders_router
@@ -39,6 +40,7 @@ router.include_router(quiz_router)
 router.include_router(renshe_router)
 router.include_router(zones_router)
 router.include_router(coupons_router)
+router.include_router(deployment_acceptance_router)
 router.include_router(agreements_router)
 router.include_router(tickets_router)
 router.include_router(statistics_router)

@@ -63,6 +63,10 @@ from app.domain.renshe.src.index import (
     RensheReview,
     RensheReviewCorrection,
 )
+from app.models.deployment_acceptance import (
+    DeploymentAcceptance,
+    DeploymentAcceptanceEvent,
+)
 
 __all__ = [
     "Activity",
@@ -82,6 +86,8 @@ __all__ = [
     "CourseEnrollment",
     "DeletedOpenid",
     "DeletedIdentityHash",
+    "DeploymentAcceptance",
+    "DeploymentAcceptanceEvent",
     "Inventory",
     "InventoryRecord",
     "Job",

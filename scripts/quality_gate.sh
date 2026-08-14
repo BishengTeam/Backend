@@ -22,6 +22,7 @@ run_backend() {
     (cd "$BACKEND_ROOT" && "$PYTHON_BIN" -m pytest tests/unit -q)
     (cd "$BACKEND_ROOT" && "$PYTHON_BIN" scripts/check_renshe_contract.py)
     (cd "$BACKEND_ROOT" && "$PYTHON_BIN" scripts/check_migrations.py --offline-sql)
+    (cd "$BACKEND_ROOT" && "$PYTHON_BIN" scripts/check_bootstrap_deployment.py)
     (cd "$BACKEND_ROOT" && "$PYTHON_BIN" scripts/postgres_backup.py --help >/dev/null)
     (cd "$BACKEND_ROOT" && "$PYTHON_BIN" scripts/quiz_acceptance_preflight.py --help >/dev/null)
     (cd "$BACKEND_ROOT" && "$PYTHON_BIN" scripts/quiz_acceptance_runner.py --help >/dev/null)
