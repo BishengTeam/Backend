@@ -23,8 +23,17 @@ def forbid(source: str, fragment: str, label: str) -> None:
 
 def main() -> None:
     bootstrap_compose = (ROOT / "docker-compose.bootstrap.yml").read_text("utf-8")
+    release_bootstrap_compose = (
+        ROOT / "docker-compose.bootstrap.release.yml"
+    ).read_text("utf-8")
     runtime_compose = (ROOT / "docker-compose.deploy.yml").read_text("utf-8")
     orchestrator = (ROOT / "scripts/bootstrap_server.sh").read_text("utf-8")
+    installer = (ROOT / "scripts/install_server.sh").read_text("utf-8")
+    release_installer = (ROOT / "scripts/install_release.sh").read_text("utf-8")
+    release_packager = (ROOT / "scripts/package_github_release.py").read_text("utf-8")
+    image_workflow = (
+        ROOT / ".github/workflows/publish-github-release.yml"
+    ).read_text("utf-8")
     production_seed = (ROOT / "scripts/seed_production.py").read_text("utf-8")
 
     require(
@@ -33,6 +42,12 @@ def main() -> None:
         "loopback-only bootstrap port",
     )
     require(bootstrap_compose, "bootstrap_app.main:create_app", "bootstrap app factory")
+    require(
+        release_bootstrap_compose,
+        "127.0.0.1:${BOOTSTRAP_PORT:-18080}:18080",
+        "release loopback-only bootstrap port",
+    )
+    forbid(release_bootstrap_compose, "build:", "release image build")
     require(runtime_compose, 'RUN_MIGRATIONS: "false"', "runtime migration disable")
     require(runtime_compose, "migration:", "dedicated migration job")
     require(runtime_compose, "production-seed:", "production seed job")
@@ -48,7 +63,30 @@ def main() -> None:
     )
     require(runtime_compose, "REDIS_URL_FILE: /run/secrets/redis_url", "Redis secret")
     require(orchestrator, "refs/heads/main:refs/remotes/origin/main", "single main fetch")
+    require(orchestrator, "git clone --branch main", "automatic Admin clone")
     require(orchestrator, "status --porcelain", "dirty worktree refusal")
+    require(orchestrator, 'DEPLOY_SOURCE_MODE="${DEPLOY_SOURCE_MODE:-git}"', "source mode")
+    require(orchestrator, "release-source.env", "GitHub Release source manifest")
+    require(orchestrator, 'docker_cli pull "$BACKEND_IMAGE"', "prebuilt Backend pull")
+    require(orchestrator, 'docker_cli pull "$ADMIN_IMAGE"', "prebuilt Admin pull")
+    require(
+        orchestrator,
+        "org.opencontainers.image.revision",
+        "prebuilt image revision verification",
+    )
+    require(orchestrator, "--no-build bootstrap", "prebuilt bootstrap start")
+    require(installer, "git clone --branch main", "automatic Backend clone")
+    require(release_installer, "zstd -dc", "release image decompression")
+    require(release_installer, "docker_cli load", "release image load")
+    require(release_installer, "DEPLOY_SOURCE_MODE=release", "source-free release mode")
+    require(release_installer, "DOCKER_USE_SUDO", "Docker-only sudo mode")
+    require(release_packager, "MAX_RELEASE_ASSET_BYTES", "GitHub asset size guard")
+    require(release_packager, "SHA256SUMS", "release checksum manifest")
+    require(image_workflow, "contents: write", "Release publish permission")
+    require(image_workflow, "tests/integration/db", "CI PostgreSQL integration tests")
+    require(image_workflow, "docker save", "Docker image archive export")
+    require(image_workflow, "gh release create", "GitHub Release creation")
+    require(image_workflow, "SHA256SUMS", "GitHub Release checksums")
     require(orchestrator, "tests/integration/db", "isolated PostgreSQL tests")
     require(orchestrator, "INSTALLED_PENDING_UAT", "post-install UAT state")
     require(
@@ -79,13 +117,16 @@ def main() -> None:
 
     for source, label in (
         (bootstrap_compose, "bootstrap Compose"),
+        (release_bootstrap_compose, "release bootstrap Compose"),
         (runtime_compose, "runtime Compose"),
         (orchestrator, "orchestrator"),
+        (release_installer, "release installer"),
     ):
         forbid(source, "/var/run/docker.sock", f"Docker Socket in {label}")
         forbid(source, "docker.sock", f"Docker Socket alias in {label}")
     forbid(orchestrator, "git reset", "destructive Git reset")
     forbid(orchestrator, "git clean", "destructive Git clean")
+    forbid(orchestrator, 'fail "missing official template', "hard template preflight")
     forbid(orchestrator, "Platform", "Platform deployment")
     forbid(production_seed, "seed_testdata", "test data import")
     forbid(production_seed, '"--force"', "force seed mode")

@@ -46,7 +46,9 @@ def _single_line(value: str, name: str, *, allow_space: bool = False) -> str:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Write the immutable local-build release manifest.")
+    parser = argparse.ArgumentParser(
+        description="Write the immutable prebuilt or local-build release manifest."
+    )
     parser.add_argument("--backend-commit", required=True)
     parser.add_argument("--admin-commit", required=True)
     parser.add_argument("--backend-remote", required=True)
@@ -55,6 +57,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--admin-image", required=True)
     parser.add_argument("--backend-image-id", required=True)
     parser.add_argument("--admin-image-id", required=True)
+    parser.add_argument(
+        "--quality-source",
+        choices=("ci_prebuilt", "github_release", "preloaded", "server_build"),
+        default="server_build",
+    )
     parser.add_argument("--template-dir", required=True)
     parser.add_argument("--backend-port", type=int, default=8000)
     parser.add_argument("--admin-port", type=int, default=8080)
@@ -109,6 +116,7 @@ def main() -> None:
             "admin": {"name": args.admin_image, "id": args.admin_image_id},
         },
         "quality": {
+            "source": args.quality_source,
             "backend_unit_contract_migration": "passed",
             "backend_isolated_postgresql": "passed",
             "admin_test_build": "passed",

@@ -43,6 +43,20 @@ def test_bootstrap_and_runtime_compose_parse_when_required_values_are_supplied(t
         env=bootstrap_env,
         check=True,
     )
+    subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            "docker-compose.bootstrap.release.yml",
+            "config",
+            "--quiet",
+        ],
+        cwd=ROOT,
+        env=bootstrap_env
+        | {"BOOTSTRAP_IMAGE": "wemini-backend:" + "a" * 40},
+        check=True,
+    )
 
     runtime_env = os.environ | {
         "BACKEND_IMAGE": "wemini-backend:test",

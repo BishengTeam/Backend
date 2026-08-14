@@ -1,0 +1,24 @@
+services:
+  bootstrap:
+    image: ${BOOTSTRAP_IMAGE:?BOOTSTRAP_IMAGE is required}
+    entrypoint: []
+    command:
+      - uvicorn
+      - bootstrap_app.main:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "18080"
+      - --no-access-log
+    user: ${BOOTSTRAP_UID:?BOOTSTRAP_UID is required}:${BOOTSTRAP_GID:?BOOTSTRAP_GID is required}
+    environment:
+      BOOTSTRAP_DEPLOY_ROOT: /bootstrap-data
+      BOOTSTRAP_HOST_DEPLOY_ROOT: ${BOOTSTRAP_HOST_DEPLOY_ROOT:?BOOTSTRAP_HOST_DEPLOY_ROOT is required}
+      BOOTSTRAP_TOKEN_FILE: /bootstrap-data/control/bootstrap_token
+      BOOTSTRAP_REQUEST_MAX_BYTES: "2097152"
+    volumes:
+      - ${BOOTSTRAP_HOST_DEPLOY_ROOT:?BOOTSTRAP_HOST_DEPLOY_ROOT is required}:/bootstrap-data
+    ports:
+      - 127.0.0.1:${BOOTSTRAP_PORT:-18080}:18080
+    restart: "no"

@@ -4,15 +4,40 @@ set -Eeuo pipefail
 umask 077
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-BACKEND_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+DETECTED_BACKEND_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+BACKEND_DIR="${BACKEND_DIR:-$DETECTED_BACKEND_DIR}"
+BACKEND_DIR="$(cd -- "$BACKEND_DIR" && pwd)"
 PROJECT_ROOT="$(cd -- "$BACKEND_DIR/.." && pwd)"
 ADMIN_DIR="${ADMIN_DIR:-$PROJECT_ROOT/Admin}"
-RENSHE_TEMPLATE_HOST_DIR="${RENSHE_TEMPLATE_HOST_DIR:-$PROJECT_ROOT/docs/renshe}"
 BOOTSTRAP_HOST_DEPLOY_ROOT="${BOOTSTRAP_HOST_DEPLOY_ROOT:-/srv/wemini-bootstrap}"
+DEPLOY_SOURCE_MODE="${DEPLOY_SOURCE_MODE:-git}"
+RELEASE_SOURCE_FILE="${RELEASE_SOURCE_FILE:-$BACKEND_DIR/release-source.env}"
+PROJECT_RENSHE_TEMPLATE_DIR="$PROJECT_ROOT/docs/renshe"
+if [[ -z "${RENSHE_TEMPLATE_HOST_DIR:-}" ]]; then
+  if [[ -f "$PROJECT_RENSHE_TEMPLATE_DIR/报名信息.xlsx" \
+    && -f "$PROJECT_RENSHE_TEMPLATE_DIR/工作经历.xlsx" ]]; then
+    RENSHE_TEMPLATE_HOST_DIR="$PROJECT_RENSHE_TEMPLATE_DIR"
+  else
+    RENSHE_TEMPLATE_HOST_DIR="$BOOTSTRAP_HOST_DEPLOY_ROOT/assets/renshe"
+  fi
+fi
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-wemini}"
 BOOTSTRAP_PORT="${BOOTSTRAP_PORT:-18080}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 ADMIN_PORT="${ADMIN_PORT:-8080}"
+ADMIN_GIT_REMOTE="${ADMIN_GIT_REMOTE:-https://github.com/BishengTeam/Admin.git}"
+if [[ -z "${RELEASE_IMAGE_MODE:-}" ]]; then
+  if [[ "$DEPLOY_SOURCE_MODE" = "release" ]]; then
+    RELEASE_IMAGE_MODE="preloaded"
+  else
+    RELEASE_IMAGE_MODE="build"
+  fi
+fi
+BACKEND_IMAGE_REPOSITORY="${BACKEND_IMAGE_REPOSITORY:-ghcr.io/bishengteam/backend}"
+ADMIN_IMAGE_REPOSITORY="${ADMIN_IMAGE_REPOSITORY:-ghcr.io/bishengteam/admin}"
+BACKEND_IMAGE_OVERRIDE="${BACKEND_IMAGE:-}"
+ADMIN_IMAGE_OVERRIDE="${ADMIN_IMAGE:-}"
+DOCKER_USE_SUDO="${DOCKER_USE_SUDO:-0}"
 
 CONTROL_DIR="$BOOTSTRAP_HOST_DEPLOY_ROOT/control"
 TOKEN_FILE="$CONTROL_DIR/bootstrap_token"
@@ -21,6 +46,9 @@ RUNTIME_ENV="$BOOTSTRAP_HOST_DEPLOY_ROOT/installation/runtime.env"
 RELEASE_ENV="$CONTROL_DIR/release.env"
 BOOTSTRAP_COMPOSE_FILE="$BACKEND_DIR/docker-compose.bootstrap.yml"
 RUNTIME_COMPOSE_FILE="$BACKEND_DIR/docker-compose.deploy.yml"
+if [[ "$DEPLOY_SOURCE_MODE" = "release" ]]; then
+  BOOTSTRAP_COMPOSE_FILE="$BACKEND_DIR/docker-compose.bootstrap.release.yml"
+fi
 
 BOOTSTRAP_UID="$(id -u)"
 BOOTSTRAP_GID="$(id -g)"
@@ -36,6 +64,14 @@ fail() {
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "required command is unavailable: $1"
+}
+
+docker_cli() {
+  if [[ "$DOCKER_USE_SUDO" = "1" ]]; then
+    sudo docker "$@"
+  else
+    docker "$@"
+  fi
 }
 
 assert_safe_absolute_path() {
@@ -63,6 +99,71 @@ check_repository() {
     || fail "$name origin contains URL credentials; use an SSH remote or credential helper"
 }
 
+ensure_admin_repository() {
+  if git -C "$ADMIN_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return
+  fi
+  [[ ! -e "$ADMIN_DIR" ]] \
+    || fail "Admin path exists but is not a Git worktree: $ADMIN_DIR"
+  [[ "$ADMIN_GIT_REMOTE" != *://*@* ]] \
+    || fail "ADMIN_GIT_REMOTE must not contain URL credentials"
+  log "Admin repository is missing; cloning origin/main"
+  git clone --branch main --single-branch "$ADMIN_GIT_REMOTE" "$ADMIN_DIR" \
+    || fail "unable to clone Admin repository"
+}
+
+validate_image_ref() {
+  local image_ref="$1"
+  local name="$2"
+  [[ -n "$image_ref" && "$image_ref" != -* ]] \
+    || fail "$name is invalid"
+  [[ "$image_ref" != *$'\n'* && "$image_ref" != *$'\r'* \
+    && "$image_ref" != *' '* && "$image_ref" != *$'\t'* ]] \
+    || fail "$name contains invalid whitespace"
+}
+
+release_value() {
+  local key="$1"
+  local count value
+  count="$(grep -c "^${key}=" "$RELEASE_SOURCE_FILE" || true)"
+  [[ "$count" = "1" ]] || fail "release source must contain exactly one $key"
+  value="$(sed -n "s/^${key}=//p" "$RELEASE_SOURCE_FILE")"
+  [[ -n "$value" && "$value" != *$'\n'* && "$value" != *$'\r'* ]] \
+    || fail "release source value is invalid: $key"
+  printf '%s' "$value"
+}
+
+load_release_source() {
+  [[ -f "$RELEASE_SOURCE_FILE" && ! -L "$RELEASE_SOURCE_FILE" ]] \
+    || fail "release source manifest is unavailable: $RELEASE_SOURCE_FILE"
+  [[ "$(stat -c '%s' "$RELEASE_SOURCE_FILE")" -le 16384 ]] \
+    || fail "release source manifest is too large"
+  [[ "$(release_value RELEASE_BUNDLE_VERSION)" = "1" ]] \
+    || fail "unsupported release bundle version"
+  RELEASE_TOOLING_COMMIT="$(release_value TOOLING_COMMIT)"
+  RELEASE_BACKEND_COMMIT="$(release_value BACKEND_COMMIT)"
+  RELEASE_ADMIN_COMMIT="$(release_value ADMIN_COMMIT)"
+  RELEASE_BACKEND_REMOTE="$(release_value BACKEND_REMOTE)"
+  RELEASE_ADMIN_REMOTE="$(release_value ADMIN_REMOTE)"
+  RELEASE_BACKEND_IMAGE="$(release_value BACKEND_IMAGE)"
+  RELEASE_ADMIN_IMAGE="$(release_value ADMIN_IMAGE)"
+  [[ "$RELEASE_TOOLING_COMMIT" =~ ^[0-9a-f]{40,64}$ ]] \
+    || fail "release tooling commit is invalid"
+  [[ "$RELEASE_BACKEND_COMMIT" =~ ^[0-9a-f]{40,64}$ ]] \
+    || fail "release Backend commit is invalid"
+  [[ "$RELEASE_ADMIN_COMMIT" =~ ^[0-9a-f]{40,64}$ ]] \
+    || fail "release Admin commit is invalid"
+  [[ "$RELEASE_BACKEND_REMOTE" != *://*@* \
+    && "$RELEASE_ADMIN_REMOTE" != *://*@* ]] \
+    || fail "release repository remote contains URL credentials"
+  validate_image_ref "$RELEASE_BACKEND_IMAGE" BACKEND_IMAGE
+  validate_image_ref "$RELEASE_ADMIN_IMAGE" ADMIN_IMAGE
+  [[ "$RELEASE_BACKEND_IMAGE" = *":$RELEASE_BACKEND_COMMIT" ]] \
+    || fail "release Backend image tag must equal its full commit"
+  [[ "$RELEASE_ADMIN_IMAGE" = *":$RELEASE_ADMIN_COMMIT" ]] \
+    || fail "release Admin image tag must equal its full commit"
+}
+
 warn_resources() {
   local cpu_count memory_kib disk_kib
   cpu_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '0')"
@@ -80,13 +181,26 @@ warn_resources() {
 }
 
 preflight() {
-  for command in docker git curl openssl sha256sum awk sed grep seq stat install; do
+  for command in docker curl openssl sha256sum awk sed grep seq stat install; do
     require_command "$command"
   done
-  docker info >/dev/null 2>&1 || fail "Docker daemon is unavailable"
-  docker compose version >/dev/null 2>&1 || fail "Docker Compose v2 is unavailable"
+  (( EUID != 0 )) \
+    || fail "do not run this script with sudo; grant the deployment user Docker access"
+  case "$DOCKER_USE_SUDO" in
+    0)
+      ;;
+    1)
+      require_command sudo
+      sudo -v || fail "sudo authentication failed"
+      ;;
+    *)
+      fail "DOCKER_USE_SUDO must be 0 or 1"
+      ;;
+  esac
+  docker_cli info >/dev/null 2>&1 \
+    || fail "Docker daemon is unavailable; use Docker group access or DOCKER_USE_SUDO=1"
+  docker_cli compose version >/dev/null 2>&1 || fail "Docker Compose v2 is unavailable"
   assert_safe_absolute_path "$BACKEND_DIR" BACKEND_DIR
-  assert_safe_absolute_path "$ADMIN_DIR" ADMIN_DIR
   assert_safe_absolute_path "$BOOTSTRAP_HOST_DEPLOY_ROOT" BOOTSTRAP_HOST_DEPLOY_ROOT
   assert_safe_absolute_path "$RENSHE_TEMPLATE_HOST_DIR" RENSHE_TEMPLATE_HOST_DIR
   [[ "$BOOTSTRAP_PORT" =~ ^[0-9]+$ && "$BOOTSTRAP_PORT" -ge 1 && "$BOOTSTRAP_PORT" -le 65535 ]] \
@@ -97,15 +211,44 @@ preflight() {
     || fail "ADMIN_PORT is invalid"
   [[ "$BOOTSTRAP_PORT" != "$BACKEND_PORT" && "$BOOTSTRAP_PORT" != "$ADMIN_PORT" && "$BACKEND_PORT" != "$ADMIN_PORT" ]] \
     || fail "bootstrap, Backend and Admin ports must be different"
-  [[ -f "$RENSHE_TEMPLATE_HOST_DIR/报名信息.xlsx" ]] \
-    || fail "missing official template: 报名信息.xlsx"
-  [[ -f "$RENSHE_TEMPLATE_HOST_DIR/工作经历.xlsx" ]] \
-    || fail "missing official template: 工作经历.xlsx"
-  check_repository "$BACKEND_DIR" Backend
-  check_repository "$ADMIN_DIR" Admin
+  case "$DEPLOY_SOURCE_MODE" in
+    git|release)
+      ;;
+    *)
+      fail "DEPLOY_SOURCE_MODE must be git or release"
+      ;;
+  esac
+  case "$RELEASE_IMAGE_MODE" in
+    pull|preloaded|build)
+      ;;
+    *)
+      fail "RELEASE_IMAGE_MODE must be pull, preloaded, or build"
+      ;;
+  esac
+  if [[ "$DEPLOY_SOURCE_MODE" = "release" ]]; then
+    [[ "$RELEASE_IMAGE_MODE" = "preloaded" ]] \
+      || fail "release bundles require RELEASE_IMAGE_MODE=preloaded"
+    load_release_source
+  else
+    require_command git
+    assert_safe_absolute_path "$ADMIN_DIR" ADMIN_DIR
+    ensure_admin_repository
+    check_repository "$BACKEND_DIR" Backend
+    check_repository "$ADMIN_DIR" Admin
+  fi
 
   install -d -m 0700 "$BOOTSTRAP_HOST_DEPLOY_ROOT" "$CONTROL_DIR"
   chmod 0700 "$BOOTSTRAP_HOST_DEPLOY_ROOT" "$CONTROL_DIR"
+  if [[ ! -e "$RENSHE_TEMPLATE_HOST_DIR" ]]; then
+    install -d -m 0755 "$RENSHE_TEMPLATE_HOST_DIR"
+  fi
+  [[ -d "$RENSHE_TEMPLATE_HOST_DIR" && ! -L "$RENSHE_TEMPLATE_HOST_DIR" ]] \
+    || fail "RENSHE_TEMPLATE_HOST_DIR must be a real directory"
+  if [[ ! -f "$RENSHE_TEMPLATE_HOST_DIR/报名信息.xlsx" \
+    || ! -f "$RENSHE_TEMPLATE_HOST_DIR/工作经历.xlsx" ]]; then
+    log "WARNING: 人社 Excel 模板尚未补齐；平台可以部署，但人社批次导出暂不可用"
+    log "template directory: $RENSHE_TEMPLATE_HOST_DIR"
+  fi
   if command -v timedatectl >/dev/null 2>&1; then
     local synchronized
     synchronized="$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)"
@@ -115,6 +258,32 @@ preflight() {
 }
 
 pin_sources_once() {
+  if [[ "$DEPLOY_SOURCE_MODE" = "release" ]]; then
+    load_release_source
+    BACKEND_COMMIT="$RELEASE_BACKEND_COMMIT"
+    ADMIN_COMMIT="$RELEASE_ADMIN_COMMIT"
+    BACKEND_IMAGE="$RELEASE_BACKEND_IMAGE"
+    ADMIN_IMAGE="$RELEASE_ADMIN_IMAGE"
+    if [[ -f "$SOURCE_PINS_FILE" ]]; then
+      grep -Eq "^BACKEND_COMMIT=${BACKEND_COMMIT}$" "$SOURCE_PINS_FILE" \
+        || fail "saved Backend source pin differs from the release bundle"
+      grep -Eq "^ADMIN_COMMIT=${ADMIN_COMMIT}$" "$SOURCE_PINS_FILE" \
+        || fail "saved Admin source pin differs from the release bundle"
+    else
+      {
+        printf 'BACKEND_COMMIT=%s\n' "$BACKEND_COMMIT"
+        printf 'ADMIN_COMMIT=%s\n' "$ADMIN_COMMIT"
+      } >"$SOURCE_PINS_FILE"
+      chmod 0600 "$SOURCE_PINS_FILE"
+    fi
+    validate_image_ref "$BACKEND_IMAGE" BACKEND_IMAGE
+    validate_image_ref "$ADMIN_IMAGE" ADMIN_IMAGE
+    log "release source mode: GitHub Release bundle"
+    log "Backend image: $BACKEND_IMAGE"
+    log "Admin image:   $ADMIN_IMAGE"
+    export BACKEND_COMMIT ADMIN_COMMIT BACKEND_IMAGE ADMIN_IMAGE
+    return
+  fi
   if [[ -f "$SOURCE_PINS_FILE" ]]; then
     # This file contains only two lowercase hexadecimal commit IDs generated
     # below. Validate every line before sourcing it.
@@ -145,9 +314,66 @@ pin_sources_once() {
     || fail "pinned Admin commit is unavailable"
   git -C "$BACKEND_DIR" checkout --detach "$BACKEND_COMMIT"
   git -C "$ADMIN_DIR" checkout --detach "$ADMIN_COMMIT"
-  BACKEND_IMAGE="wemini-backend:${BACKEND_COMMIT:0:12}"
-  ADMIN_IMAGE="wemini-admin:${ADMIN_COMMIT:0:12}"
+  case "$RELEASE_IMAGE_MODE" in
+    pull|preloaded)
+      BACKEND_IMAGE="${BACKEND_IMAGE_OVERRIDE:-${BACKEND_IMAGE_REPOSITORY}:${BACKEND_COMMIT}}"
+      ADMIN_IMAGE="${ADMIN_IMAGE_OVERRIDE:-${ADMIN_IMAGE_REPOSITORY}:${ADMIN_COMMIT}}"
+      ;;
+    build)
+      BACKEND_IMAGE="${BACKEND_IMAGE_OVERRIDE:-wemini-backend:${BACKEND_COMMIT:0:12}}"
+      ADMIN_IMAGE="${ADMIN_IMAGE_OVERRIDE:-wemini-admin:${ADMIN_COMMIT:0:12}}"
+      ;;
+  esac
+  validate_image_ref "$BACKEND_IMAGE" BACKEND_IMAGE
+  validate_image_ref "$ADMIN_IMAGE" ADMIN_IMAGE
+  log "release image mode: $RELEASE_IMAGE_MODE"
+  log "Backend image: $BACKEND_IMAGE"
+  log "Admin image:   $ADMIN_IMAGE"
   export BACKEND_COMMIT ADMIN_COMMIT BACKEND_IMAGE ADMIN_IMAGE
+}
+
+image_revision() {
+  docker_cli image inspect \
+    --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+    "$1" 2>/dev/null
+}
+
+verify_release_image() {
+  local image_ref="$1"
+  local expected_commit="$2"
+  local name="$3"
+  docker_cli image inspect "$image_ref" >/dev/null 2>&1 \
+    || fail "$name image is unavailable: $image_ref"
+  local revision
+  revision="$(image_revision "$image_ref")"
+  [[ "$revision" = "$expected_commit" ]] \
+    || fail "$name image revision mismatch: expected $expected_commit, got ${revision:-missing}"
+}
+
+verify_release_images() {
+  verify_release_image "$BACKEND_IMAGE" "$BACKEND_COMMIT" Backend
+  verify_release_image "$ADMIN_IMAGE" "$ADMIN_COMMIT" Admin
+}
+
+prepare_release_images() {
+  case "$RELEASE_IMAGE_MODE" in
+    pull)
+      log "pulling immutable prebuilt Backend image"
+      docker_cli pull "$BACKEND_IMAGE" \
+        || fail "unable to pull Backend image; publish it in CI and log in to its registry"
+      log "pulling immutable prebuilt Admin image"
+      docker_cli pull "$ADMIN_IMAGE" \
+        || fail "unable to pull Admin image; publish it in CI and log in to its registry"
+      verify_release_images
+      ;;
+    preloaded)
+      log "using preloaded release images"
+      verify_release_images
+      ;;
+    build)
+      log "development build mode selected; images will be built on this host"
+      ;;
+  esac
 }
 
 ensure_token() {
@@ -164,22 +390,35 @@ ensure_token() {
 }
 
 bootstrap_compose() {
-  env \
-    BOOTSTRAP_UID="$BOOTSTRAP_UID" \
-    BOOTSTRAP_GID="$BOOTSTRAP_GID" \
-    BOOTSTRAP_HOST_DEPLOY_ROOT="$BOOTSTRAP_HOST_DEPLOY_ROOT" \
-    BOOTSTRAP_PORT="$BOOTSTRAP_PORT" \
-    BOOTSTRAP_IMAGE="$BACKEND_IMAGE" \
-    docker compose \
+  if [[ "$DOCKER_USE_SUDO" = "1" ]]; then
+    sudo env \
+      BOOTSTRAP_UID="$BOOTSTRAP_UID" \
+      BOOTSTRAP_GID="$BOOTSTRAP_GID" \
+      BOOTSTRAP_HOST_DEPLOY_ROOT="$BOOTSTRAP_HOST_DEPLOY_ROOT" \
+      BOOTSTRAP_PORT="$BOOTSTRAP_PORT" \
+      BOOTSTRAP_IMAGE="$BACKEND_IMAGE" \
+      docker compose \
       --project-name "$COMPOSE_PROJECT_NAME" \
       --file "$BOOTSTRAP_COMPOSE_FILE" \
       "$@"
+  else
+    env \
+      BOOTSTRAP_UID="$BOOTSTRAP_UID" \
+      BOOTSTRAP_GID="$BOOTSTRAP_GID" \
+      BOOTSTRAP_HOST_DEPLOY_ROOT="$BOOTSTRAP_HOST_DEPLOY_ROOT" \
+      BOOTSTRAP_PORT="$BOOTSTRAP_PORT" \
+      BOOTSTRAP_IMAGE="$BACKEND_IMAGE" \
+      docker compose \
+        --project-name "$COMPOSE_PROJECT_NAME" \
+        --file "$BOOTSTRAP_COMPOSE_FILE" \
+        "$@"
+  fi
 }
 
 runtime_compose() {
   [[ -f "$RUNTIME_ENV" && -f "$RELEASE_ENV" ]] \
     || fail "runtime environment is not ready"
-  docker compose \
+  docker_cli compose \
     --project-name "$COMPOSE_PROJECT_NAME" \
     --env-file "$RUNTIME_ENV" \
     --env-file "$RELEASE_ENV" \
@@ -188,8 +427,13 @@ runtime_compose() {
 }
 
 start_bootstrap() {
-  log "building and starting loopback-only bootstrap service"
-  bootstrap_compose up -d --build bootstrap
+  if [[ "$RELEASE_IMAGE_MODE" = "build" ]]; then
+    log "building and starting loopback-only bootstrap service"
+    bootstrap_compose up -d --build bootstrap
+  else
+    log "starting loopback-only bootstrap service from the prebuilt image"
+    bootstrap_compose up -d --no-build bootstrap
+  fi
   local attempt
   for attempt in $(seq 1 60); do
     if curl --fail --silent --show-error \
@@ -257,8 +501,8 @@ wait_for_phase_change() {
 cleanup_quality_infrastructure() {
   local database_container="$1"
   local network="$2"
-  docker rm -f "$database_container" >/dev/null 2>&1 || true
-  docker network rm "$network" >/dev/null 2>&1 || true
+  docker_cli rm -f "$database_container" >/dev/null 2>&1 || true
+  docker_cli network rm "$network" >/dev/null 2>&1 || true
 }
 
 run_backend_quality() {
@@ -269,8 +513,8 @@ run_backend_quality() {
   quality_image="wemini-backend-quality:${BACKEND_COMMIT:0:12}"
   test_password="isolated-test-password"
   cleanup_quality_infrastructure "$quality_database" "$quality_network"
-  docker network create "$quality_network" >/dev/null || return 1
-  docker run -d --name "$quality_database" --network "$quality_network" \
+  docker_cli network create "$quality_network" >/dev/null || return 1
+  docker_cli run -d --name "$quality_database" --network "$quality_network" \
     -e POSTGRES_USER=test \
     -e POSTGRES_PASSWORD="$test_password" \
     -e POSTGRES_DB=wemini_app_test \
@@ -280,24 +524,24 @@ run_backend_quality() {
     }
   local attempt
   for attempt in $(seq 1 60); do
-    if docker exec "$quality_database" pg_isready -U test -d wemini_app_test >/dev/null 2>&1; then
+    if docker_cli exec "$quality_database" pg_isready -U test -d wemini_app_test >/dev/null 2>&1; then
       break
     fi
     sleep 1
   done
-  if ! docker exec "$quality_database" pg_isready -U test -d wemini_app_test >/dev/null 2>&1; then
+  if ! docker_cli exec "$quality_database" pg_isready -U test -d wemini_app_test >/dev/null 2>&1; then
     cleanup_quality_infrastructure "$quality_database" "$quality_network"
     return 1
   fi
 
-  docker build --target builder --tag "$quality_image" "$BACKEND_DIR" || {
+  docker_cli build --target builder --tag "$quality_image" "$BACKEND_DIR" || {
     cleanup_quality_infrastructure "$quality_database" "$quality_network"
     return 1
   }
   local async_url sync_url
   async_url="postgresql+asyncpg://test:${test_password}@${quality_database}:5432/wemini_app_test"
   sync_url="postgresql://test:${test_password}@${quality_database}:5432/wemini_app_test"
-  docker run --rm --network "$quality_network" \
+  docker_cli run --rm --network "$quality_network" \
     --volume "$BACKEND_DIR:/workspace:ro" \
     --workdir /workspace \
     -e APP_ENV=test \
@@ -321,7 +565,7 @@ run_backend_quality() {
 }
 
 run_admin_quality() {
-  docker run --rm \
+  docker_cli run --rm \
     --volume "$ADMIN_DIR:/source:ro" \
     node:20-alpine \
     /bin/sh -ec '
@@ -336,16 +580,34 @@ run_admin_quality() {
 }
 
 build_release_images() {
-  docker build --tag "$BACKEND_IMAGE" "$BACKEND_DIR" &&
-  docker build --tag "$ADMIN_IMAGE" "$ADMIN_DIR"
+  docker_cli build \
+    --label "org.opencontainers.image.revision=$BACKEND_COMMIT" \
+    --tag "$BACKEND_IMAGE" "$BACKEND_DIR" &&
+  docker_cli build \
+    --label "org.opencontainers.image.revision=$ADMIN_COMMIT" \
+    --tag "$ADMIN_IMAGE" "$ADMIN_DIR"
 }
 
 write_release_manifest() {
+  local quality_source="$1"
   local backend_image_id admin_image_id backend_remote admin_remote
-  backend_image_id="$(docker image inspect --format '{{.Id}}' "$BACKEND_IMAGE")"
-  admin_image_id="$(docker image inspect --format '{{.Id}}' "$ADMIN_IMAGE")"
-  backend_remote="$(git -C "$BACKEND_DIR" remote get-url origin)"
-  admin_remote="$(git -C "$ADMIN_DIR" remote get-url origin)"
+  local quality_source_args=()
+  backend_image_id="$(docker_cli image inspect --format '{{.Id}}' "$BACKEND_IMAGE")"
+  admin_image_id="$(docker_cli image inspect --format '{{.Id}}' "$ADMIN_IMAGE")"
+  if [[ "$DEPLOY_SOURCE_MODE" = "release" ]]; then
+    backend_remote="$RELEASE_BACKEND_REMOTE"
+    admin_remote="$RELEASE_ADMIN_REMOTE"
+  else
+    backend_remote="$(git -C "$BACKEND_DIR" remote get-url origin)"
+    admin_remote="$(git -C "$ADMIN_DIR" remote get-url origin)"
+  fi
+  if bootstrap_compose exec -T bootstrap \
+    python -m bootstrap_app.release_cli --help 2>/dev/null \
+    | grep -q -- '--quality-source'; then
+    quality_source_args=(--quality-source "$quality_source")
+  else
+    log "WARNING: pinned Backend predates quality-source metadata; writing a legacy manifest"
+  fi
   bootstrap_compose exec -T bootstrap python -m bootstrap_app.release_cli \
     --backend-commit "$BACKEND_COMMIT" \
     --admin-commit "$ADMIN_COMMIT" \
@@ -355,13 +617,32 @@ write_release_manifest() {
     --admin-image "$ADMIN_IMAGE" \
     --backend-image-id "$backend_image_id" \
     --admin-image-id "$admin_image_id" \
+    "${quality_source_args[@]}" \
     --template-dir "$RENSHE_TEMPLATE_HOST_DIR" \
     --backend-port "$BACKEND_PORT" \
     --admin-port "$ADMIN_PORT"
 }
 
 quality_and_build() {
-  run_backend_quality && run_admin_quality && build_release_images && write_release_manifest
+  case "$RELEASE_IMAGE_MODE" in
+    build)
+      run_backend_quality \
+        && run_admin_quality \
+        && build_release_images \
+        && verify_release_images \
+        && write_release_manifest server_build
+      ;;
+    pull)
+      verify_release_images && write_release_manifest ci_prebuilt
+      ;;
+    preloaded)
+      if [[ "$DEPLOY_SOURCE_MODE" = "release" ]]; then
+        verify_release_images && write_release_manifest github_release
+      else
+        verify_release_images && write_release_manifest preloaded
+      fi
+      ;;
+  esac
 }
 
 start_infrastructure() {
@@ -440,6 +721,7 @@ show_connection() {
 main() {
   preflight
   pin_sources_once
+  prepare_release_images
   ensure_token
   start_bootstrap
   case "$(state_phase)" in
@@ -512,4 +794,6 @@ main() {
   done
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" = "$0" ]]; then
+  main "$@"
+fi

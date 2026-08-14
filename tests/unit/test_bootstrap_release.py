@@ -47,6 +47,8 @@ def test_release_manifest_is_private_hashed_and_advances_state(tmp_path, monkeyp
             "sha256:" + "c" * 64,
             "--admin-image-id",
             "sha256:" + "d" * 64,
+            "--quality-source",
+            "ci_prebuilt",
             "--template-dir",
             "/srv/wemini/docs/renshe",
         ],
@@ -57,6 +59,7 @@ def test_release_manifest_is_private_hashed_and_advances_state(tmp_path, monkeyp
     release_env = control / "release.env"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["source"]["backend"]["commit"] == "a" * 40
+    assert manifest["quality"]["source"] == "ci_prebuilt"
     assert manifest["quality"]["admin_test_build"] == "passed"
     assert (os.stat(manifest_path).st_mode & 0o777) == 0o600
     assert (os.stat(release_env).st_mode & 0o777) == 0o600

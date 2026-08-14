@@ -1,0 +1,223 @@
+name: Publish GitHub Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: New immutable release tag, for example 2026.08.14.1
+        required: true
+        type: string
+      backend_ref:
+        description: Backend branch, tag, or full commit to package
+        required: true
+        default: main
+        type: string
+      admin_ref:
+        description: Admin branch, tag, or full commit to package
+        required: true
+        default: main
+        type: string
+
+concurrency:
+  group: github-release-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  test-build-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: isolated-test-password
+          POSTGRES_DB: wemini_app_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d wemini_app_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Check out release tooling
+        uses: actions/checkout@v4
+        with:
+          path: tooling
+          fetch-depth: 1
+
+      - name: Check out target Backend
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.backend_ref }}
+          path: Backend
+          fetch-depth: 1
+
+      - name: Check out target Admin
+        uses: actions/checkout@v4
+        with:
+          repository: BishengTeam/Admin
+          ref: ${{ inputs.admin_ref }}
+          path: Admin
+          fetch-depth: 1
+
+      - name: Resolve immutable source revisions
+        id: source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          printf 'tooling_sha=%s\n' "$(git -C tooling rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          printf 'backend_sha=%s\n' "$(git -C Backend rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          printf 'admin_sha=%s\n' "$(git -C Admin rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate new release tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$RELEASE_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            printf 'release already exists: %s\n' "$RELEASE_TAG" >&2
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: Backend/requirements.txt
+
+      - name: Install Backend dependencies
+        run: python -m pip install --disable-pip-version-check -r Backend/requirements.txt
+
+      - name: Run Backend quality and PostgreSQL integration tests
+        working-directory: Backend
+        env:
+          APP_ENV: test
+          APP_DEBUG: "false"
+          JWT_SECRET: test-only-jwt-secret-that-is-at-least-32-characters
+          PYTHON_BIN: python
+          TEST_DATABASE_URL: postgresql+asyncpg://test:isolated-test-password@127.0.0.1:5432/wemini_app_test
+          TEST_DATABASE_URL_SYNC: postgresql://test:isolated-test-password@127.0.0.1:5432/wemini_app_test
+          DATABASE_URL: postgresql+asyncpg://test:isolated-test-password@127.0.0.1:5432/wemini_app_test
+          DATABASE_URL_SYNC: postgresql://test:isolated-test-password@127.0.0.1:5432/wemini_app_test
+        run: |
+          scripts/quality_gate.sh backend
+          python -m pytest -q -p no:cacheprovider tests/integration/db
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: Admin/package-lock.json
+
+      - name: Test and build Admin
+        working-directory: Admin
+        run: |
+          npm ci
+          npm test -- --no-cache
+          npm run build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Backend image into the runner
+        uses: docker/build-push-action@v6
+        with:
+          context: Backend
+          load: true
+          platforms: linux/amd64
+          tags: wemini-backend:${{ steps.source.outputs.backend_sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/BishengTeam/Backend
+            org.opencontainers.image.revision=${{ steps.source.outputs.backend_sha }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build Admin image into the runner
+        uses: docker/build-push-action@v6
+        with:
+          context: Admin
+          load: true
+          platforms: linux/amd64
+          tags: wemini-admin:${{ steps.source.outputs.admin_sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/BishengTeam/Admin
+            org.opencontainers.image.revision=${{ steps.source.outputs.admin_sha }}
+          cache-from: type=gha,scope=admin
+          cache-to: type=gha,mode=max,scope=admin
+
+      - name: Export and compress image assets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zstd
+          mkdir -p dist
+          docker save 'wemini-backend:${{ steps.source.outputs.backend_sha }}' \
+            | zstd -T0 -6 -o 'dist/wemini-backend-${{ steps.source.outputs.backend_sha }}.tar.zst'
+          docker save 'wemini-admin:${{ steps.source.outputs.admin_sha }}' \
+            | zstd -T0 -6 -o 'dist/wemini-admin-${{ steps.source.outputs.admin_sha }}.tar.zst'
+
+      - name: Build deployment bundle and checksums
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python tooling/scripts/package_github_release.py \
+            --release-tag '${{ inputs.release_tag }}' \
+            --tooling-commit '${{ steps.source.outputs.tooling_sha }}' \
+            --backend-commit '${{ steps.source.outputs.backend_sha }}' \
+            --admin-commit '${{ steps.source.outputs.admin_sha }}' \
+            --backend-archive 'dist/wemini-backend-${{ steps.source.outputs.backend_sha }}.tar.zst' \
+            --admin-archive 'dist/wemini-admin-${{ steps.source.outputs.admin_sha }}.tar.zst' \
+            --runtime-compose Backend/docker-compose.deploy.yml \
+            --output-dir dist
+
+      - name: Create draft GitHub Release with all assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          TOOLING_SHA: ${{ steps.source.outputs.tooling_sha }}
+          BACKEND_SHA: ${{ steps.source.outputs.backend_sha }}
+          ADMIN_SHA: ${{ steps.source.outputs.admin_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$BACKEND_SHA" \
+            --title "WeMiniApp deployment $RELEASE_TAG" \
+            --notes "Release tooling: $TOOLING_SHA
+          Backend: $BACKEND_SHA
+          Admin: $ADMIN_SHA
+
+          Download all four assets, verify SHA256SUMS, extract the deployment bundle, then run install_release.sh as the deployment user." \
+            --draft \
+            "dist/wemini-backend-${BACKEND_SHA}.tar.zst" \
+            "dist/wemini-admin-${ADMIN_SHA}.tar.zst" \
+            "dist/wemini-deploy-${RELEASE_TAG}.tar.gz" \
+            dist/SHA256SUMS
+          gh release edit "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false
+
+      - name: Write release summary
+        shell: bash
+        run: |
+          {
+            printf '### GitHub Release published\n\n'
+            printf -- '- Tag: `%s`\n' '${{ inputs.release_tag }}'
+            printf -- '- Release tooling: `%s`\n' '${{ steps.source.outputs.tooling_sha }}'
+            printf -- '- Backend: `%s`\n' '${{ steps.source.outputs.backend_sha }}'
+            printf -- '- Admin: `%s`\n' '${{ steps.source.outputs.admin_sha }}'
+            printf -- '- Assets: Backend image, Admin image, deployment bundle, SHA256SUMS\n'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -6,6 +6,8 @@
 >
 > API 契约：[网页初始化 API 与错误码契约](./网页初始化API与错误码契约.md)
 >
+> 生产恢复：[预构建镜像发布与生产机恢复](./预构建镜像发布与生产机恢复.md)
+>
 > 范围：Backend、Admin、部署运维和 UAT；不包含 Platform
 >
 > 维护规则：任务只有在验收标准和证据均满足后才能标记 `DONE`。
@@ -22,9 +24,11 @@
 | Secret | 网页写入专用目录；正式服务只读 |
 | 编排 | 宿主机脚本控制 Docker；Web 容器不挂 Docker Socket |
 | 数据库 | 内置或外部 PostgreSQL/Redis；外部目标必须为空 |
-| 源码 | Backend/Admin 各读取一次最新 `main` 后固定 Commit |
-| 构建 | 目标服务器现场构建并记录镜像 ID |
-| 质量 | Backend/Admin 全门禁和隔离迁移失败即终止 |
+| 源码 | CI 检出明确指定的 Backend/Admin ref 并固定完整 Commit；生产服务器不克隆源码 |
+| 构建 | CI 测试并将两个 Commit 镜像、Compose 部署包和 SHA-256 发布到 GitHub Release |
+| 质量 | CI Backend/Admin 全门禁失败不发布；目标库独立迁移失败即终止 |
+| 制品 | 四个独立 Release 资产；镜像不进入 Git 历史，不依赖容器 Registry |
+| 人社模板 | 缺失只禁用人社批次导出，不阻断 Backend/Admin 整体部署 |
 | 平台端 | 不处理 Platform |
 | 网关 | 运维预先配置两个 HTTPS 域名；Admin 受 IP 白名单或 VPN 保护 |
 | 恢复 | 完整 Secret 恢复包用恢复公钥加密并上传独立私有 OSS |
@@ -73,15 +77,15 @@
 | WEBI-15 | 🧪 | P0 | BE | 新增版本化生产种子入口 | WEBI-14、WEBI-16 | 版本化、无测试数据/`--force`、冲突拒绝已实现；真实隔离 PostgreSQL 连跑两次为 `4/8 -> 0/0`，待正式镜像执行 |
 | WEBI-16 | 🧪 | P0 | BE | 网页创建唯一超级管理员 | WEBI-14 | 12 位密码、PBKDF2、advisory lock、已有管理员拒绝已实现；真实隔离 PostgreSQL 并发同请求返回同一管理员 ID，待网页容器演练 |
 
-## 7. 阶段四：源码、质量和现场构建
+## 7. 阶段四：源码、CI 质量和预构建镜像
 
 | ID | 状态 | 优先级 | 负责人 | 任务 | 依赖 | 验收标准 |
 |---|---|---|---|---|---|---|
 | WEBI-17 | 🧪 | P0 | OPS | 实现宿主机 preflight | WEBI-00 | 脚本已检查 Docker/Compose、Git、时钟、端口、路径、权限和资源告警；待干净服务器执行 |
-| WEBI-18 | 🧪 | P0 | OPS | 固定 Backend/Admin 最新 main Commit | WEBI-17 | 每仓一次 fetch、脏树拒绝、detached SHA 和私有发布清单已实现；待真实远端演练 |
-| WEBI-19 | 🧪 | P0 | BE/OPS | 临时容器运行 Backend 完整门禁 | WEBI-18 | 隔离 PostgreSQL/网络、Backend 门禁与 DB 集成命令已编排；当前宿主 Docker 权限阻断实跑 |
-| WEBI-20 | 🧪 | P0 | Admin/OPS | 临时容器运行 Admin 测试和生产构建 | WEBI-18 | 同构 `/tmp` 隔离目录已完成 `npm ci`、50 项测试和生产构建；Docker 容器实跑仍被宿主权限阻断，npm audit 另报 9 个依赖漏洞 |
-| WEBI-21 | 🧪 | P0 | OPS | 现场构建并记录 Backend/Admin 镜像 | WEBI-19、WEBI-20 | Commit 标签、镜像 ID和发布清单已实现并单测；待 Docker 现场构建 |
+| WEBI-18 | 🧪 | P0 | OPS | CI 获取并固定指定 Backend/Admin Commit | WEBI-17 | Workflow 接受两个 ref、解析完整 SHA，部署包无源码且续跑时与 `source-pins.env` 强一致；待真实 Release 演练 |
+| WEBI-19 | 🧪 | P0 | BE/OPS | CI 运行 Backend 完整门禁并导出镜像资产 | WEBI-18 | 单元/契约/迁移、隔离 PostgreSQL 集成测试、完整 Commit 标签及 revision 标签已编排；`docker save + zstd` 独立资产待 Actions 实跑 |
+| WEBI-20 | 🧪 | P0 | Admin/OPS | CI 运行 Admin 测试/构建并导出镜像资产 | WEBI-18 | Workflow 检出指定 Admin ref，执行 `npm ci`、测试和构建后导出对应 Commit 镜像；待 Actions 实跑 |
+| WEBI-21 | 🧪 | P0 | OPS | 发布并安装四资产 GitHub Release | WEBI-19、WEBI-20 | Draft 完整上传后发布；2 GiB/资产门禁、外层和内置 SHA-256、`docker load`、OCI revision、无源码 Compose 已实现，待服务器实测 |
 
 ## 8. 阶段五：恢复包和部署编排
 
@@ -91,7 +95,7 @@
 | WEBI-23 | 🧪 | P0 | BE/OPS | 上传独立私有恢复 OSS 并校验 | WEBI-22 | 私有 ACL、独立凭据、对象元数据和 SHA-256 校验已实现并模拟测试；待真实版本化 Bucket |
 | WEBI-24 | 🧪 | P0 | BE | 提供离线恢复包解密工具 | WEBI-22 | CLI 显式输出、拒绝覆盖/符号链接、0600 恢复测试通过；待离线主机演练 |
 | WEBI-25 | 🧪 | P0 | OPS | 新增部署 Compose | WEBI-11、WEBI-12、WEBI-21 | Bootstrap 可写、正式 Secret 只读、两端环回且无 Docker Socket；`compose config` 通过，待容器实启 |
-| WEBI-26 | 🧪 | P0 | OPS | 实现 `bootstrap_server.sh` 阶段编排 | WEBI-17 至 WEBI-25 | 阶段续跑、网页重试、启动/关闭及失败留阶段已实现并通过静态契约；待中断故障注入 |
+| WEBI-26 | 🧪 | P0 | OPS | 实现 GitHub Release 无源码安装及阶段编排 | WEBI-17 至 WEBI-25 | `install_release.sh`、release source 模式、模板非阻断、镜像导入、阶段续跑和网页重试已实现；待旧构建中断现场续跑 |
 | WEBI-27 | DOING | P0 | OPS/BE | 部署后健康、就绪和 Secret 泄露检查 | WEBI-26 | 已强制 `/ready`、Admin 可达、Worker 心跳和数据库指纹；尚缺真实日志泄露扫描和公网端口扫描 |
 
 ## 9. 阶段六：Admin 验收页和真实 UAT
@@ -119,7 +123,7 @@
 - [ ] Bootstrap 只能通过环回地址和一次性 Token 访问。
 - [ ] Secret 原子写入、权限、脱敏和完成锁测试通过。
 - [ ] 外部空库/Redis 门禁以及内置模式均通过。
-- [ ] Backend/Admin 固定 Commit、隔离门禁和现场构建可复现。
+- [ ] Backend/Admin 固定 Commit，CI 门禁和四资产 GitHub Release 可追溯、可下载、可校验。
 - [ ] 独立 migration job、生产种子和唯一超级管理员闭合。
 - [ ] 恢复包可离线解密，并已上传独立私有 OSS、校验 SHA-256。
 - [ ] 正式 Backend/Admin 只绑定环回地址，Secret 只读且无 Docker Socket。
@@ -130,6 +134,7 @@
 ## 12. 当前外部阻断
 
 - 当前工作区存在大量尚未提交的 Backend 修改；现场部署脚本必须在干净发布工作区验收，不能直接以当前目录作为成功证据。
+- GitHub Release Workflow 尚未提交到 `origin/main`、尚未首次生成四个真实资产；生产机在此之前不能切换到无源码安装模式。
 - 当前会话只允许写 Backend 工作区，Admin 页面任务需要取得 Admin 仓库写权限后实施。
 - 尚无新服务器、正式 HTTPS 域名、恢复 OSS、隔离测试账号和真实支付回调环境，因此 WEBI-31/32 只能保持 `BLOCKED`。
 - Admin `npm ci` 当前全依赖审计报告 5 个中危、3 个高危、1 个严重漏洞；`--omit=dev` 后生产依赖仍有 3 个中危、1 个高危。生产发布前需在 Admin 仓库评估并升级，不能用本次“测试/构建通过”代替供应链安全验收。
@@ -138,8 +143,9 @@
 
 2026-08-14 已执行：
 
-- Backend 单元测试：`530 passed`（包含部署验收与题库答案不可提前暴露回归测试）。
+- Backend 单元测试：`533 passed`（包含 GitHub Release 打包/导入/固定 Commit、部署验收与题库答案不可提前暴露回归测试）。
 - Backend 质量门禁：人社契约 `31/31`、Alembic 唯一 head `deploy001`、55 个 revision、离线 SQL、Bootstrap 静态契约和题库契约均通过。
+- GitHub Release 改造：模板非阻断、无源码 Compose、两个独立镜像包、双层 SHA-256、Commit/revision 校验和旧状态续跑已通过本地契约测试；Workflow 通过 `actionlint v1.7.12`。
 - 隔离 PostgreSQL `3306`：完整 DB 集成套件 `156 passed`；随机测试数据库均在结束后删除。
 - `deploy001`：真实 `upgrade -> downgrade quiz007 -> upgrade` 通过；事件 UPDATE/DELETE 和验收状态回退均被数据库触发器拒绝。
 - 初始化管理员/种子：并发创建得到同一超级管理员；生产种子首跑创建 4 个认证和 8 个价格，次跑创建量均为 0。
