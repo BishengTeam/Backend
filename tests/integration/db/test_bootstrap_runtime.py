@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 
@@ -149,7 +150,7 @@ def test_initial_admin_is_concurrent_idempotent_and_seed_repeats_cleanly(
     outputs = []
     for _ in range(2):
         result = subprocess.run(
-            [str(REPO_ROOT / ".venv/bin/python"), "scripts/seed_production.py"],
+            [sys.executable, "scripts/seed_production.py"],
             cwd=REPO_ROOT,
             env=env,
             check=True,
