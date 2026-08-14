@@ -19,6 +19,7 @@ from app.domain.community.src.rule.quiz import (
 
 
 QuizAnswer: TypeAlias = str | list[str]
+QuizPracticeScopeType: TypeAlias = Literal["library", "module", "knowledge_point"]
 
 
 class QuizContractModel(BaseModel):
@@ -254,6 +255,17 @@ class QuizPracticeStats(QuizContractModel):
     checkin_days: int = Field(ge=0)
     consecutive_days: int = Field(ge=0)
     today_questions: int = Field(ge=0)
+
+
+class QuizStatsQuery(QuizContractModel):
+    scope_type: QuizPracticeScopeType | None = None
+    scope_id: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> "QuizStatsQuery":
+        if (self.scope_type is None) != (self.scope_id is None):
+            raise ValueError("scope_type and scope_id must be provided together")
+        return self
 
 
 class QuizExamStats(QuizContractModel):

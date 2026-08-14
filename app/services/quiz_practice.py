@@ -70,6 +70,7 @@ from app.schemas.quiz_contract import (
     QuizPublicQuestion,
     QuizQuestionListQuery,
     QuizStatsResponse,
+    QuizStatsQuery,
     QuizWrongBookItem,
     QuizWrongBookQuery,
 )
@@ -1443,13 +1444,144 @@ class QuizPracticeService:
                 for row in rows
             ]
 
-    async def get_stats(self, user_id: int) -> QuizStatsResponse:
+    async def _scoped_practice_stats(
+        self,
+        db,
+        user_id: int,
+        query: QuizStatsQuery,
+        stats: QuizUserStats | None,
+        local_day: date,
+        current_streak: int,
+    ) -> QuizPracticeStats:
+        assert query.scope_type is not None and query.scope_id is not None
+        categories = await self._load_categories(db)
+        by_id, _ = self._category_maps(categories)
+        root = by_id.get(query.scope_id)
+        if root is None:
+            raise NotFoundException("棰樺簱鑼冨洿")
+        expected_depth = {
+            "library": 1,
+            "module": 2,
+            "knowledge_point": 3,
+        }[query.scope_type]
+        if int(root.depth) != expected_depth:
+            raise ValidationException("棰樺簱鑼冨洿绫诲瀷涓庡垎绫诲眰绾т笉鍖归厤")
+
+        if not self._is_effectively_active(root.id, by_id):
+            scope_ids: set[int] = set()
+        else:
+            _, scope_ids = self._effective_category_ids(categories, root.id)
+
+        start_at, end_at = self._utc_range(local_day, local_day)
+        base_conditions = (
+            QuizPracticeAttempt.user_id == user_id,
+            QuizQuestion.status == _PUBLISHED,
+            QuizQuestion.category_id.in_(scope_ids),
+        )
+        metrics = (
+            await db.execute(
+                select(
+                    func.count(QuizPracticeAttempt.id),
+                    func.count(QuizPracticeAttempt.id).filter(
+                        QuizPracticeAttempt.is_first_attempt.is_(True)
+                    ),
+                    func.count(QuizPracticeAttempt.id).filter(
+                        QuizPracticeAttempt.is_first_attempt.is_(True),
+                        QuizPracticeAttempt.is_correct.is_(True),
+                    ),
+                    func.count(func.distinct(QuizQuestion.id)),
+                    func.count(QuizPracticeAttempt.id).filter(
+                        QuizPracticeAttempt.submitted_at >= start_at,
+                        QuizPracticeAttempt.submitted_at < end_at,
+                    ),
+                )
+                .select_from(QuizPracticeAttempt)
+                .join(
+                    QuizPracticeSessionQuestion,
+                    and_(
+                        QuizPracticeAttempt.session_id
+                        == QuizPracticeSessionQuestion.session_id,
+                        QuizPracticeAttempt.session_question_id
+                        == QuizPracticeSessionQuestion.id,
+                    ),
+                )
+                .join(
+                    QuizQuestion,
+                    QuizQuestion.id == QuizPracticeSessionQuestion.question_id,
+                )
+                .where(*base_conditions)
+            )
+        ).one()
+        total_attempts = int(metrics[0] or 0)
+        first_attempts = int(metrics[1] or 0)
+        first_correct = int(metrics[2] or 0)
+        answered_questions = int(metrics[3] or 0)
+        today_questions = int(metrics[4] or 0)
+
+        active_wrong_count = int(
+            (
+                await db.execute(
+                    select(func.count())
+                    .select_from(QuizWrongItem)
+                    .join(QuizQuestion, QuizQuestion.id == QuizWrongItem.question_id)
+                    .where(
+                        QuizWrongItem.user_id == user_id,
+                        QuizWrongItem.status == _WRONG_ACTIVE,
+                        QuizQuestion.status == _PUBLISHED,
+                        QuizQuestion.category_id.in_(scope_ids),
+                    )
+                )
+            ).scalar()
+            or 0
+        )
+        active_collection_count = int(
+            (
+                await db.execute(
+                    select(func.count())
+                    .select_from(QuizCollection)
+                    .join(QuizQuestion, QuizQuestion.id == QuizCollection.question_id)
+                    .where(
+                        QuizCollection.user_id == user_id,
+                        QuizCollection.is_active.is_(True),
+                        QuizQuestion.status == _PUBLISHED,
+                        QuizQuestion.category_id.in_(scope_ids),
+                    )
+                )
+            ).scalar()
+            or 0
+        )
+        accuracy = (
+            (Decimal(first_correct) * Decimal("100") / Decimal(first_attempts)).quantize(
+                Decimal("0.1")
+            )
+            if first_attempts
+            else Decimal("0.0")
+        )
+        return QuizPracticeStats(
+            total_attempts=total_attempts,
+            first_attempts=first_attempts,
+            first_correct_attempts=first_correct,
+            accuracy=accuracy,
+            answered_questions=answered_questions,
+            active_wrong_count=active_wrong_count,
+            active_collection_count=active_collection_count,
+            checkin_days=int(stats.checkin_days) if stats is not None else 0,
+            consecutive_days=current_streak,
+            today_questions=today_questions,
+        )
+
+    async def get_stats(
+        self,
+        user_id: int,
+        query: QuizStatsQuery | None = None,
+    ) -> QuizStatsResponse:
+        query = query or QuizStatsQuery()
         local_day = self._local_date()
         async with get_db_ctx() as db:
             stats = (
                 await db.execute(select(QuizUserStats).where(QuizUserStats.user_id == user_id))
             ).scalar_one_or_none()
-            if stats is None:
+            if stats is None and query.scope_type is None:
                 practice = QuizPracticeStats(
                     total_attempts=0,
                     first_attempts=0,
@@ -1476,8 +1608,8 @@ class QuizPracticeService:
                         latest_score=None,
                     ),
                 )
-            first_attempts = int(stats.practice_first_attempts)
-            first_correct = int(stats.practice_first_correct)
+            first_attempts = int(stats.practice_first_attempts) if stats is not None else 0
+            first_correct = int(stats.practice_first_correct) if stats is not None else 0
             accuracy = (
                 (Decimal(first_correct) * Decimal("100") / Decimal(first_attempts)).quantize(
                     Decimal("0.1")
@@ -1485,8 +1617,8 @@ class QuizPracticeService:
                 if first_attempts
                 else Decimal("0.0")
             )
-            current_streak = int(stats.consecutive_days)
-            if stats.today_practice_date != local_day:
+            current_streak = int(stats.consecutive_days) if stats is not None else 0
+            if stats is not None and stats.today_practice_date != local_day:
                 previous = (
                     await db.execute(
                         select(QuizCheckin)
@@ -1497,42 +1629,50 @@ class QuizPracticeService:
                     )
                 ).scalar_one_or_none()
                 current_streak = int(previous.consecutive_days) if previous is not None else 0
-            practice = QuizPracticeStats(
-                total_attempts=int(stats.practice_total_attempts),
-                first_attempts=first_attempts,
-                first_correct_attempts=first_correct,
-                accuracy=accuracy,
-                answered_questions=int(stats.practice_answered_questions),
-                active_wrong_count=int(stats.active_wrong_count),
-                active_collection_count=int(stats.active_collection_count),
-                checkin_days=int(stats.checkin_days),
-                consecutive_days=current_streak,
-                today_questions=(
-                    int(stats.today_practice_count)
-                    if stats.today_practice_date == local_day
-                    else 0
-                ),
+            practice = (
+                await self._scoped_practice_stats(
+                    db, user_id, query, stats, local_day, current_streak
+                )
+                if query.scope_type is not None
+                else QuizPracticeStats(
+                    total_attempts=int(stats.practice_total_attempts),
+                    first_attempts=first_attempts,
+                    first_correct_attempts=first_correct,
+                    accuracy=accuracy,
+                    answered_questions=int(stats.practice_answered_questions),
+                    active_wrong_count=int(stats.active_wrong_count),
+                    active_collection_count=int(stats.active_collection_count),
+                    checkin_days=int(stats.checkin_days),
+                    consecutive_days=current_streak,
+                    today_questions=(
+                        int(stats.today_practice_count)
+                        if stats.today_practice_date == local_day
+                        else 0
+                    ),
+                )
             )
-            exam_total = int(stats.exam_total_questions)
-            settled_exam_count = int(
-                stats.completed_exam_count + stats.timed_out_exam_count
+            exam_total = int(stats.exam_total_questions) if stats is not None else 0
+            settled_exam_count = (
+                int(stats.completed_exam_count + stats.timed_out_exam_count)
+                if stats is not None
+                else 0
             )
             average = (
                 (
                     Decimal(stats.exam_score_sum) / Decimal(settled_exam_count)
                 ).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
-                if settled_exam_count
+                if settled_exam_count and stats is not None
                 else None
             )
             exam = QuizExamStats(
-                completed_exam_count=int(stats.completed_exam_count),
-                timed_out_exam_count=int(stats.timed_out_exam_count),
+                completed_exam_count=int(stats.completed_exam_count) if stats is not None else 0,
+                timed_out_exam_count=int(stats.timed_out_exam_count) if stats is not None else 0,
                 total_questions=exam_total,
-                correct_count=int(stats.exam_correct),
-                wrong_count=int(stats.exam_wrong),
-                unanswered_count=int(stats.exam_unanswered),
+                correct_count=int(stats.exam_correct) if stats is not None else 0,
+                wrong_count=int(stats.exam_wrong) if stats is not None else 0,
+                unanswered_count=int(stats.exam_unanswered) if stats is not None else 0,
                 average_score=average,
-                highest_score=stats.exam_high_score,
-                latest_score=stats.exam_latest_score,
+                highest_score=stats.exam_high_score if stats is not None else None,
+                latest_score=stats.exam_latest_score if stats is not None else None,
             )
             return QuizStatsResponse(practice=practice, exam=exam)

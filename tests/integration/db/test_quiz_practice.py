@@ -36,6 +36,7 @@ from app.schemas.quiz_contract import (
     QuizPracticeHistoryQuery,
     QuizPracticeSessionCreate,
     QuizQuestionListQuery,
+    QuizStatsQuery,
     QuizWrongBookQuery,
 )
 from app.services.quiz_practice import QuizPracticeService
@@ -384,6 +385,15 @@ async def test_snapshot_idempotency_reanswers_history_stats_and_abandonment(
     assert stats.practice.first_correct_attempts == 1
     assert stats.practice.answered_questions == 1
     assert stats.practice.today_questions == 2
+
+    scoped_stats = await env.service.get_stats(
+        env.user.id,
+        QuizStatsQuery(scope_type="library", scope_id=category.id),
+    )
+    assert scoped_stats.practice.total_attempts == 0
+    assert scoped_stats.practice.first_attempts == 0
+    assert scoped_stats.practice.answered_questions == 0
+    assert scoped_stats.practice.accuracy == 0
 
     abandoned = await env.service.abandon_session(env.user.id, session.id)
     assert abandoned.status == "abandoned"

@@ -32,9 +32,11 @@ from app.schemas.quiz_contract import (
     QuizPracticeHistoryQuery,
     QuizPracticeSessionCreate,
     QuizPracticeSessionResponse,
+    QuizPracticeScopeType,
     QuizPublicQuestion,
     QuizQuestionListQuery,
     QuizStatsResponse as QuizContractStatsResponse,
+    QuizStatsQuery,
     QuizWrongBookItem,
     QuizWrongBookQuery,
 )
@@ -117,6 +119,16 @@ async def quiz_exam_list_query(
     page_size: int = Query(20, ge=1, le=100),
 ) -> QuizExamListQuery:
     return QuizExamListQuery(page=page, page_size=page_size)
+
+
+async def quiz_stats_query(
+    scope_type: QuizPracticeScopeType | None = Query(None),
+    scope_id: int | None = Query(None, ge=1),
+) -> QuizStatsQuery:
+    return _validated_query(
+        QuizStatsQuery,
+        {"scope_type": scope_type, "scope_id": scope_id},
+    )
 
 
 @router.get("/categories",
@@ -403,9 +415,10 @@ async def get_checkin_calendar(
     summary="练习统计",
 )
 async def get_stats(
+    query: QuizStatsQuery = Depends(quiz_stats_query),
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[QuizContractStatsResponse]:
-    result = await QuizPracticeService().get_stats(current_user.id)
+    result = await QuizPracticeService().get_stats(current_user.id, query)
     return success(data=result)
 
 
