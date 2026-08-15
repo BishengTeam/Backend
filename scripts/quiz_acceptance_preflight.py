@@ -376,7 +376,7 @@ def _check_admin(
         if "*" not in permissions:
             raise PreflightError("super administrator wildcard permission is missing")
     elif not REQUIRED_ADMIN_PERMISSIONS <= permissions:
-        raise PreflightError("normal administrator lacks required quiz permissions")
+        raise PreflightError("quiz administrator lacks required quiz permissions")
     try:
         return int(admin["id"])
     except (KeyError, TypeError, ValueError) as exc:
@@ -487,7 +487,7 @@ def check_http_environment(
     admin_id = _check_admin(
         api_base,
         admin_token,
-        expected_role="admin",
+        expected_role="quiz_admin",
         timeout=timeout,
         opener=opener,
     )
@@ -499,7 +499,7 @@ def check_http_environment(
         opener=opener,
     )
     if admin_id == super_admin_id:
-        raise PreflightError("normal and super administrator accounts must be distinct")
+        raise PreflightError("quiz and super administrator accounts must be distinct")
 
     disabled_status, disabled_response = _http_json(
         api_base,

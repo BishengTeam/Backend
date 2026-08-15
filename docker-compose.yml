@@ -55,6 +55,9 @@ services:
       - PII_HASH_KEY_FILE=/run/secrets/pii_hash_key
       - JWT_ALGORITHM=HS256
       - JWT_EXPIRE_MINUTES=120
+      # adm001 对已有管理员数据执行安全迁移前要求已验证备份引用；
+      # 干净安装可留空，已有数据升级时必须在 .env 中显式设置。
+      - ADMIN_SECURITY_MIGRATION_BACKUP_REF=${ADMIN_SECURITY_MIGRATION_BACKUP_REF:-}
       # 微信小程序 — 用实际值替换
       - WECHAT_APPID=${WECHAT_APPID:?WECHAT_APPID is required}
       - WECHAT_SECRET_FILE=/run/secrets/wechat_secret
@@ -149,6 +152,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - JWT_SECRET_FILE=/run/secrets/jwt_secret
       - PII_HASH_KEY_FILE=/run/secrets/pii_hash_key
+      - ADMIN_SECURITY_MIGRATION_BACKUP_REF=${ADMIN_SECURITY_MIGRATION_BACKUP_REF:-}
       - WECHAT_APPID=${WECHAT_APPID:?WECHAT_APPID is required}
       - WECHAT_SECRET_FILE=/run/secrets/wechat_secret
       - WECHAT_PAY_ENABLED=${WECHAT_PAY_ENABLED:?WECHAT_PAY_ENABLED is required}

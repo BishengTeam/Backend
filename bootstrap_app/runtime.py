@@ -143,6 +143,31 @@ async def create_initial_super_admin(
             )
             if not isinstance(identifier, int):
                 raise BootstrapRuntimeError("super administrator creation failed")
+            # The initial bootstrap password is a temporary credential, but it
+            # still belongs to the recent-password history.  Persist both the
+            # history row and the security event in the same transaction as
+            # account creation so bootstrap cannot leave a partially secured
+            # administrator behind.
+            await connection.execute(
+                """
+                INSERT INTO admin_password_history (admin_id, password_hash)
+                VALUES ($1, $2)
+                """,
+                identifier,
+                password_hash,
+            )
+            await connection.execute(
+                """
+                INSERT INTO admin_security_audit
+                    (target_admin_id, action, result, reason_code, username, summary)
+                VALUES
+                    ($1, 'admin_account.create', 'succeeded',
+                     'bootstrap_super_admin_created', $2,
+                     '{"source":"bootstrap"}'::jsonb)
+                """,
+                identifier,
+                request.username,
+            )
             return identifier
     except BootstrapRuntimeError:
         raise

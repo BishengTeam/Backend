@@ -47,7 +47,8 @@ from app.domain.community.src.index import (
 from app.domain.plan.src.index import Plan
 from app.domain.order.src.index import Coupon, Inventory, InventoryRecord, Order, PriceConfig, UserCoupon
 from app.domain.user.src.index import (
-    AdminUser, DeletedIdentityHash, DeletedOpenid, PointsHistory,
+    AdminPasswordHistory, AdminSecurityAudit, AdminUser,
+    DeletedIdentityHash, DeletedOpenid, PointsHistory,
     User, UserEnterprise, UserPoints, UserProfile, UserRealname, UserStudent, ADMIN_ROLES,
 )
 from app.domain.renshe.src.index import (
@@ -73,6 +74,8 @@ __all__ = [
     "ActivityRegistration",
     "ActivityReminder",
     "ADMIN_ROLES",
+    "AdminPasswordHistory",
+    "AdminSecurityAudit",
     "AdminUser",
     "Agreement",
     "Certification",

@@ -186,35 +186,48 @@ class AdminBatch3SystemTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             model()
         instance = model(
-            username="testuser", password="strong-pass-123", role="admin"
+            username="  testuser  ", display_name="  测试管理员  "
         )
         self.assertEqual(instance.username, "testuser")
-        self.assertEqual(instance.role, "admin")
+        self.assertEqual(instance.display_name, "测试管理员")
         with self.assertRaises(ValidationError):
-            model(username="legacy", password="strong-pass-123", role="auditor")
+            model(username="legacy", display_name="测试管理员", role="super_admin")
 
-    def test_admin_settings_user_create_default_role(self):
+    def test_admin_settings_user_create_does_not_accept_role_or_password(self):
         schema = importlib.import_module("app.schemas.admin_settings")
         model = getattr(schema, "AdminSettingsUserCreate", None)
-        instance = model(username="testuser", password="strong-pass-123")
-        self.assertEqual(instance.role, "admin")
+        fields = _field_names(model)
+        self.assertEqual(fields, {"username", "display_name"})
+        with self.assertRaises(ValidationError):
+            model(
+                username="testuser",
+                display_name="测试管理员",
+                password="caller-selected-value-42",
+            )
 
-    def test_admin_settings_user_update_allows_partial_update(self):
+    def test_admin_settings_user_update_only_allows_display_name(self):
         schema = importlib.import_module("app.schemas.admin_settings")
         model = getattr(schema, "AdminSettingsUserUpdate", None)
         self.assertIsNotNone(model)
-        instance = model()
-        self.assertIsNone(instance.is_active)
+        with self.assertRaises(ValidationError):
+            model()
+        instance = model(display_name="题库管理员")
+        self.assertEqual(instance.display_name, "题库管理员")
         self.assertNotIn("role", model.model_fields)
-        instance = model(is_active=False)
-        self.assertFalse(instance.is_active)
+        self.assertNotIn("is_active", model.model_fields)
+        with self.assertRaises(ValidationError):
+            model(display_name="题库管理员", is_active=False)
 
     def test_admin_settings_user_list_item_has_expected_fields(self):
         schema = importlib.import_module("app.schemas.admin_settings")
         model = getattr(schema, "AdminSettingsUserListItem", None)
         self.assertIsNotNone(model)
         fields = _field_names(model)
-        for f in ("id", "username", "role", "is_active", "created_at"):
+        for f in (
+            "id", "username", "display_name", "role", "is_active",
+            "must_change_password", "locked_until", "last_login_at",
+            "created_at", "updated_at",
+        ):
             self.assertIn(f, fields, f"AdminSettingsUserListItem must have field '{f}'")
         # Must NOT expose password_hash
         self.assertNotIn("password_hash", fields,
@@ -366,7 +379,7 @@ class AdminBatch3SystemTests(unittest.TestCase):
         self.assertIn("ck_admin_user_role", source)
         self.assertIn("ADMIN_ROLES", source)
         self.assertIn("super_admin", source)
-        self.assertIn('"admin"', source)
+        self.assertIn("QUIZ_ADMIN_ROLE", source)
         self.assertNotIn("content_editor", source)
 
     def test_admin_user_model_does_not_expose_password_in_schema(self):

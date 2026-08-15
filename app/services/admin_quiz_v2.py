@@ -46,6 +46,7 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizKnowledgePointResponse,
     AdminQuizKnowledgePointUpdate,
     AdminQuizCourseBindingCreate,
+    AdminQuizCourseOptionResponse,
     AdminQuizCourseBindingResponse,
     AdminQuizCourseBindingStatusUpdate,
     AdminQuizLibraryCreate,
@@ -568,11 +569,7 @@ class AdminQuizV2Service:
                 object_id=library_id,
                 before=before,
                 after=self._library_fields(library),
-                permission=(
-                    "quiz_access_change"
-                    if before["access_mode"] != library.access_mode
-                    else "quiz_library_manage"
-                ),
+                permission="quiz_library_manage",
             )
             try:
                 await db.commit()
@@ -1008,6 +1005,36 @@ class AdminQuizV2Service:
             counts = await self._library_counts(db, [library_id])
             return self._library_response(library, counts[library_id])
 
+    async def list_course_options(
+        self,
+        *,
+        keyword: str | None = None,
+        limit: int = 100,
+    ) -> list[AdminQuizCourseOptionResponse]:
+        """Return only fields needed by the quiz course-binding selector.
+
+        Quiz administrators intentionally cannot call the general course
+        management API.  Keeping this projection under ``/admin/quiz`` lets
+        them complete course binding without granting ``course:list`` or
+        exposing course-management fields.
+        """
+
+        async with get_db_ctx() as db:
+            query = select(Course.id, Course.title).where(
+                Course.is_active.is_(True)
+            )
+            if keyword and keyword.strip():
+                query = query.where(Course.title.ilike(f"%{keyword.strip()}%"))
+            rows = (
+                await db.execute(
+                    query.order_by(Course.title.asc(), Course.id.asc()).limit(limit)
+                )
+            ).all()
+            return [
+                AdminQuizCourseOptionResponse(id=row.id, title=row.title)
+                for row in rows
+            ]
+
     async def list_course_bindings(
         self, library_id: int
     ) -> list[AdminQuizCourseBindingResponse]:
@@ -1046,6 +1073,8 @@ class AdminQuizV2Service:
             course = await db.get(Course, data.course_id)
             if course is None:
                 raise NotFoundException("课程")
+            if not course.is_active:
+                raise BusinessException("只能绑定启用中的课程")
             binding = QuizCourseLibraryBinding(
                 course_id=data.course_id,
                 library_id=library_id,

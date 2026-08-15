@@ -126,6 +126,8 @@ class RensheObjectStorage:
     async def signed_get_url(
         self, storage_key: str, *, download_filename: str | None = None
     ) -> str:
+        if self.storage_type == "disabled":
+            raise ThirdPartyException("人社 OSS 未配置，材料功能不可用")
         if self.storage_type != "aliyun_oss":
             raise ThirdPartyException("本地开发存储不生成公网访问地址")
 
@@ -168,6 +170,8 @@ class RensheObjectStorage:
             await asyncio.to_thread(_copy)
             return
         if self.storage_type != "aliyun_oss":
+            if self.storage_type == "disabled":
+                raise ThirdPartyException("人社 OSS 未配置，材料功能不可用")
             raise ThirdPartyException("未知的人社材料存储类型")
 
         def _upload() -> None:
@@ -201,6 +205,8 @@ class RensheObjectStorage:
             await asyncio.to_thread(shutil.copyfile, source, destination)
             return
         if self.storage_type != "aliyun_oss":
+            if self.storage_type == "disabled":
+                raise ThirdPartyException("人社 OSS 未配置，材料功能不可用")
             raise ThirdPartyException("未知的人社材料存储类型")
 
         def _download() -> None:
@@ -222,6 +228,8 @@ class RensheObjectStorage:
             await asyncio.to_thread(_write)
             return
         if self.storage_type != "aliyun_oss":
+            if self.storage_type == "disabled":
+                raise ThirdPartyException("人社 OSS 未配置，材料功能不可用")
             raise ThirdPartyException("未知的人社材料存储类型")
 
         def _upload() -> None:
@@ -247,6 +255,8 @@ class RensheObjectStorage:
             )
             return data, content_type
         if self.storage_type != "aliyun_oss":
+            if self.storage_type == "disabled":
+                raise ThirdPartyException("人社 OSS 未配置，材料功能不可用")
             raise ThirdPartyException("未知的人社材料存储类型")
 
         def _download() -> tuple[bytes, str]:
@@ -267,6 +277,8 @@ class RensheObjectStorage:
                 await asyncio.to_thread(path.unlink)
             return
         if self.storage_type != "aliyun_oss":
+            if self.storage_type == "disabled":
+                raise ThirdPartyException("人社 OSS 未配置，材料功能不可用")
             raise ThirdPartyException("未知的人社材料存储类型")
 
         def _remove() -> None:

@@ -12,12 +12,14 @@ from bootstrap_app.recovery import (
     RecoveryBundleError,
     create_recovery_envelope,
     decrypt_recovery_envelope,
+    recovery_oss_is_configured,
     restore_recovery_files,
+    store_local_recovery_envelope,
     upload_recovery_envelope,
 )
 
 
-def _installation(tmp_path, recovery_key):
+def _installation(tmp_path, recovery_key, *, recovery_oss=True):
     os.chmod(tmp_path, 0o700)
     installation_dir = tmp_path / "installation"
     control_dir = tmp_path / "control"
@@ -28,15 +30,19 @@ def _installation(tmp_path, recovery_key):
     )
     (control_dir / "release-manifest.json").chmod(0o600)
     runtime = {
-        "RECOVERY_OSS_ENDPOINT": "https://oss-cn-shanghai.aliyuncs.com",
-        "RECOVERY_OSS_BUCKET": "recovery-private",
+        "RECOVERY_OSS_ENDPOINT": (
+            "https://oss-cn-shanghai.aliyuncs.com" if recovery_oss else ""
+        ),
+        "RECOVERY_OSS_BUCKET": "recovery-private" if recovery_oss else "",
         "RECOVERY_OSS_PREFIX": "wemini-recovery",
     }
     secrets_payload = {
         "jwt_secret": b"j" * 64,
         "pii_hash_key": b"p" * 64,
-        "recovery_oss_access_key_id": b"recovery-id",
-        "recovery_oss_access_key_secret": b"recovery-secret",
+        "recovery_oss_access_key_id": b"recovery-id" if recovery_oss else b"",
+        "recovery_oss_access_key_secret": (
+            b"recovery-secret" if recovery_oss else b""
+        ),
     }
     signing_key = b"s" * 64
     store = InstallationStore(installation_dir, signing_key)
@@ -173,4 +179,39 @@ def test_recovery_upload_requires_private_bucket_and_verifies_metadata(tmp_path)
             envelope_bytes=envelope,
             envelope_sha256=digest,
             bucket_factory=lambda *_: _FakeBucket(corrupt_metadata=True),
+        )
+
+
+def test_recovery_oss_can_be_omitted_and_encrypted_bundle_stays_local(tmp_path):
+    recovery_key = RSA.generate(3072)
+    installation_dir, control_dir, signing_key = _installation(
+        tmp_path,
+        recovery_key,
+        recovery_oss=False,
+    )
+    envelope, digest = create_recovery_envelope(
+        installation_dir=installation_dir,
+        control_dir=control_dir,
+        installation_id="installation-123",
+        signing_key=signing_key,
+    )
+
+    assert recovery_oss_is_configured(installation_dir) is False
+    local_key = store_local_recovery_envelope(
+        control_dir=control_dir,
+        installation_id="installation-123",
+        envelope_bytes=envelope,
+        envelope_sha256=digest,
+    )
+
+    assert local_key == "local-only:installation-123.recovery.json"
+    local_path = control_dir / "recovery-bundles" / "installation-123.recovery.json"
+    assert local_path.read_bytes() == envelope
+    assert (os.stat(local_path).st_mode & 0o777) == 0o600
+    with pytest.raises(RecoveryBundleError, match="not configured"):
+        upload_recovery_envelope(
+            installation_dir=installation_dir,
+            installation_id="installation-123",
+            envelope_bytes=envelope,
+            envelope_sha256=digest,
         )

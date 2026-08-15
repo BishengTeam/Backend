@@ -59,6 +59,12 @@ def quiz_migration_database(monkeypatch):
     )
     monkeypatch.delenv("QUIZ_DESTRUCTIVE_MIGRATION_BACKUP_REF", raising=False)
     monkeypatch.delenv("QUIZ_DESTRUCTIVE_DOWNGRADE_BACKUP_REF", raising=False)
+    # adm001 runs after the quiz migrations and requires evidence before
+    # transforming any pre-existing administrator account.
+    monkeypatch.setenv(
+        "ADMIN_SECURITY_MIGRATION_BACKUP_REF",
+        "isolated-quiz-migration-test",
+    )
 
     try:
         yield test_url

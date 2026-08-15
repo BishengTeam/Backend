@@ -408,8 +408,8 @@ async def health():
     "/ready",
     summary="就绪检查",
     description=(
-        "就绪探针。检查当前环境要求的数据库、Redis、OSS、微信登录和微信支付"
-        "依赖；未就绪时返回 503，部署脚本不得切入流量。"
+        "就绪探针。检查唯一有效超级管理员及当前环境要求的数据库、Redis、"
+        "OSS、微信登录和微信支付依赖；未就绪时返回 503，部署脚本不得切入流量。"
     ),
 )
 async def ready(response: Response):
@@ -461,6 +461,12 @@ async def _dependency_checks(
         # exposes a non-reversible database fingerprint for UAT target binding.
         db_ok = bool(database_probe)
         database_details = {"status": "ok" if db_ok else "unavailable"}
+    admin_identity = database_details.get("admin_identity")
+    if not isinstance(admin_identity, dict):
+        admin_identity = {
+            "status": "unavailable",
+            "reason": "database_probe_unavailable",
+        }
     oss_details = inspect_oss_configuration()
     quiz_oss_details = inspect_quiz_oss_configuration()
     # Staging deployments can use a real private bucket too.  Probe every
@@ -474,6 +480,7 @@ async def _dependency_checks(
     payment_details = inspect_wechat_payment_configuration()
     details: dict[str, dict[str, Any]] = {
         "database": database_details,
+        "admin_identity": admin_identity,
         "redis": {"status": "ok" if redis_ok else "unavailable"},
         "oss": oss_details,
         "quiz_oss": quiz_oss_details,
@@ -482,6 +489,7 @@ async def _dependency_checks(
     }
     checks = {
         "database": details["database"]["status"],
+        "admin_identity": admin_identity["status"],
         "redis": details["redis"]["status"],
         "oss": oss_details["status"],
         "quiz_oss": quiz_oss_details["status"],
@@ -500,7 +508,11 @@ async def _database_probe() -> dict[str, Any]:
                 await db.execute(
                     text(
                         "SELECT current_database(), "
-                        "(SELECT system_identifier::text FROM pg_control_system())"
+                        "(SELECT system_identifier::text FROM pg_control_system()), "
+                        "(SELECT count(*) FROM admin_user "
+                        " WHERE role = 'super_admin'), "
+                        "(SELECT count(*) FROM admin_user "
+                        " WHERE role = 'super_admin' AND is_active IS TRUE)"
                     )
                 )
             ).one()
@@ -508,7 +520,30 @@ async def _database_probe() -> dict[str, Any]:
         fingerprint = hashlib.sha256(
             f"{identity[1]}/{database_name}".encode("utf-8")
         ).hexdigest()
-        return {"status": "ok", "fingerprint_sha256": fingerprint}
+        super_admin_count = int(identity[2])
+        active_super_admin_count = int(identity[3])
+        if super_admin_count == 1 and active_super_admin_count == 1:
+            admin_identity = {"status": "ok"}
+        elif super_admin_count == 0:
+            admin_identity = {
+                "status": "unavailable",
+                "reason": "super_admin_missing",
+            }
+        elif super_admin_count == 1:
+            admin_identity = {
+                "status": "unavailable",
+                "reason": "super_admin_inactive",
+            }
+        else:
+            admin_identity = {
+                "status": "unavailable",
+                "reason": "multiple_super_admins",
+            }
+        return {
+            "status": "ok",
+            "fingerprint_sha256": fingerprint,
+            "admin_identity": admin_identity,
+        }
     except Exception:
         return {"status": "unavailable"}
 

@@ -21,6 +21,14 @@ _SENSITIVE_KEY = re.compile(
 _ID_CARD = re.compile(r"(?<!\d)(?:\d{17}[0-9Xx]|\d{15})(?!\d)")
 _MOBILE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
 _BEARER = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~-]+")
+_CREDENTIAL_ASSIGNMENT = re.compile(
+    r"(?i)([\"']?(?:password|passwd|(?:access|refresh|reauth)?[_-]?token|"
+    r"authorization|credential|secret|password[_-]?hash|hash)[\"']?\s*[:=]\s*)"
+    # Unquoted values run to a structural delimiter or line ending, not just
+    # the next space: Authorization/Basic and malformed password fragments
+    # commonly contain whitespace and must be removed as one opaque value.
+    r"(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^,;\r\n]+)"
+)
 _OSS_URL = re.compile(
     r"(?i)https?://[^\s\"']*(?:aliyuncs\.com|\.oss[-.]|/oss/)[^\s\"']*"
 )
@@ -33,6 +41,11 @@ def _redact_string(value: str) -> str:
     value = _ID_CARD.sub(REDACTED, value)
     value = _MOBILE.sub(REDACTED, value)
     value = _BEARER.sub(r"\1" + REDACTED, value)
+    # Free-form fields such as User-Agent and exception messages can contain
+    # attacker-controlled credential-shaped key/value fragments.  Structured
+    # key redaction does not see these, so remove the complete assigned value
+    # before the text can reach a permanent audit row or debug response.
+    value = _CREDENTIAL_ASSIGNMENT.sub(r"\1" + REDACTED, value)
     value = _OSS_URL.sub(REDACTED, value)
     return _OSS_URI.sub(REDACTED, value)
 

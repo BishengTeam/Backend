@@ -58,6 +58,15 @@ def inspect_oss_configuration() -> dict[str, Any]:
     """Return OSS configuration state without making a network request."""
 
     storage_type = (settings.RENSHE_STORAGE_TYPE or "").strip().lower()
+    if storage_type == "disabled":
+        return {
+            "status": "not_configured",
+            "configured": False,
+            "required": False,
+            "mode": "disabled",
+            "reason": "feature_not_configured",
+            "probe": "not_required",
+        }
     if storage_type == "local":
         # Local storage is an intentional development/test adapter.  Production
         # settings reject it before the application starts.
@@ -107,6 +116,15 @@ def inspect_quiz_oss_configuration() -> dict[str, Any]:
     """Return quiz-import storage state without exposing bucket metadata."""
 
     storage_type = (settings.QUIZ_IMPORT_STORAGE_TYPE or "").strip().lower()
+    if storage_type == "disabled":
+        return {
+            "status": "not_configured",
+            "configured": False,
+            "required": False,
+            "mode": "disabled",
+            "reason": "feature_not_configured",
+            "probe": "not_required",
+        }
     if storage_type == "local":
         return {
             "status": "ok",
@@ -291,9 +309,17 @@ def inspect_wechat_payment_configuration() -> dict[str, Any]:
 def required_dependency_names() -> set[str]:
     """Return checks that must be healthy before traffic can be accepted."""
 
-    required = {"database", "redis", "oss"}
+    # A migrated database without exactly one active super administrator is
+    # not ready to accept Admin traffic.  Clean installation is allowed to
+    # pass the migration with an empty table, but bootstrap must create the
+    # initial account before runtime readiness succeeds.
+    required = {"database", "redis", "admin_identity"}
+    if inspect_oss_configuration().get("mode") != "disabled":
+        required.add("oss")
     if settings.QUIZ_TASKS_ENABLED:
-        required.update({"quiz_oss", "quiz_worker"})
+        required.add("quiz_worker")
+        if inspect_quiz_oss_configuration().get("mode") != "disabled":
+            required.add("quiz_oss")
     if settings.APP_ENV == "production":
         required.update({"wechat_login", "wechat_payment"})
     elif getattr(settings, "WECHAT_PAY_ENABLED", False):

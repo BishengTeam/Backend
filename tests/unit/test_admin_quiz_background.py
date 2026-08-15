@@ -132,6 +132,21 @@ async def test_quiz_oss_adapter_maps_upload_and_sign_failures(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
+async def test_disabled_quiz_oss_never_falls_back_to_local_storage(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "QUIZ_IMPORT_STORAGE_TYPE", "disabled")
+    service = AdminQuizService()
+
+    with pytest.raises(ThirdPartyException, match="题库 OSS 未配置"):
+        await service._put_import_object(
+            "quiz-imports/batch.csv",
+            b"payload",
+            "text/csv",
+        )
+    with pytest.raises(ThirdPartyException, match="题库 OSS 未配置"):
+        await service._get_import_object("quiz-imports/batch.csv")
+
+
+@pytest.mark.asyncio
 async def test_local_quiz_import_storage_maps_filesystem_failure(monkeypatch) -> None:
     async def run_inline(func, *args, **kwargs):
         return func(*args, **kwargs)

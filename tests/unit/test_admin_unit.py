@@ -188,21 +188,14 @@ class AdminLoginSchemaTests(unittest.TestCase):
         fields = set(response_model.model_fields)
         self.assertIn("permissions", fields, "AdminLoginResponse should have 'permissions' field")
 
-    def test_all_permissions_list_exists(self):
+    def test_permissions_have_no_legacy_schema_default(self):
         schema = importlib.import_module("app.schemas.admin")
-        self.assertTrue(hasattr(schema, "ALL_PERMISSIONS"))
-        perms = schema.ALL_PERMISSIONS
-        self.assertIsInstance(perms, list)
-        self.assertGreater(len(perms), 0)
-        expected = [
-            "dashboard:view", "user:list",
-            "order:list", "order:write",
-            "quiz:list", "quiz:write", "quiz:import",
-            "content:list", "content:write", "content:banner",
-            "course:list", "course:write",
-        ]
-        for p in expected:
-            self.assertIn(p, perms, f"ALL_PERMISSIONS should contain {p}")
+        self.assertFalse(
+            hasattr(schema, "ALL_PERMISSIONS"),
+            "role permissions must have one policy-layer source of truth",
+        )
+        permissions = schema.AdminLoginResponse.model_fields["permissions"]
+        self.assertTrue(permissions.is_required())
 
 
 class AdminBatchDeleteSchemaTests(unittest.TestCase):

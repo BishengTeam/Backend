@@ -1,20 +1,52 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class AdminLoginRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=64)
-    password: str = Field(..., min_length=1, max_length=128)
+    password: str = Field(..., min_length=1, max_length=128, repr=False)
 
 
 class AdminInfo(BaseModel):
     id: int
     username: str
-    role: str
+    display_name: str
+    role: Literal["super_admin", "quiz_admin"]
+    is_active: bool
+    must_change_password: bool
+    locked_until: datetime | None = None
+    last_login_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class AdminChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=128, repr=False)
+    new_password: str = Field(..., min_length=12, max_length=128, repr=False)
+    confirm_password: str = Field(..., min_length=12, max_length=128, repr=False)
+
+    model_config = {"extra": "forbid"}
+
+    @model_validator(mode="after")
+    def validate_confirmation(self) -> "AdminChangePasswordRequest":
+        if self.new_password != self.confirm_password:
+            raise ValueError("两次输入的新密码不一致")
+        return self
+
+
+class AdminReauthRequest(BaseModel):
+    password: str = Field(..., min_length=1, max_length=128, repr=False)
+
+    model_config = {"extra": "forbid"}
+
+
+class AdminReauthResponse(BaseModel):
+    reauth_token: str = Field(..., repr=False)
+    expires_in: int = 600
 
 class DashboardResponse(BaseModel):
     """管理后台数据看板响应"""
@@ -29,39 +61,22 @@ class DashboardResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-ALL_PERMISSIONS = [
-    "dashboard:view",
-    "user:list",
-    "user:write",
-    "user:delete",
-    "order:list",
-    "order:write",
-    "quiz:list",
-    "quiz:write",
-    "quiz:import",
-    "quiz_content_edit",
-    "quiz_content_publish",
-    "quiz_library_manage",
-    "course_quiz_bind",
-    "quiz_access_change",
-    "content:list",
-    "content:write",
-    "content:banner",
-    "course:list",
-    "course:write",
-]
-
-
 class AdminLoginResponse(BaseModel):
-    access_token: str
+    access_token: str = Field(..., repr=False)
     expires_in: int
     admin: AdminInfo
-    permissions: list[str] = ALL_PERMISSIONS
+    # Deliberately required: omitting the role-derived permission set must
+    # fail response construction instead of silently granting legacy defaults.
+    permissions: list[str]
+    session_mode: Literal["normal", "restricted"]
+    must_change_password: bool
 
 
 class AdminMeResponse(BaseModel):
     admin: AdminInfo
     permissions: list[str]
+    session_mode: Literal["normal", "restricted"]
+    must_change_password: bool
 
 
 # ── User management ──

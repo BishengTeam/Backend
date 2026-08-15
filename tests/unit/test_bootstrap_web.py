@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 import pytest
 from Crypto.PublicKey import RSA
@@ -92,6 +93,27 @@ def test_health_and_static_page_have_security_headers(tmp_path):
     assert page.headers["cache-control"] == "no-store"
     assert "default-src 'none'" in page.headers["content-security-policy"]
 
+    for name in (
+        "renshe_oss_endpoint",
+        "renshe_oss_bucket",
+        "renshe_oss_access_key_id",
+        "renshe_oss_access_key_secret",
+        "quiz_oss_endpoint",
+        "quiz_oss_bucket",
+        "quiz_oss_access_key_id",
+        "quiz_oss_access_key_secret",
+        "recovery_oss_endpoint",
+        "recovery_oss_bucket",
+        "recovery_oss_access_key_id",
+        "recovery_oss_access_key_secret",
+    ):
+        tag = re.search(rf'<input name="{name}"[^>]*>', page.text)
+        assert tag is not None
+        assert "required" not in tag.group(0)
+    assert 'data-optional-group="renshe"' in page.text
+    assert 'data-optional-group="quiz"' in page.text
+    assert 'data-optional-group="recovery"' in page.text
+
 
 def test_api_requires_exact_bearer_token(tmp_path):
     client, token = _client(tmp_path)
@@ -133,6 +155,43 @@ def test_configuration_commits_once_without_echoing_secrets(tmp_path, web_payloa
     assert repeated.json()["config_fingerprint"] == response.json()[
         "config_fingerprint"
     ]
+
+
+def test_configuration_accepts_all_three_oss_groups_as_unconfigured(
+    tmp_path,
+    web_payload,
+):
+    client, token = _client(tmp_path)
+    payload = dict(web_payload)
+    for name in (
+        "renshe_oss_endpoint",
+        "renshe_oss_bucket",
+        "renshe_oss_access_key_id",
+        "renshe_oss_access_key_secret",
+        "quiz_oss_endpoint",
+        "quiz_oss_bucket",
+        "quiz_oss_access_key_id",
+        "quiz_oss_access_key_secret",
+        "recovery_oss_endpoint",
+        "recovery_oss_bucket",
+        "recovery_oss_access_key_id",
+        "recovery_oss_access_key_secret",
+    ):
+        payload[name] = None
+
+    response = client.post(
+        "/api/bootstrap/configure",
+        headers={"Authorization": f"Bearer {token}"},
+        json=payload,
+    )
+
+    assert response.status_code == 200
+    runtime = (tmp_path / "installation" / "runtime.env").read_text("utf-8")
+    assert "RENSHE_STORAGE_TYPE=disabled" in runtime
+    assert "QUIZ_IMPORT_STORAGE_TYPE=disabled" in runtime
+    assert (
+        tmp_path / "installation" / "secrets" / "aliyun_oss_access_key_id"
+    ).read_bytes() == b""
 
 
 def test_validation_response_never_echoes_rejected_secret(tmp_path, web_payload):
@@ -180,7 +239,7 @@ def test_admin_password_is_used_once_and_never_echoed(tmp_path):
     for target in phases[1 : awaiting_index + 1]:
         state = store.transition(state.phase, target)
 
-    password = "a-final-admin-password"
+    password = "a-final-admin-password-2026"
     response = client.post(
         "/api/bootstrap/admin",
         headers={"Authorization": f"Bearer {token}"},

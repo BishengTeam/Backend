@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
 
-ROLES = ("super_admin", "admin")
+ROLES = ("super_admin", "quiz_admin")
 
 
 @pytest.fixture
@@ -52,6 +52,7 @@ class TestAdminAuthMe:
                 username=f"{prefix}_{role}",
                 password_hash="integration_test_hash",
                 role=role,
+                must_change_password=False,
             )
             admins.append(admin)
 
@@ -90,13 +91,16 @@ class TestAdminAuthMe:
 
             for admin in admins:
                 permissions = ROLE_PERMISSIONS.get(admin.role, [])
-                assert isinstance(permissions, list), f"permissions for {admin.role} should be a list"
+                assert isinstance(permissions, list), (
+                    f"permissions for {admin.role} should be a list"
+                )
 
                 if admin.role == "super_admin":
                     assert permissions == ["*"], (
                         f"super_admin should have ['*'], got {permissions}"
                     )
                 else:
-                    assert "dashboard:view" in permissions, (
-                        f"{admin.role} missing dashboard:view"
+                    assert "quiz:write" in permissions, (
+                        f"{admin.role} missing quiz:write"
                     )
+                    assert "dashboard:view" not in permissions

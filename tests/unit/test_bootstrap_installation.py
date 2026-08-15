@@ -5,6 +5,7 @@ import os
 
 import pytest
 from Crypto.PublicKey import RSA
+from pydantic import ValidationError
 
 from bootstrap_app.installation import (
     BootstrapValidationError,
@@ -104,6 +105,67 @@ def test_external_mode_keeps_credentials_out_of_runtime(rsa_materials, tmp_path)
     assert secret_files["postgres_password"] == b"db-password"
     assert secret_files["redis_url"].startswith(b"rediss://")
     assert "db-password" not in json.dumps(runtime)
+
+
+def test_all_oss_groups_can_be_omitted_without_enabling_local_fallback(
+    rsa_materials,
+    tmp_path,
+):
+    omitted = {
+        name: None
+        for name in (
+            "renshe_oss_endpoint",
+            "renshe_oss_bucket",
+            "renshe_oss_access_key_id",
+            "renshe_oss_access_key_secret",
+            "quiz_oss_endpoint",
+            "quiz_oss_bucket",
+            "quiz_oss_access_key_id",
+            "quiz_oss_access_key_secret",
+            "recovery_oss_endpoint",
+            "recovery_oss_bucket",
+            "recovery_oss_access_key_id",
+            "recovery_oss_access_key_secret",
+        )
+    }
+    request = BootstrapConfigureRequest.model_validate(
+        configure_payload(rsa_materials, **omitted)
+    )
+
+    secret_files, runtime, _ = build_installation_payload(
+        request,
+        host_deploy_root=tmp_path,
+    )
+
+    assert runtime["RENSHE_STORAGE_TYPE"] == "disabled"
+    assert runtime["QUIZ_IMPORT_STORAGE_TYPE"] == "disabled"
+    assert runtime["ALIYUN_OSS_ENDPOINT"] == ""
+    assert runtime["QUIZ_OSS_ENDPOINT"] == ""
+    assert runtime["RECOVERY_OSS_ENDPOINT"] == ""
+    assert secret_files["aliyun_oss_access_key_id"] == b""
+    assert secret_files["quiz_oss_access_key_secret"] == b""
+    assert secret_files["recovery_oss_access_key_id"] == b""
+
+    os.chmod(tmp_path, 0o700)
+    store = InstallationStore(tmp_path / "installation", b"o" * 64)
+    store.commit(
+        installation_id="optional-oss",
+        secret_files=secret_files,
+        runtime=runtime,
+        recovery_public_key=rsa_materials["recovery_public"].encode(),
+    )
+    assert store.verify_existing("optional-oss")
+
+
+@pytest.mark.parametrize("group", ("renshe", "quiz", "recovery"))
+def test_each_optional_oss_group_rejects_partial_credentials(rsa_materials, group):
+    with pytest.raises(ValidationError, match=rf"{group}_oss.*fully configured"):
+        BootstrapConfigureRequest.model_validate(
+            configure_payload(
+                rsa_materials,
+                **{f"{group}_oss_endpoint": ""},
+            )
+        )
 
 
 @pytest.mark.parametrize(

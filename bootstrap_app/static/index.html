@@ -3,126 +3,238 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
     <title>weMiniApp 一次性初始化</title>
     <link rel="stylesheet" href="/assets/bootstrap.css">
   </head>
   <body>
-    <main>
-      <header>
-        <p class="eyebrow">LOCAL BOOTSTRAP</p>
-        <h1>weMiniApp 一次性初始化</h1>
-        <p>此页面只能通过服务器环回地址或 SSH 隧道访问。初始化完成后入口永久关闭。</p>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <main class="app-shell">
+      <header class="hero">
+        <div class="brand-mark" aria-hidden="true"><span>W</span></div>
+        <div class="hero-copy">
+          <div class="hero-meta">
+            <p class="eyebrow">SERVER BOOTSTRAP</p>
+            <span class="security-pill"><i></i>仅限本机安全会话</span>
+          </div>
+          <h1>让新服务器，稳稳地跑起来。</h1>
+          <p class="hero-description">一次完成 Backend 与 Admin 的环境校验、配置写入、数据库迁移和首位管理员创建。初始化结束后，此入口将永久关闭。</p>
+        </div>
       </header>
 
-      <section id="session-card" class="card">
-        <h2>连接初始化会话</h2>
-        <label>一次性 Token
-          <input id="token" type="password" autocomplete="off" spellcheck="false">
-        </label>
-        <button id="connect" type="button">连接</button>
+      <section id="session-card" class="session-card card">
+        <div class="session-illustration" aria-hidden="true">
+          <span class="shield">✓</span>
+        </div>
+        <div class="session-content">
+          <p class="section-kicker">第一步</p>
+          <h2>连接初始化会话</h2>
+          <p class="section-description">粘贴终端输出的一次性 Token。Token 只保存在当前浏览器内存中，不会写入本地存储。</p>
+          <div class="connect-row">
+            <label class="field grow-field">
+              <span class="field-label">一次性 Token</span>
+              <span class="input-shell secret-input">
+                <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 64 位 Token">
+              </span>
+            </label>
+            <button id="connect" type="button" class="primary-button">安全连接 <span aria-hidden="true">→</span></button>
+          </div>
+          <p class="microcopy"><span aria-hidden="true">⌁</span> 页面只能通过服务器环回地址或 SSH 隧道访问</p>
+        </div>
       </section>
 
-      <section id="status-card" class="card hidden" aria-live="polite">
-        <div class="status-row">
-          <div>
+      <div class="workspace">
+        <aside id="status-card" class="status-card card hidden" aria-live="polite">
+          <div class="status-heading">
+            <span class="live-dot" aria-hidden="true"></span>
+            <span>部署进度</span>
+          </div>
+          <div class="current-phase">
             <span class="label">当前阶段</span>
             <strong id="phase">—</strong>
+            <p id="phase-description">正在读取初始化状态</p>
           </div>
-          <div>
+          <ol id="progress-list" class="progress-list" aria-label="初始化步骤">
+            <li data-step="1"><span>1</span><div><strong>部署配置</strong><small>连接与凭据校验</small></div></li>
+            <li data-step="2"><span>2</span><div><strong>质量门禁</strong><small>测试与发布校验</small></div></li>
+            <li data-step="3"><span>3</span><div><strong>基础设施</strong><small>数据库迁移</small></div></li>
+            <li data-step="4"><span>4</span><div><strong>管理员</strong><small>创建初始账号</small></div></li>
+            <li data-step="5"><span>5</span><div><strong>启动服务</strong><small>恢复包与运行验收</small></div></li>
+          </ol>
+          <div class="installation-meta">
             <span class="label">安装 ID</span>
             <code id="installation-id">—</code>
           </div>
+          <div id="failure-panel" class="failure-panel hidden">
+            <strong>当前步骤需要处理</strong>
+            <p id="failure" class="error"></p>
+            <button id="retry" type="button" class="secondary-button hidden">重试当前步骤</button>
+          </div>
+        </aside>
+
+        <div class="content-column">
+          <form id="configuration" class="form-card card hidden" autocomplete="off">
+            <div class="form-heading">
+              <div>
+                <p class="section-kicker">部署配置</p>
+                <h2>告诉我们这台服务器如何工作</h2>
+                <p class="section-description">带“必填”标记的内容会在提交前校验。三组 OSS 均可暂不配置，相关能力会明确保持停用。</p>
+              </div>
+              <span class="form-badge">配置只提交一次</span>
+            </div>
+
+            <fieldset class="form-section">
+              <legend><span class="section-number">01</span><span>访问地址与基础设施<small>确定对外域名以及数据服务运行位置</small></span></legend>
+              <div class="field-grid">
+                <label class="field field-wide">
+                  <span class="field-label">基础设施模式 <em>必填</em></span>
+                  <select name="deployment_mode">
+                    <option value="internal">Compose 内置 PostgreSQL / Redis</option>
+                    <option value="external">使用外部 PostgreSQL / Redis</option>
+                  </select>
+                  <small id="deployment-mode-help">适合新服务器，自动创建并管理数据容器</small>
+                </label>
+                <label class="field">
+                  <span class="field-label">Backend HTTPS Origin <em>必填</em></span>
+                  <input name="api_origin" type="url" placeholder="https://api.example.com" required>
+                </label>
+                <label class="field">
+                  <span class="field-label">Admin HTTPS Origin <em>必填</em></span>
+                  <input name="admin_origin" type="url" placeholder="https://admin.example.com" required>
+                </label>
+                <label class="field">
+                  <span class="field-label">PostgreSQL Host <em>必填</em></span>
+                  <input name="postgres_host" value="db" required>
+                </label>
+                <label class="field">
+                  <span class="field-label">PostgreSQL Port <em>必填</em></span>
+                  <input name="postgres_port" type="number" value="5432" min="1" max="65535" required>
+                </label>
+                <label class="field">
+                  <span class="field-label">PostgreSQL User <em>必填</em></span>
+                  <input name="postgres_user" value="wemini" required>
+                </label>
+                <label class="field">
+                  <span class="field-label">PostgreSQL Database <em>必填</em></span>
+                  <input name="postgres_database" value="wemini_app" required>
+                </label>
+                <label class="field external-field" data-external-field>
+                  <span class="field-label">外部 PostgreSQL Password <em>外置必填</em></span>
+                  <input name="postgres_password" type="password" autocomplete="new-password">
+                </label>
+                <label class="field external-field" data-external-field>
+                  <span class="field-label">外部 Redis URL <em>外置必填</em></span>
+                  <input name="redis_url" type="password" placeholder="rediss://..." autocomplete="off">
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset class="form-section">
+              <legend><span class="section-number">02</span><span>微信登录与支付 V3<small>登录、报名支付和退款所需的正式商户材料</small></span></legend>
+              <div class="info-banner"><span aria-hidden="true">i</span><p>支付与退款回调地址会根据 Backend Origin 自动生成，全程使用微信支付 API V3。</p></div>
+              <div class="field-grid">
+                <label class="field"><span class="field-label">小程序 AppID <em>必填</em></span><input name="wechat_appid" required></label>
+                <label class="field"><span class="field-label">小程序 Secret <em>必填</em></span><input name="wechat_secret" type="password" required autocomplete="off"></label>
+                <label class="field"><span class="field-label">支付 AppID <em>必填</em></span><input name="wechat_pay_appid" required></label>
+                <label class="field"><span class="field-label">商户号 <em>必填</em></span><input name="wechat_pay_mchid" required inputmode="numeric"></label>
+                <label class="field"><span class="field-label">商户证书序列号 <em>必填</em></span><input name="wechat_pay_cert_serial_no" required></label>
+                <label class="field"><span class="field-label">微信支付公钥 ID <em>必填</em></span><input name="wechat_pay_public_key_id" required placeholder="PUB_KEY_ID_..."></label>
+                <label class="field"><span class="field-label">API V3 Key <em>必填</em></span><input name="wechat_pay_api_v3_key" type="password" required minlength="32" maxlength="32" autocomplete="off"><small>必须恰好为 32 字节</small></label>
+                <label class="field file-field"><span class="field-label">商户私钥 PEM <em>必填</em></span><input name="wechat_pay_private_key_file" type="file" accept=".pem,.key" required><small>RSA 2048 私钥，最大 64 KiB</small></label>
+                <label class="field file-field"><span class="field-label">微信支付公钥 PEM <em>必填</em></span><input name="wechat_pay_public_key_file" type="file" accept=".pem" required><small>与上方公钥 ID 对应</small></label>
+              </div>
+            </fieldset>
+
+            <fieldset class="form-section oss-section">
+              <legend><span class="section-number">03</span><span>对象存储<small>三组凭据彼此独立，均可稍后再规划</small></span></legend>
+              <div class="optional-notice">
+                <div class="optional-icon" aria-hidden="true">◇</div>
+                <div><strong>OSS 现在可以不填</strong><p>每组请完整填写或全部留空。留空不会阻止 Backend 与 Admin 启动，但相应材料、导入或远端恢复能力会显示“未配置”。</p></div>
+              </div>
+
+              <div class="optional-groups">
+                <section class="optional-group" data-optional-group="renshe">
+                  <div class="optional-group-heading">
+                    <div><span class="capability-dot"></span><h3>人社材料 OSS</h3></div>
+                    <span class="optional-badge">可选 · 未配置</span>
+                  </div>
+                  <p>用于身份证、学生材料、报名版本和批次导出文件。</p>
+                  <div class="field-grid compact-grid">
+                    <label class="field"><span class="field-label">Endpoint</span><input name="renshe_oss_endpoint" type="url" placeholder="https://oss-cn-....aliyuncs.com"></label>
+                    <label class="field"><span class="field-label">Bucket</span><input name="renshe_oss_bucket" placeholder="private-bucket"></label>
+                    <label class="field"><span class="field-label">AccessKey ID</span><input name="renshe_oss_access_key_id" type="password" autocomplete="off"></label>
+                    <label class="field"><span class="field-label">AccessKey Secret</span><input name="renshe_oss_access_key_secret" type="password" autocomplete="off"></label>
+                  </div>
+                </section>
+
+                <section class="optional-group" data-optional-group="quiz">
+                  <div class="optional-group-heading">
+                    <div><span class="capability-dot"></span><h3>题库导入 OSS</h3></div>
+                    <span class="optional-badge">可选 · 未配置</span>
+                  </div>
+                  <p>用于题库批量导入源文件、错误报告和定时清理。</p>
+                  <div class="field-grid compact-grid">
+                    <label class="field"><span class="field-label">Endpoint</span><input name="quiz_oss_endpoint" type="url" placeholder="https://oss-cn-....aliyuncs.com"></label>
+                    <label class="field"><span class="field-label">Bucket</span><input name="quiz_oss_bucket" placeholder="private-bucket"></label>
+                    <label class="field"><span class="field-label">AccessKey ID</span><input name="quiz_oss_access_key_id" type="password" autocomplete="off"></label>
+                    <label class="field"><span class="field-label">AccessKey Secret</span><input name="quiz_oss_access_key_secret" type="password" autocomplete="off"></label>
+                  </div>
+                </section>
+
+                <section class="optional-group" data-optional-group="recovery">
+                  <div class="optional-group-heading">
+                    <div><span class="capability-dot"></span><h3>独立恢复 OSS</h3></div>
+                    <span class="optional-badge">可选 · 未配置</span>
+                  </div>
+                  <p>留空时仍生成本机加密恢复包；填写后会额外上传到独立私有 Bucket。</p>
+                  <div class="field-grid compact-grid">
+                    <label class="field"><span class="field-label">Endpoint</span><input name="recovery_oss_endpoint" type="url" placeholder="https://oss-cn-....aliyuncs.com"></label>
+                    <label class="field"><span class="field-label">Bucket</span><input name="recovery_oss_bucket" placeholder="private-recovery"></label>
+                    <label class="field"><span class="field-label">对象前缀</span><input name="recovery_oss_prefix" value="wemini-recovery" required></label>
+                    <label class="field"><span class="field-label">AccessKey ID</span><input name="recovery_oss_access_key_id" type="password" autocomplete="off"></label>
+                    <label class="field"><span class="field-label">AccessKey Secret</span><input name="recovery_oss_access_key_secret" type="password" autocomplete="off"></label>
+                    <label class="field file-field"><span class="field-label">恢复 RSA 公钥 PEM <em>必填</em></span><input name="recovery_public_key_file" type="file" accept=".pem" required><small>不属于 OSS 凭据；用于加密本机或远端恢复包，RSA 3072+</small></label>
+                  </div>
+                </section>
+              </div>
+            </fieldset>
+
+            <div class="submit-panel">
+              <div><strong>提交前请最后核对</strong><p>Secret 提交后不会再次显示；完整填写的外部服务会立即执行真实连通性探针。</p></div>
+              <button type="submit" class="primary-button submit-button"><span>验证并开始部署</span><b aria-hidden="true">→</b></button>
+            </div>
+          </form>
+
+          <form id="administrator" class="form-card card admin-card hidden" autocomplete="off">
+            <div class="form-heading">
+              <div>
+                <p class="section-kicker">账号初始化</p>
+                <h2>创建首位超级管理员</h2>
+                <p class="section-description">数据库迁移已经完成。密码仅用于本次请求，不会写入配置文件、日志或恢复包。</p>
+              </div>
+              <span class="form-badge success-badge">迁移已完成</span>
+            </div>
+            <div class="field-grid admin-grid">
+              <label class="field"><span class="field-label">用户名 <em>必填</em></span><input name="username" minlength="4" maxlength="32" required autocomplete="username"><small>小写字母开头，可使用数字、点、下划线和连字符</small></label>
+              <label class="field"><span class="field-label">最终强密码 <em>必填</em></span><input name="password" type="password" minlength="12" maxlength="128" required autocomplete="new-password"><small>12–128 位，必须同时包含字母和数字</small></label>
+              <label class="field"><span class="field-label">再次输入密码 <em>必填</em></span><input name="password_confirm" type="password" minlength="12" maxlength="128" required autocomplete="new-password"></label>
+            </div>
+            <div class="submit-panel compact-submit">
+              <p>创建后，宿主机将继续正式种子、恢复包和运行时启动。</p>
+              <button type="submit" class="primary-button">创建超级管理员 <span aria-hidden="true">→</span></button>
+            </div>
+          </form>
         </div>
-        <p id="failure" class="error hidden"></p>
-        <button id="retry" type="button" class="secondary hidden">重试当前步骤</button>
-      </section>
-
-      <form id="configuration" class="card hidden" autocomplete="off">
-        <h2>部署配置</h2>
-        <div class="grid">
-          <label>基础设施模式
-            <select name="deployment_mode">
-              <option value="internal">Compose 内置 PostgreSQL / Redis</option>
-              <option value="external">外部 PostgreSQL / Redis</option>
-            </select>
-          </label>
-          <label>Backend HTTPS Origin
-            <input name="api_origin" type="url" placeholder="https://api.example.com" required>
-          </label>
-          <label>Admin HTTPS Origin
-            <input name="admin_origin" type="url" placeholder="https://admin.example.com" required>
-          </label>
-        </div>
-
-        <fieldset>
-          <legend>PostgreSQL / Redis</legend>
-          <div class="grid">
-            <label>PostgreSQL Host<input name="postgres_host" value="db" required></label>
-            <label>PostgreSQL Port<input name="postgres_port" type="number" value="5432" min="1" max="65535" required></label>
-            <label>PostgreSQL User<input name="postgres_user" value="wemini" required></label>
-            <label>PostgreSQL Database<input name="postgres_database" value="wemini_app" required></label>
-            <label>外部 PostgreSQL Password<input name="postgres_password" type="password"></label>
-            <label>外部 Redis URL<input name="redis_url" type="password" placeholder="rediss://..."></label>
-          </div>
-        </fieldset>
-
-        <fieldset>
-          <legend>微信登录与支付 V3</legend>
-          <div class="grid">
-            <label>小程序 AppID<input name="wechat_appid" required></label>
-            <label>小程序 Secret<input name="wechat_secret" type="password" required></label>
-            <label>支付 AppID<input name="wechat_pay_appid" required></label>
-            <label>商户号<input name="wechat_pay_mchid" required></label>
-            <label>商户证书序列号<input name="wechat_pay_cert_serial_no" required></label>
-            <label>微信支付公钥 ID<input name="wechat_pay_public_key_id" required></label>
-            <label>API V3 Key<input name="wechat_pay_api_v3_key" type="password" required></label>
-            <label>商户私钥 PEM 文件<input name="wechat_pay_private_key_file" type="file" accept=".pem,.key" required></label>
-            <label>微信支付公钥 PEM 文件<input name="wechat_pay_public_key_file" type="file" accept=".pem" required></label>
-          </div>
-        </fieldset>
-
-        <fieldset>
-          <legend>私有 OSS</legend>
-          <div class="grid">
-            <label>人社 Endpoint<input name="renshe_oss_endpoint" type="url" required></label>
-            <label>人社 Bucket<input name="renshe_oss_bucket" required></label>
-            <label>人社 AccessKey ID<input name="renshe_oss_access_key_id" type="password" required></label>
-            <label>人社 AccessKey Secret<input name="renshe_oss_access_key_secret" type="password" required></label>
-            <label>题库 Endpoint<input name="quiz_oss_endpoint" type="url" required></label>
-            <label>题库 Bucket<input name="quiz_oss_bucket" required></label>
-            <label>题库 AccessKey ID<input name="quiz_oss_access_key_id" type="password" required></label>
-            <label>题库 AccessKey Secret<input name="quiz_oss_access_key_secret" type="password" required></label>
-          </div>
-        </fieldset>
-
-        <fieldset>
-          <legend>独立恢复 OSS</legend>
-          <div class="grid">
-            <label>恢复 Endpoint<input name="recovery_oss_endpoint" type="url" required></label>
-            <label>恢复 Bucket<input name="recovery_oss_bucket" required></label>
-            <label>对象前缀<input name="recovery_oss_prefix" value="wemini-recovery" required></label>
-            <label>恢复 AccessKey ID<input name="recovery_oss_access_key_id" type="password" required></label>
-            <label>恢复 AccessKey Secret<input name="recovery_oss_access_key_secret" type="password" required></label>
-            <label>恢复 RSA 公钥 PEM 文件<input name="recovery_public_key_file" type="file" accept=".pem" required></label>
-          </div>
-        </fieldset>
-
-        <p class="notice">提交后 Secret 不会再次显示。请先确认所有字段和文件来自正确环境。</p>
-        <button type="submit">验证并提交配置</button>
-      </form>
-
-      <form id="administrator" class="card hidden" autocomplete="off">
-        <h2>创建首位超级管理员</h2>
-        <p>数据库迁移已完成。密码只用于本次请求，不会写入文件、日志或恢复包。</p>
-        <div class="grid">
-          <label>用户名<input name="username" minlength="3" maxlength="64" required></label>
-          <label>最终强密码<input name="password" type="password" minlength="12" maxlength="256" required></label>
-          <label>再次输入密码<input name="password_confirm" type="password" minlength="12" maxlength="256" required></label>
-        </div>
-        <button type="submit">创建超级管理员</button>
-      </form>
+      </div>
 
       <p id="message" class="message" aria-live="polite"></p>
+
+      <footer>
+        <span>weMiniApp Bootstrap</span>
+        <span>所有敏感字段均通过一次性会话传输</span>
+      </footer>
     </main>
     <script src="/assets/bootstrap.js" defer></script>
   </body>

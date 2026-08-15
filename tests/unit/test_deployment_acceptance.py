@@ -28,6 +28,7 @@ def _runtime_documents() -> dict[str, dict]:
     fingerprint = "d" * 64
     checks = {
         "database": "ok",
+        "admin_identity": "ok",
         "redis": "ok",
         "oss": "ok",
         "quiz_oss": "ok",
@@ -48,6 +49,7 @@ def _runtime_documents() -> dict[str, dict]:
             "checks": checks,
             "details": {
                 "database": {"status": "ok", "fingerprint_sha256": fingerprint},
+                "admin_identity": {"status": "ok"},
                 "quiz_tasks": {
                     "source": "redis",
                     "heartbeat_at": "2026-08-14T08:00:00+00:00",
@@ -75,6 +77,33 @@ def test_runtime_evidence_requires_all_production_checks_and_database_identity()
     documents["/ready"]["checks"]["quiz_worker"] = "unavailable"
     with pytest.raises(BootstrapAcceptanceError, match="dependencies"):
         collect_runtime_evidence("http://app:8000", reader=reader)
+
+
+def test_runtime_evidence_records_explicitly_disabled_optional_oss() -> None:
+    documents = _runtime_documents()
+    for name in ("oss", "quiz_oss"):
+        documents["/ready"]["checks"][name] = "not_configured"
+        documents["/ready"]["details"][name] = {
+            "status": "not_configured",
+            "configured": False,
+            "required": False,
+            "mode": "disabled",
+            "reason": "feature_not_configured",
+        }
+
+    def reader(url: str) -> dict:
+        return documents["/ready" if url.endswith("/ready") else "/health"]
+
+    result = collect_runtime_evidence("http://app:8000", reader=reader)
+
+    assert result.summaries["runtime_readiness"]["checks"]["oss"] == (
+        "not_configured"
+    )
+    assert result.summaries["renshe_private_oss"] == {
+        "status": "not_configured",
+        "capability": "disabled",
+        "verification": "runtime_configuration",
+    }
 
 
 def test_release_manifest_is_bound_to_signed_state(tmp_path: Path):

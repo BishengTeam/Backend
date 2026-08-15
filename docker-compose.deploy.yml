@@ -12,6 +12,9 @@ x-backend-environment: &backend_environment
   PII_HASH_KEY_FILE: /run/secrets/pii_hash_key
   JWT_ALGORITHM: HS256
   JWT_EXPIRE_MINUTES: "120"
+  # Empty is valid only for a clean installation. Existing administrator
+  # data makes adm001 fail closed until operations records a verified backup.
+  ADMIN_SECURITY_MIGRATION_BACKUP_REF: ${ADMIN_SECURITY_MIGRATION_BACKUP_REF:-}
   CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
   WECHAT_APPID: ${WECHAT_APPID:?WECHAT_APPID is required}
   WECHAT_SECRET_FILE: /run/secrets/wechat_secret
@@ -35,9 +38,9 @@ x-backend-environment: &backend_environment
   WECHAT_PAY_SYNC_RATE_PER_MINUTE: ${WECHAT_PAY_SYNC_RATE_PER_MINUTE:-10}
   UPLOAD_DIR: /app/uploads
   STORAGE_TYPE: local
-  RENSHE_STORAGE_TYPE: aliyun_oss
-  ALIYUN_OSS_ENDPOINT: ${ALIYUN_OSS_ENDPOINT:?ALIYUN_OSS_ENDPOINT is required}
-  ALIYUN_OSS_BUCKET: ${ALIYUN_OSS_BUCKET:?ALIYUN_OSS_BUCKET is required}
+  RENSHE_STORAGE_TYPE: ${RENSHE_STORAGE_TYPE:-disabled}
+  ALIYUN_OSS_ENDPOINT: ${ALIYUN_OSS_ENDPOINT:-}
+  ALIYUN_OSS_BUCKET: ${ALIYUN_OSS_BUCKET:-}
   ALIYUN_OSS_ACCESS_KEY_ID_FILE: /run/secrets/aliyun_oss_access_key_id
   ALIYUN_OSS_ACCESS_KEY_SECRET_FILE: /run/secrets/aliyun_oss_access_key_secret
   ALIYUN_OSS_PREFIX: ${ALIYUN_OSS_PREFIX:-renshe}
@@ -47,9 +50,9 @@ x-backend-environment: &backend_environment
   HEALTH_CHECK_TIMEOUT_SECONDS: ${HEALTH_CHECK_TIMEOUT_SECONDS:-3}
   QUIZ_TASKS_ENABLED: "true"
   QUIZ_EMBEDDED_WORKER_ENABLED: "false"
-  QUIZ_IMPORT_STORAGE_TYPE: aliyun_oss
-  QUIZ_OSS_ENDPOINT: ${QUIZ_OSS_ENDPOINT:?QUIZ_OSS_ENDPOINT is required}
-  QUIZ_OSS_BUCKET: ${QUIZ_OSS_BUCKET:?QUIZ_OSS_BUCKET is required}
+  QUIZ_IMPORT_STORAGE_TYPE: ${QUIZ_IMPORT_STORAGE_TYPE:-disabled}
+  QUIZ_OSS_ENDPOINT: ${QUIZ_OSS_ENDPOINT:-}
+  QUIZ_OSS_BUCKET: ${QUIZ_OSS_BUCKET:-}
   QUIZ_OSS_ACCESS_KEY_ID_FILE: /run/secrets/quiz_oss_access_key_id
   QUIZ_OSS_ACCESS_KEY_SECRET_FILE: /run/secrets/quiz_oss_access_key_secret
   QUIZ_OSS_PREFIX: ${QUIZ_OSS_PREFIX:-quiz-imports}

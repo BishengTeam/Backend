@@ -212,37 +212,45 @@ async def validate_external_dependencies(
 
     await _probe_wechat_login(request, async_client_factory)
     await _probe_wechat_pay(request, async_client_factory)
-    probes = (
-        {
-            "component": "renshe_oss",
-            "endpoint": request.renshe_oss_endpoint,
-            "bucket_name": request.renshe_oss_bucket,
-            "access_id": _secret(request.renshe_oss_access_key_id),
-            "access_secret": _secret(request.renshe_oss_access_key_secret),
-            "object_prefix": "renshe",
-            "require_write": True,
-        },
-        {
-            "component": "quiz_oss",
-            "endpoint": request.quiz_oss_endpoint,
-            "bucket_name": request.quiz_oss_bucket,
-            "access_id": _secret(request.quiz_oss_access_key_id),
-            "access_secret": _secret(request.quiz_oss_access_key_secret),
-            "object_prefix": "quiz-imports",
-            "require_write": True,
-        },
-        {
-            "component": "recovery_oss",
-            "endpoint": request.recovery_oss_endpoint,
-            "bucket_name": request.recovery_oss_bucket,
-            "access_id": _secret(request.recovery_oss_access_key_id),
-            "access_secret": _secret(request.recovery_oss_access_key_secret),
-            "object_prefix": request.recovery_oss_prefix,
-            # The encrypted bundle upload later is the authoritative write
-            # check.  Do not require delete permission for the recovery key.
-            "require_write": False,
-        },
-    )
+    probes: list[dict[str, object]] = []
+    if request.has_renshe_oss():
+        probes.append(
+            {
+                "component": "renshe_oss",
+                "endpoint": request.renshe_oss_endpoint,
+                "bucket_name": request.renshe_oss_bucket,
+                "access_id": _secret(request.renshe_oss_access_key_id),
+                "access_secret": _secret(request.renshe_oss_access_key_secret),
+                "object_prefix": "renshe",
+                "require_write": True,
+            }
+        )
+    if request.has_quiz_oss():
+        probes.append(
+            {
+                "component": "quiz_oss",
+                "endpoint": request.quiz_oss_endpoint,
+                "bucket_name": request.quiz_oss_bucket,
+                "access_id": _secret(request.quiz_oss_access_key_id),
+                "access_secret": _secret(request.quiz_oss_access_key_secret),
+                "object_prefix": "quiz-imports",
+                "require_write": True,
+            }
+        )
+    if request.has_recovery_oss():
+        probes.append(
+            {
+                "component": "recovery_oss",
+                "endpoint": request.recovery_oss_endpoint,
+                "bucket_name": request.recovery_oss_bucket,
+                "access_id": _secret(request.recovery_oss_access_key_id),
+                "access_secret": _secret(request.recovery_oss_access_key_secret),
+                "object_prefix": request.recovery_oss_prefix,
+                # The encrypted bundle upload later is the authoritative write
+                # check.  Do not require delete permission for the recovery key.
+                "require_write": False,
+            }
+        )
     for probe in probes:
         try:
             await asyncio.wait_for(
@@ -259,7 +267,11 @@ async def validate_external_dependencies(
     return ProbeReport(
         wechat_login="ok",
         wechat_pay="ok",
-        renshe_oss="ok",
-        quiz_oss="ok",
-        recovery_oss="private_and_reachable",
+        renshe_oss="ok" if request.has_renshe_oss() else "not_configured",
+        quiz_oss="ok" if request.has_quiz_oss() else "not_configured",
+        recovery_oss=(
+            "private_and_reachable"
+            if request.has_recovery_oss()
+            else "not_configured"
+        ),
     )

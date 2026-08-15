@@ -587,6 +587,13 @@ class AdminQuizCourseBindingCreate(QuizContractModel):
     course_id: int = Field(ge=1)
 
 
+class AdminQuizCourseOptionResponse(QuizContractModel):
+    """Narrow course projection available to quiz administrators."""
+
+    id: int
+    title: str
+
+
 class AdminQuizCourseBindingStatusUpdate(QuizContractModel):
     status: Literal["active", "inactive"]
     lock_version: int = Field(ge=1)

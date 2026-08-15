@@ -169,6 +169,28 @@ def test_initial_admin_is_concurrent_idempotent_and_seed_repeats_cleanly(
         assert connection.scalar(
             text("SELECT count(*) FROM admin_user WHERE role = 'super_admin'")
         ) == 1
+        assert connection.execute(
+            text(
+                "SELECT must_change_password, display_name FROM admin_user "
+                "WHERE id = :admin_id"
+            ),
+            {"admin_id": first_id},
+        ).one() == (True, "initial-super-admin")
+        assert connection.scalar(
+            text(
+                "SELECT count(*) FROM admin_password_history "
+                "WHERE admin_id = :admin_id"
+            ),
+            {"admin_id": first_id},
+        ) == 1
+        assert connection.scalar(
+            text(
+                "SELECT count(*) FROM admin_security_audit "
+                "WHERE target_admin_id = :admin_id "
+                "AND reason_code = 'bootstrap_super_admin_created'"
+            ),
+            {"admin_id": first_id},
+        ) == 1
         assert connection.scalar(text("SELECT count(*) FROM certification")) == 4
         assert connection.scalar(text("SELECT count(*) FROM price_config")) == 8
     engine.dispose()

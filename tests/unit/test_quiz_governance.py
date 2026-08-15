@@ -50,8 +50,8 @@ def test_quiz_rate_limit_key_is_per_authenticated_user() -> None:
 
 
 def test_quiz_admin_rate_limit_key_is_per_authenticated_admin() -> None:
-    first = create_admin_access_token(31, "admin-31", "admin")
-    same_admin = create_admin_access_token(31, "renamed-admin-31", "admin")
+    first = create_admin_access_token(31, "admin-31", "quiz_admin")
+    same_admin = create_admin_access_token(31, "renamed-admin-31", "quiz_admin")
     other_admin = create_admin_access_token(32, "admin-32", "super_admin")
 
     assert quiz_admin_key(_request(authorization=f"Bearer {first}")) == "quiz:admin:31"
@@ -102,7 +102,7 @@ def test_runtime_openapi_matches_all_frozen_quiz_operations() -> None:
 
     for contract in QUIZ_API_CONTRACTS:
         operation = paths[contract.path][contract.method.lower()]
-        assert operation["x-quiz-contract-version"] == "2026-08-14"
+        assert operation["x-quiz-contract-version"] == "2026-08-15"
         assert operation["x-error-codes"]
         success_response = operation["responses"]["200"]
         assert success_response["content"]["application/json"]["schema"]

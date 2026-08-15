@@ -291,7 +291,7 @@ async def test_cleanup_resume_reuses_the_same_configured_retention(monkeypatch):
 async def test_finalize_impact_preview_requires_super_admin_but_cancel_does_not(
     monkeypatch,
 ):
-    admin = SimpleNamespace(id=8, role="admin")
+    admin = SimpleNamespace(id=8, role="quiz_admin")
     with pytest.raises(ForbiddenException, match="仅超级管理员"):
         await preview_plan_impact(
             code="RS-ZY",

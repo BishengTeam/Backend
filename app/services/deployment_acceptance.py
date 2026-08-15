@@ -39,8 +39,8 @@ EVIDENCE_DEFINITIONS: dict[str, tuple[str, str]] = {
     "wechat_login": ("真实微信登录", "正式 AppID/Secret 完成一次真实 code2session 登录"),
     "uat_scope": ("隔离 UAT 数据", "专用 UAT 用户和批次已标识且不计入正式统计"),
     "renshe_private_oss": (
-        "人社私有 OSS",
-        "六类材料上传、短签访问及他人越权拒绝均通过",
+        "人社材料存储",
+        "私有 OSS 的材料链路已通过，或该可选能力已明确标记为未配置",
     ),
     "wechat_payment": (
         "0.01 元微信支付",
@@ -52,7 +52,7 @@ EVIDENCE_DEFINITIONS: dict[str, tuple[str, str]] = {
     ),
     "recovery_bundle": (
         "加密恢复包",
-        "恢复 OSS 对象版本、安装 ID 与 SHA-256 已核对",
+        "恢复包安装 ID 与 SHA-256 已核对；恢复 OSS 未配置时仅保留本机加密副本",
     ),
     "backup_restore_config": (
         "数据库备份恢复",

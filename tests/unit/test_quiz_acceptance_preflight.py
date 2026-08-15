@@ -167,7 +167,7 @@ def _opener(manifest: dict):
     normal = {
         "code": 0,
         "data": {
-            "admin": {"id": 10, "role": "admin"},
+            "admin": {"id": 10, "role": "quiz_admin"},
             "permissions": ["quiz:list", "quiz:write", "quiz:import"],
         },
     }
@@ -193,6 +193,7 @@ def _opener(manifest: dict):
                     "status": "ready",
                     "checks": {
                         "database": "ok",
+                        "admin_identity": "ok",
                         "redis": "ok",
                         "quiz_oss": "ok",
                         "quiz_worker": "ok",
@@ -202,6 +203,7 @@ def _opener(manifest: dict):
                             "status": "ok",
                             "fingerprint_sha256": database_fingerprint,
                         },
+                        "admin_identity": {"status": "ok"},
                         "quiz_oss": {"mode": "aliyun_oss", "probe": "ok"},
                         "quiz_tasks": {
                             "source": "redis",
@@ -301,7 +303,7 @@ def test_http_preflight_requires_frozen_contract_accounts_private_oss_and_worker
     )
 
     assert report["ready"] is True
-    assert report["quiz_operation_count"] == 80
+    assert report["quiz_operation_count"] == 81
     assert report["removed_operation_count"] == 14
     assert report["quiz_oss"] == "private_aliyun_oss"
     assert report["worker_metrics_source"] == "redis"

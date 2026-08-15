@@ -41,6 +41,7 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizContentStatusUpdate,
     AdminQuizContentTreeResponse,
     AdminQuizCourseBindingCreate,
+    AdminQuizCourseOptionResponse,
     AdminQuizCourseBindingResponse,
     AdminQuizCourseBindingStatusUpdate,
     AdminQuizKnowledgePointCreate,
@@ -94,7 +95,7 @@ from app.schemas.quiz_contract import (
 )
 
 
-QUIZ_CONTRACT_VERSION = "2026-08-14"
+QUIZ_CONTRACT_VERSION = "2026-08-15"
 
 
 class QuizErrorCode(IntEnum):
@@ -375,6 +376,11 @@ QUIZ_API_CONTRACTS: tuple[QuizEndpointContract, ...] = (
         "POST", "/admin/quiz/libraries/{library_id}/lifecycle", "admin",
         APIResponse[AdminQuizLibraryResponse], body_model=AdminQuizLibraryStatusUpdate,
         permission="quiz_library_manage", errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "GET", "/admin/quiz/course-options", "admin",
+        APIResponse[list[AdminQuizCourseOptionResponse]],
+        permission="course_quiz_bind",
     ),
     QuizEndpointContract(
         "GET", "/admin/quiz/libraries/{library_id}/course-bindings", "admin",

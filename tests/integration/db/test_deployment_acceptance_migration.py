@@ -76,6 +76,10 @@ def deployment_migration_database(monkeypatch):
         "QUIZ_DESTRUCTIVE_MIGRATION_BACKUP_REF",
         "isolated-deployment-migration-test",
     )
+    monkeypatch.setenv(
+        "ADMIN_SECURITY_MIGRATION_BACKUP_REF",
+        "isolated-deployment-migration-test",
+    )
     try:
         yield test_url
     finally:

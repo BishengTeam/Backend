@@ -63,6 +63,26 @@ def test_free_form_diagnostics_redact_tokens_and_pii() -> None:
     )
 
 
+def test_free_form_diagnostics_redact_credential_assignments() -> None:
+    value = redact_sensitive_text(
+        "Agent password=plain-value; token=opaque-value; "
+        "reauth_token='quoted-value'; secret:another-value"
+    )
+    assert value == (
+        "Agent password=[REDACTED]; token=[REDACTED]; "
+        "reauth_token=[REDACTED]; secret:[REDACTED]"
+    )
+    assert redact_sensitive_text("Authorization: Basic dXNlcjpwYXNz") == (
+        "Authorization: [REDACTED]"
+    )
+    assert redact_sensitive_text("Authorization: Bearer abc.def.ghi") == (
+        "Authorization: [REDACTED]"
+    )
+    assert redact_sensitive_text("password=Top Secret 123") == (
+        "password=[REDACTED]"
+    )
+
+
 def test_audit_values_never_persist_object_keys_or_signed_urls() -> None:
     sanitized = sanitize_audit_value(
         {
@@ -139,7 +159,13 @@ async def test_source_cleanup_can_surface_oss_failure_for_retention_retry(monkey
 @pytest.mark.asyncio
 async def test_dependency_checks_keep_legacy_shape_and_add_safe_details(monkeypatch) -> None:
     monkeypatch.setattr(
-        "app.main._database_probe", AsyncMock(return_value={"status": "ok"})
+        "app.main._database_probe",
+        AsyncMock(
+            return_value={
+                "status": "ok",
+                "admin_identity": {"status": "ok"},
+            }
+        ),
     )
     monkeypatch.setattr("app.main._check_redis", AsyncMock(return_value=True))
     monkeypatch.setattr(
@@ -162,6 +188,7 @@ async def test_dependency_checks_keep_legacy_shape_and_add_safe_details(monkeypa
     checks, details = await _dependency_checks(probe_external=False)
 
     assert checks["database"] == "ok"
+    assert checks["admin_identity"] == "ok"
     assert checks["redis"] == "ok"
     assert checks["oss"] == "ok"
     assert checks["quiz_oss"] == "ok"
@@ -174,7 +201,13 @@ async def test_dependency_checks_reject_unwritable_local_quiz_storage(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        "app.main._database_probe", AsyncMock(return_value={"status": "ok"})
+        "app.main._database_probe",
+        AsyncMock(
+            return_value={
+                "status": "ok",
+                "admin_identity": {"status": "ok"},
+            }
+        ),
     )
     monkeypatch.setattr("app.main._check_redis", AsyncMock(return_value=True))
     monkeypatch.setattr(
@@ -220,6 +253,7 @@ async def test_ready_returns_503_when_required_dependency_is_unavailable(monkeyp
             return_value=(
                 {
                     "database": "ok",
+                    "admin_identity": "ok",
                     "redis": "ok",
                     "oss": "unavailable",
                     "quiz_oss": "ok",
@@ -254,6 +288,7 @@ def test_readiness_requires_production_wechat_and_payment() -> None:
         settings.APP_ENV = "production"
         checks = {
             "database": "ok",
+            "admin_identity": "ok",
             "redis": "ok",
             "oss": "ok",
             "quiz_oss": "ok",
@@ -264,8 +299,29 @@ def test_readiness_requires_production_wechat_and_payment() -> None:
         assert is_ready(checks) is False
         checks["wechat_payment"] = "ok"
         assert is_ready(checks) is True
+        checks["admin_identity"] = "unavailable"
+        assert is_ready(checks) is False
     finally:
         settings.APP_ENV = previous
+
+
+def test_readiness_treats_explicitly_disabled_oss_as_optional(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    monkeypatch.setattr(settings, "RENSHE_STORAGE_TYPE", "disabled")
+    monkeypatch.setattr(settings, "QUIZ_IMPORT_STORAGE_TYPE", "disabled")
+    monkeypatch.setattr(settings, "QUIZ_TASKS_ENABLED", True)
+    checks = {
+        "database": "ok",
+        "admin_identity": "ok",
+        "redis": "ok",
+        "oss": "not_configured",
+        "quiz_oss": "not_configured",
+        "quiz_worker": "ok",
+        "wechat_login": "ok",
+        "wechat_payment": "ok",
+    }
+
+    assert is_ready(checks) is True
 
 
 def test_quiz_oss_configuration_is_independent_from_renshe_storage(
@@ -396,6 +452,23 @@ def test_production_settings_require_explicit_wechat_v3_configuration() -> None:
     assert valid.WECHAT_PAY_API_VERSION == "v3"
     assert valid.RENSHE_CLEANUP_RETENTION_DAYS == 30
 
+    disabled_oss_values = {
+        **values,
+        "RENSHE_STORAGE_TYPE": "disabled",
+        "ALIYUN_OSS_ENDPOINT": "",
+        "ALIYUN_OSS_BUCKET": "",
+        "ALIYUN_OSS_ACCESS_KEY_ID": "",
+        "ALIYUN_OSS_ACCESS_KEY_SECRET": "",
+        "QUIZ_IMPORT_STORAGE_TYPE": "disabled",
+        "QUIZ_OSS_ENDPOINT": "",
+        "QUIZ_OSS_BUCKET": "",
+        "QUIZ_OSS_ACCESS_KEY_ID": "",
+        "QUIZ_OSS_ACCESS_KEY_SECRET": "",
+    }
+    disabled_oss = Settings(**disabled_oss_values)
+    assert disabled_oss.RENSHE_STORAGE_TYPE == "disabled"
+    assert disabled_oss.QUIZ_IMPORT_STORAGE_TYPE == "disabled"
+
     with pytest.raises(
         ValueError,
         match="RENSHE_CLEANUP_RETENTION_DAYS must remain 30 in production",
@@ -440,10 +513,12 @@ def test_settings_load_secrets_from_read_only_files(tmp_path, monkeypatch) -> No
     pii_file = tmp_path / "pii"
     redis_file = tmp_path / "redis"
     wechat_pay_public_key_file = tmp_path / "wechat-pay-public-key"
+    optional_oss_id_file = tmp_path / "optional-oss-id"
     jwt_file.write_text("j" * 40 + "\n", encoding="utf-8")
     pii_file.write_text("p" * 40 + "\n", encoding="utf-8")
     redis_file.write_text("redis://redis.internal:6379/0\n", encoding="utf-8")
     wechat_pay_public_key_file.write_text("public-key\n", encoding="utf-8")
+    optional_oss_id_file.write_bytes(b"")
 
     file_settings = Settings(
         _env_file=None,
@@ -452,12 +527,14 @@ def test_settings_load_secrets_from_read_only_files(tmp_path, monkeypatch) -> No
         PII_HASH_KEY_FILE=str(pii_file),
         REDIS_URL_FILE=str(redis_file),
         WECHAT_PAY_PUBLIC_KEY_FILE=str(wechat_pay_public_key_file),
+        ALIYUN_OSS_ACCESS_KEY_ID_FILE=str(optional_oss_id_file),
     )
 
     assert file_settings.JWT_SECRET == "j" * 40
     assert file_settings.PII_HASH_KEY == "p" * 40
     assert file_settings.REDIS_URL == "redis://redis.internal:6379/0"
     assert file_settings.WECHAT_PAY_PUBLIC_KEY == "public-key"
+    assert file_settings.ALIYUN_OSS_ACCESS_KEY_ID == ""
     assert "JWT_SECRET_FILE" not in file_settings.model_dump()
     assert "REDIS_URL_FILE" not in file_settings.model_dump()
     assert "WECHAT_PAY_PUBLIC_KEY_FILE" not in file_settings.model_dump()

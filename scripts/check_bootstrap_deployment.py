@@ -62,6 +62,26 @@ def main() -> None:
         "loopback-only Admin port",
     )
     require(runtime_compose, "REDIS_URL_FILE: /run/secrets/redis_url", "Redis secret")
+    require(
+        runtime_compose,
+        "RENSHE_STORAGE_TYPE: ${RENSHE_STORAGE_TYPE:-disabled}",
+        "optional human-resources OSS mode",
+    )
+    require(
+        runtime_compose,
+        "QUIZ_IMPORT_STORAGE_TYPE: ${QUIZ_IMPORT_STORAGE_TYPE:-disabled}",
+        "optional quiz OSS mode",
+    )
+    forbid(
+        runtime_compose,
+        "${ALIYUN_OSS_ENDPOINT:?",
+        "required human-resources OSS endpoint",
+    )
+    forbid(
+        runtime_compose,
+        "${QUIZ_OSS_ENDPOINT:?",
+        "required quiz OSS endpoint",
+    )
     require(orchestrator, "refs/heads/main:refs/remotes/origin/main", "single main fetch")
     require(orchestrator, "git clone --branch main", "automatic Admin clone")
     require(orchestrator, "status --porcelain", "dirty worktree refusal")

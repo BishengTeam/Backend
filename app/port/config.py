@@ -24,6 +24,14 @@ SECRET_FILE_FIELDS = (
     "QUIZ_METRICS_BEARER_TOKEN",
 )
 SECRET_FILE_NAMES = {f"{field_name}_FILE" for field_name in SECRET_FILE_FIELDS}
+OPTIONAL_EMPTY_SECRET_FIELDS = frozenset(
+    {
+        "ALIYUN_OSS_ACCESS_KEY_ID",
+        "ALIYUN_OSS_ACCESS_KEY_SECRET",
+        "QUIZ_OSS_ACCESS_KEY_ID",
+        "QUIZ_OSS_ACCESS_KEY_SECRET",
+    }
+)
 
 
 def _load_secret_files(values: Any) -> Any:
@@ -59,7 +67,7 @@ def _load_secret_files(values: Any) -> Any:
             value = path.read_text(encoding="utf-8").strip()
         except OSError as exc:
             raise ValueError(f"cannot read secret file for {field_name}") from exc
-        if not value:
+        if not value and field_name not in OPTIONAL_EMPTY_SECRET_FIELDS:
             raise ValueError(f"secret file for {field_name} is empty")
         data[field_name] = value
     return data
@@ -337,22 +345,39 @@ class Settings(BaseSettings):
             raise ValueError(
                 "RENSHE_CLEANUP_RETENTION_DAYS must be greater than 0 and at most 30"
             )
+        storage_type = (self.RENSHE_STORAGE_TYPE or "").strip().lower()
+        required = {
+            "ALIYUN_OSS_ENDPOINT": self.ALIYUN_OSS_ENDPOINT,
+            "ALIYUN_OSS_BUCKET": self.ALIYUN_OSS_BUCKET,
+            "ALIYUN_OSS_ACCESS_KEY_ID": self.ALIYUN_OSS_ACCESS_KEY_ID,
+            "ALIYUN_OSS_ACCESS_KEY_SECRET": self.ALIYUN_OSS_ACCESS_KEY_SECRET,
+        }
+        present = {
+            name: bool(str(value or "").strip()) for name, value in required.items()
+        }
+        if any(present.values()) and not all(present.values()):
+            missing = [name for name, exists in present.items() if not exists]
+            raise ValueError(
+                "incomplete human-resources OSS settings: " + ", ".join(missing)
+            )
+        if storage_type == "aliyun_oss" and not all(present.values()):
+            raise ValueError(
+                "missing human-resources OSS settings: "
+                + ", ".join(required)
+            )
+        if storage_type == "disabled" and any(present.values()):
+            raise ValueError(
+                "RENSHE_STORAGE_TYPE cannot be disabled when OSS settings are present"
+            )
         if self.APP_ENV == "production":
             if self.RENSHE_CLEANUP_RETENTION_DAYS != 30:
                 raise ValueError(
                     "RENSHE_CLEANUP_RETENTION_DAYS must remain 30 in production"
                 )
-            if self.RENSHE_STORAGE_TYPE != "aliyun_oss":
-                raise ValueError("RENSHE_STORAGE_TYPE must be aliyun_oss in production")
-            required = {
-                "ALIYUN_OSS_ENDPOINT": self.ALIYUN_OSS_ENDPOINT,
-                "ALIYUN_OSS_BUCKET": self.ALIYUN_OSS_BUCKET,
-                "ALIYUN_OSS_ACCESS_KEY_ID": self.ALIYUN_OSS_ACCESS_KEY_ID,
-                "ALIYUN_OSS_ACCESS_KEY_SECRET": self.ALIYUN_OSS_ACCESS_KEY_SECRET,
-            }
-            missing = [name for name, value in required.items() if not value]
-            if missing:
-                raise ValueError(f"missing production OSS settings: {', '.join(missing)}")
+            if storage_type not in {"aliyun_oss", "disabled"}:
+                raise ValueError(
+                    "RENSHE_STORAGE_TYPE must be aliyun_oss or disabled in production"
+                )
         return self
 
     @model_validator(mode="after")
@@ -565,6 +590,25 @@ class Settings(BaseSettings):
             )
         if self.QUIZ_TASKS_ENABLED and not self.REDIS_URL.startswith(("redis://", "rediss://")):
             raise ValueError("REDIS_URL must use redis:// or rediss:// when quiz tasks are enabled")
+        storage_type = (self.QUIZ_IMPORT_STORAGE_TYPE or "").strip().lower()
+        required = {
+            "QUIZ_OSS_ENDPOINT": self.QUIZ_OSS_ENDPOINT,
+            "QUIZ_OSS_BUCKET": self.QUIZ_OSS_BUCKET,
+            "QUIZ_OSS_ACCESS_KEY_ID": self.QUIZ_OSS_ACCESS_KEY_ID,
+            "QUIZ_OSS_ACCESS_KEY_SECRET": self.QUIZ_OSS_ACCESS_KEY_SECRET,
+        }
+        present = {
+            name: bool(str(value or "").strip()) for name, value in required.items()
+        }
+        if any(present.values()) and not all(present.values()):
+            missing = [name for name, exists in present.items() if not exists]
+            raise ValueError("incomplete quiz OSS settings: " + ", ".join(missing))
+        if storage_type == "aliyun_oss" and not all(present.values()):
+            raise ValueError("missing quiz OSS settings: " + ", ".join(required))
+        if storage_type == "disabled" and any(present.values()):
+            raise ValueError(
+                "QUIZ_IMPORT_STORAGE_TYPE cannot be disabled when OSS settings are present"
+            )
         if self.APP_ENV == "production":
             if not self.QUIZ_TASKS_ENABLED:
                 raise ValueError("QUIZ_TASKS_ENABLED must be true in production")
@@ -572,18 +616,9 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "QUIZ_EMBEDDED_WORKER_ENABLED must be false in production"
                 )
-            if self.QUIZ_IMPORT_STORAGE_TYPE != "aliyun_oss":
-                raise ValueError("QUIZ_IMPORT_STORAGE_TYPE must be aliyun_oss in production")
-            required = {
-                "QUIZ_OSS_ENDPOINT": self.QUIZ_OSS_ENDPOINT,
-                "QUIZ_OSS_BUCKET": self.QUIZ_OSS_BUCKET,
-                "QUIZ_OSS_ACCESS_KEY_ID": self.QUIZ_OSS_ACCESS_KEY_ID,
-                "QUIZ_OSS_ACCESS_KEY_SECRET": self.QUIZ_OSS_ACCESS_KEY_SECRET,
-            }
-            missing = [name for name, value in required.items() if not value]
-            if missing:
+            if storage_type not in {"aliyun_oss", "disabled"}:
                 raise ValueError(
-                    f"missing production quiz OSS settings: {', '.join(missing)}"
+                    "QUIZ_IMPORT_STORAGE_TYPE must be aliyun_oss or disabled in production"
                 )
             if not self.QUIZ_METRICS_ENABLED:
                 raise ValueError("QUIZ_METRICS_ENABLED must be true in production")

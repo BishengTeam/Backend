@@ -6,6 +6,8 @@ from app.domain.user.src.model.user_realname import UserRealname
 from app.domain.user.src.model.user_student import UserStudent
 from app.domain.user.src.model.user_enterprise import UserEnterprise
 from app.domain.user.src.model.admin_user import AdminUser
+from app.domain.user.src.model.admin_password_history import AdminPasswordHistory
+from app.domain.user.src.model.admin_security_audit import AdminSecurityAudit
 from app.domain.user.src.model.deleted_openid import DeletedOpenid
 from app.domain.user.src.model.deleted_identity_hash import DeletedIdentityHash
 from app.domain.user.src.model.points import PointsHistory, UserPoints
@@ -18,6 +20,8 @@ __all__ = [
     "UserStudent",
     "UserEnterprise",
     "AdminUser",
+    "AdminPasswordHistory",
+    "AdminSecurityAudit",
     "DeletedOpenid",
     "DeletedIdentityHash",
     "UserPoints",

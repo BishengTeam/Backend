@@ -95,3 +95,31 @@ def test_bootstrap_and_runtime_compose_parse_when_required_values_are_supplied(t
         env=runtime_env,
         check=True,
     )
+
+    runtime_without_oss = dict(runtime_env)
+    for name in (
+        "ALIYUN_OSS_ENDPOINT",
+        "ALIYUN_OSS_BUCKET",
+        "QUIZ_OSS_ENDPOINT",
+        "QUIZ_OSS_BUCKET",
+    ):
+        runtime_without_oss.pop(name, None)
+    runtime_without_oss.update(
+        {
+            "RENSHE_STORAGE_TYPE": "disabled",
+            "QUIZ_IMPORT_STORAGE_TYPE": "disabled",
+        }
+    )
+    subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            "docker-compose.deploy.yml",
+            "config",
+            "--quiet",
+        ],
+        cwd=ROOT,
+        env=runtime_without_oss,
+        check=True,
+    )

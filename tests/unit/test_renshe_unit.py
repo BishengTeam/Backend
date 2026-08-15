@@ -26,7 +26,7 @@ from app.domain.renshe.src.index import (
 )
 from app.main import app
 from app.integrations.renshe_storage import RensheObjectStorage
-from app.port.exceptions import BusinessException, ConflictException
+from app.port.exceptions import BusinessException, ConflictException, ThirdPartyException
 from app.schemas.admin import AdminIdentityReview, AdminOrderReview, AdminProfileUpdate
 from app.schemas.renshe import (
     RensheRefundCreate,
@@ -703,6 +703,21 @@ async def test_generated_archives_use_oss_multipart_resumable_upload(
         num_threads=4,
         headers={"Content-Type": "application/zip"},
     )
+
+
+@pytest.mark.asyncio
+async def test_disabled_renshe_oss_never_falls_back_to_local_storage(tmp_path):
+    archive = tmp_path / "volume.zip"
+    archive.write_bytes(b"archive")
+    storage = RensheObjectStorage()
+    storage.storage_type = "disabled"
+
+    with pytest.raises(ThirdPartyException, match="人社 OSS 未配置"):
+        await storage.upload_file(
+            "renshe/exports/volume.zip",
+            archive,
+            "application/zip",
+        )
 
 
 @pytest.mark.asyncio

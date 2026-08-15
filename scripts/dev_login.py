@@ -35,9 +35,17 @@ async def main():
                 print(f"❌ 管理员不存在: {openid}")
                 print("  可用用户名: admin, editor, cs, finance, auditor")
                 return
-            token = create_admin_access_token(admin.id, admin.username, admin.role)
-            print(f"✅ 管理员 Token ({admin.username} | {admin.role})")
-            print(f"   admin_id: {admin.id}")
+        token = create_admin_access_token(
+            admin.id,
+            admin.username,
+            admin.role,
+            auth_version=admin.auth_version,
+            session_mode=(
+                "restricted" if admin.must_change_password else "normal"
+            ),
+        )
+        print(f"✅ 管理员 Token ({admin.username} | {admin.role})")
+        print(f"   admin_id: {admin.id}")
     else:
         async with async_session_factory() as db:
             result = await db.execute(

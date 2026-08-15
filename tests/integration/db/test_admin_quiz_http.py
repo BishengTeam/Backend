@@ -60,6 +60,7 @@ async def quiz_http_env(monkeypatch, tmp_path):
             username=f"{prefix}_admin",
             password_hash="integration-test-only",
             role="super_admin",
+            must_change_password=False,
         )
         db.add(admin)
         await db.commit()
@@ -70,7 +71,13 @@ async def quiz_http_env(monkeypatch, tmp_path):
 
     previous_overrides = dict(app.dependency_overrides)
     app.dependency_overrides[get_db] = override_get_db
-    token = create_admin_access_token(admin.id, admin.username, admin.role)
+    token = create_admin_access_token(
+        admin.id,
+        admin.username,
+        admin.role,
+        auth_version=admin.auth_version,
+        session_mode="normal",
+    )
     transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         env = SimpleNamespace(
@@ -162,7 +169,12 @@ async def test_authentication_permission_and_real_route_prefix(quiz_http_env) ->
     from app.middleware.auth import get_current_admin
 
     async def admin_without_quiz_permission():
-        return SimpleNamespace(id=env.admin.id, role="auditor", is_active=True)
+        return SimpleNamespace(
+            id=env.admin.id,
+            role="auditor",
+            is_active=True,
+            _session_mode="normal",
+        )
 
     env.app.dependency_overrides[get_current_admin] = admin_without_quiz_permission
     try:

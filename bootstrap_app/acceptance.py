@@ -159,20 +159,34 @@ def collect_runtime_evidence(
     if ready.get("status") != "ready":
         raise BootstrapAcceptanceError("Backend readiness evidence did not pass")
     ready_checks = _statuses(ready.get("checks"))
-    required = (
-        "database",
-        "redis",
-        "oss",
-        "quiz_oss",
-        "quiz_worker",
-        "wechat_login",
-        "wechat_payment",
-    )
-    if any(ready_checks.get(name) != "ok" for name in required):
-        raise BootstrapAcceptanceError("Backend production dependencies did not pass")
     details = ready.get("details")
     if not isinstance(details, Mapping):
         raise BootstrapAcceptanceError("Backend readiness details are invalid")
+    required = [
+        "database",
+        "admin_identity",
+        "redis",
+        "quiz_worker",
+        "wechat_login",
+        "wechat_payment",
+    ]
+    disabled_optional: set[str] = set()
+    for name in ("oss", "quiz_oss"):
+        detail = details.get(name)
+        if (
+            isinstance(detail, Mapping)
+            and detail.get("mode") == "disabled"
+            and detail.get("configured") is False
+        ):
+            if ready_checks.get(name) != "not_configured":
+                raise BootstrapAcceptanceError(
+                    "disabled optional dependency state is invalid"
+                )
+            disabled_optional.add(name)
+        else:
+            required.append(name)
+    if any(ready_checks.get(name) != "ok" for name in required):
+        raise BootstrapAcceptanceError("Backend production dependencies did not pass")
     database = details.get("database")
     quiz_tasks = details.get("quiz_tasks")
     if not isinstance(database, Mapping):
@@ -189,18 +203,29 @@ def collect_runtime_evidence(
         if isinstance(heartbeat_at, str):
             worker_summary["heartbeat_at"] = heartbeat_at
 
+    summaries = {
+        "runtime_health": {
+            "checks": {name: health_checks[name] for name in ("database", "redis")}
+        },
+        "runtime_readiness": {
+            "checks": {
+                name: ready_checks[name]
+                for name in (*required, *sorted(disabled_optional))
+            },
+            "database_fingerprint_sha256": fingerprint,
+        },
+        "worker_heartbeat": worker_summary,
+    }
+    if "oss" in disabled_optional:
+        summaries["renshe_private_oss"] = {
+            "status": "not_configured",
+            "capability": "disabled",
+            "verification": "runtime_configuration",
+        }
+
     return RuntimeAcceptanceEvidence(
         database_fingerprint_sha256=fingerprint,
-        summaries={
-            "runtime_health": {
-                "checks": {name: health_checks[name] for name in ("database", "redis")}
-            },
-            "runtime_readiness": {
-                "checks": {name: ready_checks[name] for name in required},
-                "database_fingerprint_sha256": fingerprint,
-            },
-            "worker_heartbeat": worker_summary,
-        },
+        summaries=summaries,
     )
 
 
@@ -241,6 +266,11 @@ async def register_installed_acceptance(
         "recovery_object_key_sha256": hashlib.sha256(
             state.recovery_object_key.encode("utf-8")
         ).hexdigest(),
+        "storage": (
+            "local_only"
+            if state.recovery_object_key.startswith("local-only:")
+            else "recovery_oss"
+        ),
         "release_manifest_sha256": state.release_manifest_sha256,
     }
     summaries = dict(runtime_evidence.summaries)

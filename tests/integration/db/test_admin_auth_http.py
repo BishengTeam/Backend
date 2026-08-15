@@ -14,12 +14,16 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
 
-ROLES = ("super_admin", "admin")
+ROLES = ("super_admin", "quiz_admin")
 
 
-def _make_admin_token(admin_id: int, username: str, role: str) -> str:
+def _make_admin_token(
+    admin_id: int, username: str, role: str, *, auth_version: int = 1
+) -> str:
     from app.adapter.security import create_admin_access_token
-    return create_admin_access_token(admin_id, username, role)
+    return create_admin_access_token(
+        admin_id, username, role, auth_version=auth_version
+    )
 
 
 @pytest.fixture
@@ -67,10 +71,16 @@ class TestAdminAuthMe:
                 username=f"{prefix}_sa",
                 password_hash="ignored_for_test",
                 role="super_admin",
+                must_change_password=False,
             )
             db.add(admin)
             await db.flush()
-            token = _make_admin_token(admin.id, admin.username, admin.role)
+            token = _make_admin_token(
+                admin.id,
+                admin.username,
+                admin.role,
+                auth_version=admin.auth_version,
+            )
             await db.commit()
 
         resp = await client.get("/admin/auth/me", headers={"Authorization": f"Bearer {token}"})
@@ -83,32 +93,74 @@ class TestAdminAuthMe:
         assert data["admin"]["username"] == admin.username
         assert data["admin"]["role"] == "super_admin"
         assert data["permissions"] == ["*"]
+        assert data["session_mode"] == "normal"
+        assert data["must_change_password"] is False
 
     async def test_me_returns_role_specific_permissions(self, test_client):
-        """admin gets explicit permissions rather than the wildcard grant."""
+        """quiz_admin gets explicit quiz-only permissions."""
         from app.domain.user.src.index import AdminUser
 
         client, factory, prefix = test_client
 
         async with factory() as db:
             admin = AdminUser(
-                username=f"{prefix}_admin",
+                username=f"{prefix}_quiz_admin",
                 password_hash="ignored_for_test",
-                role="admin",
+                role="quiz_admin",
+                must_change_password=False,
             )
             db.add(admin)
             await db.flush()
-            token = _make_admin_token(admin.id, admin.username, admin.role)
+            token = _make_admin_token(
+                admin.id,
+                admin.username,
+                admin.role,
+                auth_version=admin.auth_version,
+            )
             await db.commit()
 
         resp = await client.get("/admin/auth/me", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200, resp.text
         body = resp.json()
         data = body["data"]
-        assert data["admin"]["role"] == "admin"
+        assert data["admin"]["role"] == "quiz_admin"
         assert "quiz:write" in data["permissions"]
-        assert "order:write" in data["permissions"]
+        assert "order:write" not in data["permissions"]
         assert "*" not in data["permissions"]
+        assert data["session_mode"] == "normal"
+
+    async def test_restricted_session_only_reaches_auth_completion_routes(
+        self, test_client
+    ):
+        from app.adapter.security import create_admin_access_token
+        from app.domain.user.src.index import AdminUser
+
+        client, factory, prefix = test_client
+        async with factory() as db:
+            admin = AdminUser(
+                username=f"{prefix}_restricted",
+                password_hash="ignored-for-test",
+                role="quiz_admin",
+                must_change_password=True,
+            )
+            db.add(admin)
+            await db.flush()
+            token = create_admin_access_token(
+                admin.id,
+                admin.username,
+                admin.role,
+                auth_version=admin.auth_version,
+                session_mode="restricted",
+            )
+            await db.commit()
+
+        headers = {"Authorization": f"Bearer {token}"}
+        me_response = await client.get("/admin/auth/me", headers=headers)
+        assert me_response.status_code == 200
+        assert me_response.json()["data"]["session_mode"] == "restricted"
+        forbidden = await client.get("/admin/quiz/categories", headers=headers)
+        assert forbidden.status_code == 403
+        assert forbidden.json()["code"] == 40101
 
     async def test_me_rejects_invalid_token(self, test_client):
         """Invalid or missing token returns 401."""
@@ -148,19 +200,37 @@ class TestAdminAuthLogout:
             admin = AdminUser(
                 username=f"{prefix}_logout",
                 password_hash="ignored_for_test",
-                role="admin",
+                role="quiz_admin",
+                must_change_password=False,
             )
             db.add(admin)
             await db.flush()
-            token = _make_admin_token(admin.id, admin.username, admin.role)
+            token = _make_admin_token(
+                admin.id,
+                admin.username,
+                admin.role,
+                auth_version=admin.auth_version,
+            )
             await db.commit()
 
         revoked: list[str] = []
 
-        async def _capture_revoke(value: str) -> None:
+        async def _capture_revoke(value: str) -> bool:
             revoked.append(value)
+            return True
+
+        async def _skip_permanent_audit(_self, **_kwargs) -> None:
+            # This endpoint test validates token revocation.  Permanent audit
+            # persistence is covered against an isolated migration database;
+            # do not leave an undeletable row in the shared integration DB.
+            return None
 
         monkeypatch.setattr(admin_auth_api, "revoke_token", _capture_revoke)
+        monkeypatch.setattr(
+            admin_auth_api.AdminAuthService,
+            "record_logout",
+            _skip_permanent_audit,
+        )
         resp = await client.post(
             "/admin/auth/logout",
             headers={"Authorization": f"Bearer {token}"},

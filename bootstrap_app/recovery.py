@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import stat
 from datetime import datetime, timezone
@@ -22,6 +23,7 @@ RECOVERY_FORMAT = "wemini-bootstrap-recovery-v1"
 RECOVERY_AAD = b"wemini-bootstrap-recovery-v1\x00RSA-OAEP-SHA256\x00AES-256-GCM"
 MAX_ENVELOPE_BYTES = 4 * 1024 * 1024
 MAX_RECOVERED_FILE_BYTES = 1024 * 1024
+SAFE_INSTALLATION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 class RecoveryBundleError(RuntimeError):
@@ -281,22 +283,10 @@ def restore_recovery_files(
         raise
 
 
-def upload_recovery_envelope(
-    *,
+def _recovery_oss_configuration(
     installation_dir: Path,
-    installation_id: str,
-    envelope_bytes: bytes,
-    envelope_sha256: str,
-    bucket_factory: Callable | None = None,
-) -> str:
+) -> tuple[dict[str, str], str, str] | None:
     runtime = read_runtime_env(installation_dir / "runtime.env")
-    required = (
-        "RECOVERY_OSS_ENDPOINT",
-        "RECOVERY_OSS_BUCKET",
-        "RECOVERY_OSS_PREFIX",
-    )
-    if any(not runtime.get(name) for name in required):
-        raise RecoveryBundleError("recovery OSS runtime configuration is incomplete")
     secret_dir = installation_dir / "secrets"
     access_id = _private_regular_file(
         secret_dir / "recovery_oss_access_key_id",
@@ -306,8 +296,107 @@ def upload_recovery_envelope(
         secret_dir / "recovery_oss_access_key_secret",
         max_bytes=4096,
     ).decode("utf-8").strip()
-    if not access_id or not access_secret:
-        raise RecoveryBundleError("recovery OSS credentials are empty")
+    values = {
+        "RECOVERY_OSS_ENDPOINT": runtime.get("RECOVERY_OSS_ENDPOINT", "").strip(),
+        "RECOVERY_OSS_BUCKET": runtime.get("RECOVERY_OSS_BUCKET", "").strip(),
+        "recovery_oss_access_key_id": access_id,
+        "recovery_oss_access_key_secret": access_secret,
+    }
+    present = {name: bool(value) for name, value in values.items()}
+    if not any(present.values()):
+        return None
+    if not all(present.values()):
+        raise RecoveryBundleError("recovery OSS configuration is incomplete")
+    prefix = runtime.get("RECOVERY_OSS_PREFIX", "").strip()
+    if not prefix:
+        raise RecoveryBundleError("recovery OSS prefix is missing")
+    return runtime, access_id, access_secret
+
+
+def recovery_oss_is_configured(installation_dir: Path) -> bool:
+    """Return whether the optional recovery OSS group is fully configured."""
+
+    return _recovery_oss_configuration(installation_dir) is not None
+
+
+def store_local_recovery_envelope(
+    *,
+    control_dir: Path,
+    installation_id: str,
+    envelope_bytes: bytes,
+    envelope_sha256: str,
+) -> str:
+    """Persist an encrypted local fallback when remote recovery OSS is disabled."""
+
+    if not SAFE_INSTALLATION_ID_RE.fullmatch(installation_id):
+        raise RecoveryBundleError("installation ID is invalid")
+    if not re.fullmatch(
+        r"[0-9a-f]{64}", envelope_sha256
+    ) or not secrets.compare_digest(
+        hashlib.sha256(envelope_bytes).hexdigest(),
+        envelope_sha256,
+    ):
+        raise RecoveryBundleError("recovery envelope checksum is invalid")
+    try:
+        envelope = json.loads(envelope_bytes)
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise RecoveryBundleError("recovery envelope is invalid") from exc
+    if (
+        not isinstance(envelope, dict)
+        or envelope.get("installation_id") != installation_id
+    ):
+        raise RecoveryBundleError("recovery envelope installation mismatch")
+
+    directory = control_dir / "recovery-bundles"
+    try:
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        info = directory.lstat()
+    except OSError as exc:
+        raise RecoveryBundleError("local recovery directory is unavailable") from exc
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise RecoveryBundleError("local recovery directory is unsafe")
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        raise RecoveryBundleError("local recovery directory permissions are unsafe")
+
+    destination = directory / f"{installation_id}.recovery.json"
+    temporary = directory / f".{installation_id}.{secrets.token_hex(8)}.tmp"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(temporary, flags, 0o600)
+        with os.fdopen(descriptor, "wb", closefd=True) as stream:
+            stream.write(envelope_bytes)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o600, follow_symlinks=False)
+        os.replace(temporary, destination)
+        directory_fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError as exc:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise RecoveryBundleError("local recovery envelope cannot be stored") from exc
+    return f"local-only:{destination.name}"
+
+
+def upload_recovery_envelope(
+    *,
+    installation_dir: Path,
+    installation_id: str,
+    envelope_bytes: bytes,
+    envelope_sha256: str,
+    bucket_factory: Callable | None = None,
+) -> str:
+    configuration = _recovery_oss_configuration(installation_dir)
+    if configuration is None:
+        raise RecoveryBundleError("recovery OSS is not configured")
+    runtime, access_id, access_secret = configuration
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     object_key = (

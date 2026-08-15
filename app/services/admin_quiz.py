@@ -2146,6 +2146,8 @@ class AdminQuizService:
                 raise ThirdPartyException("题库导入存储不可用") from exc
             return
         if settings.QUIZ_IMPORT_STORAGE_TYPE != "aliyun_oss":
+            if settings.QUIZ_IMPORT_STORAGE_TYPE == "disabled":
+                raise ThirdPartyException("题库 OSS 未配置，导入功能不可用")
             raise ThirdPartyException("未知的题库导入存储类型")
 
         def _upload() -> None:
@@ -2176,6 +2178,8 @@ class AdminQuizService:
             except OSError as exc:
                 raise ThirdPartyException("题库导入存储不可用") from exc
         if settings.QUIZ_IMPORT_STORAGE_TYPE != "aliyun_oss":
+            if settings.QUIZ_IMPORT_STORAGE_TYPE == "disabled":
+                raise ThirdPartyException("题库 OSS 未配置，导入功能不可用")
             raise ThirdPartyException("未知的题库导入存储类型")
 
         def _download() -> bytes:
@@ -2261,6 +2265,11 @@ class AdminQuizService:
                     ) from exc
 
             return await asyncio.to_thread(_sign)
+
+        if settings.QUIZ_IMPORT_STORAGE_TYPE == "disabled":
+            raise ThirdPartyException("题库 OSS 未配置，导入功能不可用")
+        if settings.QUIZ_IMPORT_STORAGE_TYPE != "local":
+            raise ThirdPartyException("未知的题库导入存储类型")
 
         # Development/local storage uses a short HMAC URL so a browser download
         # does not need to forward the admin's bearer token.
@@ -2365,13 +2374,10 @@ class AdminQuizService:
         query: AdminQuizImportJobQuery | None = None,
         *,
         admin_id: int | None = None,
-        is_super_admin: bool = False,
     ) -> PaginatedData[AdminQuizImportJobResponse]:
         query = query or AdminQuizImportJobQuery()
         async with get_db_ctx() as db:
             stmt = select(QuizImportJob)
-            if admin_id is not None and not is_super_admin:
-                stmt = stmt.where(QuizImportJob.admin_id == admin_id)
             if query.status is not None:
                 stmt = stmt.where(QuizImportJob.status == self._enum_value(query.status))
             if query.source_type is not None:
@@ -2397,15 +2403,10 @@ class AdminQuizService:
         job_id: int,
         *,
         admin_id: int | None = None,
-        is_super_admin: bool = False,
     ) -> QuizImportJob:
         async with get_db_ctx() as db:
             job = await db.get(QuizImportJob, job_id)
-            if job is None or (
-                admin_id is not None
-                and not is_super_admin
-                and job.admin_id != admin_id
-            ):
+            if job is None:
                 raise NotFoundException("导入任务")
             if admin_id is not None:
                 self._add_audit(
@@ -2428,13 +2429,10 @@ class AdminQuizService:
         query: AdminQuizImportErrorQuery,
         *,
         admin_id: int,
-        is_super_admin: bool = False,
     ) -> AdminQuizImportErrorPage:
         async with get_db_ctx() as db:
             job = await db.get(QuizImportJob, job_id)
-            if job is None or (
-                not is_super_admin and job.admin_id != admin_id
-            ):
+            if job is None:
                 raise NotFoundException("导入任务")
             expires_at = self._aware(job.expires_at)
             if expires_at <= datetime.now(timezone.utc):
@@ -2526,13 +2524,10 @@ class AdminQuizService:
         job_id: int,
         *,
         admin_id: int,
-        is_super_admin: bool = False,
     ) -> AdminQuizImportCategoryImpactResponse:
         async with get_db_ctx() as db:
             job = await db.get(QuizImportJob, job_id)
-            if job is None or (
-                not is_super_admin and job.admin_id != admin_id
-            ):
+            if job is None:
                 raise NotFoundException("导入任务")
             if job.status != "awaiting_category_confirmation" or not job.category_impact:
                 self._add_audit(
@@ -2583,14 +2578,11 @@ class AdminQuizService:
         data: AdminQuizImportConfirmCategoriesRequest,
         *,
         admin_id: int,
-        is_super_admin: bool = False,
     ) -> QuizImportJob:
         now = datetime.now(timezone.utc)
         async with get_db_ctx() as db:
             job = await self._get_for_update(db, QuizImportJob, job_id)
-            if job is None or (
-                not is_super_admin and job.admin_id != admin_id
-            ):
+            if job is None:
                 raise NotFoundException("导入任务")
             if job.status != "awaiting_category_confirmation":
                 raise ConflictException("导入任务已被确认、取消或过期")
@@ -2658,14 +2650,11 @@ class AdminQuizService:
         data: AdminQuizImportCancelRequest,
         *,
         admin_id: int,
-        is_super_admin: bool = False,
     ) -> QuizImportJob:
         now = datetime.now(timezone.utc)
         async with get_db_ctx() as db:
             job = await self._get_for_update(db, QuizImportJob, job_id)
-            if job is None or (
-                not is_super_admin and job.admin_id != admin_id
-            ):
+            if job is None:
                 raise NotFoundException("导入任务")
             if job.status != "awaiting_category_confirmation":
                 raise ConflictException("导入任务已被确认、取消或过期")
@@ -2704,12 +2693,10 @@ class AdminQuizService:
         job_id: int,
         *,
         admin_id: int,
-        is_super_admin: bool = False,
     ) -> AdminQuizSignedUrlResponse:
         job = await self.get_import_job(
             job_id,
             admin_id=admin_id,
-            is_super_admin=is_super_admin,
         )
         now = datetime.now(timezone.utc)
         if job.expires_at <= now:
@@ -2762,12 +2749,10 @@ class AdminQuizService:
         job_id: int,
         *,
         admin_id: int,
-        is_super_admin: bool = False,
     ) -> AdminQuizSignedUrlResponse:
         job = await self.get_import_job(
             job_id,
             admin_id=admin_id,
-            is_super_admin=is_super_admin,
         )
         now = datetime.now(timezone.utc)
         if job.expires_at <= now:
@@ -2858,7 +2843,6 @@ class AdminQuizService:
         job = await self.get_import_job(
             job_id,
             admin_id=admin_id,
-            is_super_admin=True,
         )
         now = datetime.now(timezone.utc)
         if job.expires_at <= now:
@@ -2908,7 +2892,6 @@ class AdminQuizService:
         job = await self.get_import_job(
             job_id,
             admin_id=admin_id,
-            is_super_admin=True,
         )
         raw = await self._read_local_signed_import_object(
             job_id,
@@ -2934,7 +2917,7 @@ class AdminQuizService:
 
         async with get_db_ctx() as db:
             job = await self._get_for_update(db, QuizImportJob, job_id)
-            if job is None or job.admin_id != admin_id:
+            if job is None:
                 raise NotFoundException("导入任务")
             if job.status != "failed":
                 self._add_audit(

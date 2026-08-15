@@ -21,7 +21,7 @@ async def _check(permission: str, role: str):
 
 class TestTwoRoleRbac:
     def test_role_matrix_is_frozen(self):
-        assert set(ROLE_PERMISSIONS) == {"super_admin", "admin"}
+        assert set(ROLE_PERMISSIONS) == {"super_admin", "quiz_admin"}
 
     @pytest.mark.asyncio
     async def test_super_admin_passes_unknown_permission(self):
@@ -29,9 +29,14 @@ class TestTwoRoleRbac:
         assert result.role == "super_admin"
 
     @pytest.mark.asyncio
-    async def test_normal_admin_passes_operational_permission(self):
-        result = await _check("user:write", "admin")
-        assert result.role == "admin"
+    async def test_quiz_admin_passes_quiz_permission(self):
+        result = await _check("quiz:write", "quiz_admin")
+        assert result.role == "quiz_admin"
+
+    @pytest.mark.asyncio
+    async def test_quiz_admin_cannot_cross_into_user_management(self):
+        with pytest.raises(ForbiddenException):
+            await _check("user:write", "quiz_admin")
 
     @pytest.mark.asyncio
     async def test_unknown_legacy_role_is_denied(self):
@@ -39,9 +44,9 @@ class TestTwoRoleRbac:
             await _check("user:list", "customer_service")
 
     @pytest.mark.asyncio
-    async def test_normal_admin_fails_super_admin_dependency(self):
+    async def test_quiz_admin_fails_super_admin_dependency(self):
         with pytest.raises(ForbiddenException):
-            await require_super_admin(admin=_admin("admin"))
+            await require_super_admin(admin=_admin("quiz_admin"))
 
     @pytest.mark.asyncio
     async def test_super_admin_dependency_accepts_super_admin(self):

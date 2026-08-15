@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import time
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -198,3 +199,46 @@ async def test_external_probe_rejects_public_bucket_without_exposing_credentials
     assert error.value.component == "renshe_oss"
     assert error.value.code == "bucket_not_private"
     assert "renshe-secret" not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_external_probe_skips_each_omitted_optional_oss_group(monkeypatch):
+    request, _ = _request()
+    request = request.model_copy(
+        update={
+            name: None
+            for name in (
+                "renshe_oss_endpoint",
+                "renshe_oss_bucket",
+                "renshe_oss_access_key_id",
+                "renshe_oss_access_key_secret",
+                "quiz_oss_endpoint",
+                "quiz_oss_bucket",
+                "quiz_oss_access_key_id",
+                "quiz_oss_access_key_secret",
+                "recovery_oss_endpoint",
+                "recovery_oss_bucket",
+                "recovery_oss_access_key_id",
+                "recovery_oss_access_key_secret",
+            )
+        }
+    )
+    monkeypatch.setattr("bootstrap_app.probes._probe_wechat_login", AsyncMock())
+    monkeypatch.setattr("bootstrap_app.probes._probe_wechat_pay", AsyncMock())
+
+    def unexpected_bucket(*_args):
+        raise AssertionError("OSS probe must not run for an omitted group")
+
+    report = await validate_external_dependencies(
+        request,
+        installation_id="install-without-oss",
+        bucket_factory=unexpected_bucket,
+    )
+
+    assert report.public_dict() == {
+        "wechat_login": "ok",
+        "wechat_pay": "ok",
+        "renshe_oss": "not_configured",
+        "quiz_oss": "not_configured",
+        "recovery_oss": "not_configured",
+    }

@@ -23,7 +23,7 @@ def test_database_probe_returns_stable_one_way_identity() -> None:
     session = SimpleNamespace(
         execute=AsyncMock(
             return_value=SimpleNamespace(
-                one=lambda: ("wemini_app_acceptance", "test-system-id")
+                one=lambda: ("wemini_app_acceptance", "test-system-id", 1, 1)
             )
         )
     )
@@ -43,6 +43,7 @@ def test_database_probe_returns_stable_one_way_identity() -> None:
         "fingerprint_sha256": hashlib.sha256(
             b"test-system-id/wemini_app_acceptance"
         ).hexdigest(),
+        "admin_identity": {"status": "ok"},
     }
     statement = str(session.execute.await_args.args[0])
     assert "current_database" in statement
@@ -63,6 +64,32 @@ def test_database_probe_fails_closed_without_exception_detail() -> None:
     assert result == {"status": "unavailable"}
 
 
+def test_database_probe_keeps_database_healthy_but_blocks_missing_super_admin() -> None:
+    session = SimpleNamespace(
+        execute=AsyncMock(
+            return_value=SimpleNamespace(
+                one=lambda: ("wemini_app_acceptance", "test-system-id", 0, 0)
+            )
+        )
+    )
+
+    class _Context:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    with patch("app.main.get_db_ctx", return_value=_Context()):
+        result = asyncio.run(app.main._database_probe())
+
+    assert result["status"] == "ok"
+    assert result["admin_identity"] == {
+        "status": "unavailable",
+        "reason": "super_admin_missing",
+    }
+
+
 # ---------------------------------------------------------------------------
 # four-state matrix
 # ---------------------------------------------------------------------------
@@ -75,7 +102,10 @@ class TestHealthEndpoint:
                 "app.main._database_probe",
                 AsyncMock(
                     return_value={
-                        "status": "ok" if db_ok else "unavailable"
+                        "status": "ok" if db_ok else "unavailable",
+                        "admin_identity": {
+                            "status": "ok" if db_ok else "unavailable"
+                        },
                     }
                 ),
             ),
@@ -135,6 +165,7 @@ class TestHealthEndpoint:
         assert "data" in body
         assert "checks" in body["data"]
         assert "database" in body["data"]["checks"]
+        assert "admin_identity" in body["data"]["checks"]
         assert "redis" in body["data"]["checks"]
         assert "quiz_oss" in body["data"]["checks"]
         assert body["data"]["checks"]["quiz_worker"] == "ok"

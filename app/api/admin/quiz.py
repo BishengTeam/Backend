@@ -42,6 +42,7 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizVersionRequest,
     AdminQuizContentStatusUpdate,
     AdminQuizCourseBindingCreate,
+    AdminQuizCourseOptionResponse,
     AdminQuizCourseBindingResponse,
     AdminQuizCourseBindingStatusUpdate,
     AdminQuizContentTreeResponse,
@@ -76,6 +77,24 @@ QUESTION = "/questions"
 
 
 # ── Fixed hierarchy V2 routes ──
+
+
+@router.get(
+    "/course-options",
+    response_model=APIResponse[list[AdminQuizCourseOptionResponse]],
+    summary="题库课程绑定候选项",
+)
+async def list_course_options(
+    keyword: str | None = Query(None, min_length=1, max_length=128),
+    limit: int = Query(100, ge=1, le=100),
+    _admin=Depends(require_permission("course_quiz_bind")),
+) -> APIResponse[list[AdminQuizCourseOptionResponse]]:
+    return success(
+        data=await AdminQuizV2Service().list_course_options(
+            keyword=keyword,
+            limit=limit,
+        )
+    )
 
 
 @router.get(
@@ -138,8 +157,6 @@ async def update_library(
     library_id: int = Path(..., ge=1),
     admin=Depends(require_permission("quiz_library_manage")),
 ) -> APIResponse[AdminQuizLibraryResponse]:
-    if "access_mode" in body.model_fields_set and admin.role != "super_admin":
-        raise BusinessException("只有超级管理员可以变更题库访问模式")
     return success(
         data=await AdminQuizV2Service().update_library(
             library_id, body, admin_id=admin.id
@@ -1084,7 +1101,6 @@ async def list_import_jobs(
     result = await AdminQuizService().list_import_jobs(
         query,
         admin_id=admin.id,
-        is_super_admin=admin.role == "super_admin",
     )
     return success(data=result)
 
@@ -1100,7 +1116,6 @@ async def get_import_job(
     result = await AdminQuizService().get_import_job(
         job_id,
         admin_id=admin.id,
-        is_super_admin=admin.role == "super_admin",
     )
     return success(data=result)
 
@@ -1119,7 +1134,6 @@ async def list_import_errors(
         job_id,
         query,
         admin_id=admin.id,
-        is_super_admin=admin.role == "super_admin",
     )
     return success(data=result)
 
@@ -1136,7 +1150,6 @@ async def get_import_category_impact(
     result = await AdminQuizService().get_import_category_impact(
         job_id,
         admin_id=admin.id,
-        is_super_admin=admin.role == "super_admin",
     )
     return success(data=result)
 
@@ -1161,7 +1174,6 @@ async def confirm_import_categories(
         job_id,
         body,
         admin_id=admin.id,
-        is_super_admin=admin.role == "super_admin",
     )
     return success(data=result)
 
@@ -1185,7 +1197,6 @@ async def cancel_import_job(
         job_id,
         body,
         admin_id=admin.id,
-        is_super_admin=admin.role == "super_admin",
     )
     return success(data=result)
 
@@ -1206,7 +1217,6 @@ async def get_import_report_url(
     result = await AdminQuizService().get_import_report_url(
         job_id,
         admin_id=admin.id,
-        is_super_admin=admin.role == "super_admin",
     )
     return success(data=result)
 
@@ -1228,7 +1238,6 @@ async def get_import_source_url(
     result = await AdminQuizService().get_import_source_url(
         job_id,
         admin_id=admin.id,
-        is_super_admin=admin.role == "super_admin",
     )
     return success(data=result)
 

@@ -21,6 +21,16 @@ RUNTIME_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 WECHAT_APPID_RE = re.compile(r"^wx[A-Za-z0-9]{16}$")
 MCHID_RE = re.compile(r"^[0-9]{8,16}$")
 SERIAL_RE = re.compile(r"^[A-Fa-f0-9]{16,64}$")
+OPTIONAL_EMPTY_SECRET_FILES = frozenset(
+    {
+        "aliyun_oss_access_key_id",
+        "aliyun_oss_access_key_secret",
+        "quiz_oss_access_key_id",
+        "quiz_oss_access_key_secret",
+        "recovery_oss_access_key_id",
+        "recovery_oss_access_key_secret",
+    }
+)
 
 
 class BootstrapValidationError(ValueError):
@@ -33,6 +43,10 @@ class InstallationCommitError(RuntimeError):
 
 def _secret_value(value) -> str:
     return value.get_secret_value()
+
+
+def _optional_secret_value(value) -> str:
+    return value.get_secret_value() if value is not None else ""
 
 
 def _validate_rsa_key(
@@ -113,20 +127,28 @@ def build_installation_payload(
 
     scalar_secret_fields = {
         "wechat_secret": _secret_value(request.wechat_secret),
-        "aliyun_oss_access_key_id": _secret_value(request.renshe_oss_access_key_id),
-        "aliyun_oss_access_key_secret": _secret_value(
+        "aliyun_oss_access_key_id": _optional_secret_value(
+            request.renshe_oss_access_key_id
+        ),
+        "aliyun_oss_access_key_secret": _optional_secret_value(
             request.renshe_oss_access_key_secret
         ),
-        "quiz_oss_access_key_id": _secret_value(request.quiz_oss_access_key_id),
-        "quiz_oss_access_key_secret": _secret_value(request.quiz_oss_access_key_secret),
-        "recovery_oss_access_key_id": _secret_value(
+        "quiz_oss_access_key_id": _optional_secret_value(
+            request.quiz_oss_access_key_id
+        ),
+        "quiz_oss_access_key_secret": _optional_secret_value(
+            request.quiz_oss_access_key_secret
+        ),
+        "recovery_oss_access_key_id": _optional_secret_value(
             request.recovery_oss_access_key_id
         ),
-        "recovery_oss_access_key_secret": _secret_value(
+        "recovery_oss_access_key_secret": _optional_secret_value(
             request.recovery_oss_access_key_secret
         ),
     }
     for name, value in scalar_secret_fields.items():
+        if name in OPTIONAL_EMPTY_SECRET_FILES and not value:
+            continue
         if not value or "\x00" in value or "\r" in value or "\n" in value:
             raise BootstrapValidationError(f"{name} must be a non-empty single-line value")
         if len(value.encode("utf-8")) > 4096:
@@ -206,12 +228,18 @@ def build_installation_payload(
         ),
         "WECHAT_PAY_CERT_SERIAL_NO": request.wechat_pay_cert_serial_no,
         "WECHAT_PAY_PUBLIC_KEY_ID": request.wechat_pay_public_key_id,
-        "ALIYUN_OSS_ENDPOINT": request.renshe_oss_endpoint,
-        "ALIYUN_OSS_BUCKET": request.renshe_oss_bucket,
-        "QUIZ_OSS_ENDPOINT": request.quiz_oss_endpoint,
-        "QUIZ_OSS_BUCKET": request.quiz_oss_bucket,
-        "RECOVERY_OSS_ENDPOINT": request.recovery_oss_endpoint,
-        "RECOVERY_OSS_BUCKET": request.recovery_oss_bucket,
+        "RENSHE_STORAGE_TYPE": (
+            "aliyun_oss" if request.has_renshe_oss() else "disabled"
+        ),
+        "ALIYUN_OSS_ENDPOINT": request.renshe_oss_endpoint or "",
+        "ALIYUN_OSS_BUCKET": request.renshe_oss_bucket or "",
+        "QUIZ_IMPORT_STORAGE_TYPE": (
+            "aliyun_oss" if request.has_quiz_oss() else "disabled"
+        ),
+        "QUIZ_OSS_ENDPOINT": request.quiz_oss_endpoint or "",
+        "QUIZ_OSS_BUCKET": request.quiz_oss_bucket or "",
+        "RECOVERY_OSS_ENDPOINT": request.recovery_oss_endpoint or "",
+        "RECOVERY_OSS_BUCKET": request.recovery_oss_bucket or "",
         "RECOVERY_OSS_PREFIX": request.recovery_oss_prefix,
         "API_ORIGIN": request.api_origin,
         "ADMIN_ORIGIN": request.admin_origin,
@@ -284,7 +312,7 @@ class InstallationStore:
                 if not SECRET_FILE_RE.fullmatch(name):
                     raise InstallationCommitError("invalid secret file name")
                 content = secret_files[name]
-                if not content:
+                if not content and name not in OPTIONAL_EMPTY_SECRET_FILES:
                     raise InstallationCommitError("secret files cannot be empty")
                 _write_private_file(secrets_dir / name, content)
                 secret_macs[name] = hmac.new(

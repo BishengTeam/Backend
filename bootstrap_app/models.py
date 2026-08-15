@@ -14,6 +14,20 @@ HOST_RE = re.compile(
 )
 NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,62}$")
 BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$")
+ADMIN_USERNAME_RE = re.compile(r"^[a-z][a-z0-9._-]{3,31}$")
+FROZEN_WEAK_ADMIN_PASSWORDS = frozenset(
+    {
+        "password1234",
+        "password12345",
+        "qwerty123456",
+        "qwertyuiop12",
+        "abc123456789",
+        "administrator1",
+        "welcome12345",
+        "letmein123456",
+        "1234567890ab",
+    }
+)
 
 
 def _clean_single_line(value: str, *, field_name: str, max_length: int = 2048) -> str:
@@ -73,21 +87,47 @@ class BootstrapConfigureRequest(BaseModel):
     wechat_pay_public_key_pem: SecretStr
     wechat_pay_public_key_id: str
 
-    renshe_oss_endpoint: str
-    renshe_oss_bucket: str
-    renshe_oss_access_key_id: SecretStr
-    renshe_oss_access_key_secret: SecretStr
-    quiz_oss_endpoint: str
-    quiz_oss_bucket: str
-    quiz_oss_access_key_id: SecretStr
-    quiz_oss_access_key_secret: SecretStr
+    renshe_oss_endpoint: str | None = None
+    renshe_oss_bucket: str | None = None
+    renshe_oss_access_key_id: SecretStr | None = None
+    renshe_oss_access_key_secret: SecretStr | None = None
+    quiz_oss_endpoint: str | None = None
+    quiz_oss_bucket: str | None = None
+    quiz_oss_access_key_id: SecretStr | None = None
+    quiz_oss_access_key_secret: SecretStr | None = None
 
-    recovery_oss_endpoint: str
-    recovery_oss_bucket: str
+    recovery_oss_endpoint: str | None = None
+    recovery_oss_bucket: str | None = None
     recovery_oss_prefix: str = "wemini-recovery"
-    recovery_oss_access_key_id: SecretStr
-    recovery_oss_access_key_secret: SecretStr
+    recovery_oss_access_key_id: SecretStr | None = None
+    recovery_oss_access_key_secret: SecretStr | None = None
     recovery_public_key_pem: SecretStr
+
+    @field_validator(
+        "renshe_oss_endpoint",
+        "renshe_oss_bucket",
+        "renshe_oss_access_key_id",
+        "renshe_oss_access_key_secret",
+        "quiz_oss_endpoint",
+        "quiz_oss_bucket",
+        "quiz_oss_access_key_id",
+        "quiz_oss_access_key_secret",
+        "recovery_oss_endpoint",
+        "recovery_oss_bucket",
+        "recovery_oss_access_key_id",
+        "recovery_oss_access_key_secret",
+        mode="before",
+    )
+    @classmethod
+    def empty_optional_oss_value(cls, value):
+        """Treat an empty browser field as an omitted optional credential."""
+
+        if value is None:
+            return None
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return cleaned or None
+        return value
 
     @field_validator("api_origin")
     @classmethod
@@ -105,7 +145,9 @@ class BootstrapConfigureRequest(BaseModel):
         "recovery_oss_endpoint",
     )
     @classmethod
-    def validate_endpoint(cls, value: str, info) -> str:
+    def validate_endpoint(cls, value: str | None, info) -> str | None:
+        if value is None:
+            return None
         return _https_endpoint(value, field_name=info.field_name)
 
     @field_validator(
@@ -114,7 +156,9 @@ class BootstrapConfigureRequest(BaseModel):
         "recovery_oss_bucket",
     )
     @classmethod
-    def validate_bucket(cls, value: str, info) -> str:
+    def validate_bucket(cls, value: str | None, info) -> str | None:
+        if value is None:
+            return None
         cleaned = _clean_single_line(value, field_name=info.field_name, max_length=63)
         if not BUCKET_RE.fullmatch(cleaned):
             raise ValueError(f"{info.field_name} has an invalid OSS bucket name")
@@ -163,10 +207,51 @@ class BootstrapConfigureRequest(BaseModel):
     def validate_modes_and_origins(self) -> "BootstrapConfigureRequest":
         if self.api_origin == self.admin_origin:
             raise ValueError("api_origin and admin_origin must be different")
+        for label, fields in (
+            (
+                "renshe_oss",
+                (
+                    "renshe_oss_endpoint",
+                    "renshe_oss_bucket",
+                    "renshe_oss_access_key_id",
+                    "renshe_oss_access_key_secret",
+                ),
+            ),
+            (
+                "quiz_oss",
+                (
+                    "quiz_oss_endpoint",
+                    "quiz_oss_bucket",
+                    "quiz_oss_access_key_id",
+                    "quiz_oss_access_key_secret",
+                ),
+            ),
+            (
+                "recovery_oss",
+                (
+                    "recovery_oss_endpoint",
+                    "recovery_oss_bucket",
+                    "recovery_oss_access_key_id",
+                    "recovery_oss_access_key_secret",
+                ),
+            ),
+        ):
+            present = [
+                self._optional_value_present(getattr(self, name)) for name in fields
+            ]
+            if any(present) and not all(present):
+                missing = [name for name, exists in zip(fields, present) if not exists]
+                raise ValueError(
+                    f"{label} must be fully configured or left empty; missing: "
+                    + ", ".join(missing)
+                )
         if self.deployment_mode == "external":
             if self.postgres_host == "db":
                 raise ValueError("external deployment requires an explicit postgres_host")
-            if self.postgres_password is None or not self.postgres_password.get_secret_value():
+            if (
+                self.postgres_password is None
+                or not self.postgres_password.get_secret_value()
+            ):
                 raise ValueError("external deployment requires postgres_password")
             if self.redis_url is None or not self.redis_url.get_secret_value():
                 raise ValueError("external deployment requires redis_url")
@@ -175,28 +260,49 @@ class BootstrapConfigureRequest(BaseModel):
                 raise ValueError("redis_url must use redis:// or rediss://")
         return self
 
+    @staticmethod
+    def _optional_value_present(value: object) -> bool:
+        if isinstance(value, SecretStr):
+            return bool(value.get_secret_value())
+        return bool(value)
+
+    def has_renshe_oss(self) -> bool:
+        return self.renshe_oss_endpoint is not None
+
+    def has_quiz_oss(self) -> bool:
+        return self.quiz_oss_endpoint is not None
+
+    def has_recovery_oss(self) -> bool:
+        return self.recovery_oss_endpoint is not None
+
 
 class BootstrapAdminRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    username: str = Field(min_length=3, max_length=64)
+    username: str = Field(min_length=4, max_length=32)
     password: SecretStr
 
     @field_validator("username")
     @classmethod
     def validate_username(cls, value: str) -> str:
-        cleaned = _clean_single_line(value, field_name="username", max_length=64)
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+", cleaned):
+        cleaned = _clean_single_line(value, field_name="username", max_length=32).lower()
+        if not ADMIN_USERNAME_RE.fullmatch(cleaned):
             raise ValueError("username contains unsupported characters")
         return cleaned
 
     @model_validator(mode="after")
     def validate_password(self) -> "BootstrapAdminRequest":
         password = self.password.get_secret_value()
-        if len(password) < 12 or len(password) > 256:
-            raise ValueError("password must contain 12 to 256 characters")
+        if len(password) < 12 or len(password) > 128:
+            raise ValueError("password must contain 12 to 128 characters")
         if "\x00" in password or "\r" in password or "\n" in password:
             raise ValueError("password contains unsupported control characters")
+        if not re.search(r"[A-Za-z]", password) or not re.search(r"[0-9]", password):
+            raise ValueError("password must contain letters and numbers")
+        if self.username in password.lower():
+            raise ValueError("password must not contain the username")
+        if password.casefold() in FROZEN_WEAK_ADMIN_PASSWORDS:
+            raise ValueError("password is too common")
         return self
 
 

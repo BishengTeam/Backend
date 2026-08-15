@@ -12,7 +12,9 @@ from bootstrap_app.recovery import (
     RecoveryBundleError,
     create_recovery_envelope,
     decrypt_recovery_envelope,
+    recovery_oss_is_configured,
     restore_recovery_files,
+    store_local_recovery_envelope,
     upload_recovery_envelope,
 )
 from bootstrap_app.state import BootstrapPhase, BootstrapStateStore
@@ -76,12 +78,24 @@ def main() -> None:
         installation_id=state.installation_id,
         signing_key=settings.token,
     )
-    object_key = upload_recovery_envelope(
-        installation_dir=settings.installation_dir,
-        installation_id=state.installation_id,
-        envelope_bytes=envelope,
-        envelope_sha256=digest,
-    )
+    if recovery_oss_is_configured(settings.installation_dir):
+        object_key = upload_recovery_envelope(
+            installation_dir=settings.installation_dir,
+            installation_id=state.installation_id,
+            envelope_bytes=envelope,
+            envelope_sha256=digest,
+        )
+        result_status = "uploaded"
+        recovery_oss_status = "configured"
+    else:
+        object_key = store_local_recovery_envelope(
+            control_dir=settings.control_dir,
+            installation_id=state.installation_id,
+            envelope_bytes=envelope,
+            envelope_sha256=digest,
+        )
+        result_status = "stored_locally"
+        recovery_oss_status = "not_configured"
     state_store.transition(
         BootstrapPhase.SEEDED,
         BootstrapPhase.RECOVERY_VERIFIED,
@@ -91,9 +105,10 @@ def main() -> None:
     print(
         json.dumps(
             {
-                "status": "uploaded",
+                "status": result_status,
                 "object_key": object_key,
                 "sha256": digest,
+                "recovery_oss": recovery_oss_status,
             },
             ensure_ascii=False,
             sort_keys=True,

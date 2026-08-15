@@ -25,6 +25,10 @@ redis_client = aioredis.from_url(
 _redis_available = True
 
 
+class RedisUnavailableError(RuntimeError):
+    """Raised when a security-critical Redis read cannot be completed."""
+
+
 async def redis_ping() -> bool:
     """尝试 ping Redis，更新可用性标记。"""
     global _redis_available
@@ -50,6 +54,25 @@ async def redis_get_safe(key: str) -> str | None:
         logger.warning("Redis GET failed; marking unavailable")
         _redis_available = False
         return None
+
+
+async def redis_get_required(key: str) -> str | None:
+    """Redis GET for security decisions that must fail closed.
+
+    Unlike :func:`redis_get_safe`, an unavailable backend is distinguishable
+    from a missing key.  Credential material is never included in logs or the
+    raised exception.
+    """
+
+    global _redis_available
+    if not _redis_available:
+        raise RedisUnavailableError("required Redis read unavailable")
+    try:
+        return await redis_client.get(key)
+    except Exception as exc:
+        logger.warning("Required Redis GET failed; marking unavailable")
+        _redis_available = False
+        raise RedisUnavailableError("required Redis read unavailable") from exc
 
 
 async def redis_setex_safe(key: str, ttl: int, value: str) -> bool:

@@ -113,6 +113,8 @@ def run_offline_sql_check() -> None:
         "alembic",
         "-x",
         "quiz_backup_ref=offline-static-check",
+        "-x",
+        "admin_security_backup_ref=offline-static-check",
         "upgrade",
         "base:head",
         "--sql",
