@@ -200,6 +200,7 @@ def upgrade() -> None:
         "UPDATE admin_user SET display_name = username "
         "WHERE display_name IS NULL OR btrim(display_name) = ''"
     )
+    op.drop_constraint("ck_admin_user_role", "admin_user", type_="check")
     op.execute(
         "UPDATE admin_user SET role = 'quiz_admin', is_active = false, "
         "must_change_password = true, auth_version = 2, "
@@ -218,7 +219,6 @@ def upgrade() -> None:
     op.alter_column("admin_user", "failed_login_attempts", nullable=False)
     op.alter_column("admin_user", "password_changed_at", nullable=False)
 
-    op.drop_constraint("ck_admin_user_role", "admin_user", type_="check")
     op.alter_column(
         "admin_user",
         "role",

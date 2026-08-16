@@ -225,7 +225,8 @@ class AdminAuthService:
                 summary={"role": admin.role, "session_mode": session_mode},
             )
             await db.commit()
-
+            await db.refresh(admin)
+           
             return AdminLoginResponse(
                 access_token=access_token,
                 expires_in=ADMIN_SESSION_EXPIRE_MINUTES * 60,
