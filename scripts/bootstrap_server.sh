@@ -68,9 +68,15 @@ require_command() {
 
 docker_cli() {
   if [[ "$DOCKER_USE_SUDO" = "1" ]]; then
-    sudo docker "$@"
+    sudo env \
+      BOOTSTRAP_UID="$BOOTSTRAP_UID" \
+      BOOTSTRAP_GID="$BOOTSTRAP_GID" \
+      docker "$@"
   else
-    docker "$@"
+    env \
+      BOOTSTRAP_UID="$BOOTSTRAP_UID" \
+      BOOTSTRAP_GID="$BOOTSTRAP_GID" \
+      docker "$@"
   fi
 }
 

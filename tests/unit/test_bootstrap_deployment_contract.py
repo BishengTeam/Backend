@@ -59,6 +59,8 @@ def test_bootstrap_and_runtime_compose_parse_when_required_values_are_supplied(t
     )
 
     runtime_env = os.environ | {
+        "BOOTSTRAP_UID": str(os.getuid()),
+        "BOOTSTRAP_GID": str(os.getgid()),
         "BACKEND_IMAGE": "wemini-backend:test",
         "ADMIN_IMAGE": "wemini-admin:test",
         "DB_HOST": "db",

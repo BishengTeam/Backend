@@ -64,6 +64,16 @@ def main() -> None:
     require(runtime_compose, "REDIS_URL_FILE: /run/secrets/redis_url", "Redis secret")
     require(
         runtime_compose,
+        "user: ${BOOTSTRAP_UID:?BOOTSTRAP_UID is required}:${BOOTSTRAP_GID:?BOOTSTRAP_GID is required}",
+        "Backend runtime runs as the secret-owning bootstrap user",
+    )
+    require(
+        runtime_compose,
+        "chown -R ${BOOTSTRAP_UID:?BOOTSTRAP_UID is required}:${BOOTSTRAP_GID:?BOOTSTRAP_GID is required} /app/uploads",
+        "uploads volume ownership matches the runtime user",
+    )
+    require(
+        runtime_compose,
         "RENSHE_STORAGE_TYPE: ${RENSHE_STORAGE_TYPE:-disabled}",
         "optional human-resources OSS mode",
     )
@@ -95,6 +105,11 @@ def main() -> None:
         "prebuilt image revision verification",
     )
     require(orchestrator, "--no-build bootstrap", "prebuilt bootstrap start")
+    require(
+        orchestrator,
+        'BOOTSTRAP_UID="$BOOTSTRAP_UID"',
+        "runtime Compose receives the secret-owning UID",
+    )
     require(installer, "git clone --branch main", "automatic Backend clone")
     require(release_installer, "zstd -dc", "release image decompression")
     require(release_installer, "docker_cli load", "release image load")

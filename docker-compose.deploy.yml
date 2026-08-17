@@ -90,13 +90,14 @@ services:
           /app/uploads/private/quiz-imports \
           /app/uploads/private/renshe \
           /app/uploads/private/course-assets
-        chown -R 10001:10001 /app/uploads
+        chown -R ${BOOTSTRAP_UID:?BOOTSTRAP_UID is required}:${BOOTSTRAP_GID:?BOOTSTRAP_GID is required} /app/uploads
     volumes:
       - uploads:/app/uploads
     restart: "no"
 
   app:
     image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}
+    user: ${BOOTSTRAP_UID:?BOOTSTRAP_UID is required}:${BOOTSTRAP_GID:?BOOTSTRAP_GID is required}
     depends_on:
       uploads-init:
         condition: service_completed_successfully
@@ -119,6 +120,7 @@ services:
 
   quiz-worker:
     image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}
+    user: ${BOOTSTRAP_UID:?BOOTSTRAP_UID is required}:${BOOTSTRAP_GID:?BOOTSTRAP_GID is required}
     entrypoint: []
     command: ["python", "-m", "app.quiz_worker"]
     environment:
@@ -142,6 +144,7 @@ services:
   migration:
     profiles: [orchestration]
     image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}
+    user: ${BOOTSTRAP_UID:?BOOTSTRAP_UID is required}:${BOOTSTRAP_GID:?BOOTSTRAP_GID is required}
     entrypoint: []
     command: ["alembic", "upgrade", "head"]
     environment:
@@ -153,6 +156,7 @@ services:
   production-seed:
     profiles: [orchestration]
     image: ${BACKEND_IMAGE:?BACKEND_IMAGE is required}
+    user: ${BOOTSTRAP_UID:?BOOTSTRAP_UID is required}:${BOOTSTRAP_GID:?BOOTSTRAP_GID is required}
     entrypoint: []
     command: ["python", "scripts/seed_production.py"]
     environment:
