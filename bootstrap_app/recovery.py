@@ -289,18 +289,18 @@ def _recovery_oss_configuration(
     runtime = read_runtime_env(installation_dir / "runtime.env")
     secret_dir = installation_dir / "secrets"
     access_id = _private_regular_file(
-        secret_dir / "recovery_oss_access_key_id",
+        secret_dir / "aliyun_oss_access_key_id",
         max_bytes=4096,
     ).decode("utf-8").strip()
     access_secret = _private_regular_file(
-        secret_dir / "recovery_oss_access_key_secret",
+        secret_dir / "aliyun_oss_access_key_secret",
         max_bytes=4096,
     ).decode("utf-8").strip()
     values = {
         "RECOVERY_OSS_ENDPOINT": runtime.get("RECOVERY_OSS_ENDPOINT", "").strip(),
         "RECOVERY_OSS_BUCKET": runtime.get("RECOVERY_OSS_BUCKET", "").strip(),
-        "recovery_oss_access_key_id": access_id,
-        "recovery_oss_access_key_secret": access_secret,
+        "aliyun_oss_access_key_id": access_id,
+        "aliyun_oss_access_key_secret": access_secret,
     }
     present = {name: bool(value) for name, value in values.items()}
     if not any(present.values()):

@@ -31,7 +31,7 @@
 | 人社模板 | 缺失只禁用人社批次导出，不阻断 Backend/Admin 整体部署 |
 | 平台端 | 不处理 Platform |
 | 网关 | 运维预先配置两个 HTTPS 域名；Admin 受 IP 白名单或 VPN 保护 |
-| 恢复 | 完整 Secret 恢复包用恢复公钥加密并上传独立私有 OSS |
+| 恢复 | 完整 Secret 恢复包用恢复公钥加密并上传统一私有 OSS 的恢复前缀 |
 | 完成口径 | 部署后先为 `INSTALLED_PENDING_UAT`；真实闭环签署后才是 `PRODUCTION_ACCEPTED` |
 | 失败处理 | 幂等续跑和重试；网页不删除数据库、卷或 Secret |
 
@@ -62,7 +62,7 @@
 | WEBI-05 | 🧪 | P0 | BE | 实现独立 Bootstrap FastAPI 服务和静态网页 | WEBI-02 | 独立配置、页面、健康接口和一次性 Token 已实现并通过 HTTP 单测；待容器浏览器冒烟 |
 | WEBI-06 | 🧪 | P0 | BE/OPS | 只绑定宿主机环回端口并提供 SSH 使用说明 | WEBI-05 | Compose 固定 `127.0.0.1:18080`，脚本输出 SSH 隧道命令，错误 Token 单测为 401；待真实端口扫描 |
 | WEBI-07 | 🧪 | P0 | BE | 自动生成内部 Secret | WEBI-03、WEBI-05 | PostgreSQL、JWT、PII、Metrics Token 已分别用 CSPRNG 生成且不回显；待新服务器权限复核 |
-| WEBI-08 | 🧪 | P0 | BE | 接收并验证微信、支付 V3 和三组 OSS 凭据 | WEBI-03、WEBI-05 | PEM/V3/ID/URL/大小校验与微信、支付签名、私有 OSS 探针已实现；当前仅模拟外部依赖通过，待真实凭据 |
+| WEBI-08 | 🧪 | P0 | BE | 接收并验证微信、支付 V3 和统一 OSS 凭据 | WEBI-03、WEBI-05 | PEM/V3/ID/URL/大小校验、微信支付公钥模式探测和统一私有 OSS 探针已实现；同一 Bucket 以固定前缀服务人社、题库和恢复包，待真实凭据 |
 | WEBI-09 | 🧪 | P0 | BE | 写入白名单 `runtime.env` | WEBI-03、WEBI-08 | 白名单 env 与独立 Secret 文件已实现，NUL/换行/未知键和 Secret 落 env 均有测试；待现场文件复核 |
 | WEBI-10 | 🧪 | P1 | BE | 实现脱敏进度页和当前步骤重试 | WEBI-04、WEBI-05 | 已按签名状态恢复页面并只清除当前失败；待浏览器关闭、宿主重启演练 |
 
@@ -92,7 +92,7 @@
 | ID | 状态 | 优先级 | 负责人 | 任务 | 依赖 | 验收标准 |
 |---|---|---|---|---|---|---|
 | WEBI-22 | 🧪 | P0 | BE | 实现 RSA-OAEP + AES-256-GCM 恢复包 | WEBI-08、WEBI-18 | 混合加密、明文不落盘、RSA 3072+、错钥/篡改/覆盖拒绝测试通过；待生产密钥保管演练 |
-| WEBI-23 | 🧪 | P0 | BE/OPS | 上传独立私有恢复 OSS 并校验 | WEBI-22 | 私有 ACL、独立凭据、对象元数据和 SHA-256 校验已实现并模拟测试；待真实版本化 Bucket |
+| WEBI-23 | 🧪 | P0 | BE/OPS | 上传统一私有 OSS 恢复前缀并校验 | WEBI-22 | 私有 ACL、统一凭据、对象元数据和 SHA-256 校验已实现并模拟测试；待真实版本化 Bucket |
 | WEBI-24 | 🧪 | P0 | BE | 提供离线恢复包解密工具 | WEBI-22 | CLI 显式输出、拒绝覆盖/符号链接、0600 恢复测试通过；待离线主机演练 |
 | WEBI-25 | 🧪 | P0 | OPS | 新增部署 Compose | WEBI-11、WEBI-12、WEBI-21 | Bootstrap 可写、正式 Secret 只读、两端环回且无 Docker Socket；`compose config` 通过，待容器实启 |
 | WEBI-26 | 🧪 | P0 | OPS | 实现 GitHub Release 无源码安装及阶段编排 | WEBI-17 至 WEBI-25 | `install_release.sh`、release source 模式、模板非阻断、镜像导入、阶段续跑和网页重试已实现；待旧构建中断现场续跑 |
@@ -105,7 +105,7 @@
 | WEBI-28 | 🧪 | P0 | BE | 新增部署/UAT 状态、证据和签署模型/API | WEBI-04、WEBI-27 | `deploy001`、十项证据、超级管理员 GET/签署、发布摘要并发确认和 PostgreSQL 不可变触发器已实现；真实迁移往返通过，待全量 UAT 证据 |
 | WEBI-29 | BLOCKED | P0 | Admin | 新增“系统部署与验收”页面 | WEBI-28 | 解除条件：当前会话取得 Admin 仓库写权限；Backend API 已就绪，页面不得查看或修改 Secret |
 | WEBI-30 | TODO | P0 | BE/Admin/PO | 建立隔离 UAT 批次和数据标识 | WEBI-28、WEBI-29 | 不进入正式统计；0.01 元退款完成后归档证据 |
-| WEBI-31 | BLOCKED | P0 | OPS/PO | 真实微信、支付、退款和 OSS UAT | WEBI-27、WEBI-30 | 解除条件：HTTPS 域名、正式小程序版本、测试用户、支付商户和三个私有 Bucket 就绪 |
+| WEBI-31 | BLOCKED | P0 | OPS/PO | 真实微信、支付、退款和 OSS UAT | WEBI-27、WEBI-30 | 解除条件：HTTPS 域名、正式小程序版本、测试用户、支付商户和统一私有 Bucket 就绪 |
 | WEBI-32 | BLOCKED | P0 | OPS/PO | 干净服务器完整安装演练 | WEBI-26、WEBI-27 | 解除条件：提供新服务器/生产等价 VM、外部凭据和 HTTPS 网关；保存全量证据 |
 
 ## 10. 自动化与安全测试
@@ -125,7 +125,7 @@
 - [ ] 外部空库/Redis 门禁以及内置模式均通过。
 - [ ] Backend/Admin 固定 Commit，CI 门禁和四资产 GitHub Release 可追溯、可下载、可校验。
 - [ ] 独立 migration job、生产种子和唯一超级管理员闭合。
-- [ ] 恢复包可离线解密，并已上传独立私有 OSS、校验 SHA-256。
+- [ ] 恢复包可离线解密，并已上传统一私有 OSS 恢复前缀、校验 SHA-256。
 - [ ] 正式 Backend/Admin 只绑定环回地址，Secret 只读且无 Docker Socket。
 - [ ] Admin 验收页和不可跳过签署闭合。
 - [ ] 干净服务器安装演练、真实微信登录、0.01 元支付退款和 OSS UAT 通过。

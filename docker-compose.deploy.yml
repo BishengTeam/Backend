@@ -53,8 +53,8 @@ x-backend-environment: &backend_environment
   QUIZ_IMPORT_STORAGE_TYPE: ${QUIZ_IMPORT_STORAGE_TYPE:-disabled}
   QUIZ_OSS_ENDPOINT: ${QUIZ_OSS_ENDPOINT:-}
   QUIZ_OSS_BUCKET: ${QUIZ_OSS_BUCKET:-}
-  QUIZ_OSS_ACCESS_KEY_ID_FILE: /run/secrets/quiz_oss_access_key_id
-  QUIZ_OSS_ACCESS_KEY_SECRET_FILE: /run/secrets/quiz_oss_access_key_secret
+  QUIZ_OSS_ACCESS_KEY_ID_FILE: /run/secrets/aliyun_oss_access_key_id
+  QUIZ_OSS_ACCESS_KEY_SECRET_FILE: /run/secrets/aliyun_oss_access_key_secret
   QUIZ_OSS_PREFIX: ${QUIZ_OSS_PREFIX:-quiz-imports}
   QUIZ_OSS_SIGNED_URL_TTL_SECONDS: "300"
   QUIZ_WORKER_POLL_SECONDS: ${QUIZ_WORKER_POLL_SECONDS:-5}
@@ -75,8 +75,6 @@ x-backend-secrets: &backend_secrets
   - wechat_pay_public_key
   - aliyun_oss_access_key_id
   - aliyun_oss_access_key_secret
-  - quiz_oss_access_key_id
-  - quiz_oss_access_key_secret
   - quiz_metrics_bearer_token
 
 services:
@@ -216,9 +214,5 @@ secrets:
     file: ${SECRETS_DIR:?SECRETS_DIR is required}/aliyun_oss_access_key_id
   aliyun_oss_access_key_secret:
     file: ${SECRETS_DIR:?SECRETS_DIR is required}/aliyun_oss_access_key_secret
-  quiz_oss_access_key_id:
-    file: ${SECRETS_DIR:?SECRETS_DIR is required}/quiz_oss_access_key_id
-  quiz_oss_access_key_secret:
-    file: ${SECRETS_DIR:?SECRETS_DIR is required}/quiz_oss_access_key_secret
   quiz_metrics_bearer_token:
     file: ${SECRETS_DIR:?SECRETS_DIR is required}/quiz_metrics_bearer_token

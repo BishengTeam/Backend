@@ -80,7 +80,7 @@
               <div>
                 <p class="section-kicker">部署配置</p>
                 <h2>告诉我们这台服务器如何工作</h2>
-                <p class="section-description">带“必填”标记的内容会在提交前校验。三组 OSS 均可暂不配置，相关能力会明确保持停用。</p>
+                <p class="section-description">带“必填”标记的内容会在提交前校验。统一 OSS 可暂不配置，相关能力会明确保持停用。</p>
               </div>
               <span class="form-badge">配置只提交一次</span>
             </div>
@@ -148,53 +148,24 @@
             </fieldset>
 
             <fieldset class="form-section oss-section">
-              <legend><span class="section-number">03</span><span>对象存储<small>三组凭据彼此独立，均可稍后再规划</small></span></legend>
+              <legend><span class="section-number">03</span><span>统一对象存储<small>一套凭据服务所有 OSS 模块</small></span></legend>
               <div class="optional-notice">
                 <div class="optional-icon" aria-hidden="true">◇</div>
-                <div><strong>OSS 现在可以不填</strong><p>每组请完整填写或全部留空。留空不会阻止 Backend 与 Admin 启动，但相应材料、导入或远端恢复能力会显示“未配置”。</p></div>
+                <div><strong>OSS 现在可以不填</strong><p>请完整填写或全部留空。填写后，人社材料、题库导入和远端恢复会复用同一个私有 Bucket 与同一组凭据；留空则这些 OSS 能力显示“未配置”。</p></div>
               </div>
 
               <div class="optional-groups">
-                <section class="optional-group" data-optional-group="renshe">
+                <section class="optional-group" data-optional-group="oss">
                   <div class="optional-group-heading">
-                    <div><span class="capability-dot"></span><h3>人社材料 OSS</h3></div>
+                    <div><span class="capability-dot"></span><h3>阿里云 OSS</h3></div>
                     <span class="optional-badge">可选 · 未配置</span>
                   </div>
-                  <p>用于身份证、学生材料、报名版本和批次导出文件。</p>
+                  <p>同一 Bucket 内使用固定前缀隔离数据：<code>renshe/</code>、<code>quiz-imports/</code>、<code>wemini-recovery/</code>。</p>
                   <div class="field-grid compact-grid">
-                    <label class="field"><span class="field-label">Endpoint</span><input name="renshe_oss_endpoint" type="url" placeholder="https://oss-cn-....aliyuncs.com"></label>
-                    <label class="field"><span class="field-label">Bucket</span><input name="renshe_oss_bucket" placeholder="private-bucket"></label>
-                    <label class="field"><span class="field-label">AccessKey ID</span><input name="renshe_oss_access_key_id" type="password" autocomplete="off"></label>
-                    <label class="field"><span class="field-label">AccessKey Secret</span><input name="renshe_oss_access_key_secret" type="password" autocomplete="off"></label>
-                  </div>
-                </section>
-
-                <section class="optional-group" data-optional-group="quiz">
-                  <div class="optional-group-heading">
-                    <div><span class="capability-dot"></span><h3>题库导入 OSS</h3></div>
-                    <span class="optional-badge">可选 · 未配置</span>
-                  </div>
-                  <p>用于题库批量导入源文件、错误报告和定时清理。</p>
-                  <div class="field-grid compact-grid">
-                    <label class="field"><span class="field-label">Endpoint</span><input name="quiz_oss_endpoint" type="url" placeholder="https://oss-cn-....aliyuncs.com"></label>
-                    <label class="field"><span class="field-label">Bucket</span><input name="quiz_oss_bucket" placeholder="private-bucket"></label>
-                    <label class="field"><span class="field-label">AccessKey ID</span><input name="quiz_oss_access_key_id" type="password" autocomplete="off"></label>
-                    <label class="field"><span class="field-label">AccessKey Secret</span><input name="quiz_oss_access_key_secret" type="password" autocomplete="off"></label>
-                  </div>
-                </section>
-
-                <section class="optional-group" data-optional-group="recovery">
-                  <div class="optional-group-heading">
-                    <div><span class="capability-dot"></span><h3>独立恢复 OSS</h3></div>
-                    <span class="optional-badge">可选 · 未配置</span>
-                  </div>
-                  <p>留空时仍生成本机加密恢复包；填写后会额外上传到独立私有 Bucket。</p>
-                  <div class="field-grid compact-grid">
-                    <label class="field"><span class="field-label">Endpoint</span><input name="recovery_oss_endpoint" type="url" placeholder="https://oss-cn-....aliyuncs.com"></label>
-                    <label class="field"><span class="field-label">Bucket</span><input name="recovery_oss_bucket" placeholder="private-recovery"></label>
-                    <label class="field"><span class="field-label">对象前缀</span><input name="recovery_oss_prefix" value="wemini-recovery" required></label>
-                    <label class="field"><span class="field-label">AccessKey ID</span><input name="recovery_oss_access_key_id" type="password" autocomplete="off"></label>
-                    <label class="field"><span class="field-label">AccessKey Secret</span><input name="recovery_oss_access_key_secret" type="password" autocomplete="off"></label>
+                    <label class="field"><span class="field-label">Endpoint</span><input name="oss_endpoint" type="url" placeholder="https://oss-cn-chengdu.aliyuncs.com"></label>
+                    <label class="field"><span class="field-label">Bucket</span><input name="oss_bucket" placeholder="materials-20260817"></label>
+                    <label class="field"><span class="field-label">AccessKey ID</span><input name="oss_access_key_id" type="password" autocomplete="off"></label>
+                    <label class="field"><span class="field-label">AccessKey Secret</span><input name="oss_access_key_secret" type="password" autocomplete="off"></label>
                     <label class="field file-field"><span class="field-label">恢复 RSA 公钥 PEM <em>必填</em></span><input name="recovery_public_key_file" type="file" accept=".pem" required><small>不属于 OSS 凭据；用于加密本机或远端恢复包，RSA 3072+</small></label>
                   </div>
                 </section>

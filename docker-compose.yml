@@ -104,8 +104,8 @@ services:
       - QUIZ_IMPORT_STORAGE_TYPE=aliyun_oss
       - QUIZ_OSS_ENDPOINT=${QUIZ_OSS_ENDPOINT:?QUIZ_OSS_ENDPOINT is required}
       - QUIZ_OSS_BUCKET=${QUIZ_OSS_BUCKET:?QUIZ_OSS_BUCKET is required}
-      - QUIZ_OSS_ACCESS_KEY_ID_FILE=/run/secrets/quiz_oss_access_key_id
-      - QUIZ_OSS_ACCESS_KEY_SECRET_FILE=/run/secrets/quiz_oss_access_key_secret
+      - QUIZ_OSS_ACCESS_KEY_ID_FILE=/run/secrets/aliyun_oss_access_key_id
+      - QUIZ_OSS_ACCESS_KEY_SECRET_FILE=/run/secrets/aliyun_oss_access_key_secret
       - QUIZ_OSS_PREFIX=${QUIZ_OSS_PREFIX:-quiz-imports}
       - QUIZ_OSS_SIGNED_URL_TTL_SECONDS=300
       - QUIZ_WORKER_POLL_SECONDS=${QUIZ_WORKER_POLL_SECONDS:-5}
@@ -124,8 +124,6 @@ services:
       - source: wechat_pay_public_key
       - source: aliyun_oss_access_key_id
       - source: aliyun_oss_access_key_secret
-      - source: quiz_oss_access_key_id
-      - source: quiz_oss_access_key_secret
       - source: quiz_metrics_bearer_token
     volumes:
       - uploads:/app/uploads
@@ -177,8 +175,8 @@ services:
       - QUIZ_IMPORT_STORAGE_TYPE=aliyun_oss
       - QUIZ_OSS_ENDPOINT=${QUIZ_OSS_ENDPOINT:?QUIZ_OSS_ENDPOINT is required}
       - QUIZ_OSS_BUCKET=${QUIZ_OSS_BUCKET:?QUIZ_OSS_BUCKET is required}
-      - QUIZ_OSS_ACCESS_KEY_ID_FILE=/run/secrets/quiz_oss_access_key_id
-      - QUIZ_OSS_ACCESS_KEY_SECRET_FILE=/run/secrets/quiz_oss_access_key_secret
+      - QUIZ_OSS_ACCESS_KEY_ID_FILE=/run/secrets/aliyun_oss_access_key_id
+      - QUIZ_OSS_ACCESS_KEY_SECRET_FILE=/run/secrets/aliyun_oss_access_key_secret
       - QUIZ_OSS_PREFIX=${QUIZ_OSS_PREFIX:-quiz-imports}
       - QUIZ_OSS_SIGNED_URL_TTL_SECONDS=300
       - QUIZ_WORKER_POLL_SECONDS=${QUIZ_WORKER_POLL_SECONDS:-5}
@@ -269,9 +267,5 @@ secrets:
     file: ${SECRETS_DIR:?SECRETS_DIR is required}/aliyun_oss_access_key_id
   aliyun_oss_access_key_secret:
     file: ${SECRETS_DIR:?SECRETS_DIR is required}/aliyun_oss_access_key_secret
-  quiz_oss_access_key_id:
-    file: ${SECRETS_DIR:?SECRETS_DIR is required}/quiz_oss_access_key_id
-  quiz_oss_access_key_secret:
-    file: ${SECRETS_DIR:?SECRETS_DIR is required}/quiz_oss_access_key_secret
   quiz_metrics_bearer_token:
     file: ${SECRETS_DIR:?SECRETS_DIR is required}/quiz_metrics_bearer_token

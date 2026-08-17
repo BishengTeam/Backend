@@ -36,19 +36,10 @@ def web_payload():
         "wechat_pay_api_v3_key": "v" * 32,
         "wechat_pay_public_key_pem": payment.public_key().export_key().decode(),
         "wechat_pay_public_key_id": "PUB_KEY_ID_0111",
-        "renshe_oss_endpoint": "https://oss-cn-hangzhou.aliyuncs.com",
-        "renshe_oss_bucket": "renshe-private",
-        "renshe_oss_access_key_id": "renshe-id",
-        "renshe_oss_access_key_secret": "renshe-secret",
-        "quiz_oss_endpoint": "https://oss-cn-hangzhou.aliyuncs.com",
-        "quiz_oss_bucket": "quiz-private",
-        "quiz_oss_access_key_id": "quiz-id",
-        "quiz_oss_access_key_secret": "quiz-secret",
-        "recovery_oss_endpoint": "https://oss-cn-shanghai.aliyuncs.com",
-        "recovery_oss_bucket": "recovery-private",
-        "recovery_oss_prefix": "wemini-recovery",
-        "recovery_oss_access_key_id": "recovery-id",
-        "recovery_oss_access_key_secret": "recovery-secret",
+        "oss_endpoint": "https://oss-cn-hangzhou.aliyuncs.com",
+        "oss_bucket": "shared-private",
+        "oss_access_key_id": "shared-id",
+        "oss_access_key_secret": "shared-secret",
         "recovery_public_key_pem": recovery.public_key().export_key().decode(),
     }
 
@@ -94,25 +85,18 @@ def test_health_and_static_page_have_security_headers(tmp_path):
     assert "default-src 'none'" in page.headers["content-security-policy"]
 
     for name in (
-        "renshe_oss_endpoint",
-        "renshe_oss_bucket",
-        "renshe_oss_access_key_id",
-        "renshe_oss_access_key_secret",
-        "quiz_oss_endpoint",
-        "quiz_oss_bucket",
-        "quiz_oss_access_key_id",
-        "quiz_oss_access_key_secret",
-        "recovery_oss_endpoint",
-        "recovery_oss_bucket",
-        "recovery_oss_access_key_id",
-        "recovery_oss_access_key_secret",
+        "oss_endpoint",
+        "oss_bucket",
+        "oss_access_key_id",
+        "oss_access_key_secret",
     ):
         tag = re.search(rf'<input name="{name}"[^>]*>', page.text)
         assert tag is not None
         assert "required" not in tag.group(0)
-    assert 'data-optional-group="renshe"' in page.text
-    assert 'data-optional-group="quiz"' in page.text
-    assert 'data-optional-group="recovery"' in page.text
+    assert 'data-optional-group="oss"' in page.text
+    assert 'data-optional-group="renshe"' not in page.text
+    assert 'data-optional-group="quiz"' not in page.text
+    assert 'data-optional-group="recovery"' not in page.text
 
 
 def test_api_requires_exact_bearer_token(tmp_path):
@@ -157,26 +141,13 @@ def test_configuration_commits_once_without_echoing_secrets(tmp_path, web_payloa
     ]
 
 
-def test_configuration_accepts_all_three_oss_groups_as_unconfigured(
+def test_configuration_accepts_unified_oss_as_unconfigured(
     tmp_path,
     web_payload,
 ):
     client, token = _client(tmp_path)
     payload = dict(web_payload)
-    for name in (
-        "renshe_oss_endpoint",
-        "renshe_oss_bucket",
-        "renshe_oss_access_key_id",
-        "renshe_oss_access_key_secret",
-        "quiz_oss_endpoint",
-        "quiz_oss_bucket",
-        "quiz_oss_access_key_id",
-        "quiz_oss_access_key_secret",
-        "recovery_oss_endpoint",
-        "recovery_oss_bucket",
-        "recovery_oss_access_key_id",
-        "recovery_oss_access_key_secret",
-    ):
+    for name in ("oss_endpoint", "oss_bucket", "oss_access_key_id", "oss_access_key_secret"):
         payload[name] = None
 
     response = client.post(

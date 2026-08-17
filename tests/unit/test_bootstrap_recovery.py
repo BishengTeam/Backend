@@ -31,17 +31,17 @@ def _installation(tmp_path, recovery_key, *, recovery_oss=True):
     (control_dir / "release-manifest.json").chmod(0o600)
     runtime = {
         "RECOVERY_OSS_ENDPOINT": (
-            "https://oss-cn-shanghai.aliyuncs.com" if recovery_oss else ""
+            "https://oss-cn-chengdu.aliyuncs.com" if recovery_oss else ""
         ),
-        "RECOVERY_OSS_BUCKET": "recovery-private" if recovery_oss else "",
+        "RECOVERY_OSS_BUCKET": "materials-20260817" if recovery_oss else "",
         "RECOVERY_OSS_PREFIX": "wemini-recovery",
     }
     secrets_payload = {
         "jwt_secret": b"j" * 64,
         "pii_hash_key": b"p" * 64,
-        "recovery_oss_access_key_id": b"recovery-id" if recovery_oss else b"",
-        "recovery_oss_access_key_secret": (
-            b"recovery-secret" if recovery_oss else b""
+        "aliyun_oss_access_key_id": b"shared-id" if recovery_oss else b"",
+        "aliyun_oss_access_key_secret": (
+            b"shared-secret" if recovery_oss else b""
         ),
     }
     signing_key = b"s" * 64
@@ -65,7 +65,7 @@ def test_recovery_round_trip_and_private_restore_permissions(tmp_path):
         signing_key=signing_key,
     )
     assert len(digest) == 64
-    assert b"recovery-secret" not in envelope
+    assert b"shared-secret" not in envelope
     payload = decrypt_recovery_envelope(envelope, recovery_key.export_key())
     assert payload["installation_id"] == "installation-123"
     assert base64.b64decode(payload["files"]["secrets/pii_hash_key"]) == b"p" * 64
@@ -161,7 +161,10 @@ def test_recovery_upload_requires_private_bucket_and_verifies_metadata(tmp_path)
     )
     assert object_key.startswith("wemini-recovery/installation-123/")
     assert bucket.objects[object_key] == envelope
-    assert captured["access_secret"] == "recovery-secret"
+    assert captured["access_id"] == "shared-id"
+    assert captured["access_secret"] == "shared-secret"
+    assert captured["endpoint"] == "https://oss-cn-chengdu.aliyuncs.com"
+    assert captured["bucket_name"] == "materials-20260817"
     assert bucket.metadata[object_key]["x-oss-meta-sha256"] == digest
 
     with pytest.raises(RecoveryBundleError, match="must be private"):

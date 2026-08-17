@@ -48,19 +48,10 @@ def configure_payload(rsa_materials, **overrides):
         "wechat_pay_api_v3_key": "a" * 32,
         "wechat_pay_public_key_pem": rsa_materials["payment_public"],
         "wechat_pay_public_key_id": "PUB_KEY_ID_0111",
-        "renshe_oss_endpoint": "https://oss-cn-hangzhou.aliyuncs.com",
-        "renshe_oss_bucket": "renshe-private",
-        "renshe_oss_access_key_id": "renshe-id",
-        "renshe_oss_access_key_secret": "renshe-secret",
-        "quiz_oss_endpoint": "https://oss-cn-hangzhou.aliyuncs.com",
-        "quiz_oss_bucket": "quiz-private",
-        "quiz_oss_access_key_id": "quiz-id",
-        "quiz_oss_access_key_secret": "quiz-secret",
-        "recovery_oss_endpoint": "https://oss-cn-shanghai.aliyuncs.com",
-        "recovery_oss_bucket": "recovery-private",
-        "recovery_oss_prefix": "wemini-recovery",
-        "recovery_oss_access_key_id": "recovery-id",
-        "recovery_oss_access_key_secret": "recovery-secret",
+        "oss_endpoint": "https://oss-cn-hangzhou.aliyuncs.com",
+        "oss_bucket": "shared-private",
+        "oss_access_key_id": "shared-id",
+        "oss_access_key_secret": "shared-secret",
         "recovery_public_key_pem": rsa_materials["recovery_public"],
     }
     payload.update(overrides)
@@ -81,6 +72,17 @@ def test_build_internal_payload_generates_separate_secrets(rsa_materials, tmp_pa
     assert runtime["RUN_MIGRATIONS"] == "false"
     assert runtime["DB_HOST"] == "db"
     assert runtime["WECHAT_PAY_NOTIFY_URL"].startswith("https://api.example.com/")
+    assert runtime["ALIYUN_OSS_ENDPOINT"] == "https://oss-cn-hangzhou.aliyuncs.com"
+    assert runtime["ALIYUN_OSS_BUCKET"] == "shared-private"
+    assert runtime["QUIZ_OSS_ENDPOINT"] == runtime["ALIYUN_OSS_ENDPOINT"]
+    assert runtime["QUIZ_OSS_BUCKET"] == runtime["ALIYUN_OSS_BUCKET"]
+    assert runtime["RECOVERY_OSS_ENDPOINT"] == runtime["ALIYUN_OSS_ENDPOINT"]
+    assert runtime["RECOVERY_OSS_BUCKET"] == runtime["ALIYUN_OSS_BUCKET"]
+    assert runtime["RECOVERY_OSS_PREFIX"] == "wemini-recovery"
+    assert first["aliyun_oss_access_key_id"] == b"shared-id"
+    assert first["aliyun_oss_access_key_secret"] == b"shared-secret"
+    assert "quiz_oss_access_key_id" not in first
+    assert "recovery_oss_access_key_id" not in first
     assert "wechat-secret" not in json.dumps(runtime)
     assert RSA.import_key(recovery_key).has_private() is False
 
@@ -107,25 +109,17 @@ def test_external_mode_keeps_credentials_out_of_runtime(rsa_materials, tmp_path)
     assert "db-password" not in json.dumps(runtime)
 
 
-def test_all_oss_groups_can_be_omitted_without_enabling_local_fallback(
+def test_oss_can_be_omitted_without_enabling_local_fallback(
     rsa_materials,
     tmp_path,
 ):
     omitted = {
         name: None
         for name in (
-            "renshe_oss_endpoint",
-            "renshe_oss_bucket",
-            "renshe_oss_access_key_id",
-            "renshe_oss_access_key_secret",
-            "quiz_oss_endpoint",
-            "quiz_oss_bucket",
-            "quiz_oss_access_key_id",
-            "quiz_oss_access_key_secret",
-            "recovery_oss_endpoint",
-            "recovery_oss_bucket",
-            "recovery_oss_access_key_id",
-            "recovery_oss_access_key_secret",
+            "oss_endpoint",
+            "oss_bucket",
+            "oss_access_key_id",
+            "oss_access_key_secret",
         )
     }
     request = BootstrapConfigureRequest.model_validate(
@@ -143,8 +137,6 @@ def test_all_oss_groups_can_be_omitted_without_enabling_local_fallback(
     assert runtime["QUIZ_OSS_ENDPOINT"] == ""
     assert runtime["RECOVERY_OSS_ENDPOINT"] == ""
     assert secret_files["aliyun_oss_access_key_id"] == b""
-    assert secret_files["quiz_oss_access_key_secret"] == b""
-    assert secret_files["recovery_oss_access_key_id"] == b""
 
     os.chmod(tmp_path, 0o700)
     store = InstallationStore(tmp_path / "installation", b"o" * 64)
@@ -157,13 +149,12 @@ def test_all_oss_groups_can_be_omitted_without_enabling_local_fallback(
     assert store.verify_existing("optional-oss")
 
 
-@pytest.mark.parametrize("group", ("renshe", "quiz", "recovery"))
-def test_each_optional_oss_group_rejects_partial_credentials(rsa_materials, group):
-    with pytest.raises(ValidationError, match=rf"{group}_oss.*fully configured"):
+def test_optional_oss_rejects_partial_credentials(rsa_materials):
+    with pytest.raises(ValidationError, match=r"oss must be fully configured"):
         BootstrapConfigureRequest.model_validate(
             configure_payload(
                 rsa_materials,
-                **{f"{group}_oss_endpoint": ""},
+                oss_endpoint="",
             )
         )
 

@@ -40,19 +40,10 @@ def _request():
             "wechat_pay_api_v3_key": "v" * 32,
             "wechat_pay_public_key_pem": payment.public_key().export_key().decode(),
             "wechat_pay_public_key_id": "PUB_KEY_ID_TEST",
-            "renshe_oss_endpoint": "https://oss-cn-hangzhou.aliyuncs.com",
-            "renshe_oss_bucket": "renshe-private",
-            "renshe_oss_access_key_id": "renshe-id",
-            "renshe_oss_access_key_secret": "renshe-secret",
-            "quiz_oss_endpoint": "https://oss-cn-hangzhou.aliyuncs.com",
-            "quiz_oss_bucket": "quiz-private",
-            "quiz_oss_access_key_id": "quiz-id",
-            "quiz_oss_access_key_secret": "quiz-secret",
-            "recovery_oss_endpoint": "https://oss-cn-shanghai.aliyuncs.com",
-            "recovery_oss_bucket": "recovery-private",
-            "recovery_oss_prefix": "wemini-recovery",
-            "recovery_oss_access_key_id": "recovery-id",
-            "recovery_oss_access_key_secret": "recovery-secret",
+            "oss_endpoint": "https://oss-cn-hangzhou.aliyuncs.com",
+            "oss_bucket": "shared-private",
+            "oss_access_key_id": "shared-id",
+            "oss_access_key_secret": "shared-secret",
             "recovery_public_key_pem": recovery.public_key().export_key().decode(),
         }
     )
@@ -175,8 +166,10 @@ async def test_external_probe_validates_signed_payment_and_private_oss():
         return client
 
     buckets = []
+    bucket_arguments = []
 
-    def bucket_factory(*_args):
+    def bucket_factory(*args):
+        bucket_arguments.append(args)
         bucket = _Bucket("install-1")
         buckets.append(bucket)
         return bucket
@@ -188,10 +181,19 @@ async def test_external_probe_validates_signed_payment_and_private_oss():
         bucket_factory=bucket_factory,
     )
     assert report.public_dict()["wechat_pay"] == "ok"
-    assert len(buckets) == 3
+    assert report.public_dict()["renshe_oss"] == "ok"
+    assert report.public_dict()["quiz_oss"] == "ok"
+    assert report.public_dict()["recovery_oss"] == "private_and_reachable"
+    assert len(buckets) == 1
     assert len(buckets[0].deleted) == 1
-    assert len(buckets[1].deleted) == 1
-    assert buckets[2].deleted == []
+    assert bucket_arguments == [
+        (
+            "shared-id",
+            "shared-secret",
+            "https://oss-cn-hangzhou.aliyuncs.com",
+            "shared-private",
+        )
+    ]
     payment_headers = clients[1].request[1]["headers"]
     assert payment_headers["Authorization"].startswith("WECHATPAY2-SHA256-RSA2048")
 
@@ -336,30 +338,22 @@ async def test_external_probe_rejects_public_bucket_without_exposing_credentials
             client_factory=lambda: _FakeAsyncClient(next(responses)),
             bucket_factory=bucket_factory,
         )
-    assert error.value.component == "renshe_oss"
+    assert error.value.component == "oss"
     assert error.value.code == "bucket_not_private"
     assert "renshe-secret" not in str(error.value)
 
 
 @pytest.mark.asyncio
-async def test_external_probe_skips_each_omitted_optional_oss_group(monkeypatch):
+async def test_external_probe_skips_omitted_optional_oss(monkeypatch):
     request, _ = _request()
     request = request.model_copy(
         update={
             name: None
             for name in (
-                "renshe_oss_endpoint",
-                "renshe_oss_bucket",
-                "renshe_oss_access_key_id",
-                "renshe_oss_access_key_secret",
-                "quiz_oss_endpoint",
-                "quiz_oss_bucket",
-                "quiz_oss_access_key_id",
-                "quiz_oss_access_key_secret",
-                "recovery_oss_endpoint",
-                "recovery_oss_bucket",
-                "recovery_oss_access_key_id",
-                "recovery_oss_access_key_secret",
+                "oss_endpoint",
+                "oss_bucket",
+                "oss_access_key_id",
+                "oss_access_key_secret",
             )
         }
     )

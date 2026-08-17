@@ -25,10 +25,6 @@ OPTIONAL_EMPTY_SECRET_FILES = frozenset(
     {
         "aliyun_oss_access_key_id",
         "aliyun_oss_access_key_secret",
-        "quiz_oss_access_key_id",
-        "quiz_oss_access_key_secret",
-        "recovery_oss_access_key_id",
-        "recovery_oss_access_key_secret",
     }
 )
 
@@ -128,22 +124,10 @@ def build_installation_payload(
     scalar_secret_fields = {
         "wechat_secret": _secret_value(request.wechat_secret),
         "aliyun_oss_access_key_id": _optional_secret_value(
-            request.renshe_oss_access_key_id
+            request.oss_access_key_id
         ),
         "aliyun_oss_access_key_secret": _optional_secret_value(
-            request.renshe_oss_access_key_secret
-        ),
-        "quiz_oss_access_key_id": _optional_secret_value(
-            request.quiz_oss_access_key_id
-        ),
-        "quiz_oss_access_key_secret": _optional_secret_value(
-            request.quiz_oss_access_key_secret
-        ),
-        "recovery_oss_access_key_id": _optional_secret_value(
-            request.recovery_oss_access_key_id
-        ),
-        "recovery_oss_access_key_secret": _optional_secret_value(
-            request.recovery_oss_access_key_secret
+            request.oss_access_key_secret
         ),
     }
     for name, value in scalar_secret_fields.items():
@@ -189,18 +173,6 @@ def build_installation_payload(
         "aliyun_oss_access_key_secret": scalar_secret_fields[
             "aliyun_oss_access_key_secret"
         ].encode("utf-8"),
-        "quiz_oss_access_key_id": scalar_secret_fields[
-            "quiz_oss_access_key_id"
-        ].encode("utf-8"),
-        "quiz_oss_access_key_secret": scalar_secret_fields[
-            "quiz_oss_access_key_secret"
-        ].encode("utf-8"),
-        "recovery_oss_access_key_id": scalar_secret_fields[
-            "recovery_oss_access_key_id"
-        ].encode("utf-8"),
-        "recovery_oss_access_key_secret": scalar_secret_fields[
-            "recovery_oss_access_key_secret"
-        ].encode("utf-8"),
     }
     secrets_dir = host_deploy_root / "installation" / "secrets"
     runtime = {
@@ -229,18 +201,18 @@ def build_installation_payload(
         "WECHAT_PAY_CERT_SERIAL_NO": request.wechat_pay_cert_serial_no,
         "WECHAT_PAY_PUBLIC_KEY_ID": request.wechat_pay_public_key_id,
         "RENSHE_STORAGE_TYPE": (
-            "aliyun_oss" if request.has_renshe_oss() else "disabled"
+            "aliyun_oss" if request.has_oss() else "disabled"
         ),
-        "ALIYUN_OSS_ENDPOINT": request.renshe_oss_endpoint or "",
-        "ALIYUN_OSS_BUCKET": request.renshe_oss_bucket or "",
+        "ALIYUN_OSS_ENDPOINT": request.oss_endpoint or "",
+        "ALIYUN_OSS_BUCKET": request.oss_bucket or "",
         "QUIZ_IMPORT_STORAGE_TYPE": (
-            "aliyun_oss" if request.has_quiz_oss() else "disabled"
+            "aliyun_oss" if request.has_oss() else "disabled"
         ),
-        "QUIZ_OSS_ENDPOINT": request.quiz_oss_endpoint or "",
-        "QUIZ_OSS_BUCKET": request.quiz_oss_bucket or "",
-        "RECOVERY_OSS_ENDPOINT": request.recovery_oss_endpoint or "",
-        "RECOVERY_OSS_BUCKET": request.recovery_oss_bucket or "",
-        "RECOVERY_OSS_PREFIX": request.recovery_oss_prefix,
+        "QUIZ_OSS_ENDPOINT": request.oss_endpoint or "",
+        "QUIZ_OSS_BUCKET": request.oss_bucket or "",
+        "RECOVERY_OSS_ENDPOINT": request.oss_endpoint or "",
+        "RECOVERY_OSS_BUCKET": request.oss_bucket or "",
+        "RECOVERY_OSS_PREFIX": "wemini-recovery",
         "API_ORIGIN": request.api_origin,
         "ADMIN_ORIGIN": request.admin_origin,
         "CORS_ORIGINS": json.dumps([request.admin_origin], separators=(",", ":")),

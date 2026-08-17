@@ -29,19 +29,9 @@
 
   const optionalGroups = [
     {
-      element: document.querySelector('[data-optional-group="renshe"]'),
-      label: '人社材料 OSS',
-      names: ['renshe_oss_endpoint', 'renshe_oss_bucket', 'renshe_oss_access_key_id', 'renshe_oss_access_key_secret']
-    },
-    {
-      element: document.querySelector('[data-optional-group="quiz"]'),
-      label: '题库导入 OSS',
-      names: ['quiz_oss_endpoint', 'quiz_oss_bucket', 'quiz_oss_access_key_id', 'quiz_oss_access_key_secret']
-    },
-    {
-      element: document.querySelector('[data-optional-group="recovery"]'),
-      label: '独立恢复 OSS',
-      names: ['recovery_oss_endpoint', 'recovery_oss_bucket', 'recovery_oss_access_key_id', 'recovery_oss_access_key_secret']
+      element: document.querySelector('[data-optional-group="oss"]'),
+      label: '阿里云 OSS',
+      names: ['oss_endpoint', 'oss_bucket', 'oss_access_key_id', 'oss_access_key_secret']
     }
   ]
 
