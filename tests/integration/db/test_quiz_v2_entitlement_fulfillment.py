@@ -34,7 +34,13 @@ async def test_course_settlement_entitlement_is_idempotent_and_refund_scoped() -
     prefix = f"qful_{uuid4().hex[:10]}"
     async with factory() as db:
         user = User(openid=f"{prefix}_user")
-        course = Course(title=f"{prefix}课程", category="test", price=100)
+        course = Course(
+            title=f"{prefix}课程",
+            category="test",
+            price=100,
+            status="published",
+            is_active=True,
+        )
         db.add_all([user, course])
         await db.flush()
         order = Order(

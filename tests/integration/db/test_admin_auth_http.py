@@ -27,7 +27,7 @@ def _make_admin_token(
 
 
 @pytest.fixture
-async def test_client():
+async def test_client(monkeypatch):
     """Fixtures a FastAPI TestClient wired to the real test database."""
     from app.adapter.database import get_db
 
@@ -41,6 +41,16 @@ async def test_client():
 
     # Build app without lifespan (no Redis / background tasks)
     from app.main import app
+    async def token_is_not_revoked(_token: str) -> bool:
+        return False
+
+    # Administrator revocation is authoritative and intentionally fails closed
+    # when Redis is unavailable.  This HTTP contract test has no Redis service,
+    # so provide the same explicit non-revoked store stub used by the other
+    # admin HTTP integration fixtures.
+    monkeypatch.setattr(
+        "app.middleware.auth.is_token_revoked", token_is_not_revoked
+    )
     app.dependency_overrides[get_db] = _override_get_db
 
     transport = ASGITransport(app=app)

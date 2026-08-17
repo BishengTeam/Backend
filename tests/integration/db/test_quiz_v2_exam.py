@@ -138,6 +138,7 @@ async def quiz_v2_exam_env(monkeypatch):
             title=f"{prefix}课程",
             category="test",
             price=100,
+            status="published",
             is_active=True,
         )
         db.add_all([admin, free_user, entitled_user, hidden_user, course])
