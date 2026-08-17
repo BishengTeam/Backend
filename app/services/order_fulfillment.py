@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.certification.src.index import CourseEnrollment
+from app.domain.certification.src.index import Course
 from app.domain.order.src.index import Order
 from app.domain.community.src.index import (
     QuizCourseLibraryBinding,
@@ -165,6 +166,9 @@ class OrderFulfillmentService:
             return False
         if enrollment is None:
             raise ConflictException("课程订单缺少报名记录，无法开通学习权限")
+        course = await db.get(Course, enrollment.course_id)
+        if course is None or course.status != "published":
+            raise ConflictException("课程已下线，无法开通学习权限")
         if enrollment.status in {"enrolled", "completed"} and enrollment.learning_access:
             return await self._grant_quiz_entitlements(db, order, enrollment)
         if enrollment.status in {"refunded", "cancelled", "expired"}:

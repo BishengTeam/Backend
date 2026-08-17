@@ -19,6 +19,7 @@ from sqlalchemy.exc import DBAPIError
 
 from bootstrap_app.models import BootstrapAdminRequest
 from bootstrap_app.runtime import create_initial_super_admin
+from scripts.seed_production import COURSE_REQUIRED_TABLES
 
 
 pytestmark = pytest.mark.integration_db
@@ -161,8 +162,10 @@ def test_initial_admin_is_concurrent_idempotent_and_seed_repeats_cleanly(
 
     assert outputs[0]["created_certifications"] == 4
     assert outputs[0]["created_prices"] == 8
+    assert outputs[0]["course_domain_ready"] is True
     assert outputs[1]["created_certifications"] == 0
     assert outputs[1]["created_prices"] == 0
+    assert outputs[1]["course_domain_ready"] is True
 
     engine = create_engine(sync_url)
     with engine.connect() as connection:
@@ -193,4 +196,9 @@ def test_initial_admin_is_concurrent_idempotent_and_seed_repeats_cleanly(
         ) == 1
         assert connection.scalar(text("SELECT count(*) FROM certification")) == 4
         assert connection.scalar(text("SELECT count(*) FROM price_config")) == 8
+        for table_name in COURSE_REQUIRED_TABLES:
+            assert connection.scalar(
+                text("SELECT to_regclass(:qualified_name) IS NOT NULL"),
+                {"qualified_name": f"public.{table_name}"},
+            )
     engine.dispose()

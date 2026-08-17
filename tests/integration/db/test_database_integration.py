@@ -322,7 +322,13 @@ class TestOrderCRUD:
 class TestCourseCRUD:
     async def test_create_and_read(self, db_session):
         from app.domain.certification.src.index import Course
-        course = Course(title="测试课程", category="网络", price=9900)
+        course = Course(
+            title="测试课程",
+            category="网络",
+            price=9900,
+            status="published",
+            is_active=True,
+        )
         db_session.add(course)
         await db_session.flush()
         assert course.is_active is True
@@ -335,13 +341,18 @@ class TestCourseCRUD:
         user = User(openid="enroll_user")
         db_session.add(user)
         await db_session.flush()
-        course = Course(title="报名课程", category="安全", price=19900)
+        course = Course(
+            title="报名课程",
+            category="安全",
+            price=19900,
+            status="published",
+            is_active=True,
+        )
         db_session.add(course)
         await db_session.flush()
         enrollment = CourseEnrollment(
             user_id=user.id,
             course_id=course.id,
-            batch_selected="2026春季",
             status="enrolled",
             learning_access=True,
         )

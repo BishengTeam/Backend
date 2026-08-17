@@ -60,6 +60,9 @@ class _FakeDB:
     async def commit(self):
         self.commits += 1
 
+    async def refresh(self, _instance):
+        return None
+
 
 def _db_context(db):
     @asynccontextmanager
@@ -235,7 +238,7 @@ async def test_admin_auth_version_and_session_mode_are_checked(monkeypatch):
 
 def test_admin_account_schemas_normalize_and_reject_legacy_credentials():
     created = AdminSettingsUserCreate(
-        username="  Quiz.Operator  ", display_name="  题库运营  "
+        username="  Quiz.Operator  ", display_name="  题库运营  ", role="quiz_admin"
     )
     assert created.username == "quiz.operator"
     assert created.display_name == "题库运营"

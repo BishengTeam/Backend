@@ -193,11 +193,18 @@ class AdminBatch3SystemTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             model(username="legacy", display_name="测试管理员", role="super_admin")
 
-    def test_admin_settings_user_create_does_not_accept_role_or_password(self):
+    def test_admin_settings_user_create_selects_a_non_super_role_and_rejects_password(self):
         schema = importlib.import_module("app.schemas.admin_settings")
         model = getattr(schema, "AdminSettingsUserCreate", None)
         fields = _field_names(model)
-        self.assertEqual(fields, {"username", "display_name"})
+        self.assertEqual(fields, {"username", "display_name", "role"})
+        instance = model(
+            username="testuser",
+            display_name="测试管理员",
+            role="quiz_admin",
+        )
+        self.assertEqual(instance.role, "quiz_admin")
+        self.assertEqual(model(username="testuser", display_name="测试管理员").role, "quiz_admin")
         with self.assertRaises(ValidationError):
             model(
                 username="testuser",

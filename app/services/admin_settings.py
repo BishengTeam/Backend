@@ -172,7 +172,7 @@ class AdminSettingsService:
                 username=data.username,
                 display_name=data.display_name,
                 password_hash=password_hash,
-                role="quiz_admin",
+                role=data.role,
                 is_active=True,
                 must_change_password=True,
                 auth_version=1,
@@ -191,12 +191,12 @@ class AdminSettingsService:
                 db,
                 action="admin_account.create",
                 result="succeeded",
-                reason_code="quiz_admin_created",
+                reason_code=f"{data.role}_created",
                 actor_admin_id=actor_id,
                 target_admin_id=admin.id,
                 username=admin.username,
                 context=context,
-                summary={"role": "quiz_admin"},
+                summary={"role": data.role},
                 idempotency_key=idempotency_key,
             )
             await db.commit()

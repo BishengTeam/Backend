@@ -83,7 +83,7 @@ async def list_admins(
 @router.post(
     "/admins",
     response_model=APIResponse[AdminSettingsTemporaryPasswordResponse],
-    summary="新增题库管理员",
+    summary="新增管理员",
     **admin_error_contract(
         "40001", "40100", "40101", "40200", "40201", "50000"
     ),

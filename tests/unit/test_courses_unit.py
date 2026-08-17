@@ -232,61 +232,25 @@ class CoursesSystemTests(unittest.TestCase):
             CourseListResponse(id=1)
 
     def test_course_detail_response_has_expected_fields(self):
-        r = CourseDetailResponse(id=1, title="课程A", category="网络", price=9900)
+        r = CourseDetailResponse(
+            id=1, title="课程A", category="网络", price=9900, status="published"
+        )
         self.assertFalse(hasattr(r, "video_url"))
         self.assertFalse(hasattr(r, "teacher_contact"))
-        self.assertEqual(r.batches, None)
+        self.assertFalse(hasattr(r, "batches"))
         self.assertEqual(r.included_quiz_libraries, [])
 
-    def test_course_detail_response_normalizes_empty_list_batches(self):
-        """历史数据可能把空班次存成 []，应自动转成 {} 避免校验失败。"""
-        r = CourseDetailResponse(id=1, title="课程A", category="网络", price=9900, batches=[])
-        self.assertEqual(r.batches, {})
-
-    def test_admin_course_create_rejects_list_batches(self):
+    def test_admin_course_create_rejects_batches(self):
         from app.schemas.admin_course import AdminCourseCreate
         with self.assertRaises(ValidationError):
             AdminCourseCreate(title="课程A", category="网络", price=9900, batches=[])
 
-    def test_admin_course_create_accepts_schedule_dict(self):
+    def test_admin_course_create_allows_free_online_course(self):
         from app.schemas.admin_course import AdminCourseCreate
 
-        course = AdminCourseCreate(
-            title="课程A",
-            category="网络",
-            price=0,
-            batches={
-                "550e8400-e29b-41d4-a716-446655440000": {
-                    "class_date": "2026-09-01",
-                    "start_time": "09:00",
-                    "end_time": "12:00",
-                    "location": "线上",
-                }
-            },
-        )
-
-        self.assertEqual(
-            course.batches["550e8400-e29b-41d4-a716-446655440000"].location,
-            "线上",
-        )
-
-    def test_admin_course_create_rejects_schedule_price(self):
-        from app.schemas.admin_course import AdminCourseCreate
-
-        with self.assertRaises(ValidationError):
-            AdminCourseCreate(
-                title="课程A",
-                category="网络",
-                price=0,
-                batches={
-                    "550e8400-e29b-41d4-a716-446655440000": {
-                        "class_date": "2026-09-01",
-                        "start_time": "09:00",
-                        "end_time": "12:00",
-                        "price": 100,
-                    }
-                },
-            )
+        course = AdminCourseCreate(title="课程A", category="网络", price=0)
+        self.assertEqual(course.price, 0)
+        self.assertFalse(hasattr(course, "batches"))
 
     def test_course_purchase_response_matches_unified_contract(self):
         response = CoursePurchaseResponse(

@@ -2,10 +2,11 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.orm import joinedload
 
 from app.adapter.database import get_db_ctx
-from app.port.exceptions import NotFoundException
+from app.port.exceptions import ForbiddenException, NotFoundException
 from app.domain.certification.src.index import (
     Course,
     CourseAsset,
+    CourseCategory,
     CourseChapter,
     CourseEnrollment,
     UserChapterProgress,
@@ -25,17 +26,32 @@ from app.schemas.course import (
     CourseFilter,
     CourseListResponse,
     CourseQuizLibrarySummary,
+    CourseQuizModuleSummary,
 )
+from app.services.course_entitlement import CourseEntitlementService
 from app.services.course_purchase import CoursePurchaseService
 
 
 class CourseService:
+    @staticmethod
+    def _public_chapter(chapter: CourseChapter) -> ChapterResponse:
+        return ChapterResponse(
+            id=chapter.id,
+            title=chapter.title,
+            video_url=chapter.video_url,
+            video_source_type=chapter.video_source_type,
+            video_storage_key=None,
+            duration=chapter.duration,
+            sort_order=chapter.sort_order,
+            is_preview=chapter.is_preview,
+        )
+
 
     async def list_courses(
         self, filters: CourseFilter | None = None, page: int = 1, page_size: int = 20
     ) -> PaginatedData[CourseListResponse]:
         async with get_db_ctx() as db:
-            base = select(Course).where(Course.is_active == True)
+            base = select(Course).where(Course.status == "published")
             if filters and filters.category:
                 base = base.where(Course.category == filters.category)
             count_stmt = select(func.count()).select_from(base.subquery())
@@ -88,6 +104,9 @@ class CourseService:
                     )
                 ).scalars()
             )
+            modules_by_library = await CourseEntitlementService.list_library_modules(
+                db, [int(library.id) for library in bound_libraries]
+            )
             response.included_quiz_libraries = [
                 CourseQuizLibrarySummary(
                     id=int(library.id),
@@ -99,6 +118,15 @@ class CourseService:
                     available=(
                         library.status == "published" and bool(library.v2_enabled)
                     ),
+                    modules=[
+                        CourseQuizModuleSummary(
+                            id=int(module.id),
+                            name=module.name,
+                            description=module.description,
+                            status=module.status,
+                        )
+                        for module in modules_by_library.get(int(library.id), [])
+                    ],
                 )
                 for library in bound_libraries
             ]
@@ -106,7 +134,7 @@ class CourseService:
             # 过滤活跃章节并按 sort_order 排序
             active_chapters = [ch for ch in course.chapters if ch.is_active]
             active_chapters.sort(key=lambda ch: ch.sort_order)
-            response.chapters = [ChapterResponse.model_validate(ch) for ch in active_chapters]
+            response.chapters = [self._public_chapter(ch) for ch in active_chapters]
 
             if enrollment is not None:
                 response.has_access = True
@@ -126,7 +154,7 @@ class CourseService:
             if course is None:
                 raise NotFoundException("课程")
             has_access = await self._has_learning_access(db, user_id, course_id)
-            if not course.is_active and not has_access:
+            if course.status == "draft" or not course.is_active and not has_access:
                 raise NotFoundException("课程")
 
             asset_filter = CourseAsset.course_id == course_id
@@ -159,10 +187,9 @@ class CourseService:
     async def list_categories(self) -> list[str]:
         async with get_db_ctx() as db:
             result = await db.execute(
-                select(Course.category)
-                .where(Course.is_active == True)
-                .distinct()
-                .order_by(Course.category)
+                select(CourseCategory.name)
+                .where(CourseCategory.is_active.is_(True))
+                .order_by(CourseCategory.sort_order, CourseCategory.id)
             )
             return [row[0] for row in result.all()]
 
@@ -170,7 +197,6 @@ class CourseService:
         purchase = await CoursePurchaseService().purchase(
             user_id,
             data.course_id,
-            batch=data.batch,
             allow_paid=False,
         )
         async with get_db_ctx() as db:
@@ -248,7 +274,7 @@ class CourseService:
 
             return CourseChaptersResponse(
                 free_preview_seconds=free_seconds,
-                chapters=[ChapterResponse.model_validate(ch) for ch in active_chapters],
+                chapters=[self._public_chapter(ch) for ch in active_chapters],
                 progress=progress,
             )
 

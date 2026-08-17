@@ -102,20 +102,26 @@ async def create_initial_super_admin(
             # Transaction-scoped advisory lock serializes concurrent browser
             # submissions without creating another bootstrap table.
             await connection.execute("SELECT pg_advisory_xact_lock($1)", 836_642_001)
-            table_exists = await connection.fetchval(
-                "SELECT to_regclass('public.admin_user') IS NOT NULL"
+            security_tables_ready = await connection.fetchval(
+                "SELECT to_regclass('public.admin_user') IS NOT NULL "
+                "AND to_regclass('public.admin_password_history') IS NOT NULL "
+                "AND to_regclass('public.admin_security_audit') IS NOT NULL"
             )
-            if not table_exists:
-                raise BootstrapRuntimeError("admin_user table is not migrated")
+            if not security_tables_ready:
+                raise BootstrapRuntimeError("administrator security tables are not migrated")
             existing = await connection.fetchrow(
                 """
-                SELECT id, username, password_hash
+                SELECT id, username, password_hash, is_active
                 FROM admin_user
                 WHERE role = 'super_admin'
                 LIMIT 1
                 """
             )
             if existing is not None:
+                if not existing["is_active"]:
+                    raise BootstrapRuntimeError(
+                        "the existing super administrator is inactive"
+                    )
                 if (
                     existing["username"] == request.username
                     and verify_admin_password(
@@ -134,8 +140,12 @@ async def create_initial_super_admin(
             identifier = await connection.fetchval(
                 """
                 INSERT INTO admin_user
-                    (username, password_hash, role, is_active)
-                VALUES ($1, $2, 'super_admin', TRUE)
+                    (
+                        username, password_hash, role, is_active, display_name,
+                        must_change_password, auth_version, failed_login_attempts
+                    )
+                VALUES
+                    ($1, $2, 'super_admin', TRUE, $1, TRUE, 1, 0)
                 RETURNING id
                 """,
                 request.username,

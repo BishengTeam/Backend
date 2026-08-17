@@ -122,6 +122,7 @@ async def test_create_generates_the_temporary_password_and_audits_in_one_commit(
         AdminSettingsUserCreate(
             username=" Quiz.New-Operator ",
             display_name=" 新题库运营 ",
+            role="quiz_admin",
         ),
         actor_id=1,
         idempotency_key="create-request-0001",
@@ -137,6 +138,8 @@ async def test_create_generates_the_temporary_password_and_audits_in_one_commit(
     assert len(audits) == 1
     assert audits[0].action == "admin_account.create"
     assert audits[0].result == "succeeded"
+    assert audits[0].reason_code == "quiz_admin_created"
+    assert audits[0].summary == {"role": "quiz_admin"}
     assert audits[0].idempotency_key_hash is not None
     assert audits[0].idempotency_key_hash != "create-request-0001"
 

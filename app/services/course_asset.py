@@ -12,13 +12,14 @@ from sqlalchemy import select
 
 from app.adapter.database import get_db_ctx
 from app.domain.certification.src.index import Course, CourseAsset, CourseEnrollment
+from app.domain.certification.src.index import CourseAuditLog
 from app.domain.user.src.index import User
 from app.port.config import settings
 from app.port.exceptions import ForbiddenException, NotFoundException
 
 
 PRIVATE_COURSE_ASSET_ROOT = Path(settings.UPLOAD_DIR) / "private" / "course-assets"
-PLAYBACK_URL_TTL_SECONDS = 2 * 60 * 60
+PLAYBACK_URL_TTL_SECONDS = 300
 
 
 @dataclass(slots=True)
@@ -150,6 +151,21 @@ class CourseAssetService:
             filename = re.sub(r'[\\/\r\n"]', "_", asset.title).strip() or path.name
             if not Path(filename).suffix and path.suffix:
                 filename = f"{filename}{path.suffix}"
+            db.add(
+                CourseAuditLog(
+                    actor_type="user",
+                    actor_id=user_id,
+                    action="course.asset.downloaded",
+                    object_type="course_asset",
+                    object_id=asset.id,
+                    result="succeeded",
+                    summary={
+                        "course_id": asset.course_id,
+                        "preview": not has_access,
+                    },
+                )
+            )
+            await db.commit()
             return CourseAssetFile(
                 path=path,
                 media_type=media_type if inline else "application/octet-stream",

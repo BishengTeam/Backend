@@ -592,6 +592,7 @@ class AdminQuizCourseOptionResponse(QuizContractModel):
 
     id: int
     title: str
+    status: Literal["draft", "published", "offline", "archived"]
 
 
 class AdminQuizCourseBindingStatusUpdate(QuizContractModel):

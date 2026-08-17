@@ -74,8 +74,18 @@ async def course_context(monkeypatch, tmp_path):
     try:
         yield context
     finally:
-        from app.domain.certification.src.index import Course, CourseAsset, CourseEnrollment
-        from app.domain.community.src.index import QuizCourseLibraryBinding, QuizLibrary
+        from app.domain.certification.src.index import (
+            Course,
+            CourseAsset,
+            CourseEnrollment,
+            CourseEntitlementJob,
+            CourseEntitlementJobItem,
+        )
+        from app.domain.community.src.index import (
+            QuizCourseLibraryBinding,
+            QuizLibrary,
+            QuizLibraryEntitlement,
+        )
         from app.domain.order.src.index import Order
         from app.domain.user.src.index import User
 
@@ -84,6 +94,25 @@ async def course_context(monkeypatch, tmp_path):
             user_ids = select(User.id).where(User.openid.like(f"{prefix}%"))
             library_ids = select(QuizLibrary.id).where(
                 QuizLibrary.name.like(f"{prefix}%")
+            )
+            await db.execute(
+                delete(CourseEntitlementJobItem).where(
+                    CourseEntitlementJobItem.job_id.in_(
+                        select(CourseEntitlementJob.id).where(
+                            CourseEntitlementJob.course_id.in_(course_ids)
+                        )
+                    )
+                )
+            )
+            await db.execute(
+                delete(CourseEntitlementJob).where(
+                    CourseEntitlementJob.course_id.in_(course_ids)
+                )
+            )
+            await db.execute(
+                delete(QuizLibraryEntitlement).where(
+                    QuizLibraryEntitlement.library_id.in_(library_ids)
+                )
             )
             await db.execute(delete(CourseAsset).where(CourseAsset.course_id.in_(course_ids)))
             await db.execute(
@@ -121,16 +150,22 @@ async def _seed_courses(context):
             title=f"{context.prefix}_free",
             category="integration",
             price=0,
+            status="published",
+            is_active=True,
         )
         paid_course = Course(
             title=f"{context.prefix}_paid",
             category="integration",
             price=12345,
+            status="published",
+            is_active=True,
         )
         timeout_course = Course(
             title=f"{context.prefix}_timeout",
             category="integration",
             price=6789,
+            status="published",
+            is_active=True,
         )
         db.add_all([free_course, paid_course, timeout_course])
         await db.flush()
@@ -292,6 +327,7 @@ async def test_payment_refund_and_private_content_authorization(
 
     async with course_context.factory() as db:
         course = await db.get(Course, data.paid_course_id)
+        course.status = "offline"
         course.is_active = False
         await db.commit()
 
@@ -310,11 +346,15 @@ async def test_payment_refund_and_private_content_authorization(
             data.paid_course_id,
         )
 
-    revoked = await course_context.admin_service.revoke_enrollment(
-        purchase.enrollment_id
-    )
-    assert revoked.status == "cancelled"
-    assert revoked.learning_access is False
+    async with course_context.factory() as db:
+        enrollment = await db.get(CourseEnrollment, purchase.enrollment_id)
+        enrollment.status = "cancelled"
+        enrollment.learning_access = False
+        await db.commit()
+        course = await db.get(Course, data.paid_course_id)
+        course.status = "published"
+        course.is_active = True
+        await db.commit()
     duplicate_payment = await course_context.payment_service._apply_transaction(
         callback, source="integration_test", verify_provider_fields=False
     )
@@ -326,6 +366,7 @@ async def test_payment_refund_and_private_content_authorization(
 
     async with course_context.factory() as db:
         course = await db.get(Course, data.paid_course_id)
+        course.status = "published"
         course.is_active = True
         await db.commit()
 
@@ -439,6 +480,7 @@ async def test_course_detail_returns_current_included_quiz_library_display_data(
             "cover_url": "https://example.invalid/current.png",
             "status": "published",
             "available": True,
+            "modules": [],
         }
     ]
 

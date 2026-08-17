@@ -606,6 +606,34 @@ quiz_task_registry.register(
 )
 
 
+async def _course_entitlement_queue_depth() -> int:
+    from sqlalchemy import func, select
+
+    from app.adapter.database import get_db_ctx
+    from app.domain.certification.src.index import CourseEntitlementJob
+
+    async with get_db_ctx() as db:
+        value = await db.scalar(
+            select(func.count())
+            .select_from(CourseEntitlementJob)
+            .where(CourseEntitlementJob.status == "queued")
+        )
+    return int(value or 0)
+
+
+async def _process_course_entitlement_jobs() -> bool:
+    from app.services.course_entitlement import CourseEntitlementService
+
+    return await CourseEntitlementService.process_one_job()
+
+
+quiz_task_registry.register(
+    "course-entitlement-jobs",
+    _process_course_entitlement_jobs,
+    queue_depth=_course_entitlement_queue_depth,
+)
+
+
 async def ensure_quiz_runtime_ready() -> None:
     """Fail production startup when the shared Redis dependency is unavailable."""
 

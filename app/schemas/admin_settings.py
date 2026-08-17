@@ -21,6 +21,10 @@ def _normalize_display_name(value: str) -> str:
 class AdminSettingsUserCreate(BaseModel):
     username: str = Field(..., pattern=ADMIN_USERNAME_PATTERN)
     display_name: str = Field(..., min_length=1, max_length=64)
+    # The creation API deliberately omits ``super_admin`` from this literal.
+    # Legacy clients may omit the field and continue to create the only
+    # currently supported staff role, ``quiz_admin``.
+    role: Literal["quiz_admin"] = "quiz_admin"
 
     model_config = {"extra": "forbid"}
 

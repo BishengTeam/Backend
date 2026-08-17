@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.domain.certification.src.index import Course
+from app.domain.certification.src.index import Course, CourseEntitlementJob, CourseEntitlementJobItem
 from app.domain.community.src.index import (
     QuizAdminAuditLog,
     QuizCheckin,
@@ -82,18 +82,20 @@ async def quiz_v2_catalog_env(monkeypatch):
     monkeypatch.setattr("app.services.admin_quiz_v2.get_db_ctx", db_ctx)
     monkeypatch.setattr("app.services.quiz_v2.get_db_ctx", db_ctx)
     monkeypatch.setattr("app.services.quiz_practice.get_db_ctx", db_ctx)
+    monkeypatch.setattr("app.services.course_entitlement.get_db_ctx", db_ctx)
 
     async with factory() as db:
         admin = AdminUser(
             username=f"{prefix}_admin",
             password_hash="test-only",
-            role="super_admin",
+            role="quiz_admin",
         )
         user = User(openid=f"{prefix}_user", is_active=True)
         course = Course(
             title=f"{prefix}课程",
             category="test",
             price=100,
+            status="published",
             is_active=True,
         )
         db.add_all([admin, user, course])
@@ -121,11 +123,6 @@ async def quiz_v2_catalog_env(monkeypatch):
             description="课程附赠题库",
             cover_url="https://example.invalid/cover.png",
         ),
-        admin_id=admin.id,
-    )
-    binding = await admin_service.create_course_binding(
-        library.id,
-        AdminQuizCourseBindingCreate(course_id=course.id),
         admin_id=admin.id,
     )
     module = await admin_service.create_module(
@@ -156,6 +153,11 @@ async def quiz_v2_catalog_env(monkeypatch):
         AdminQuizLibraryStatusUpdate(
             action="publish", lock_version=library.lock_version
         ),
+        admin_id=admin.id,
+    )
+    binding = await admin_service.create_course_binding(
+        library.id,
+        AdminQuizCourseBindingCreate(course_id=course.id),
         admin_id=admin.id,
     )
     library = await admin_service.update_library(
@@ -228,6 +230,20 @@ async def quiz_v2_catalog_env(monkeypatch):
             )
             await db.execute(
                 delete(QuizUserStats).where(QuizUserStats.user_id == user.id)
+            )
+            await db.execute(
+                delete(CourseEntitlementJobItem).where(
+                    CourseEntitlementJobItem.job_id.in_(
+                        select(CourseEntitlementJob.id).where(
+                            CourseEntitlementJob.library_id == library.id
+                        )
+                    )
+                )
+            )
+            await db.execute(
+                delete(CourseEntitlementJob).where(
+                    CourseEntitlementJob.library_id == library.id
+                )
             )
             await db.execute(
                 delete(QuizLibraryEntitlement).where(

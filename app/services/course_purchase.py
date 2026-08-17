@@ -12,6 +12,7 @@ from app.domain.order.src.index import (
 from app.domain.user.src.index import User
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.course import CoursePurchaseResponse
+from app.services.course_entitlement import CourseEntitlementService
 from app.services.order_fulfillment import OrderFulfillmentService
 from app.utils.payment import generate_out_trade_no
 
@@ -65,7 +66,7 @@ class CoursePurchaseService:
                         select(Course).where(Course.id == course_id).with_for_update()
                     )
                 ).scalar_one_or_none()
-                if course is None or not course.is_active:
+                if course is None or course.status != "published":
                     raise NotFoundException("课程")
                 if course.price > 0 and not allow_paid:
                     raise BusinessException("付费课程请使用课程购买接口")
@@ -109,13 +110,13 @@ class CoursePurchaseService:
                     enrollment = CourseEnrollment(
                         user_id=user_id,
                         course_id=course.id,
-                        batch_selected=batch,
                         status="enrolled",
                         learning_access=True,
                         access_granted_at=self._now(),
                     )
                     db.add(enrollment)
                     await db.flush()
+                    await CourseEntitlementService.grant_for_enrollment(db, enrollment, now=self._now())
                     return self._response(enrollment)
 
                 expires_at = self._now() + timedelta(
@@ -138,7 +139,6 @@ class CoursePurchaseService:
                     user_id=user_id,
                     course_id=course.id,
                     order_id=order.id,
-                    batch_selected=batch,
                     status="pending_payment",
                     learning_access=False,
                 )

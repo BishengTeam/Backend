@@ -54,6 +54,9 @@ STATS_INDEX_MIGRATION_PATH = (
 QUIZ_MIGRATION_PATHS = tuple(
     sorted((REPO_ROOT / "alembic/versions").glob("quiz*.py"))
 )
+COURSE_QUIZ_MIGRATION_PATH = (
+    REPO_ROOT / "alembic/versions/crs001_rebuild_course_domain.py"
+)
 V2_MIGRATION_PATH = (
     REPO_ROOT / "alembic/versions/quiz004_expand_quiz_v2_domain.py"
 )
@@ -365,7 +368,8 @@ def test_destructive_migration_is_isolated_and_backup_gated() -> None:
     migration = _load_migration()
     source = MIGRATION_PATH.read_text(encoding="utf-8")
     all_quiz_migration_source = "\n".join(
-        path.read_text(encoding="utf-8") for path in QUIZ_MIGRATION_PATHS
+        path.read_text(encoding="utf-8")
+        for path in (*QUIZ_MIGRATION_PATHS, COURSE_QUIZ_MIGRATION_PATH)
     )
     assert migration.revision == "quiz001"
     assert migration.down_revision == "rsh001"

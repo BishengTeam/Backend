@@ -549,15 +549,30 @@ class QuizLibraryEntitlement(Base, _QuizTimestampMixin):
             name="ck_quiz_library_entitlement_status",
         ),
         CheckConstraint(
-            "source_type = 'course_order'",
+            "source_type IN ('course_order', 'course_enrollment')",
             name="ck_quiz_library_entitlement_source_type",
+        ),
+        CheckConstraint(
+            "((source_type = 'course_order' AND order_id IS NOT NULL) OR "
+            "(source_type = 'course_enrollment' AND enrollment_id IS NOT NULL))",
+            name="ck_quiz_library_entitlement_source_ref",
         ),
         CheckConstraint(
             "ends_at IS NULL OR ends_at > starts_at",
             name="ck_quiz_library_entitlement_period",
         ),
         UniqueConstraint(
-            "order_id", "library_id", name="uq_quiz_library_entitlement_order_library"
+            "order_id",
+            "library_id",
+            name="uq_quiz_library_entitlement_order_library",
+        ),
+        Index(
+            "uq_quiz_library_entitlement_enrollment_library",
+            "enrollment_id",
+            "library_id",
+            unique=True,
+            postgresql_where=text("enrollment_id IS NOT NULL"),
+            sqlite_where=text("enrollment_id IS NOT NULL"),
         ),
         Index(
             "ix_quiz_library_entitlement_access",
@@ -578,8 +593,13 @@ class QuizLibraryEntitlement(Base, _QuizTimestampMixin):
     course_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("course.id", ondelete="RESTRICT"), nullable=False
     )
-    order_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("order.id", ondelete="RESTRICT"), nullable=False
+    order_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("order.id", ondelete="RESTRICT"), nullable=True
+    )
+    enrollment_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("course_enrollment.id", ondelete="RESTRICT"),
+        nullable=True,
     )
     source_type: Mapped[str] = mapped_column(
         String(24), nullable=False, default="course_order", server_default="course_order"

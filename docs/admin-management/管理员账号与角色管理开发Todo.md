@@ -255,7 +255,7 @@
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | `GET` | `/admin/settings/admins` | 分页、搜索和筛选管理员 |
-| `POST` | `/admin/settings/admins` | 新建 `quiz_admin` 和临时密码 |
+| `POST` | `/admin/settings/admins` | 新建非 `super_admin` 的预设角色管理员和临时密码；当前可选角色仅 `quiz_admin` |
 | `PATCH` | `/admin/settings/admins/{admin_id}` | 仅编辑普通管理员显示名等允许字段 |
 | `POST` | `/admin/settings/admins/{admin_id}/disable` | 停用账号并立即失效全部会话 |
 | `POST` | `/admin/settings/admins/{admin_id}/enable` | 使用新临时密码重新启用 |
@@ -278,7 +278,7 @@
 - 管理员写接口统一使用 `X-Reauth-Token` 头传递再认证凭据；再认证凭据仅存服务端短期缓存，成功后最多 10 分钟有效，并绑定管理员 ID、当前会话 `jti` 和 `auth_version`。
 - 登录成功响应至少包含 `access_token`、`expires_in`、`admin`、`permissions`、`session_mode`（`normal`/`restricted`）和 `must_change_password`；受限会话只能调用 `me`、`change-password`、`logout`。
 - 管理员对象至少包含 `id`、`username`、`display_name`、`role`、`is_active`、`must_change_password`、`locked_until`、`last_login_at`、`created_at`、`updated_at`。
-- 新建和重置/启用接口返回一次性 `temporary_password`，响应之后不再重复返回；请求体不接受调用方指定超级管理员角色。
+- 新建和重置/启用接口返回一次性 `temporary_password`，响应之后不再重复返回；新建请求可选择当前开放的非 `super_admin` 预设角色，当前仅 `quiz_admin`，且永远不能指定或提升为 `super_admin`。
 - 新建、重新启用和密码重置必须携带 16～64 位 `Idempotency-Key`。Admin 每次用户动作生成新 UUID 且不持久化；Backend 只保存 SHA-256 摘要。相同操作者、动作和键已经成功后返回 `40201 / HTTP 409`，不得再次修改凭据或再次返回临时密码；数据库部分唯一索引负责并发兜底。
 - 错误语义冻结为：未认证 `40100`、无权限 `40101`、参数校验 `40001`、业务状态不允许 `40200`、并发/重复 `40201`、限流 `40202`；登录失败、账号不存在、账号停用和锁定对外统一使用 `40100`，详细原因只入安全审计。
 - `PATCH /admin/settings/admins/{admin_id}` 只允许修改普通管理员 `display_name`；停用、启用、重置密码、解锁使用独立 POST 动作接口。保留旧 `PUT` 路由仅作兼容转发，不扩展权限。
@@ -315,7 +315,7 @@
 - 按用户名/显示名搜索。
 - 按角色、启停状态、锁定状态和首次改密状态筛选。
 - 列表列：ID、用户名、显示名、角色、综合状态、最近登录、创建时间。
-- 新建题库管理员。
+- 新建管理员：窗口内选择角色；角色列表只包含当前开放的非 `super_admin` 预设角色，当前仅 `quiz_admin`。
 - 编辑普通管理员显示名。
 - 停用、重新启用、重置密码和解除锁定。
 - 超级管理员行只读且所有危险按钮禁用并说明原因。

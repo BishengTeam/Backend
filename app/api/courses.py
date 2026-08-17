@@ -141,7 +141,7 @@ async def purchase_course(
     result = await CoursePurchaseService().purchase(
         current_user.id,
         course_id,
-        batch=body.batch if body else None,
+        allow_paid=True,
     )
     return success(data=result)
 
@@ -157,7 +157,6 @@ async def purchase_course(
 
 **请求体**:
 - `course_id`: 课程 ID
-- `batch`: 所选班次（可选）
 
 **认证**: 需登录
     """,

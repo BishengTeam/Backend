@@ -12,7 +12,7 @@ import json
 import sys
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -25,7 +25,25 @@ from app.domain.order.src.index import PriceConfig
 from app.domain.user.src.index import AdminUser
 
 
-PRODUCTION_SEED_VERSION = "2026.08.14.1"
+PRODUCTION_SEED_VERSION = "2026.08.17.1"
+
+# ``crs001`` intentionally removes the old fake course dataset and rebuilds
+# the domain.  Production bootstrap does not invent course categories or
+# courses; it only proves that the migrated schema required by operators is
+# present before the installation can advance to runtime startup.
+COURSE_REQUIRED_TABLES = (
+    "course",
+    "quiz_course_library_binding",
+    "course_category",
+    "course_chapter",
+    "course_asset",
+    "course_enrollment",
+    "user_chapter_progress",
+    "quiz_library_entitlement",
+    "course_audit_log",
+    "course_entitlement_job",
+    "course_entitlement_job_item",
+)
 
 CERTIFICATIONS = (
     {
@@ -89,19 +107,53 @@ def _certification_conflicts(existing: Certification, expected: dict) -> bool:
     return any(getattr(existing, field) != expected[field] for field in fields)
 
 
+async def _assert_course_domain_is_migrated(db) -> None:
+    connection = await db.connection()
+    missing = []
+    for table_name in COURSE_REQUIRED_TABLES:
+        exists = await connection.scalar(
+            text("SELECT to_regclass(:qualified_name) IS NOT NULL"),
+            {"qualified_name": f"public.{table_name}"},
+        )
+        if not exists:
+            missing.append(table_name)
+    if missing:
+        raise RuntimeError(
+            "production seed requires the migrated course domain; missing tables: "
+            + ", ".join(missing)
+        )
+
+
 async def main() -> None:
     created_certifications = 0
     created_prices = 0
     async with async_session_factory() as db:
         async with db.begin():
-            super_admin_id = await db.scalar(
-                select(AdminUser.id)
-                .where(AdminUser.role == "super_admin", AdminUser.is_active.is_(True))
-                .limit(1)
-            )
-            if super_admin_id is None:
+            await _assert_course_domain_is_migrated(db)
+            connection = await db.connection()
+            administrator = (
+                await connection.execute(
+                    text(
+                        "SELECT count(*) AS total, min(id) AS id "
+                        "FROM admin_user WHERE role = 'super_admin' AND is_active"
+                    )
+                )
+            ).one()
+            if administrator.total != 1 or administrator.id is None:
                 raise RuntimeError(
-                    "production seed requires the active initial super administrator"
+                    "production seed requires exactly one active initial super administrator"
+                )
+            super_admin_id = int(administrator.id)
+
+            invalid_roles = await connection.scalar(
+                text(
+                    "SELECT count(*) FROM admin_user "
+                    "WHERE role NOT IN ('super_admin', 'quiz_admin')"
+                )
+            )
+            if invalid_roles:
+                raise RuntimeError(
+                    "production seed found an unsupported administrator role"
                 )
 
             for expected in CERTIFICATIONS:
@@ -149,6 +201,7 @@ async def main() -> None:
             {
                 "status": "ok",
                 "version": PRODUCTION_SEED_VERSION,
+                "course_domain_ready": True,
                 "created_certifications": created_certifications,
                 "created_prices": created_prices,
             },

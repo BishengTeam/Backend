@@ -145,6 +145,21 @@ def main() -> None:
             "bootstrap deployment check failed: explicit fail-closed guards missing"
         )
     require(production_seed, "PRODUCTION_SEED_VERSION", "versioned production seed")
+    require(
+        production_seed,
+        'PRODUCTION_SEED_VERSION = "2026.08.17.1"',
+        "course-domain-aware production seed version",
+    )
+    require(
+        production_seed,
+        "COURSE_REQUIRED_TABLES",
+        "course-domain migration gate",
+    )
+    require(
+        production_seed,
+        '"course_domain_ready": True',
+        "course-domain seed evidence",
+    )
 
     for source, label in (
         (bootstrap_compose, "bootstrap Compose"),

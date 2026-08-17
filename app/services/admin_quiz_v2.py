@@ -69,6 +69,7 @@ from app.schemas.admin_quiz_contract import (
 from app.domain.certification.src.index import Course
 from app.schemas.common import PaginatedData
 from app.services.quiz_v2 import QuizV2Service
+from app.services.course_entitlement import CourseEntitlementService
 from app.utils.audit import sanitize_audit_value
 
 
@@ -1020,8 +1021,8 @@ class AdminQuizV2Service:
         """
 
         async with get_db_ctx() as db:
-            query = select(Course.id, Course.title).where(
-                Course.is_active.is_(True)
+            query = select(Course.id, Course.title, Course.status).where(
+                Course.status == "published"
             )
             if keyword and keyword.strip():
                 query = query.where(Course.title.ilike(f"%{keyword.strip()}%"))
@@ -1031,7 +1032,9 @@ class AdminQuizV2Service:
                 )
             ).all()
             return [
-                AdminQuizCourseOptionResponse(id=row.id, title=row.title)
+                AdminQuizCourseOptionResponse(
+                    id=row.id, title=row.title, status=row.status
+                )
                 for row in rows
             ]
 
@@ -1062,48 +1065,13 @@ class AdminQuizV2Service:
         *,
         admin_id: int,
     ) -> AdminQuizCourseBindingResponse:
+        job = await CourseEntitlementService.create_binding(
+            data.course_id, library_id, admin_id=admin_id
+        )
         async with get_db_ctx() as db:
-            library = await self._locked(db, QuizLibrary, library_id)
-            if library is None:
-                raise NotFoundException("题库")
-            if library.status in {"archived", "deleted"}:
-                raise BusinessException("已归档或删除题库不可绑定课程")
-            if library.access_mode != "course_entitlement":
-                raise BusinessException("只有课程权益题库可以绑定课程")
-            course = await db.get(Course, data.course_id)
-            if course is None:
-                raise NotFoundException("课程")
-            if not course.is_active:
-                raise BusinessException("只能绑定启用中的课程")
-            binding = QuizCourseLibraryBinding(
-                course_id=data.course_id,
-                library_id=library_id,
-                status="active",
-                lock_version=1,
-                created_by=admin_id,
-                updated_by=admin_id,
-            )
-            db.add(binding)
-            try:
-                await db.flush()
-                self._audit(
-                    db,
-                    admin_id=admin_id,
-                    action="course_binding.create",
-                    object_type="course_library_binding",
-                    object_id=int(binding.id),
-                    before={},
-                    after={
-                        "course_id": binding.course_id,
-                        "library_id": binding.library_id,
-                        "status": binding.status,
-                    },
-                    permission="course_quiz_bind",
-                )
-                await db.commit()
-            except IntegrityError as exc:
-                await db.rollback()
-                raise ValidationException("课程与题库已经绑定") from exc
+            binding = await db.get(QuizCourseLibraryBinding, job.binding_id)
+            if binding is None:
+                raise NotFoundException("课程题库绑定")
             await db.refresh(binding)
             return AdminQuizCourseBindingResponse.model_validate(binding)
 
@@ -1114,39 +1082,16 @@ class AdminQuizV2Service:
         *,
         admin_id: int,
     ) -> AdminQuizCourseBindingResponse:
+        await CourseEntitlementService.set_binding_status(
+            binding_id,
+            str(data.status),
+            admin_id=admin_id,
+            expected_lock_version=data.lock_version,
+        )
         async with get_db_ctx() as db:
-            binding = await self._locked(
-                db, QuizCourseLibraryBinding, binding_id
-            )
+            binding = await db.get(QuizCourseLibraryBinding, binding_id)
             if binding is None:
                 raise NotFoundException("课程题库绑定")
-            self._check_version(binding, data.lock_version)
-            target = str(data.status)
-            if binding.status == target:
-                raise BusinessException("课程题库绑定已经是目标状态")
-            before = {
-                "course_id": binding.course_id,
-                "library_id": binding.library_id,
-                "status": binding.status,
-            }
-            binding.status = target
-            binding.updated_by = admin_id
-            binding.lock_version += 1
-            self._audit(
-                db,
-                admin_id=admin_id,
-                action=f"course_binding.{target}",
-                object_type="course_library_binding",
-                object_id=binding_id,
-                before=before,
-                after={
-                    "course_id": binding.course_id,
-                    "library_id": binding.library_id,
-                    "status": binding.status,
-                },
-                permission="course_quiz_bind",
-            )
-            await db.commit()
             await db.refresh(binding)
             return AdminQuizCourseBindingResponse.model_validate(binding)
 
