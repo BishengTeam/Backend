@@ -124,7 +124,7 @@ class _FakeBucket:
         self.objects[key] = body
         self.metadata[key] = dict(headers)
 
-    def get_object_meta(self, key):
+    def head_object(self, key):
         headers = dict(self.metadata[key])
         if self.corrupt_metadata:
             headers["x-oss-meta-sha256"] = "bad"

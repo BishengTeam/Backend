@@ -208,7 +208,10 @@ def _probe_oss_bucket_sync(
                 headers={"x-oss-meta-bootstrap": installation_id},
             )
             uploaded = True
-            metadata = bucket.get_object_meta(object_key)
+            # OSS GetObjectMeta returns only basic metadata such as ETag, size,
+            # and Last-Modified. Custom x-oss-meta-* headers are returned by
+            # HeadObject and GetObject.
+            metadata = bucket.head_object(object_key)
             headers = {str(k).lower(): str(v) for k, v in metadata.headers.items()}
             if headers.get("x-oss-meta-bootstrap") != installation_id:
                 raise ExternalProbeError(component, "metadata_mismatch")

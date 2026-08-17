@@ -433,7 +433,9 @@ def upload_recovery_envelope(
             "Content-Type": "application/json",
         }
         bucket.put_object(object_key, envelope_bytes, headers=headers)
-        metadata = bucket.get_object_meta(object_key)
+        # Custom x-oss-meta-* headers are returned by HeadObject/GetObject,
+        # not by OSS GetObjectMeta.
+        metadata = bucket.head_object(object_key)
         normalized_headers = {str(k).lower(): str(v) for k, v in metadata.headers.items()}
         if normalized_headers.get("x-oss-meta-sha256") != envelope_sha256:
             raise RecoveryBundleError("recovery OSS checksum metadata mismatch")

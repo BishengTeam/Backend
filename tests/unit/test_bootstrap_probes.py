@@ -99,7 +99,7 @@ class _Bucket:
         assert body == b"bootstrap-probe"
         assert headers["x-oss-meta-bootstrap"] == self.installation_id
 
-    def get_object_meta(self, _key):
+    def head_object(self, _key):
         return _Meta(self.installation_id)
 
     def delete_object(self, key):
