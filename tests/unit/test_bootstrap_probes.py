@@ -11,7 +11,11 @@ from Crypto.PublicKey import RSA
 from Crypto.Signature import pkcs1_15
 
 from bootstrap_app.models import BootstrapConfigureRequest
-from bootstrap_app.probes import ExternalProbeError, validate_external_dependencies
+from bootstrap_app.probes import (
+    ExternalProbeError,
+    _probe_wechat_pay,
+    validate_external_dependencies,
+)
 
 
 def _request():
@@ -102,6 +106,42 @@ class _Bucket:
         self.deleted.append(key)
 
 
+def _signed_payment_response(
+    payment_key,
+    *,
+    status_code,
+    body,
+    serial,
+    valid_signature=True,
+    include_signature=True,
+):
+    timestamp = str(int(time.time()))
+    nonce = "response-nonce"
+    signature = ""
+    if payment_key is not None:
+        signature = base64.b64encode(
+            pkcs1_15.new(payment_key).sign(
+                SHA256.new(
+                    timestamp.encode() + b"\n" + nonce.encode() + b"\n" + body + b"\n"
+                )
+            )
+        ).decode("ascii")
+    if not valid_signature:
+        signature = ("A" if signature[0] != "A" else "B") + signature[1:]
+    headers = {
+        "Wechatpay-Timestamp": timestamp,
+        "Wechatpay-Nonce": nonce,
+        "Wechatpay-Serial": serial,
+    }
+    if include_signature:
+        headers["Wechatpay-Signature"] = signature
+    return httpx.Response(
+        status_code,
+        content=body,
+        headers=headers,
+    )
+
+
 @pytest.mark.asyncio
 async def test_external_probe_validates_signed_payment_and_private_oss():
     request, payment = _request()
@@ -154,6 +194,106 @@ async def test_external_probe_validates_signed_payment_and_private_oss():
     assert buckets[2].deleted == []
     payment_headers = clients[1].request[1]["headers"]
     assert payment_headers["Authorization"].startswith("WECHATPAY2-SHA256-RSA2048")
+
+
+@pytest.mark.asyncio
+async def test_payment_probe_accepts_signed_public_key_mode_response():
+    request, payment = _request()
+    body = (
+        b'{"code":"RESOURCE_NOT_EXISTS","message":"no platform certificates; '
+        b'use the WeChat Pay public key"}'
+    )
+    response = _signed_payment_response(
+        payment,
+        status_code=404,
+        body=body,
+        serial=request.wechat_pay_public_key_id,
+    )
+
+    await _probe_wechat_pay(request, lambda: _FakeAsyncClient(response))
+
+
+@pytest.mark.asyncio
+async def test_payment_probe_rejects_unsigned_public_key_mode_response():
+    request, _payment = _request()
+    body = (
+        b'{"code":"RESOURCE_NOT_EXISTS","message":"no platform certificates; '
+        b'use the WeChat Pay public key"}'
+    )
+    response = _signed_payment_response(
+        None,
+        status_code=404,
+        body=body,
+        serial=request.wechat_pay_public_key_id,
+        include_signature=False,
+    )
+
+    with pytest.raises(ExternalProbeError) as error:
+        await _probe_wechat_pay(request, lambda: _FakeAsyncClient(response))
+
+    assert error.value.component == "wechat_pay"
+    assert error.value.code == "unsigned_response"
+
+
+@pytest.mark.asyncio
+async def test_payment_probe_rejects_invalid_public_key_mode_signature():
+    request, payment = _request()
+    body = (
+        b'{"code":"RESOURCE_NOT_EXISTS","message":"no platform certificates; '
+        b'use the WeChat Pay public key"}'
+    )
+    response = _signed_payment_response(
+        payment,
+        status_code=404,
+        body=body,
+        serial=request.wechat_pay_public_key_id,
+        valid_signature=False,
+    )
+
+    with pytest.raises(ExternalProbeError) as error:
+        await _probe_wechat_pay(request, lambda: _FakeAsyncClient(response))
+
+    assert error.value.component == "wechat_pay"
+    assert error.value.code == "signature_invalid"
+
+
+@pytest.mark.asyncio
+async def test_payment_probe_rejects_signed_sign_error():
+    request, payment = _request()
+    body = b'{"code":"SIGN_ERROR","message":"signature verification failed"}'
+    response = _signed_payment_response(
+        payment,
+        status_code=401,
+        body=body,
+        serial=request.wechat_pay_public_key_id,
+    )
+
+    with pytest.raises(ExternalProbeError) as error:
+        await _probe_wechat_pay(request, lambda: _FakeAsyncClient(response))
+
+    assert error.value.component == "wechat_pay"
+    assert error.value.code == "credentials_rejected"
+
+
+@pytest.mark.asyncio
+async def test_payment_probe_rejects_public_key_id_mismatch():
+    request, payment = _request()
+    body = (
+        b'{"code":"RESOURCE_NOT_EXISTS","message":"no platform certificates; '
+        b'use the WeChat Pay public key"}'
+    )
+    response = _signed_payment_response(
+        payment,
+        status_code=404,
+        body=body,
+        serial="PUB_KEY_ID_OTHER",
+    )
+
+    with pytest.raises(ExternalProbeError) as error:
+        await _probe_wechat_pay(request, lambda: _FakeAsyncClient(response))
+
+    assert error.value.component == "wechat_pay"
+    assert error.value.code == "public_key_id_mismatch"
 
 
 @pytest.mark.asyncio

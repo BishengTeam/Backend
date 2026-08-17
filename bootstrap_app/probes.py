@@ -98,6 +98,29 @@ def _required_header(headers, name: str) -> str:
     return value
 
 
+def _is_public_key_mode_certificate_unavailable(response: httpx.Response) -> bool:
+    """Whether WeChat rejected platform certificates because public-key mode is enabled.
+
+    Newer WeChat Pay merchants use a static WeChat Pay public key instead of the
+    downloadable platform-certificate list. For those merchants, ``GET
+    /v3/certificates`` can return RESOURCE_NOT_EXISTS even though the merchant
+    request signature was accepted. The caller must verify WeChat's response
+    signature before trusting this positive result.
+    """
+    try:
+        payload = response.json()
+    except ValueError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    message = payload.get("message")
+    return payload.get("code") == "RESOURCE_NOT_EXISTS" and isinstance(
+        message, str
+    ) and (
+        "微信支付公钥" in message or "wechat pay public key" in message.lower()
+    )
+
+
 async def _probe_wechat_pay(
     request: BootstrapConfigureRequest,
     client_factory: Callable[[], httpx.AsyncClient],
@@ -141,8 +164,11 @@ async def _probe_wechat_pay(
         pkcs1_15.new(public_key).verify(SHA256.new(message), decoded_signature)
     except (ValueError, TypeError) as exc:
         raise ExternalProbeError("wechat_pay", "signature_invalid") from exc
-    if not 200 <= response.status_code < 300:
-        raise ExternalProbeError("wechat_pay", "credentials_rejected")
+    if 200 <= response.status_code < 300:
+        return
+    if _is_public_key_mode_certificate_unavailable(response):
+        return
+    raise ExternalProbeError("wechat_pay", "credentials_rejected")
 
 
 def _default_bucket_factory(access_id, access_secret, endpoint, bucket_name):
