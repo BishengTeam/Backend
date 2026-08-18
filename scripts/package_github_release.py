@@ -104,6 +104,15 @@ def main() -> None:
         bundle_dir / "install_release.sh",
         executable=True,
     )
+    _copy(
+        ROOT / "scripts/upgrade_release.sh",
+        bundle_dir / "upgrade_release.sh",
+        executable=True,
+    )
+    _copy(
+        ROOT / "deploy/nginx/maintenance.html",
+        bundle_dir / "maintenance.html",
+    )
 
     backend_image = f"wemini-backend:{args.backend_commit}"
     admin_image = f"wemini-admin:{args.admin_commit}"

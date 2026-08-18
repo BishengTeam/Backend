@@ -149,6 +149,7 @@ load_release_source() {
   RELEASE_TOOLING_COMMIT="$(release_value TOOLING_COMMIT)"
   RELEASE_BACKEND_COMMIT="$(release_value BACKEND_COMMIT)"
   RELEASE_ADMIN_COMMIT="$(release_value ADMIN_COMMIT)"
+  RELEASE_TAG="$(release_value RELEASE_TAG)"
   RELEASE_BACKEND_REMOTE="$(release_value BACKEND_REMOTE)"
   RELEASE_ADMIN_REMOTE="$(release_value ADMIN_REMOTE)"
   RELEASE_BACKEND_IMAGE="$(release_value BACKEND_IMAGE)"
@@ -159,6 +160,8 @@ load_release_source() {
     || fail "release Backend commit is invalid"
   [[ "$RELEASE_ADMIN_COMMIT" =~ ^[0-9a-f]{40,64}$ ]] \
     || fail "release Admin commit is invalid"
+  [[ "$RELEASE_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] \
+    || fail "release source tag is invalid"
   [[ "$RELEASE_BACKEND_REMOTE" != *://*@* \
     && "$RELEASE_ADMIN_REMOTE" != *://*@* ]] \
     || fail "release repository remote contains URL credentials"
@@ -271,12 +274,15 @@ pin_sources_once() {
     BACKEND_IMAGE="$RELEASE_BACKEND_IMAGE"
     ADMIN_IMAGE="$RELEASE_ADMIN_IMAGE"
     if [[ -f "$SOURCE_PINS_FILE" ]]; then
+      grep -Eq "^RELEASE_TAG=${RELEASE_TAG}$" "$SOURCE_PINS_FILE" \
+        || fail "saved release tag differs from the release bundle"
       grep -Eq "^BACKEND_COMMIT=${BACKEND_COMMIT}$" "$SOURCE_PINS_FILE" \
         || fail "saved Backend source pin differs from the release bundle"
       grep -Eq "^ADMIN_COMMIT=${ADMIN_COMMIT}$" "$SOURCE_PINS_FILE" \
         || fail "saved Admin source pin differs from the release bundle"
     else
       {
+        printf 'RELEASE_TAG=%s\n' "$RELEASE_TAG"
         printf 'BACKEND_COMMIT=%s\n' "$BACKEND_COMMIT"
         printf 'ADMIN_COMMIT=%s\n' "$ADMIN_COMMIT"
       } >"$SOURCE_PINS_FILE"
@@ -287,7 +293,7 @@ pin_sources_once() {
     log "release source mode: GitHub Release bundle"
     log "Backend image: $BACKEND_IMAGE"
     log "Admin image:   $ADMIN_IMAGE"
-    export BACKEND_COMMIT ADMIN_COMMIT BACKEND_IMAGE ADMIN_IMAGE
+    export BACKEND_COMMIT ADMIN_COMMIT BACKEND_IMAGE ADMIN_IMAGE RELEASE_TAG
     return
   fi
   if [[ -f "$SOURCE_PINS_FILE" ]]; then
@@ -615,6 +621,7 @@ write_release_manifest() {
     log "WARNING: pinned Backend predates quality-source metadata; writing a legacy manifest"
   fi
   bootstrap_compose exec -T bootstrap python -m bootstrap_app.release_cli \
+    --release-tag "$RELEASE_TAG" \
     --backend-commit "$BACKEND_COMMIT" \
     --admin-commit "$ADMIN_COMMIT" \
     --backend-remote "$backend_remote" \
@@ -626,7 +633,8 @@ write_release_manifest() {
     "${quality_source_args[@]}" \
     --template-dir "$RENSHE_TEMPLATE_HOST_DIR" \
     --backend-port "$BACKEND_PORT" \
-    --admin-port "$ADMIN_PORT"
+    --admin-port "$ADMIN_PORT" \
+    --compose-project "$COMPOSE_PROJECT_NAME"
 }
 
 quality_and_build() {

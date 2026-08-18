@@ -117,6 +117,18 @@ def main() -> None:
     require(release_installer, "DOCKER_USE_SUDO", "Docker-only sudo mode")
     require(release_packager, "MAX_RELEASE_ASSET_BYTES", "GitHub asset size guard")
     require(release_packager, "SHA256SUMS", "release checksum manifest")
+    require(
+        release_packager,
+        'ROOT / "scripts/upgrade_release.sh"',
+        "online updater in deployment bundle",
+    )
+    require(
+        release_packager,
+        'ROOT / "deploy/nginx/maintenance.html"',
+        "maintenance fallback page in deployment bundle",
+    )
+    require(orchestrator, "--release-tag", "release metadata tag")
+    require(runtime_compose, "WEMINI_RELEASE_TAG:", "runtime release tag metadata")
     require(image_workflow, "contents: write", "Release publish permission")
     require(
         image_workflow,

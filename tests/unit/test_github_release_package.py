@@ -147,6 +147,7 @@ def test_bootstrap_release_source_creates_and_enforces_immutable_pins(tmp_path):
     source_file = bundle / "release-source.env"
     source_file.write_text(
         "RELEASE_BUNDLE_VERSION=1\n"
+        "RELEASE_TAG=2026.08.19.1\n"
         f"TOOLING_COMMIT={'c' * 40}\n"
         f"BACKEND_COMMIT={backend_commit}\n"
         f"ADMIN_COMMIT={admin_commit}\n"
@@ -185,6 +186,7 @@ def test_bootstrap_release_source_creates_and_enforces_immutable_pins(tmp_path):
         f"wemini-admin:{admin_commit}\n"
     ) in result.stdout
     assert (control / "source-pins.env").read_text(encoding="utf-8") == (
+        "RELEASE_TAG=2026.08.19.1\n"
         f"BACKEND_COMMIT={backend_commit}\nADMIN_COMMIT={admin_commit}\n"
     )
 

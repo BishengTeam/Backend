@@ -31,6 +31,8 @@ def test_release_manifest_is_private_hashed_and_advances_state(tmp_path, monkeyp
         "argv",
         [
             "release_cli",
+            "--release-tag",
+            "2026.08.19.1",
             "--backend-commit",
             "a" * 40,
             "--admin-commit",
@@ -51,6 +53,8 @@ def test_release_manifest_is_private_hashed_and_advances_state(tmp_path, monkeyp
             "ci_prebuilt",
             "--template-dir",
             "/srv/wemini/docs/renshe",
+            "--compose-project",
+            "wemini-test",
         ],
     )
     release_cli.main()
@@ -64,6 +68,8 @@ def test_release_manifest_is_private_hashed_and_advances_state(tmp_path, monkeyp
     assert (os.stat(manifest_path).st_mode & 0o777) == 0o600
     assert (os.stat(release_env).st_mode & 0o777) == 0o600
     assert "BACKEND_IMAGE=wemini-backend:aaaaaaaaaaaa" in release_env.read_text()
+    assert "WEMINI_RELEASE_TAG=2026.08.19.1" in release_env.read_text()
+    assert manifest["release"]["tag"] == "2026.08.19.1"
 
     saved = store.load()
     assert saved.phase == BootstrapPhase.QUALITY_PASSED

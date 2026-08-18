@@ -107,6 +107,14 @@ class Settings(BaseSettings):
     APP_PORT: int = 8000
     APP_TIMEZONE: str = "Asia/Shanghai"
 
+    # Immutable deployment metadata injected by the release bundle. Empty
+    # values support local development and releases predating update checks.
+    WEMINI_RELEASE_TAG: str = ""
+    WEMINI_BACKEND_COMMIT: str = ""
+    WEMINI_ADMIN_COMMIT: str = ""
+    WEMINI_DEPLOYMENT_ROOT: str = ""
+    WEMINI_COMPOSE_PROJECT: str = ""
+
     # 数据库连接组件（优先），有特殊字符的密码不会经过 configparser
     DB_HOST: str = "localhost"
     DB_PORT: int = 5432

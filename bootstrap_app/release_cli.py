@@ -19,6 +19,7 @@ from bootstrap_app.state import (
 COMMIT_RE = re.compile(r"^[0-9a-f]{40,64}$")
 IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*:[A-Za-z0-9][A-Za-z0-9._-]*$")
+RELEASE_TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def _safe_remote(value: str) -> str:
@@ -49,6 +50,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Write the immutable prebuilt or local-build release manifest."
     )
+    parser.add_argument("--release-tag", required=True)
     parser.add_argument("--backend-commit", required=True)
     parser.add_argument("--admin-commit", required=True)
     parser.add_argument("--backend-remote", required=True)
@@ -65,11 +67,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--template-dir", required=True)
     parser.add_argument("--backend-port", type=int, default=8000)
     parser.add_argument("--admin-port", type=int, default=8080)
+    parser.add_argument("--compose-project", required=True)
     return parser
 
 
 def main() -> None:
     args = _parser().parse_args()
+    if not RELEASE_TAG_RE.fullmatch(args.release_tag):
+        raise SystemExit("release manifest refused: release_tag is invalid")
     for name, value in {
         "backend_commit": args.backend_commit,
         "admin_commit": args.admin_commit,
@@ -107,6 +112,7 @@ def main() -> None:
         "version": 1,
         "installation_id": state.installation_id,
         "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "release": {"tag": args.release_tag},
         "source": {
             "backend": {"remote": backend_remote, "commit": args.backend_commit},
             "admin": {"remote": admin_remote, "commit": args.admin_commit},
@@ -134,6 +140,11 @@ def main() -> None:
         "ADMIN_PORT": str(args.admin_port),
         "BACKEND_IMAGE": args.backend_image,
         "BACKEND_PORT": str(args.backend_port),
+        "WEMINI_ADMIN_COMMIT": args.admin_commit,
+        "WEMINI_BACKEND_COMMIT": args.backend_commit,
+        "WEMINI_COMPOSE_PROJECT": args.compose_project,
+        "WEMINI_DEPLOYMENT_ROOT": str(settings.host_deploy_root),
+        "WEMINI_RELEASE_TAG": args.release_tag,
         "RENSHE_TEMPLATE_HOST_DIR": template_dir,
     }
     env_bytes = ("\n".join(f"{key}={release_env[key]}" for key in sorted(release_env)) + "\n").encode()
