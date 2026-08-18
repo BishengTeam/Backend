@@ -11,7 +11,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, func, select, union
+from sqlalchemy import and_, func, or_, select, union
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
@@ -27,6 +27,10 @@ from app.domain.community.src.index import (
     QuizPracticeSession,
     QuizPracticeSessionQuestion,
     QuizQuestion,
+    QuizKnowledgePoint,
+    QuizLibrary,
+    QuizLibraryEntitlement,
+    QuizModule,
     QuizQuestionRevisionStats,
     QuizUserStats,
     QuizWrongItem,
@@ -1750,29 +1754,69 @@ class QuizPracticeService:
         current_streak: int,
     ) -> QuizPracticeStats:
         assert query.scope_type is not None and query.scope_id is not None
+        question_scope = None
+        if query.scope_type in {"library", "module", "knowledge_point"}:
+            now = self._now()
+            visible_library = and_(
+                QuizLibrary.v2_enabled.is_(True),
+                QuizLibrary.status == "published",
+                or_(
+                    QuizLibrary.access_mode == "free",
+                    and_(
+                        QuizLibrary.access_mode == "course_entitlement",
+                        select(QuizLibraryEntitlement.id).where(
+                            QuizLibraryEntitlement.user_id == user_id,
+                            QuizLibraryEntitlement.library_id == QuizLibrary.id,
+                            QuizLibraryEntitlement.status == "active",
+                            QuizLibraryEntitlement.starts_at <= now,
+                            or_(QuizLibraryEntitlement.ends_at.is_(None), QuizLibraryEntitlement.ends_at > now),
+                        ).exists(),
+                    ),
+                ),
+            )
+            if query.scope_type == "library":
+                scope_exists = await db.scalar(select(QuizLibrary.id).where(QuizLibrary.id == query.scope_id, visible_library))
+                question_scope = QuizQuestion.library_id == query.scope_id
+            elif query.scope_type == "module":
+                scope_exists = await db.scalar(select(QuizModule.id).join(QuizLibrary, QuizLibrary.id == QuizModule.library_id).where(
+                    QuizModule.id == query.scope_id, QuizModule.status == "active", QuizModule.system_kind == "none", visible_library,
+                ))
+                question_scope = QuizQuestion.knowledge_point_id.in_(select(QuizKnowledgePoint.id).where(
+                    QuizKnowledgePoint.module_id == query.scope_id, QuizKnowledgePoint.status == "active", QuizKnowledgePoint.system_kind == "none",
+                ))
+            else:
+                scope_exists = await db.scalar(select(QuizKnowledgePoint.id).join(QuizLibrary, QuizLibrary.id == QuizKnowledgePoint.library_id).where(
+                    QuizKnowledgePoint.id == query.scope_id, QuizKnowledgePoint.status == "active", QuizKnowledgePoint.system_kind == "none", visible_library,
+                ))
+                question_scope = QuizQuestion.knowledge_point_id == query.scope_id
+            # Keep compatibility with legacy callers that use the same scope
+            # labels for QuizCategory IDs; fall through to the old resolver
+            # when no visible V2 entity matches this ID.
+            if scope_exists is None:
+                question_scope = None
         categories = await self._load_categories(db)
         by_id, _ = self._category_maps(categories)
-        root = by_id.get(query.scope_id)
-        if root is None:
+        root = by_id.get(query.scope_id) if question_scope is None else None
+        if root is None and question_scope is None:
             raise NotFoundException("棰樺簱鑼冨洿")
         expected_depth = {
             "library": 1,
             "module": 2,
             "knowledge_point": 3,
         }[query.scope_type]
-        if int(root.depth) != expected_depth:
+        if question_scope is None and int(root.depth) != expected_depth:
             raise ValidationException("棰樺簱鑼冨洿绫诲瀷涓庡垎绫诲眰绾т笉鍖归厤")
 
-        if not self._is_effectively_active(root.id, by_id):
+        if question_scope is None and not self._is_effectively_active(root.id, by_id):
             scope_ids: set[int] = set()
-        else:
+        elif question_scope is None:
             _, scope_ids = self._effective_category_ids(categories, root.id)
 
         start_at, end_at = self._utc_range(local_day, local_day)
         base_conditions = (
             QuizPracticeAttempt.user_id == user_id,
             QuizQuestion.status == _PUBLISHED,
-            QuizQuestion.category_id.in_(scope_ids),
+            question_scope if question_scope is not None else QuizQuestion.category_id.in_(scope_ids),
         )
         metrics = (
             await db.execute(
@@ -1824,7 +1868,7 @@ class QuizPracticeService:
                         QuizWrongItem.user_id == user_id,
                         QuizWrongItem.status == _WRONG_ACTIVE,
                         QuizQuestion.status == _PUBLISHED,
-                        QuizQuestion.category_id.in_(scope_ids),
+                        question_scope if question_scope is not None else QuizQuestion.category_id.in_(scope_ids),
                     )
                 )
             ).scalar()
@@ -1840,7 +1884,7 @@ class QuizPracticeService:
                         QuizCollection.user_id == user_id,
                         QuizCollection.is_active.is_(True),
                         QuizQuestion.status == _PUBLISHED,
-                        QuizQuestion.category_id.in_(scope_ids),
+                        question_scope if question_scope is not None else QuizQuestion.category_id.in_(scope_ids),
                     )
                 )
             ).scalar()
