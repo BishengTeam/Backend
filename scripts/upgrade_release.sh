@@ -190,7 +190,7 @@ readiness_value() {
   python3 - "$json" "$path" <<'PY'
 import json
 import sys
-value = json.load(open(sys.argv[1], encoding="utf-8"))
+value = json.loads(sys.argv[1])
 for part in sys.argv[2].split("."):
     if not isinstance(value, dict) or part not in value:
         raise SystemExit(f"missing readiness field: {part}")
@@ -556,8 +556,8 @@ docker_cli run --rm \
   --user "$(id -u):$(id -g)" \
   -v "$DEPLOYMENT_ROOT:$DEPLOYMENT_ROOT:ro" \
   -v "$backup_dir:$backup_dir:ro" \
-  "$new_backend_image" python scripts/oss_backup.py upload \
-  --installation-dir "$DEPLOYMENT_ROOT" \
+  "$new_backend_image" scripts/oss_backup.py upload \
+  --installation-dir "$DEPLOYMENT_ROOT/installation" \
   --file "$oss_bundle" \
   --object-key "$oss_prefix/$RELEASE-$timestamp.oss.tar.gz" \
   --content-type application/octet-stream >/dev/null
@@ -565,8 +565,8 @@ docker_cli run --rm \
   --entrypoint python \
   --user "$(id -u):$(id -g)" \
   -v "$DEPLOYMENT_ROOT:$DEPLOYMENT_ROOT:ro" \
-  "$new_backend_image" python scripts/oss_backup.py prune \
-  --installation-dir "$DEPLOYMENT_ROOT" \
+  "$new_backend_image" scripts/oss_backup.py prune \
+  --installation-dir "$DEPLOYMENT_ROOT/installation" \
   --prefix "$oss_prefix/" \
   --retain-days 7 --min-objects 7 >/dev/null
 rm -f "$encrypted_file" "$encrypted_key" "$manifest_file" "$oss_bundle"

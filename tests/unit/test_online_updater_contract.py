@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,6 +24,62 @@ def test_online_updater_shell_contract():
     )
     assert "/var/run/docker.sock" not in source
     assert "eval" not in source
+    assert "value = json.loads(sys.argv[1])" in source
+    assert '"$new_backend_image" python scripts/oss_backup.py' not in source
+    assert source.count('--installation-dir "$DEPLOYMENT_ROOT/installation" \\') == 2
+
+
+def test_oss_backup_uploads_an_open_file(tmp_path, monkeypatch):
+    import importlib.util
+    import sys
+    from types import ModuleType
+
+    script = ROOT / "scripts/oss_backup.py"
+    oss2 = ModuleType("oss2")
+    oss2.Bucket = object
+    monkeypatch.setitem(sys.modules, "oss2", oss2)
+    spec = importlib.util.spec_from_file_location("oss_backup", script)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    backup = tmp_path / "backup.tar.gz"
+    backup.write_bytes(b"wemini-backup")
+    uploaded = {}
+
+    class ACL:
+        acl = "private"
+
+    class Metadata:
+        headers = {"x-oss-meta-sha256": module._sha256(backup)}
+
+    class Bucket:
+        def get_bucket_acl(self):
+            return ACL()
+
+        def put_object(self, key, body, headers=None):
+            uploaded["key"] = key
+            uploaded["body"] = body
+            uploaded["contents"] = body.read()
+            uploaded["headers"] = headers
+
+        def head_object(self, key):
+            return Metadata()
+
+    monkeypatch.setattr(module, "_bucket", lambda installation_dir: Bucket())
+    module.upload(
+        SimpleNamespace(
+            file=str(backup),
+            installation_dir=str(tmp_path),
+            object_key="wemini-backups/postgresql/installation/test.tar.gz",
+            content_type="application/octet-stream",
+        )
+    )
+
+    assert uploaded["key"] == "wemini-backups/postgresql/installation/test.tar.gz"
+    assert hasattr(uploaded["body"], "read")
+    assert uploaded["contents"] == b"wemini-backup"
+    assert uploaded["headers"]["x-oss-meta-purpose"] == "wemini-postgresql-backup"
 
 
 def test_release_bundle_contains_updater_and_maintenance_page():

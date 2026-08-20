@@ -71,15 +71,16 @@ def upload(args: argparse.Namespace) -> None:
     if str(bucket.get_bucket_acl().acl).strip().lower() != "private":
         raise SystemExit("backup OSS bucket must be private")
     digest = _sha256(path)
-    bucket.put_object(
-        args.object_key,
-        path,
-        headers={
-            "Content-Type": args.content_type,
-            "x-oss-meta-sha256": digest,
-            "x-oss-meta-purpose": "wemini-postgresql-backup",
-        },
-    )
+    with path.open("rb") as stream:
+        bucket.put_object(
+            args.object_key,
+            stream,
+            headers={
+                "Content-Type": args.content_type,
+                "x-oss-meta-sha256": digest,
+                "x-oss-meta-purpose": "wemini-postgresql-backup",
+            },
+        )
     metadata = bucket.head_object(args.object_key)
     headers = {str(key).lower(): str(value) for key, value in metadata.headers.items()}
     if headers.get("x-oss-meta-sha256") != digest:
