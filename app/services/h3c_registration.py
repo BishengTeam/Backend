@@ -210,12 +210,6 @@ class H3cRegistrationService:
                     raise BusinessException("请先完成实名认证")
 
                 batch = await self._get_batch_for_update(db, data.batch_id)
-                plan = await PlanEnrollmentService().lock_enrollable_plan(
-                    db,
-                    plan_id=batch.plan_id,
-                    user_id=user_id,
-                    expected_vendor="H3C",
-                )
                 active_registration_id = await db.scalar(
                     select(H3cRegistration.id)
                     .where(
@@ -227,6 +221,12 @@ class H3cRegistrationService:
                 )
                 if active_registration_id is not None:
                     raise ConflictException("该身份证号已报名此考试批次")
+                plan = await PlanEnrollmentService().lock_enrollable_plan(
+                    db,
+                    plan_id=batch.plan_id,
+                    user_id=user_id,
+                    expected_vendor="H3C",
+                )
 
                 requested_keys = {
                     key: value
@@ -476,6 +476,7 @@ class H3cRegistrationService:
         registration_id: int,
         data: H3cResubmissionCreate,
     ) -> H3cRegistrationResponse:
+        data = H3cResubmissionCreate.model_validate(data)
         async with get_db_ctx() as db:
             async with db.begin():
                 registration = await db.scalar(
@@ -571,6 +572,7 @@ class H3cRegistrationService:
         registration_id: int,
         decision_data: H3cReviewDecision,
     ) -> H3cRegistrationResponse:
+        decision_data = H3cReviewDecision.model_validate(decision_data)
         async with get_db_ctx() as db:
             async with db.begin():
                 registration = await db.scalar(

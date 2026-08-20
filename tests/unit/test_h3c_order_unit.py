@@ -49,6 +49,30 @@ class H3cOrderTests(unittest.TestCase):
         self.assertIn("confirm_inventory_sale", source)
         self.assertIn("H3cMaterialUpload", source)
         self.assertIn("status = \"pending_review\"", source)
+        create_order_source = source[
+            source.index("async def create_order") : source.index(
+                "async def list_registrations"
+            )
+        ]
+        resubmission_source = source[
+            source.index("async def resubmit_materials") : source.index(
+                "async def review"
+            )
+        ]
+        review_source = source[
+            source.index("async def review") : source.index(
+                "async def close_registration"
+            )
+        ]
+        self.assertNotIn("H3cResubmissionCreate.model_validate", create_order_source)
+        self.assertIn(
+            "H3cResubmissionCreate.model_validate(data)",
+            resubmission_source,
+        )
+        self.assertIn(
+            "H3cReviewDecision.model_validate(decision_data)",
+            review_source,
+        )
 
     def test_h3c_response_exposes_registration_and_payment_fields(self):
         source = (REPO_ROOT / "app/schemas/h3c_registration.py").read_text("utf-8")

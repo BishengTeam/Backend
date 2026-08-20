@@ -39,7 +39,7 @@ async def context(monkeypatch):
     )
     from app.domain.order.src.index import Inventory, InventoryRecord, Order
     from app.domain.plan.src.index import Plan
-    from app.domain.user.src.index import User, UserRealname
+    from app.domain.user.src.index import AdminUser, User, UserRealname
     from app.domain.certification.src.index import Certification
 
     async with factory() as db:
@@ -89,6 +89,9 @@ async def context(monkeypatch):
             delete(Certification).where(Certification.code.like(f"{prefix}%"))
         )
         await db.execute(delete(UserRealname).where(UserRealname.user_id.in_(user_ids)))
+        await db.execute(
+            delete(AdminUser).where(AdminUser.username.like(f"{prefix}%"))
+        )
         await db.execute(delete(User).where(User.id.in_(user_ids)))
         await db.commit()
     await engine.dispose()
@@ -99,11 +102,19 @@ async def _seed(context):
     from app.domain.h3c.src.index import H3cExamBatch, H3cMaterialUpload
     from app.domain.order.src.index import Inventory, InventoryRecord
     from app.domain.plan.src.index import Plan
-    from app.domain.user.src.index import User, UserRealname
+    from app.domain.user.src.index import AdminUser, User, UserRealname
 
     code = f"{context.prefix}_H3C"
     now = datetime.now(timezone.utc)
     async with context.factory() as db:
+        admin = AdminUser(
+            username=f"{context.prefix}_admin",
+            password_hash="integration-only-hash",
+            role="h3c_admin",
+            must_change_password=False,
+        )
+        db.add(admin)
+        await db.flush()
         user = User(openid=f"{context.prefix}_user", phone="13800000001")
         db.add(user)
         await db.flush()
@@ -195,6 +206,7 @@ async def _seed(context):
         )
         await db.commit()
         return SimpleNamespace(
+            admin_id=admin.id,
             user_id=user.id,
             batch_id=batch.id,
             plan_id=plan.id,
@@ -246,7 +258,7 @@ async def test_h3c_zero_price_review_and_resubmission_refund_flow(context):
         await service.create_order(seed.user_id, _request(context, seed))
 
     rejected = await service.review(
-        admin_id=1,
+        admin_id=seed.admin_id,
         registration_id=created.id,
         decision_data={
             "decision": "rejected",
@@ -284,7 +296,7 @@ async def test_h3c_zero_price_review_and_resubmission_refund_flow(context):
     assert [item.is_current for item in resubmitted.materials] == [False, True]
 
     second_reject = await service.review(
-        admin_id=1,
+        admin_id=seed.admin_id,
         registration_id=created.id,
         decision_data={
             "decision": "rejected",
@@ -317,7 +329,7 @@ async def test_h3c_zero_price_review_and_resubmission_refund_flow(context):
     assert second_resubmission.resubmission_count == 2
 
     final_reject = await service.review(
-        admin_id=1,
+        admin_id=seed.admin_id,
         registration_id=created.id,
         decision_data={
             "decision": "rejected",
