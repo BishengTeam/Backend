@@ -234,6 +234,8 @@ class H3cReviewResponse(BaseModel):
     reviewer_admin_id: int
     reviewed_at: datetime
 
+    model_config = {"from_attributes": True}
+
 
 class H3cRegistrationResponse(BaseModel):
     id: int

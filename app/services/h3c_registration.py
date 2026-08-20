@@ -42,6 +42,7 @@ from app.schemas.h3c_registration import (
     H3cRegistrationResponse,
     H3cResubmissionCreate,
     H3cReviewDecision,
+    H3cReviewResponse,
     H3cUserExamBatchResponse,
 )
 from app.services.plan_enrollment import PlanEnrollmentService

@@ -49,6 +49,7 @@ class H3cOrderTests(unittest.TestCase):
         self.assertIn("confirm_inventory_sale", source)
         self.assertIn("H3cMaterialUpload", source)
         self.assertIn("status = \"pending_review\"", source)
+        self.assertIn("H3cReviewResponse", source.split("from app.schemas.h3c_registration import", 1)[1].split(")", 1)[0])
         create_order_source = source[
             source.index("async def create_order") : source.index(
                 "async def list_registrations"
