@@ -68,6 +68,15 @@ from app.domain.renshe.src.index import (
     RensheReview,
     RensheReviewCorrection,
 )
+from app.domain.h3c.src.index import (
+    H3cExamBatch,
+    H3cExportItem,
+    H3cExportJob,
+    H3cMaterial,
+    H3cRefundRequest,
+    H3cRegistration,
+    H3cReview,
+)
 from app.models.deployment_acceptance import (
     DeploymentAcceptance,
     DeploymentAcceptanceEvent,
@@ -155,4 +164,11 @@ __all__ = [
     "RensheRefundRequest",
     "RensheReview",
     "RensheReviewCorrection",
+    "H3cExamBatch",
+    "H3cExportItem",
+    "H3cExportJob",
+    "H3cMaterial",
+    "H3cRefundRequest",
+    "H3cRegistration",
+    "H3cReview",
 ]

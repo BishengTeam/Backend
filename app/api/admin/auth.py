@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Header, Request
 
 from app.adapter.security import revoke_token
 from app.api.admin.error_contracts import admin_error_contract
-from app.middleware.auth import get_current_admin, require_super_admin
+from app.middleware.auth import get_current_admin, require_normal_admin
 from app.middleware.rate_limit import limiter
 from app.policy.permissions import ROLE_PERMISSIONS
 from app.port.exceptions import BusinessException
@@ -104,7 +104,7 @@ async def change_password(
 async def reauthenticate(
     request: Request,
     body: AdminReauthRequest,
-    admin=Depends(require_super_admin),
+    admin=Depends(require_normal_admin),
 ) -> APIResponse[AdminReauthResponse]:
     result = await AdminAuthService().reauthenticate(
         admin_id=admin.id,

@@ -99,6 +99,19 @@ async def _inventory_action_exists(
 
 
 async def lock_certification_inventory(db: AsyncSession, cert_type: str) -> InventoryChange:
+    return await lock_inventory(
+        db,
+        inventory_type=INVENTORY_TYPE_CERTIFICATION,
+        ref_code=cert_type,
+    )
+
+
+async def lock_inventory(
+    db: AsyncSession,
+    *,
+    inventory_type: str,
+    ref_code: str,
+) -> InventoryChange:
     result = await db.execute(
         text(
             """
@@ -113,7 +126,7 @@ async def lock_certification_inventory(db: AsyncSession, cert_type: str) -> Inve
             RETURNING id, total_quota, available_quota, locked_quota, sold_quota
             """
         ),
-        {"inventory_type": INVENTORY_TYPE_CERTIFICATION, "ref_code": cert_type},
+        {"inventory_type": inventory_type, "ref_code": ref_code},
     )
     row = result.mappings().one_or_none()
     if row is None:

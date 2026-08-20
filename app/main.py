@@ -25,6 +25,9 @@ from app.schemas.common import success
 from app.services.cleanup import cleanup_loop
 from app.services.renshe_export import renshe_export_worker_loop
 from app.services.renshe_cleanup import renshe_cleanup_worker_loop
+from app.services.h3c_export import h3c_export_worker_loop
+from app.services.h3c_refund import h3c_refund_reconciliation_worker_loop
+from app.services.h3c_registration import h3c_registration_worker_loop
 from app.services.payment_reconciliation import (
     payment_reconciliation_metrics,
     payment_reconciliation_worker_loop,
@@ -65,6 +68,8 @@ async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(cleanup_loop())
     renshe_export_task = asyncio.create_task(renshe_export_worker_loop())
     renshe_cleanup_task = asyncio.create_task(renshe_cleanup_worker_loop())
+    h3c_export_task = asyncio.create_task(h3c_export_worker_loop())
+    h3c_registration_task = asyncio.create_task(h3c_registration_worker_loop())
     quiz_task = asyncio.create_task(quiz_worker_loop()) if quiz_embedded_enabled else None
     payment_reconciliation_task = (
         asyncio.create_task(payment_reconciliation_worker_loop())
@@ -76,18 +81,27 @@ async def lifespan(app: FastAPI):
         if settings.WECHAT_PAY_ENABLED
         else None
     )
+    h3c_refund_task = (
+        asyncio.create_task(h3c_refund_reconciliation_worker_loop())
+        if settings.WECHAT_PAY_ENABLED
+        else None
+    )
     logger.info("Application startup complete")
     yield
     logger.info("Shutting down background tasks...")
     cleanup_task.cancel()
     renshe_export_task.cancel()
     renshe_cleanup_task.cancel()
+    h3c_export_task.cancel()
+    h3c_registration_task.cancel()
     if quiz_task is not None:
         quiz_task.cancel()
     if payment_reconciliation_task is not None:
         payment_reconciliation_task.cancel()
     if refund_reconciliation_task is not None:
         refund_reconciliation_task.cancel()
+    if h3c_refund_task is not None:
+        h3c_refund_task.cancel()
     try:
         await cleanup_task
     except asyncio.CancelledError:
@@ -98,6 +112,14 @@ async def lifespan(app: FastAPI):
         pass
     try:
         await renshe_cleanup_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await h3c_export_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await h3c_registration_task
     except asyncio.CancelledError:
         pass
     if quiz_task is not None:
@@ -113,6 +135,11 @@ async def lifespan(app: FastAPI):
     if refund_reconciliation_task is not None:
         try:
             await refund_reconciliation_task
+        except asyncio.CancelledError:
+            pass
+    if h3c_refund_task is not None:
+        try:
+            await h3c_refund_task
         except asyncio.CancelledError:
             pass
     logger.info("Closing database connections...")

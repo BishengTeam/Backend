@@ -5,4 +5,11 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "quiz_content_edit", "quiz_content_publish", "quiz_library_manage",
         "course_quiz_bind",
     ],
+    "h3c_admin": [
+        "h3c:batch_manage",
+        "h3c:review",
+        "h3c:export",
+        "h3c:refund",
+        "h3c:order_close",
+    ],
 }

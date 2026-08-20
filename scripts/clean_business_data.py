@@ -72,6 +72,13 @@ DELETE_ORDER = [
     "user_student",
     "user_enterprise",
     "user_points",
+    # H3C child records must be removed before orders and users.
+    "h3c_export_item",
+    "h3c_review",
+    "h3c_refund_request",
+    "h3c_material",
+    "h3c_registration",
+    "h3c_material_upload",
 
     # ── 第 2 批：inventory_record（解除 order ↔ inventory 循环引用）──
     "inventory_record",
@@ -98,6 +105,8 @@ DELETE_ORDER = [
     "training",
     "zone",
     "quiz_category",
+    "h3c_export_job",
+    "h3c_exam_batch",
 
     # ── 第 5 批：user（所有引用已解除）──
     "user",

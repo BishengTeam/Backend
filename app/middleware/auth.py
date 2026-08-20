@@ -186,3 +186,20 @@ async def require_reauthenticated_super_admin(
     if not valid:
         raise ForbiddenException("请重新验证当前管理员密码")
     return admin
+
+
+async def require_reauthenticated_admin(
+    x_reauth_token: str | None = Header(None, alias="X-Reauth-Token"),
+    admin=Depends(require_normal_admin),
+):
+    """Require a ten-minute reauthentication grant for any fixed admin role."""
+
+    valid = await validate_admin_reauth_token(
+        x_reauth_token,
+        admin_id=admin.id,
+        jti=getattr(admin, "_auth_jti", ""),
+        auth_version=admin.auth_version,
+    )
+    if not valid:
+        raise ForbiddenException("请重新验证当前管理员密码")
+    return admin

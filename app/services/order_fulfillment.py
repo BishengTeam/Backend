@@ -150,6 +150,9 @@ class OrderFulfillmentService:
         return bool(entitlements)
 
     async def on_paid(self, db: AsyncSession, order: Order) -> bool:
+        from app.services.h3c_registration import H3cRegistrationService
+
+        h3c_processed = await H3cRegistrationService().on_order_paid(db, order)
         application = await self._lock_renshe_application(db, order)
         if order.application_id is not None:
             if application is None:
@@ -163,7 +166,7 @@ class OrderFulfillmentService:
 
         enrollment = await self._lock_course_enrollment(db, order)
         if order.order_kind != "course":
-            return False
+            return h3c_processed
         if enrollment is None:
             raise ConflictException("课程订单缺少报名记录，无法开通学习权限")
         course = await db.get(Course, enrollment.course_id)
@@ -213,6 +216,9 @@ class OrderFulfillmentService:
         return True
 
     async def on_closed(self, db: AsyncSession, order: Order) -> bool:
+        from app.services.h3c_registration import H3cRegistrationService
+
+        h3c_processed = await H3cRegistrationService().on_order_closed(db, order)
         application = await self._lock_renshe_application(db, order)
         if order.application_id is not None:
             if application is None:
@@ -234,7 +240,7 @@ class OrderFulfillmentService:
         if order.order_kind == "course" and enrollment is None:
             raise ConflictException("课程订单缺少报名记录，无法关闭报名")
         if enrollment is None or enrollment.status != "pending_payment":
-            return False
+            return h3c_processed
 
         enrollment.status = "cancelled"
         enrollment.learning_access = False

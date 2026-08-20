@@ -5,7 +5,7 @@ class TestRolePermissions:
     def test_only_frozen_system_roles_are_configured(self):
         from app.policy.permissions import ROLE_PERMISSIONS
 
-        assert set(ROLE_PERMISSIONS) == {"super_admin", "quiz_admin"}
+        assert set(ROLE_PERMISSIONS) == {"super_admin", "quiz_admin", "h3c_admin"}
 
     def test_super_admin_has_wildcard(self):
         from app.policy.permissions import ROLE_PERMISSIONS

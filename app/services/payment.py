@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.adapter.database import get_db_ctx
 from app.domain.certification.src.index import Course, CourseEnrollment
+from app.domain.h3c.src.index import H3cRefundRequest
 from app.domain.order.src.index import (
     Order,
     apply_order_status_transition,
@@ -464,7 +465,14 @@ class PaymentService:
                 # Human-resources refunds have their own request/notification
                 # state machine in stage four.  Transaction query must not
                 # bypass it merely because WeChat reports REFUND here.
-                if order.application_id is None:
+                has_h3c_refund = (
+                    await db.scalar(
+                        select(H3cRefundRequest.id)
+                        .where(H3cRefundRequest.order_id == order.id)
+                        .limit(1)
+                    )
+                ) is not None
+                if order.application_id is None and not has_h3c_refund:
                     if order.status == "refunded":
                         processed = await self._refund_inventory_sale(db, order)
                     elif order.status in {"paid", "completed"}:

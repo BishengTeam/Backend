@@ -30,6 +30,7 @@ from app.domain.order.src.transition.inventory_transitions import (
     add_inventory_record,
     confirm_inventory_sale,
     lock_certification_inventory,
+    lock_inventory,
     refund_inventory_sale,
     release_inventory_lock,
 )
@@ -60,6 +61,7 @@ __all__ = [
     "add_inventory_record",
     "confirm_inventory_sale",
     "lock_certification_inventory",
+    "lock_inventory",
     "refund_inventory_sale",
     "release_inventory_lock",
 ]
