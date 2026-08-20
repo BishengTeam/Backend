@@ -195,7 +195,6 @@ class H3cRegistrationService:
         user_id: int,
         data: H3cOrderCreate,
     ) -> H3cRegistrationResponse:
-        data = H3cResubmissionCreate.model_validate(data)
         async with get_db_ctx() as db:
             async with db.begin():
                 user = await db.get(User, user_id)
