@@ -97,3 +97,38 @@ class H3cOrderTests(unittest.TestCase):
         self.assertIn("resubmission_due_at", fields)
         self.assertIn("materials", fields)
         self.assertIn("latest_review", fields)
+
+    def test_model_normalization_is_confined_to_matching_h3c_methods(self):
+        source = (REPO_ROOT / "app/services/h3c_registration.py").read_text("utf-8")
+        tree = ast.parse(source)
+        service_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+            and node.name == "H3cRegistrationService"
+        )
+        functions = {
+            node.name: node
+            for node in service_class.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+
+        def body_text(name):
+            return ast.unparse(functions[name])
+
+        self.assertNotIn(
+            "H3cResubmissionCreate.model_validate",
+            body_text("create_order"),
+        )
+        self.assertNotIn(
+            "H3cReviewDecision.model_validate",
+            body_text("get_registration"),
+        )
+        self.assertIn(
+            "H3cResubmissionCreate.model_validate(data)",
+            body_text("resubmit_materials"),
+        )
+        self.assertIn(
+            "H3cReviewDecision.model_validate(decision_data)",
+            body_text("review"),
+        )

@@ -436,7 +436,6 @@ class H3cRegistrationService:
         user_id: int,
         registration_id: int,
     ) -> H3cRegistrationResponse:
-        decision_data = H3cReviewDecision.model_validate(decision_data)
         async with get_db_ctx() as db:
             registration = await self._get_user_registration(db, user_id, registration_id)
             return await self._response(db, registration)
