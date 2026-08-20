@@ -74,12 +74,15 @@ async def context(monkeypatch):
         await db.execute(
             delete(H3cRegistration).where(H3cRegistration.id.in_(registration_ids))
         )
-        await db.execute(delete(Order).where(Order.id.in_(order_ids)))
+        inventory_ids = select(Inventory.id).where(
+            Inventory.ref_code.in_(inventory_refs)
+        )
         await db.execute(
             delete(InventoryRecord).where(InventoryRecord.inventory_id.in_(
-                select(Inventory.id).where(Inventory.ref_code.in_(inventory_refs))
+                inventory_ids
             ))
         )
+        await db.execute(delete(Order).where(Order.id.in_(order_ids)))
         await db.execute(
             delete(Inventory).where(Inventory.ref_code.in_(inventory_refs))
         )
