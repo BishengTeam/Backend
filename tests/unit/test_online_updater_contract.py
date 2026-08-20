@@ -16,6 +16,11 @@ def test_online_updater_shell_contract():
     assert "pg_dump" in source
     assert "pg_restore --list" in source
     assert "upgrade_release.sh.new" in source
+    assert 'install -m 0600 /dev/null "$log_file"' in source
+    assert 'exec > >(tee -a "$log_file") 2>&1' in source
+    assert source.index('install -m 0600 /dev/null "$log_file"') < source.index(
+        'exec > >(tee -a "$log_file") 2>&1'
+    )
     assert "/var/run/docker.sock" not in source
     assert "eval" not in source
 

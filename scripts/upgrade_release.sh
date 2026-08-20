@@ -254,8 +254,8 @@ exec 9>"$UPDATER_ROOT/upgrade.lock"
 flock -n 9 || fail "another upgrade is already running"
 
 log_file="$UPDATER_ROOT/logs/${RELEASE}-$(date -u +%Y%m%dT%H%M%SZ).log"
+install -m 0600 /dev/null "$log_file"
 exec > >(tee -a "$log_file") 2>&1
-chmod 0600 "$log_file"
 
 asset_dir="$UPDATER_ROOT/cache/$RELEASE"
 api_file="$UPDATER_ROOT/cache/$RELEASE.json"
