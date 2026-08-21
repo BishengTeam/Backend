@@ -192,6 +192,7 @@ class QuizService:
                 options=question.options or {},
                 correct_answer=question.correct_answer,
                 explanation=question.explanation or "",
+                image_urls=list(question.image_urls or []),
                 question_lock_version=question.lock_version,
             )
             db.add(sq)

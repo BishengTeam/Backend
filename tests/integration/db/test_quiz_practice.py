@@ -179,6 +179,7 @@ async def _create_questions(
                 options={"A": "Correct", "B": "Wrong", "C": "Other"},
                 correct_answer="A",
                 explanation=f"Explanation {index}",
+                image_urls=[f"https://cdn.example.com/{suffix}-{index}.png"] if index == 0 else [],
                 ever_published=status != "draft",
                 published_at=now if status != "draft" else None,
                 disabled_at=now if status == "disabled" else None,
@@ -241,6 +242,7 @@ async def test_public_tree_and_logged_in_question_list_use_effective_subtree(
     assert {item.category_id for item in result.items} == {root.id, child.id}
     for item in result.items:
         payload = item.model_dump()
+        assert "image_urls" in payload
         assert "correct_answer" not in payload
         assert "explanation" not in payload
 

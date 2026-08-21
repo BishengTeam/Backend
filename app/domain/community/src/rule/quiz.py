@@ -125,6 +125,7 @@ class NormalizedQuizQuestion:
     options: dict[str, str] | None
     correct_answer: QuizAnswer | None
     explanation: str | None
+    image_urls: list[str]
 
 
 def _enum_value(value: str | StrEnum, enum_type: type[StrEnum], field: str) -> StrEnum:
@@ -180,6 +181,36 @@ def normalize_question_text(question_text: object) -> str:
 
 def question_text_digest(normalized_question_text: str) -> str:
     return hashlib.sha256(normalized_question_text.encode("utf-8")).hexdigest()
+
+
+def normalize_image_urls(value: object = None) -> list[str]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        items = [part for part in re.split(r"[\r\n,，]+", value) if part.strip()]
+    elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        items = list(value)
+    else:
+        raise QuizRuleViolation("image_urls", "题干图片必须是 URL 数组")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(items):
+        if not isinstance(item, str):
+            raise QuizRuleViolation(f"image_urls.{index}", "图片 URL 必须是字符串")
+        url = item.strip()
+        if not url:
+            continue
+        if len(url) > 512:
+            raise QuizRuleViolation(f"image_urls.{index}", "图片 URL 长度不能超过 512")
+        if not re.match(r"^https?://", url, flags=re.IGNORECASE):
+            raise QuizRuleViolation(f"image_urls.{index}", "图片 URL 必须以 http:// 或 https:// 开头")
+        if url not in seen:
+            normalized.append(url)
+            seen.add(url)
+    if len(normalized) > 9:
+        raise QuizRuleViolation("image_urls", "题干图片最多 9 张")
+    return normalized
 
 
 def _normalize_option_key(value: object, *, field: str) -> str:
@@ -295,6 +326,7 @@ def normalize_question_payload(
     options: object = None,
     correct_answer: object = None,
     explanation: object = None,
+    image_urls: object = None,
     require_publishable: bool = False,
 ) -> NormalizedQuizQuestion:
     normalized_type = _enum_value(
@@ -328,6 +360,7 @@ def normalize_question_payload(
         max_length=1024,
         required=require_publishable,
     )
+    normalized_image_urls = normalize_image_urls(image_urls)
     return NormalizedQuizQuestion(
         question_type=normalized_type,
         question_text=display_text,
@@ -336,6 +369,7 @@ def normalize_question_payload(
         options=normalized_options,
         correct_answer=normalized_answer,
         explanation=normalized_explanation,
+        image_urls=normalized_image_urls,
     )
 
 

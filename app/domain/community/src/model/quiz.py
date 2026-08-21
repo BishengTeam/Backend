@@ -424,6 +424,9 @@ class QuizQuestion(Base, _QuizTimestampMixin):
     options: Mapped[dict[str, str] | None] = mapped_column(JSONB)
     correct_answer: Mapped[str | list[str] | None] = mapped_column(JSONB)
     explanation: Mapped[str | None] = mapped_column(String(1024))
+    image_urls: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'")
+    )
     ever_published: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
@@ -494,6 +497,9 @@ class QuizQuestionRevision(Base, _QuizCreatedAtMixin):
     options: Mapped[dict[str, str] | None] = mapped_column(JSONB)
     correct_answer: Mapped[str | list[str] | None] = mapped_column(JSONB)
     explanation: Mapped[str | None] = mapped_column(String(1024))
+    image_urls: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'")
+    )
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("admin_user.id", ondelete="SET NULL")
@@ -841,6 +847,9 @@ class QuizPracticeSessionQuestion(Base, _QuizTimestampMixin):
     options: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False)
     correct_answer: Mapped[str | list[str]] = mapped_column(JSONB, nullable=False)
     explanation: Mapped[str] = mapped_column(String(1024), nullable=False)
+    image_urls: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'")
+    )
     question_lock_version: Mapped[int] = mapped_column(Integer, nullable=False)
     withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     skip_count: Mapped[int] = mapped_column(
@@ -1171,6 +1180,9 @@ class QuizExamQuestion(Base, _QuizTimestampMixin):
     options: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False)
     correct_answer: Mapped[str | list[str]] = mapped_column(JSONB, nullable=False)
     explanation: Mapped[str] = mapped_column(String(1024), nullable=False)
+    image_urls: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'")
+    )
     question_lock_version: Mapped[int] = mapped_column(Integer, nullable=False)
 
 

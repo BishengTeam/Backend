@@ -185,6 +185,7 @@ class AdminQuizV2Service:
             "options": question.options,
             "correct_answer": question.correct_answer,
             "explanation": question.explanation,
+            "image_urls": question.image_urls,
             "current_revision_id": question.current_revision_id,
             "pending_revision_id": question.pending_revision_id,
             "deleted_at": question.deleted_at,
@@ -234,6 +235,7 @@ class AdminQuizV2Service:
             options=question.options,
             correct_answer=question.correct_answer,
             explanation=question.explanation,
+            image_urls=list(question.image_urls or []),
             ever_published=bool(question.ever_published),
             published_at=question.published_at,
             disabled_at=question.disabled_at,
@@ -282,6 +284,7 @@ class AdminQuizV2Service:
         options: object,
         correct_answer: object,
         explanation: object,
+        image_urls: object,
         require_publishable: bool,
     ):
         try:
@@ -291,6 +294,7 @@ class AdminQuizV2Service:
                 options=options,
                 correct_answer=correct_answer,
                 explanation=explanation,
+                image_urls=image_urls,
                 require_publishable=require_publishable,
             )
         except QuizRuleViolation as exc:
@@ -322,6 +326,7 @@ class AdminQuizV2Service:
         question.options = normalized.options
         question.correct_answer = normalized.correct_answer
         question.explanation = normalized.explanation
+        question.image_urls = normalized.image_urls
 
     @staticmethod
     def _new_revision(
@@ -344,6 +349,7 @@ class AdminQuizV2Service:
             options=normalized.options,
             correct_answer=normalized.correct_answer,
             explanation=normalized.explanation,
+            image_urls=normalized.image_urls,
             published_at=published_at,
             created_by=admin_id,
         )
@@ -1727,6 +1733,7 @@ class AdminQuizV2Service:
             options=data.options,
             correct_answer=data.correct_answer,
             explanation=data.explanation,
+            image_urls=data.image_urls,
             require_publishable=False,
         )
         async with get_db_ctx() as db:
@@ -1751,6 +1758,7 @@ class AdminQuizV2Service:
                 options=normalized.options,
                 correct_answer=normalized.correct_answer,
                 explanation=normalized.explanation,
+                image_urls=normalized.image_urls,
                 ever_published=False,
                 stem_reserved=True,
                 lock_version=1,
@@ -1841,6 +1849,9 @@ class AdminQuizV2Service:
                 ),
                 explanation=(
                     data.explanation if "explanation" in fields else source.explanation
+                ),
+                image_urls=(
+                    data.image_urls if "image_urls" in fields else source.image_urls
                 ),
                 require_publishable=bool(question.ever_published),
             )
@@ -1940,6 +1951,7 @@ class AdminQuizV2Service:
                 options=pending.options,
                 correct_answer=pending.correct_answer,
                 explanation=pending.explanation,
+                image_urls=pending.image_urls,
                 require_publishable=True,
             )
             if await self._stem_taken(
@@ -2106,6 +2118,7 @@ class AdminQuizV2Service:
                             options=pending.options,
                             correct_answer=pending.correct_answer,
                             explanation=pending.explanation,
+                            image_urls=pending.image_urls,
                             require_publishable=True,
                         )
                     except ValidationException as exc:
@@ -2169,6 +2182,7 @@ class AdminQuizV2Service:
                         options=pending.options,
                         correct_answer=pending.correct_answer,
                         explanation=pending.explanation,
+                        image_urls=pending.image_urls,
                         require_publishable=True,
                     )
                     self._apply_content(question, normalized)

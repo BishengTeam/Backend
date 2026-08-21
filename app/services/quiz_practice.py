@@ -271,6 +271,7 @@ class QuizPracticeService:
             "options": dict(question.options or {}),
             "correct_answer": question.correct_answer,
             "explanation": question.explanation or "",
+            "image_urls": list(question.image_urls or []),
             "question_lock_version": int(question.lock_version),
         }
 
@@ -298,6 +299,7 @@ class QuizPracticeService:
             question_type=str(snapshot["question_type"]),
             question_text=str(snapshot["question_text"]),
             options=dict(snapshot.get("options") or {}),
+            image_urls=list(snapshot.get("image_urls") or []),
         )
 
     @staticmethod
@@ -323,6 +325,7 @@ class QuizPracticeService:
             question_type=str(question.question_type),
             question_text=question.question_text,
             options=dict(question.options or {}),
+            image_urls=list(question.image_urls or []),
         )
 
     @classmethod
@@ -588,6 +591,7 @@ class QuizPracticeService:
                         options=snapshot["options"],
                         correct_answer=snapshot["correct_answer"],
                         explanation=snapshot["explanation"],
+                        image_urls=snapshot["image_urls"],
                         question_lock_version=snapshot["question_lock_version"],
                     )
                 )
@@ -718,6 +722,7 @@ class QuizPracticeService:
                     question_type=snapshot.question_type,
                     question_text=snapshot.question_text,
                     options=dict(snapshot.options or {}),
+                    image_urls=list(snapshot.image_urls or []),
                     session_question_id=int(snapshot.id),
                     position=int(snapshot.position),
                     category_path=[

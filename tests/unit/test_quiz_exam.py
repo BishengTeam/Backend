@@ -16,7 +16,7 @@ import pytest
 from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
-from app.main import app
+from app.api.quiz import router as quiz_router
 from app.port.exceptions import ValidationException
 from app.schemas.quiz_contract import (
     QuizExamAbandonedDetail,
@@ -49,6 +49,7 @@ def _snapshot(
         options=options,
         correct_answer=correct_answer,
         explanation="解析",
+        image_urls=["https://cdn.example.com/exam-stem.png"],
         question_lock_version=2,
     )
 
@@ -122,6 +123,7 @@ def test_public_exam_projections_never_expose_answers_before_settlement() -> Non
         "question_type": "single_choice",
         "question_text": "题目 1",
         "options": {"A": "一", "B": "二", "C": "三", "D": "四"},
+        "image_urls": ["https://cdn.example.com/exam-stem.png"],
     }
     assert "correct_answer" not in payload
     assert "explanation" not in payload
@@ -132,10 +134,10 @@ def test_public_exam_projections_never_expose_answers_before_settlement() -> Non
 
 def test_new_exam_routes_are_authenticated_and_have_explicit_models() -> None:
     routes = {
-        (next(iter(route.methods)), route.path): route
-        for route in app.routes
+        (next(iter(route.methods)), f"/api{route.path}"): route
+        for route in quiz_router.routes
         if isinstance(route, APIRoute)
-        and route.path.startswith("/api/quiz/exams")
+        and route.path.startswith("/quiz/exams")
         and route.methods
     }
     expected = {

@@ -101,6 +101,7 @@ def question_payload(question: Any, *, include_correct_answer: bool = False) -> 
         "question_type": question.question_type,
         "question_text": question.question_text,
         "options": question.options,
+        "image_urls": list(getattr(question, "image_urls", None) or []),
         "explanation": question.explanation,
     }
     if include_correct_answer:

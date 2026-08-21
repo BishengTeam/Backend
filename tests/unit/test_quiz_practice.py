@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from app.main import app
+from app.api.quiz import router as quiz_router
 from app.schemas.quiz_contract import (
     QuizCollectionItem,
     QuizPracticeAttemptCreate,
@@ -88,6 +88,7 @@ def test_public_question_projection_never_contains_answer_or_explanation() -> No
         options={"A": "One", "B": "Two", "C": "Three"},
         correct_answer="A",
         explanation="Because A is correct.",
+        image_urls=["https://cdn.example.com/stem.png"],
         lock_version=3,
     )
 
@@ -104,6 +105,7 @@ def test_public_question_projection_never_contains_answer_or_explanation() -> No
         "question_type": "single_choice",
         "question_text": "Which option is correct?",
         "options": {"A": "One", "B": "Two", "C": "Three"},
+        "image_urls": ["https://cdn.example.com/stem.png"],
     }
     assert "correct_answer" not in QuizPublicQuestion.model_fields
     assert "explanation" not in QuizPublicQuestion.model_fields
@@ -118,6 +120,7 @@ def test_pending_practice_question_omits_answer_key_fields_from_wire_payload() -
         question_type="single_choice",
         question_text="Which option is correct?",
         options={"A": "One", "B": "Two", "C": "Three"},
+        image_urls=["https://cdn.example.com/stem.png"],
         session_question_id=19,
         position=1,
         category_path=[],
@@ -128,6 +131,7 @@ def test_pending_practice_question_omits_answer_key_fields_from_wire_payload() -
     payload = pending.model_dump()
 
     assert payload["latest_result"] is None
+    assert payload["image_urls"] == ["https://cdn.example.com/stem.png"]
     assert "correct_answer" not in payload
     assert "explanation" not in payload
     assert "is_correct" not in payload
@@ -189,7 +193,7 @@ def test_shanghai_day_boundaries_and_history_utc_range() -> None:
 
 
 def test_question_list_requires_login_while_category_tree_is_public() -> None:
-    routes = {route.path: route for route in app.routes if hasattr(route, "dependant")}
+    routes = {f"/api{route.path}": route for route in quiz_router.routes if hasattr(route, "dependant")}
 
     category_dependencies = {
         dependency.call.__name__

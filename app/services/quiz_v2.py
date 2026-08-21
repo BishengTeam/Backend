@@ -738,6 +738,7 @@ class QuizV2Service:
                         options=dict(revision.options or {}),
                         correct_answer=revision.correct_answer,
                         explanation=revision.explanation or "",
+                        image_urls=list(revision.image_urls or []),
                         question_lock_version=question.lock_version,
                         skip_count=0,
                     )
@@ -847,6 +848,7 @@ class QuizV2Service:
                     question_type=snapshot.question_type,
                     question_text=snapshot.question_text,
                     options=dict(snapshot.options or {}),
+                    image_urls=list(snapshot.image_urls or []),
                     session_question_id=int(snapshot.id),
                     position=int(snapshot.position),
                     category_path=[

@@ -178,6 +178,7 @@ async def _create_questions(
                 options={"A": "One", "B": "Two", "C": "Three", "D": "Four"},
                 correct_answer=(["A", "C"] if is_multiple else "A"),
                 explanation=f"Explanation {index}",
+                image_urls=[f"https://cdn.example.com/{suffix}-{index}.png"] if index == 0 else [],
                 ever_published=True,
                 published_at=now,
                 disabled_at=None,
@@ -550,6 +551,7 @@ async def test_exam_http_auth_validation_visibility_conflict_and_ownership(
                 "correct_answer" not in question and "explanation" not in question
                 for question in exam["questions"]
             )
+            assert any(question["image_urls"] for question in exam["questions"])
 
             current = await client.get(
                 "/api/quiz/exams/current",
@@ -602,6 +604,7 @@ async def test_exam_http_auth_validation_visibility_conflict_and_ownership(
                 "correct_answer" in question and "explanation" in question
                 for question in settled_questions
             )
+            assert any(question["image_urls"] for question in settled_questions)
 
             settled_current = await client.get(
                 "/api/quiz/exams/current",

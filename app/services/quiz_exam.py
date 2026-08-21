@@ -96,6 +96,7 @@ class QuizExamService:
             "options": dict(sorted((snapshot.options or {}).items())),
             "correct_answer": snapshot.correct_answer,
             "explanation": snapshot.explanation,
+            "image_urls": list(snapshot.image_urls or []),
             "question_lock_version": int(snapshot.question_lock_version),
         }
 
@@ -129,6 +130,7 @@ class QuizExamService:
             question_type=snapshot.question_type,
             question_text=snapshot.question_text,
             options=dict(sorted((snapshot.options or {}).items())),
+            image_urls=list(snapshot.image_urls or []),
         )
 
     @staticmethod
@@ -588,6 +590,7 @@ class QuizExamService:
                         "options": dict(revision.options or {}),
                         "correct_answer": revision.correct_answer,
                         "explanation": revision.explanation or "",
+                        "image_urls": list(revision.image_urls or []),
                         "question_lock_version": int(question.lock_version),
                     }
                 else:
@@ -606,6 +609,7 @@ class QuizExamService:
                         options=snapshot["options"],
                         correct_answer=snapshot["correct_answer"],
                         explanation=snapshot["explanation"],
+                        image_urls=snapshot["image_urls"],
                         question_lock_version=snapshot["question_lock_version"],
                     )
                 )

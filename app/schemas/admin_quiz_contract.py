@@ -136,6 +136,7 @@ class AdminQuizQuestionCreate(QuizContractModel):
     options: dict[str, str] | None = None
     correct_answer: QuizAnswer | None = None
     explanation: str | None = Field(default=None, max_length=1024)
+    image_urls: list[str] = Field(default_factory=list, max_length=9)
 
     @model_validator(mode="after")
     def normalize_draft(self) -> "AdminQuizQuestionCreate":
@@ -147,6 +148,7 @@ class AdminQuizQuestionCreate(QuizContractModel):
             options=self.options,
             correct_answer=self.correct_answer,
             explanation=self.explanation,
+            image_urls=self.image_urls,
             require_publishable=False,
         )
         self.question_type = normalized.question_type
@@ -154,6 +156,7 @@ class AdminQuizQuestionCreate(QuizContractModel):
         self.options = normalized.options
         self.correct_answer = normalized.correct_answer
         self.explanation = normalized.explanation
+        self.image_urls = normalized.image_urls
         return self
 
 
@@ -166,6 +169,7 @@ class AdminQuizQuestionUpdate(QuizContractModel):
     options: dict[str, str] | None = None
     correct_answer: QuizAnswer | None = None
     explanation: str | None = Field(default=None, max_length=1024)
+    image_urls: list[str] | None = Field(default=None, max_length=9)
 
     @model_validator(mode="after")
     def require_change(self) -> "AdminQuizQuestionUpdate":
@@ -188,6 +192,7 @@ class AdminQuizQuestionResponse(QuizContractModel):
     options: dict[str, str] | None = None
     correct_answer: QuizAnswer | None = None
     explanation: str | None = None
+    image_urls: list[str] = Field(default_factory=list)
     ever_published: bool
     published_at: datetime | None = None
     disabled_at: datetime | None = None
@@ -216,6 +221,7 @@ class AdminQuizQuestionRevisionResponse(QuizContractModel):
     options: dict[str, str] | None = None
     correct_answer: QuizAnswer | None = None
     explanation: str | None = None
+    image_urls: list[str] = Field(default_factory=list)
     published_at: datetime | None = None
     created_by: int | None = None
     created_at: datetime
@@ -341,6 +347,7 @@ class AdminQuizImportQuestion(QuizContractModel):
     options: dict[str, str] | None = None
     correct_answer: QuizAnswer | None = None
     explanation: str | None = Field(default=None, max_length=1024)
+    image_urls: object = Field(default_factory=list)
 
     @field_validator("category_path")
     @classmethod
@@ -355,6 +362,7 @@ class AdminQuizImportQuestion(QuizContractModel):
             options=self.options,
             correct_answer=self.correct_answer,
             explanation=self.explanation,
+            image_urls=self.image_urls,
             require_publishable=False,
         )
         self.question_type = normalized.question_type
@@ -362,6 +370,7 @@ class AdminQuizImportQuestion(QuizContractModel):
         self.options = normalized.options
         self.correct_answer = normalized.correct_answer
         self.explanation = normalized.explanation
+        self.image_urls = normalized.image_urls
         return self
 
 
