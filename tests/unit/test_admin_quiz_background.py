@@ -295,6 +295,7 @@ def test_quiz_worker_registers_cleanup_and_stats_with_subminute_polling() -> Non
         "quiz-exam-timeout",
         "quiz-question-stats",
         "course-entitlement-jobs",
+        "course-upload-cleanup",
     )
     assert QUIZ_TASK_RUNTIME.poll_seconds <= 60
 

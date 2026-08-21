@@ -33,8 +33,8 @@ class Course(Base, TimestampMixin):
             name="ck_course_status",
         ),
         CheckConstraint(
-            "free_preview_seconds IS NULL OR free_preview_seconds >= 0",
-            name="ck_course_free_preview_nonnegative",
+            "preview_chapter_count >= 0",
+            name="ck_course_preview_chapter_count_nonnegative",
         ),
         CheckConstraint(
             "((status = 'published' AND is_active = true) OR "
@@ -47,12 +47,13 @@ class Course(Base, TimestampMixin):
     title: Mapped[str] = mapped_column(String(256), nullable=False)
     category: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text)
-    cover_url: Mapped[str | None] = mapped_column(String(512))
-    video_url: Mapped[str | None] = mapped_column(String(512))
+    cover_storage_key: Mapped[str] = mapped_column(String(512), unique=True)
     price: Mapped[int] = mapped_column(Integer, nullable=False)
     teacher_name: Mapped[str | None] = mapped_column(String(64))
     teacher_contact: Mapped[str | None] = mapped_column(String(128))
-    free_preview_seconds: Mapped[int | None] = mapped_column(Integer)
+    preview_chapter_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="draft", server_default="draft"
     )
@@ -63,10 +64,8 @@ class Course(Base, TimestampMixin):
     chapters: Mapped[list["CourseChapter"]] = relationship(
         back_populates="course", order_by="CourseChapter.sort_order"
     )
-    assets: Mapped[list["CourseAsset"]] = relationship(
-        back_populates="course",
-        cascade="all, delete-orphan",
-        order_by="CourseAsset.sort_order, CourseAsset.id",
+    uploads: Mapped[list["CourseUpload"]] = relationship(
+        back_populates="course", cascade="all, delete-orphan"
     )
 
 
@@ -127,27 +126,54 @@ class CourseEnrollment(Base, TimestampMixin):
     order: Mapped[Order | None] = relationship()
 
 
-class CourseAsset(Base, TimestampMixin):
-    __tablename__ = "course_asset"
+class CourseUpload(Base, TimestampMixin):
+    """An administrator-owned resumable OSS multipart upload session."""
+
+    __tablename__ = "course_upload"
     __table_args__ = (
-        CheckConstraint("sort_order >= 0", name="ck_course_asset_sort_order_nonnegative"),
-        Index("ix_course_asset_course_sort", "course_id", "sort_order", "id"),
+        CheckConstraint(
+            "kind IN ('cover', 'chapter_video')", name="ck_course_upload_kind"
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'completed', 'bound', 'aborted', 'expired')",
+            name="ck_course_upload_status",
+        ),
+        CheckConstraint("size_bytes > 0", name="ck_course_upload_size_positive"),
+        CheckConstraint("part_size > 0", name="ck_course_upload_part_size_positive"),
+        CheckConstraint(
+            "(kind = 'cover' AND title IS NULL AND duration IS NULL AND sort_order IS NULL) "
+            "OR (kind = 'chapter_video' AND title IS NOT NULL "
+            "AND duration IS NOT NULL AND sort_order IS NOT NULL)",
+            name="ck_course_upload_kind_fields",
+        ),
+        CheckConstraint(
+            "kind = 'cover' OR course_id IS NOT NULL",
+            name="ck_course_upload_course_presence",
+        ),
+        Index("ix_course_upload_course_status", "course_id", "status", "id"),
+        Index("ix_course_upload_cleanup", "status", "expires_at"),
     )
 
-    course_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("course.id", ondelete="CASCADE"), nullable=False
+    course_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("course.id", ondelete="CASCADE")
     )
-    title: Mapped[str] = mapped_column(String(256), nullable=False)
-    storage_key: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
-    asset_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    sort_order: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0"
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    object_key: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    oss_upload_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(256), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    part_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending"
     )
-    is_preview: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default="false"
-    )
+    title: Mapped[str | None] = mapped_column(String(256))
+    duration: Mapped[int | None] = mapped_column(Integer)
+    sort_order: Mapped[int | None] = mapped_column(Integer)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
-    course: Mapped[Course] = relationship(back_populates="assets")
+    course: Mapped[Course | None] = relationship(back_populates="uploads")
 
 
 class CourseCategory(Base, TimestampMixin):

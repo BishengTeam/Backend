@@ -1,5 +1,6 @@
 import ast
 import unittest
+from decimal import Decimal
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -248,8 +249,13 @@ class CoursesSystemTests(unittest.TestCase):
     def test_admin_course_create_allows_free_online_course(self):
         from app.schemas.admin_course import AdminCourseCreate
 
-        course = AdminCourseCreate(title="课程A", category="网络", price=0)
-        self.assertEqual(course.price, 0)
+        course = AdminCourseCreate(
+            title="课程A",
+            category="网络",
+            cover_upload_id=1,
+            price_yuan=Decimal("0.00"),
+        )
+        self.assertEqual(course.price_yuan, Decimal("0.00"))
         self.assertFalse(hasattr(course, "batches"))
 
     def test_course_purchase_response_matches_unified_contract(self):

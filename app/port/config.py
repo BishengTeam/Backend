@@ -299,6 +299,7 @@ class Settings(BaseSettings):
     ALIYUN_OSS_ACCESS_KEY_SECRET: str = ""
     ALIYUN_OSS_PREFIX: str = "renshe"
     ALIYUN_OSS_SIGNED_URL_TTL_SECONDS: int = 300
+    COURSE_OSS_INSTALLATION_ID: str = ""
     RENSHE_TEMPLATE_DIR: str = "../docs/renshe"
     RENSHE_WORKER_POLL_SECONDS: int = 5
     # Production retention is frozen at 30 days.  Non-production deployments

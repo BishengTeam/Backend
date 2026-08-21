@@ -94,7 +94,9 @@ async def quiz_v2_catalog_env(monkeypatch):
         course = Course(
             title=f"{prefix}课程",
             category="test",
+            cover_storage_key=f"course/{prefix}/cover.jpg",
             price=100,
+            preview_chapter_count=1,
             status="published",
             is_active=True,
         )

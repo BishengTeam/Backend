@@ -384,6 +384,14 @@ for item in "Backend|$new_backend_image|$new_backend_commit" "Admin|$new_admin_i
   [[ "$revision" = "$commit" ]] || fail "new $name image revision mismatch"
 done
 
+log "configuring course OSS browser-upload CORS"
+docker_cli run --rm \
+  --entrypoint python \
+  --user "$(id -u):$(id -g)" \
+  -v "$DEPLOYMENT_ROOT/installation:$DEPLOYMENT_ROOT/installation:ro" \
+  "$new_backend_image" scripts/configure_course_oss.py \
+  --installation-dir "$DEPLOYMENT_ROOT/installation" >/dev/null
+
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 backup_dir="$DEPLOYMENT_ROOT/backups/postgresql"
 backup_file="$backup_dir/${RELEASE}-${timestamp}.dump"

@@ -3,6 +3,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -35,7 +36,6 @@ async def course_context(monkeypatch, tmp_path):
 
     import app.services.admin_course as admin_course_module
     import app.services.course as course_module
-    import app.services.course_asset as course_asset_module
     import app.services.course_purchase as purchase_module
     import app.services.order_timeout as timeout_module
     import app.services.payment as payment_module
@@ -48,17 +48,11 @@ async def course_context(monkeypatch, tmp_path):
     for module in (
         admin_course_module,
         course_module,
-        course_asset_module,
         purchase_module,
         timeout_module,
         payment_module,
     ):
         monkeypatch.setattr(module, "get_db_ctx", test_db_ctx)
-    monkeypatch.setattr(
-        course_asset_module,
-        "PRIVATE_COURSE_ASSET_ROOT",
-        tmp_path / "private" / "course-assets",
-    )
 
     context = SimpleNamespace(
         factory=factory,
@@ -67,17 +61,19 @@ async def course_context(monkeypatch, tmp_path):
         payment_service=payment_module.PaymentService(),
         timeout_service=timeout_module.OrderTimeoutCloseService(),
         course_service=course_module.CourseService(),
-        asset_service=course_asset_module.CourseAssetService(),
         admin_service=admin_course_module.AdminCourseService(),
-        asset_storage=course_asset_module.CourseAssetStorage,
+    )
+    context.course_service.storage.signed_url = AsyncMock(
+        return_value="https://signed.example.invalid/course-object"
     )
     try:
         yield context
     finally:
         from app.domain.certification.src.index import (
             Course,
-            CourseAsset,
+            CourseChapter,
             CourseEnrollment,
+            CourseUpload,
             CourseEntitlementJob,
             CourseEntitlementJobItem,
         )
@@ -114,7 +110,12 @@ async def course_context(monkeypatch, tmp_path):
                     QuizLibraryEntitlement.library_id.in_(library_ids)
                 )
             )
-            await db.execute(delete(CourseAsset).where(CourseAsset.course_id.in_(course_ids)))
+            await db.execute(
+                delete(CourseChapter).where(CourseChapter.course_id.in_(course_ids))
+            )
+            await db.execute(
+                delete(CourseUpload).where(CourseUpload.course_id.in_(course_ids))
+            )
             await db.execute(
                 delete(CourseEnrollment).where(CourseEnrollment.course_id.in_(course_ids))
             )
@@ -137,7 +138,7 @@ async def course_context(monkeypatch, tmp_path):
 
 
 async def _seed_courses(context):
-    from app.domain.certification.src.index import Course, CourseAsset
+    from app.domain.certification.src.index import Course, CourseChapter
     from app.domain.user.src.index import User
 
     async with context.factory() as db:
@@ -149,42 +150,52 @@ async def _seed_courses(context):
         free_course = Course(
             title=f"{context.prefix}_free",
             category="integration",
+            cover_storage_key=f"course/{context.prefix}/free.jpg",
             price=0,
+            preview_chapter_count=0,
             status="published",
             is_active=True,
         )
         paid_course = Course(
             title=f"{context.prefix}_paid",
             category="integration",
+            cover_storage_key=f"course/{context.prefix}/paid.jpg",
             price=12345,
+            preview_chapter_count=1,
             status="published",
             is_active=True,
         )
         timeout_course = Course(
             title=f"{context.prefix}_timeout",
             category="integration",
+            cover_storage_key=f"course/{context.prefix}/timeout.jpg",
             price=6789,
+            preview_chapter_count=1,
             status="published",
             is_active=True,
         )
         db.add_all([free_course, paid_course, timeout_course])
         await db.flush()
 
-        preview = CourseAsset(
+        preview = CourseChapter(
             course_id=paid_course.id,
             title="Preview",
-            storage_key=f"{paid_course.id}/preview.mp4",
-            asset_type="video",
-            sort_order=0,
-            is_preview=True,
+            video_storage_key=f"course/{context.prefix}/preview.mp4",
+            original_filename="preview.mp4",
+            content_type="video/mp4",
+            size_bytes=1024,
+            duration=60,
+            sort_order=1,
         )
-        private = CourseAsset(
+        private = CourseChapter(
             course_id=paid_course.id,
             title="Private",
-            storage_key=f"{paid_course.id}/private.mp4",
-            asset_type="video",
-            sort_order=1,
-            is_preview=False,
+            video_storage_key=f"course/{context.prefix}/private.mp4",
+            original_filename="private.mp4",
+            content_type="video/mp4",
+            size_bytes=2048,
+            duration=90,
+            sort_order=2,
         )
         db.add_all([preview, private])
         await db.flush()
@@ -194,15 +205,11 @@ async def _seed_courses(context):
             free_course_id=free_course.id,
             paid_course_id=paid_course.id,
             timeout_course_id=timeout_course.id,
-            preview_asset_id=preview.id,
-            private_asset_id=private.id,
+            preview_chapter_id=preview.id,
+            private_chapter_id=private.id,
         )
         await db.commit()
 
-    for storage_key in (preview.storage_key, private.storage_key):
-        path = context.asset_storage.resolve(storage_key)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"private-course-content")
     return result
 
 
@@ -270,7 +277,7 @@ async def test_payment_refund_and_private_content_authorization(
     from app.domain.certification.src.index import Course, CourseEnrollment
     from app.domain.order.src.index import Order
     from app.integrations.wechat_pay import WechatPayTransaction
-    from app.port.exceptions import ForbiddenException, NotFoundException
+    from app.port.exceptions import ForbiddenException
 
     data = await _seed_courses(course_context)
     purchase = await course_context.purchase_service.purchase(
@@ -331,20 +338,29 @@ async def test_payment_refund_and_private_content_authorization(
         course.is_active = False
         await db.commit()
 
-    content = await course_context.course_service.get_content(
-        data.paid_user_id,
-        data.paid_course_id,
+    paid_chapters = await course_context.course_service.get_chapters(
+        data.paid_user_id, data.paid_course_id
     )
-    assert content.learning_access is True
-    assert [asset.id for asset in content.assets] == [
-        data.preview_asset_id,
-        data.private_asset_id,
+    assert [chapter.id for chapter in paid_chapters.chapters] == [
+        data.preview_chapter_id,
+        data.private_chapter_id,
     ]
-    with pytest.raises(NotFoundException):
-        await course_context.course_service.get_content(
-            data.other_user_id,
-            data.paid_course_id,
+    assert all(chapter.can_play for chapter in paid_chapters.chapters)
+
+    preview_chapters = await course_context.course_service.get_chapters(
+        data.other_user_id, data.paid_course_id
+    )
+    assert [
+        chapter.id for chapter in preview_chapters.chapters if chapter.can_play
+    ] == [data.preview_chapter_id]
+    with pytest.raises(ForbiddenException):
+        await course_context.course_service.issue_playback(
+            data.other_user_id, data.paid_course_id, data.private_chapter_id
         )
+    preview_playback = await course_context.course_service.issue_playback(
+        data.other_user_id, data.paid_course_id, data.preview_chapter_id
+    )
+    assert preview_playback.url == "https://signed.example.invalid/course-object"
 
     async with course_context.factory() as db:
         enrollment = await db.get(CourseEnrollment, purchase.enrollment_id)
@@ -391,23 +407,18 @@ async def test_payment_refund_and_private_content_authorization(
         assert enrollment.learning_access is False
         assert enrollment.access_revoked_at is not None
 
-    preview_file = await course_context.asset_service.get_content(
-        data.other_user_id,
-        data.preview_asset_id,
-    )
-    assert preview_file.path.is_file()
     with pytest.raises(ForbiddenException):
-        await course_context.asset_service.get_content(
-            data.paid_user_id,
-            data.private_asset_id,
+        await course_context.course_service.issue_playback(
+            data.paid_user_id, data.paid_course_id, data.private_chapter_id
         )
 
-    preview_content = await course_context.course_service.get_content(
+    refunded_preview = await course_context.course_service.get_chapters(
         data.other_user_id,
         data.paid_course_id,
     )
-    assert preview_content.learning_access is False
-    assert [asset.id for asset in preview_content.assets] == [data.preview_asset_id]
+    assert [
+        chapter.id for chapter in refunded_preview.chapters if chapter.can_play
+    ] == [data.preview_chapter_id]
 
 
 async def test_expired_course_order_cancels_pending_enrollment(course_context):

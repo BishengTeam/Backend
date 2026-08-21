@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy import delete, func, select
 
 from app.adapter.database import get_db_ctx
 from app.domain.certification.src.index import (
     Course,
-    CourseAsset,
     CourseAuditLog,
     CourseCategory,
     CourseChapter,
     CourseEnrollment,
     CourseEntitlementJob,
     CourseEntitlementJobItem,
+    CourseUpload,
 )
 from app.domain.community.src.index import (
     QuizCourseLibraryBinding,
@@ -24,8 +25,8 @@ from app.domain.order.src.index import Order
 from app.domain.order.src.transition.order_transitions import apply_order_status_transition
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.admin_course import (
-    AdminCourseAssetResponse,
     AdminCourseAuditListItem,
+    AdminChapterResponse,
     AdminCourseBindingResponse,
     AdminCourseCategoryCreate,
     AdminCourseCategoryResponse,
@@ -35,16 +36,13 @@ from app.schemas.admin_course import (
     AdminCourseEntitlementJobResponse,
     AdminCourseListItem,
     AdminCourseUpdate,
+    AdminChapterUpdate,
 )
 from app.schemas.common import PaginatedData
-from app.schemas.course import (
-    ChapterCreate,
-    ChapterResponse,
-    ChapterSortItem,
-    ChapterUpdate,
-)
-from app.services.course_asset import CourseAssetStorage
+from app.schemas.course_upload import CourseUploadCreate
 from app.services.course_entitlement import CourseEntitlementService
+from app.services.course_storage import CourseStorage
+from app.services.course_upload import CourseUploadService
 from app.services.order_fulfillment import OrderFulfillmentService
 from app.utils.audit import sanitize_audit_value
 
@@ -58,6 +56,10 @@ COURSE_LIFECYCLE_TARGETS = {
 
 
 class AdminCourseService:
+    def __init__(self, storage: CourseStorage | None = None) -> None:
+        self.storage = storage or CourseStorage()
+        self.uploads = CourseUploadService(storage=self.storage)
+
     @staticmethod
     def _now() -> datetime:
         return datetime.now(timezone.utc)
@@ -110,11 +112,11 @@ class AdminCourseService:
             "title": course.title,
             "category": course.category,
             "description": course.description,
-            "cover_url": course.cover_url,
+            "cover_storage_key": course.cover_storage_key,
             "price": course.price,
             "teacher_name": course.teacher_name,
             "teacher_contact": course.teacher_contact,
-            "free_preview_seconds": course.free_preview_seconds,
+            "preview_chapter_count": course.preview_chapter_count,
             "status": course.status,
         }
 
@@ -282,11 +284,12 @@ class AdminCourseService:
                         title=course.title,
                         category=course.category,
                         description=course.description,
-                        cover_url=course.cover_url,
+                        cover_url=await self.storage.signed_url(course.cover_storage_key),
                         price=course.price,
+                        price_yuan=(Decimal(course.price) / Decimal(100)).quantize(Decimal("0.01")),
                         teacher_name=course.teacher_name,
                         teacher_contact=course.teacher_contact,
-                        free_preview_seconds=course.free_preview_seconds,
+                        preview_chapter_count=course.preview_chapter_count,
                         status=course.status,
                         bound_quiz_library_count=bound_count,
                         enrollment_count=enrollment_count,
@@ -302,9 +305,21 @@ class AdminCourseService:
         async with get_db_ctx() as db:
             async with db.begin():
                 await self._ensure_category(db, data.category)
-                course = Course(**data.model_dump(), status="draft", is_active=False)
+                upload = await db.get(CourseUpload, data.cover_upload_id)
+                if upload is None or upload.kind != "cover" or upload.status != "completed":
+                    raise BusinessException("课程封面尚未上传完成")
+                payload = data.model_dump(exclude={"cover_upload_id", "price_yuan"})
+                course = Course(
+                    **payload,
+                    cover_storage_key=upload.object_key,
+                    price=self._price_to_cents(data.price_yuan),
+                    status="draft",
+                    is_active=False,
+                )
                 db.add(course)
                 await db.flush()
+                upload.course_id = course.id
+                upload.status = "bound"
                 self._audit(
                     db,
                     admin_id=admin_id,
@@ -330,18 +345,17 @@ class AdminCourseService:
                 course = await self._locked_course(db, course_id)
                 before = self._course_fields(course)
                 changes = data.model_dump(exclude_unset=True)
+                replacement_cover_key = None
                 if "category" in changes:
                     await self._ensure_category(db, changes["category"])
-                if "price" in changes and course.price != changes["price"] and course.status == "published":
-                    self._audit(
-                        db,
-                        admin_id=admin_id,
-                        action="course.price_changed",
-                        object_type="course",
-                        object_id=course.id,
-                        before={"price": course.price},
-                        after={"price": changes["price"]},
-                    )
+                if "cover_upload_id" in changes:
+                    upload = await db.get(CourseUpload, changes.pop("cover_upload_id"))
+                    if upload is None or upload.kind != "cover" or upload.status != "completed":
+                        raise BusinessException("新课程封面尚未上传完成")
+                    replacement_cover_key = course.cover_storage_key
+                    course.cover_storage_key = upload.object_key
+                    upload.status = "bound"
+                    upload.course_id = course.id
                 for key, value in changes.items():
                     setattr(course, key, value)
                 await db.flush()
@@ -353,6 +367,36 @@ class AdminCourseService:
                     object_id=course.id,
                     before=before,
                     after=self._course_fields(course),
+                )
+                return await self._list_item(db, course)
+        if replacement_cover_key:
+            await self.storage.delete(replacement_cover_key)
+
+    @staticmethod
+    def _price_to_cents(value: Decimal) -> int:
+        return int((value * Decimal(100)).to_integral_exact())
+
+    async def update_price(
+        self,
+        course_id: int,
+        price_yuan: Decimal,
+        *,
+        admin_id: int,
+    ) -> AdminCourseListItem:
+        async with get_db_ctx() as db:
+            async with db.begin():
+                course = await self._locked_course(db, course_id)
+                before = {"price": course.price}
+                course.price = self._price_to_cents(price_yuan)
+                await db.flush()
+                self._audit(
+                    db,
+                    admin_id=admin_id,
+                    action="course.price_changed",
+                    object_type="course",
+                    object_id=course.id,
+                    before=before,
+                    after={"price": course.price},
                 )
                 return await self._list_item(db, course)
 
@@ -384,11 +428,12 @@ class AdminCourseService:
             title=course.title,
             category=course.category,
             description=course.description,
-            cover_url=course.cover_url,
+            cover_url=await self.storage.signed_url(course.cover_storage_key),
             price=course.price,
+            price_yuan=(Decimal(course.price) / Decimal(100)).quantize(Decimal("0.01")),
             teacher_name=course.teacher_name,
             teacher_contact=course.teacher_contact,
-            free_preview_seconds=course.free_preview_seconds,
+            preview_chapter_count=course.preview_chapter_count,
             status=course.status,
             bound_quiz_library_count=bound_count,
             enrollment_count=enrollment_count,
@@ -406,6 +451,19 @@ class AdminCourseService:
                 course = await self._locked_course(db, course_id)
                 if course.status not in COURSE_LIFECYCLE_TARGETS[action]:
                     raise BusinessException("当前课程状态不允许该操作")
+                if action == "publish":
+                    chapter_count = int(
+                        await db.scalar(
+                            select(func.count()).select_from(CourseChapter).where(
+                                CourseChapter.course_id == course_id
+                            )
+                        )
+                        or 0
+                    )
+                    if not course.cover_storage_key or chapter_count == 0:
+                        raise BusinessException("课程发布前必须上传封面和至少一个章节视频")
+                    if course.price > 0 and course.preview_chapter_count > chapter_count:
+                        raise BusinessException("试看集数不能超过章节数")
                 before = {"status": course.status}
                 if action == "publish":
                     course.status = "published"
@@ -484,13 +542,6 @@ class AdminCourseService:
                     or 0
                 ) + int(
                     await db.scalar(
-                        select(func.count()).select_from(CourseAsset).where(
-                            CourseAsset.course_id == course_id
-                        )
-                    )
-                    or 0
-                ) + int(
-                    await db.scalar(
                         select(func.count()).select_from(CourseChapter).where(
                             CourseChapter.course_id == course_id
                         )
@@ -518,11 +569,9 @@ class AdminCourseService:
 
     async def list_chapters(
         self, course_id: int, is_active: bool | None, page: int, page_size: int
-    ) -> PaginatedData[ChapterResponse]:
+    ) -> PaginatedData[AdminChapterResponse]:
         async with get_db_ctx() as db:
             base = select(CourseChapter).where(CourseChapter.course_id == course_id)
-            if is_active is not None:
-                base = base.where(CourseChapter.is_active.is_(is_active))
             total = int(
                 await db.scalar(select(func.count()).select_from(base.subquery())) or 0
             )
@@ -534,124 +583,11 @@ class AdminCourseService:
                 )
             ).scalars().all()
             return PaginatedData(
-                items=[ChapterResponse.model_validate(row) for row in rows],
+                items=[AdminChapterResponse.model_validate(row) for row in rows],
                 total=total,
                 page=page,
                 page_size=page_size,
             )
-
-    async def create_chapter(
-        self, course_id: int, data: ChapterCreate, *, admin_id: int
-    ) -> ChapterResponse:
-        async with get_db_ctx() as db:
-            async with db.begin():
-                course = await self._locked_course(db, course_id)
-                if course.status == "archived":
-                    raise BusinessException("归档课程不能新增章节")
-                sort_order = data.sort_order
-                if sort_order is None:
-                    sort_order = int(
-                        await db.scalar(
-                            select(func.coalesce(func.max(CourseChapter.sort_order), 0)).where(
-                                CourseChapter.course_id == course_id
-                            )
-                        )
-                        or 0
-                    ) + 1
-                row = CourseChapter(
-                    course_id=course_id,
-                    title=data.title,
-                    video_url=data.video_url,
-                    video_source_type=data.video_source_type,
-                    video_storage_key=data.video_storage_key,
-                    duration=data.duration,
-                    sort_order=sort_order,
-                    is_preview=data.is_preview,
-                )
-                db.add(row)
-                await db.flush()
-                self._audit(
-                    db,
-                    admin_id=admin_id,
-                    action="course.chapter.created",
-                    object_type="course_chapter",
-                    object_id=row.id,
-                    after={"title": row.title, "sort_order": row.sort_order},
-                )
-                return ChapterResponse.model_validate(row)
-
-    async def update_chapter(
-        self, chapter_id: int, data: ChapterUpdate, *, admin_id: int
-    ) -> ChapterResponse:
-        async with get_db_ctx() as db:
-            async with db.begin():
-                row = (
-                    await db.execute(
-                        select(CourseChapter)
-                        .where(CourseChapter.id == chapter_id)
-                        .with_for_update()
-                    )
-                ).scalar_one_or_none()
-                if row is None:
-                    raise NotFoundException("章节")
-                before = {
-                    "title": row.title,
-                    "video_url": row.video_url,
-                    "video_source_type": row.video_source_type,
-                    "video_storage_key": row.video_storage_key,
-                    "duration": row.duration,
-                    "sort_order": row.sort_order,
-                    "is_preview": row.is_preview,
-                }
-                changes = data.model_dump(exclude_unset=True)
-                for key, value in changes.items():
-                    setattr(row, key, value)
-                if row.video_source_type == "external_url" and not row.video_url:
-                    raise BusinessException("外部视频章节缺少视频地址")
-                if row.video_source_type == "private_object" and not row.video_storage_key:
-                    raise BusinessException("私有视频章节缺少对象键")
-                await db.flush()
-                after = {
-                    "title": row.title,
-                    "video_url": row.video_url,
-                    "video_source_type": row.video_source_type,
-                    "video_storage_key": row.video_storage_key,
-                    "duration": row.duration,
-                    "sort_order": row.sort_order,
-                    "is_preview": row.is_preview,
-                }
-                self._audit(
-                    db,
-                    admin_id=admin_id,
-                    action="course.chapter.updated",
-                    object_type="course_chapter",
-                    object_id=row.id,
-                    before=before,
-                    after=after,
-                )
-                return ChapterResponse.model_validate(row)
-
-    async def delete_chapter(self, chapter_id: int, *, admin_id: int) -> None:
-        async with get_db_ctx() as db:
-            async with db.begin():
-                row = (
-                    await db.execute(
-                        select(CourseChapter)
-                        .where(CourseChapter.id == chapter_id)
-                        .with_for_update()
-                    )
-                ).scalar_one_or_none()
-                if row is None:
-                    raise NotFoundException("章节")
-                row.is_active = False
-                self._audit(
-                    db,
-                    admin_id=admin_id,
-                    action="course.chapter.deleted",
-                    object_type="course_chapter",
-                    object_id=row.id,
-                    after={"title": row.title, "is_active": False},
-                )
 
     async def sort_chapters(
         self, course_id: int, items: list[ChapterSortItem], *, admin_id: int
@@ -674,6 +610,85 @@ class AdminCourseService:
                     summary={"count": count},
                 )
                 return count
+
+    async def batch_create_chapters(
+        self, course_id: int, upload_ids: list[int], *, admin_id: int
+    ) -> list[AdminChapterResponse]:
+        rows = await self.uploads.create_chapters(
+            course_id, upload_ids, admin_id=admin_id
+        )
+        return [AdminChapterResponse.model_validate(row) for row in rows]
+
+    async def update_chapter_metadata(
+        self, course_id: int, chapter_id: int, data: AdminChapterUpdate, *, admin_id: int
+    ) -> AdminChapterResponse:
+        async with get_db_ctx() as db:
+            async with db.begin():
+                row = await db.get(CourseChapter, chapter_id)
+                if row is None or row.course_id != course_id:
+                    raise NotFoundException("章节")
+                before = {
+                    "title": row.title,
+                    "duration": row.duration,
+                    "sort_order": row.sort_order,
+                }
+                for key, value in data.model_dump(exclude_unset=True).items():
+                    setattr(row, key, value)
+                await db.flush()
+                self._audit(
+                    db,
+                    admin_id=admin_id,
+                    action="course.chapter.updated",
+                    object_type="course_chapter",
+                    object_id=row.id,
+                    before=before,
+                    after={
+                        "title": row.title,
+                        "duration": row.duration,
+                        "sort_order": row.sort_order,
+                    },
+                )
+                return AdminChapterResponse.model_validate(row)
+
+    async def replace_chapter_video(
+        self, course_id: int, chapter_id: int, upload_id: int, *, admin_id: int
+    ) -> AdminChapterResponse:
+        row = await self.uploads.replace_video(
+            course_id, chapter_id, upload_id, admin_id=admin_id
+        )
+        return AdminChapterResponse.model_validate(row)
+
+    async def delete_chapter_completely(
+        self, course_id: int, chapter_id: int, *, admin_id: int
+    ) -> None:
+        from app.domain.certification.src.index import UserChapterProgress
+
+        async with get_db_ctx() as db:
+            async with db.begin():
+                row = await db.get(CourseChapter, chapter_id)
+                if row is None or row.course_id != course_id:
+                    raise NotFoundException("章节")
+                progress_count = int(
+                    await db.scalar(
+                        select(func.count())
+                        .select_from(UserChapterProgress)
+                        .where(UserChapterProgress.chapter_id == chapter_id)
+                    )
+                    or 0
+                )
+                if progress_count:
+                    raise BusinessException("已有学习进度的章节不能删除")
+                object_key = row.video_storage_key
+                self._audit(
+                    db,
+                    admin_id=admin_id,
+                    action="course.chapter.deleted",
+                    object_type="course_chapter",
+                    object_id=row.id,
+                    after={"title": row.title},
+                )
+                await db.delete(row)
+        await self.storage.delete(object_key)
 
     async def list_enrollments(
         self,
@@ -836,90 +851,6 @@ class AdminCourseService:
                 }
             )
 
-    async def list_assets(self, course_id: int) -> list[AdminCourseAssetResponse]:
-        async with get_db_ctx() as db:
-            rows = (
-                await db.execute(
-                    select(CourseAsset)
-                    .where(CourseAsset.course_id == course_id)
-                    .order_by(CourseAsset.sort_order, CourseAsset.id)
-                )
-            ).scalars().all()
-            return [AdminCourseAssetResponse.model_validate(row) for row in rows]
-
-    async def create_asset(
-        self,
-        course_id: int,
-        *,
-        filename: str,
-        content: bytes,
-        title: str,
-        asset_type: str,
-        sort_order: int,
-        is_preview: bool,
-        admin_id: int,
-    ) -> AdminCourseAssetResponse:
-        if not content:
-            raise BusinessException("课程资料不能为空")
-        storage_key, size = CourseAssetStorage.save(course_id, filename, content)
-        try:
-            async with get_db_ctx() as db:
-                async with db.begin():
-                    course = await self._locked_course(db, course_id)
-                    if course.status == "archived":
-                        raise BusinessException("归档课程不能新增资料")
-                    row = CourseAsset(
-                        course_id=course_id,
-                        title=title,
-                        storage_key=storage_key,
-                        asset_type=asset_type,
-                        sort_order=sort_order,
-                        is_preview=is_preview,
-                    )
-                    db.add(row)
-                    await db.flush()
-                    self._audit(
-                        db,
-                        admin_id=admin_id,
-                        action="course.asset.created",
-                        object_type="course_asset",
-                        object_id=row.id,
-                        summary={"size": size, "asset_type": asset_type},
-                    )
-                    return AdminCourseAssetResponse.model_validate(row)
-        except Exception:
-            CourseAssetStorage.delete(storage_key)
-            raise
-
-    async def delete_asset(
-        self, course_id: int, asset_id: int, *, admin_id: int
-    ) -> None:
-        async with get_db_ctx() as db:
-            async with db.begin():
-                row = (
-                    await db.execute(
-                        select(CourseAsset)
-                        .where(
-                            CourseAsset.id == asset_id,
-                            CourseAsset.course_id == course_id,
-                        )
-                        .with_for_update()
-                    )
-                ).scalar_one_or_none()
-                if row is None:
-                    raise NotFoundException("课程资料")
-                self._audit(
-                    db,
-                    admin_id=admin_id,
-                    action="course.asset.deleted",
-                    object_type="course_asset",
-                    object_id=row.id,
-                    after={"title": row.title},
-                )
-                storage_key = row.storage_key
-                await db.delete(row)
-        CourseAssetStorage.delete(storage_key)
-
     async def list_audit_logs(
         self,
         *,
@@ -935,9 +866,6 @@ class AdminCourseService:
                 chapter_ids = select(CourseChapter.id).where(
                     CourseChapter.course_id == course_id
                 )
-                asset_ids = select(CourseAsset.id).where(
-                    CourseAsset.course_id == course_id
-                )
                 binding_ids = select(QuizCourseLibraryBinding.id).where(
                     QuizCourseLibraryBinding.course_id == course_id
                 )
@@ -952,8 +880,6 @@ class AdminCourseService:
                         & (CourseAuditLog.object_id == course_id),
                         (CourseAuditLog.object_type == "course_chapter")
                         & CourseAuditLog.object_id.in_(chapter_ids),
-                        (CourseAuditLog.object_type == "course_asset")
-                        & CourseAuditLog.object_id.in_(asset_ids),
                         (CourseAuditLog.object_type == "course_library_binding")
                         & CourseAuditLog.object_id.in_(binding_ids),
                         (CourseAuditLog.object_type == "course_entitlement_job")

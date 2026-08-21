@@ -37,7 +37,9 @@ async def test_course_settlement_entitlement_is_idempotent_and_refund_scoped() -
         course = Course(
             title=f"{prefix}课程",
             category="test",
+            cover_storage_key=f"course/{prefix}/cover.jpg",
             price=100,
+            preview_chapter_count=1,
             status="published",
             is_active=True,
         )

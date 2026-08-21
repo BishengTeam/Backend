@@ -634,6 +634,37 @@ quiz_task_registry.register(
 )
 
 
+async def _course_upload_cleanup_queue_depth() -> int:
+    from sqlalchemy import func, select
+
+    from app.adapter.database import get_db_ctx
+    from app.domain.certification.src.index import CourseUpload
+
+    async with get_db_ctx() as db:
+        value = await db.scalar(
+            select(func.count())
+            .select_from(CourseUpload)
+            .where(
+                CourseUpload.status.in_(("pending", "completed")),
+                CourseUpload.expires_at < _utc_now(),
+            )
+        )
+    return int(value or 0)
+
+
+async def _cleanup_course_uploads() -> bool:
+    from app.services.course_upload import CourseUploadService
+
+    return await CourseUploadService().cleanup_expired() > 0
+
+
+quiz_task_registry.register(
+    "course-upload-cleanup",
+    _cleanup_course_uploads,
+    queue_depth=_course_upload_cleanup_queue_depth,
+)
+
+
 async def ensure_quiz_runtime_ready() -> None:
     """Fail production startup when the shared Redis dependency is unavailable."""
 

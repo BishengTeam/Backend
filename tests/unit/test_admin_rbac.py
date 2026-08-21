@@ -21,7 +21,12 @@ async def _check(permission: str, role: str):
 
 class TestTwoRoleRbac:
     def test_role_matrix_is_frozen(self):
-        assert set(ROLE_PERMISSIONS) == {"super_admin", "quiz_admin", "h3c_admin"}
+        assert set(ROLE_PERMISSIONS) == {
+            "super_admin",
+            "quiz_admin",
+            "h3c_admin",
+            "course_admin",
+        }
 
     @pytest.mark.asyncio
     async def test_super_admin_passes_unknown_permission(self):

@@ -91,7 +91,7 @@ DELETE_ORDER = [
     "banner",
     "certification",
     "coupon",
-    "course_asset",
+    "course_upload",
     "course",
     "inventory",
     "job",

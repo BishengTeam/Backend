@@ -1,16 +1,16 @@
 from fastapi import APIRouter, Depends, Path, Query
 
-from app.middleware.auth import get_current_user, get_current_user_optional
 from app.domain.user.src.index import User
+from app.middleware.auth import get_current_user, get_current_user_optional
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.course import (
+    ChapterPlaybackResponse,
     ChapterProgressResponse,
     ChapterProgressUpsert,
     CourseChaptersResponse,
     CourseDetailResponse,
     CourseEnrollRequest,
     CourseEnrollmentResponse,
-    CourseContentResponse,
     CourseFilter,
     CourseListResponse,
     CoursePurchaseRequest,
@@ -19,225 +19,151 @@ from app.schemas.course import (
 from app.services.course import CourseService
 from app.services.course_purchase import CoursePurchaseService
 
+
 router = APIRouter(prefix="/courses", tags=["课程"])
 
 
-@router.get("",
+@router.get(
+    "",
     response_model=APIResponse[PaginatedData[CourseListResponse]],
     summary="课程列表",
-    description="""
-小程序 **学习专区** 页面使用。
-
-**使用场景**: 加载课程列表，支持按类目筛选
-
-**查询参数**:
-- `category`: 类目筛选（可选）
-- `page`: 页码
-- `page_size`: 每页数量
-
-**认证**: 需登录
-    """,
 )
 async def list_courses(
-    category: str | None = Query(None, description="按类目筛选"),
-    page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    category: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
-) -> APIResponse[PaginatedData[CourseListResponse]]:
-    """课程列表"""
+):
     filters = CourseFilter(category=category) if category else None
-    result = await CourseService().list_courses(filters, page, page_size)
-    return success(data=result)
+    return success(
+        data=await CourseService().list_courses(filters, page, page_size)
+    )
 
 
-@router.get("/my",
+@router.get(
+    "/my",
     response_model=APIResponse[PaginatedData[CourseEnrollmentResponse]],
     summary="我的课程",
-    description="""
-小程序 **我的** 页面使用。
-
-**使用场景**: 查看当前用户已报名的课程列表
-
-**查询参数**:
-- `page`: 页码
-- `page_size`: 每页数量
-
-**认证**: 需登录
-    """,
 )
 async def my_courses(
-    page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
-) -> APIResponse[PaginatedData[CourseEnrollmentResponse]]:
-    """我的课程列表"""
-    result = await CourseService().my_courses(current_user.id, page, page_size)
-    return success(data=result)
+):
+    return success(
+        data=await CourseService().my_courses(current_user.id, page, page_size)
+    )
 
 
-@router.get("/categories",
+@router.get(
+    "/categories",
     response_model=APIResponse[list[str]],
     summary="课程类目",
-    description="""
-小程序 **学习专区** 页面使用。
-
-**使用场景**: 获取所有不重复的课程类目列表
-
-**认证**: 无需登录
-    """,
 )
-async def list_categories() -> APIResponse[list[str]]:
-    """获取所有不重复的课程类目"""
-    result = await CourseService().list_categories()
-    return success(data=result)
+async def list_categories():
+    return success(data=await CourseService().list_categories())
 
 
-@router.get("/{course_id}",
+@router.get(
+    "/{course_id}",
     response_model=APIResponse[CourseDetailResponse],
     summary="课程详情",
-    description="""
-小程序 **课程详情** 页面使用。
-
-**使用场景**: 查看课程详细信息（含章节列表、试看时长）
-
-**路径参数**:
-- `course_id`: 课程 ID
-
-**认证**: 需登录
-    """,
 )
 async def get_course(
-    course_id: int = Path(..., ge=1, description="课程 ID"),
+    course_id: int = Path(..., ge=1),
     current_user: User = Depends(get_current_user),
-) -> APIResponse[CourseDetailResponse]:
-    """课程详情"""
-    result = await CourseService().get_course(course_id, current_user.id)
-    return success(data=result)
+):
+    return success(
+        data=await CourseService().get_course(course_id, current_user.id)
+    )
 
 
-@router.get("/{course_id}/content",
-    response_model=APIResponse[CourseContentResponse],
-    summary="课程内容",
-    description="返回试看资源；已开通学习权限时返回全部课程资源。",
-)
-async def get_course_content(
-    course_id: int = Path(..., ge=1, description="课程 ID"),
-    current_user: User = Depends(get_current_user),
-) -> APIResponse[CourseContentResponse]:
-    result = await CourseService().get_content(current_user.id, course_id)
-    return success(data=result)
-
-
-@router.post("/{course_id}/purchase",
+@router.post(
+    "/{course_id}/purchase",
     response_model=APIResponse[CoursePurchaseResponse],
     summary="购买课程",
-    description="免费课程直接开通；付费课程创建待支付订单和报名。",
 )
 async def purchase_course(
-    course_id: int = Path(..., ge=1, description="课程 ID"),
+    course_id: int = Path(..., ge=1),
     body: CoursePurchaseRequest | None = None,
     current_user: User = Depends(get_current_user),
-) -> APIResponse[CoursePurchaseResponse]:
-    result = await CoursePurchaseService().purchase(
-        current_user.id,
-        course_id,
-        allow_paid=True,
+):
+    return success(
+        data=await CoursePurchaseService().purchase(
+            current_user.id, course_id, allow_paid=True
+        )
     )
-    return success(data=result)
 
 
-@router.post("/enroll",
+@router.post(
+    "/enroll",
     response_model=APIResponse[CourseEnrollmentResponse],
-    summary="课程报名",
+    summary="免费课程报名",
     deprecated=True,
-    description="""
-小程序 **课程详情** 页面使用。
-
-**使用场景**: 兼容旧版客户端报名免费课程；付费课程会被拒绝
-
-**请求体**:
-- `course_id`: 课程 ID
-
-**认证**: 需登录
-    """,
 )
 async def enroll_course(
     body: CourseEnrollRequest,
     current_user: User = Depends(get_current_user),
-) -> APIResponse[CourseEnrollmentResponse]:
-    """兼容旧版免费课程报名；付费课程必须使用购买接口。"""
-    result = await CourseService().enroll(current_user.id, body)
-    return success(data=result)
+):
+    return success(data=await CourseService().enroll(current_user.id, body))
 
 
-# ==================== 章节与学习进度 ====================
-
-
-@router.get("/{course_id}/chapters",
+@router.get(
+    "/{course_id}/chapters",
     response_model=APIResponse[CourseChaptersResponse],
-    summary="课程章节列表（含试看时长和进度）",
-    description="""
-小程序 **视频播放页** 使用。
-
-**使用场景**: 获取课程章节列表、试看时长、用户学习进度
-
-**路径参数**:
-- `course_id`: 课程 ID
-
-**认证**: 可选登录（未登录时 progress 为 null）
-    """,
+    summary="课程章节",
 )
 async def get_chapters(
     course_id: int = Path(..., ge=1),
     current_user: User | None = Depends(get_current_user_optional),
 ):
     user_id = current_user.id if current_user else None
-    result = await CourseService().get_chapters(course_id, user_id)
-    return success(data=result)
+    return success(data=await CourseService().get_chapters(course_id, user_id))
 
 
-@router.get("/{course_id}/progress",
+@router.post(
+    "/{course_id}/chapters/{chapter_id}/playback-url",
+    response_model=APIResponse[ChapterPlaybackResponse],
+    summary="获取章节播放地址",
+)
+async def issue_playback(
+    course_id: int = Path(..., ge=1),
+    chapter_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+):
+    return success(
+        data=await CourseService().issue_playback(
+            current_user.id, course_id, chapter_id
+        )
+    )
+
+
+@router.get(
+    "/{course_id}/progress",
     response_model=APIResponse[ChapterProgressResponse],
     summary="查询学习进度",
-    description="""
-小程序 **视频播放页** 使用。
-
-**使用场景**: 查询用户在该课程下的学习进度
-
-**路径参数**:
-- `course_id`: 课程 ID
-
-**认证**: 需登录
-    """,
 )
 async def get_progress(
     course_id: int = Path(..., ge=1),
     current_user: User = Depends(get_current_user),
 ):
-    result = await CourseService().get_progress(current_user.id, course_id)
-    return success(data=result)
+    return success(
+        data=await CourseService().get_progress(current_user.id, course_id)
+    )
 
 
-@router.post("/{course_id}/progress",
+@router.post(
+    "/{course_id}/progress",
     response_model=APIResponse[ChapterProgressResponse],
     summary="上报学习进度",
-    description="""
-小程序 **视频播放页** 使用。
-
-**使用场景**: 播放暂停/切换章节/退出页面时上报进度
-
-**请求体**:
-- `chapter_id`: 章节 ID
-- `last_position_seconds`: 当前播放位置（秒）
-- `is_completed`: 是否标记为完成
-
-**认证**: 需登录
-    """,
 )
 async def upsert_progress(
     body: ChapterProgressUpsert,
     course_id: int = Path(..., ge=1),
     current_user: User = Depends(get_current_user),
 ):
-    result = await CourseService().upsert_progress(current_user.id, course_id, body)
-    return success(data=result)
+    return success(
+        data=await CourseService().upsert_progress(
+            current_user.id, course_id, body
+        )
+    )

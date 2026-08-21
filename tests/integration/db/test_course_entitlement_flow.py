@@ -110,14 +110,18 @@ async def test_course_binding_backfill_and_multi_source_revocation(context) -> N
         course_one = Course(
             title=f"{context.prefix}_course_one",
             category="integration",
+            cover_storage_key=f"course/{context.prefix}/one.jpg",
             price=0,
+            preview_chapter_count=0,
             status="published",
             is_active=True,
         )
         course_two = Course(
             title=f"{context.prefix}_course_two",
             category="integration",
+            cover_storage_key=f"course/{context.prefix}/two.jpg",
             price=0,
+            preview_chapter_count=0,
             status="published",
             is_active=True,
         )

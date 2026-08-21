@@ -157,7 +157,9 @@ class TestTableStructure:
             )
 
         course_columns, tables = await conn.run_sync(_check)
-        assert "free_preview_seconds" in course_columns
+        assert "preview_chapter_count" in course_columns
+        assert "cover_storage_key" in course_columns
+        assert "course_upload" in tables
         assert {"course_chapter", "user_chapter_progress"} <= tables
 
     async def test_plan_status_can_store_all_declared_states(self, conn_and_session):
@@ -325,7 +327,9 @@ class TestCourseCRUD:
         course = Course(
             title="测试课程",
             category="网络",
+            cover_storage_key="course/test-integration/cover.jpg",
             price=9900,
+            preview_chapter_count=1,
             status="published",
             is_active=True,
         )
@@ -344,7 +348,9 @@ class TestCourseCRUD:
         course = Course(
             title="报名课程",
             category="安全",
+            cover_storage_key="course/test-integration/enrollment.jpg",
             price=19900,
+            preview_chapter_count=0,
             status="published",
             is_active=True,
         )

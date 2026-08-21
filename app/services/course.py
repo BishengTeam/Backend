@@ -1,26 +1,28 @@
-from sqlalchemy import and_, func, select
+from decimal import Decimal
+from time import time
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload
 
 from app.adapter.database import get_db_ctx
-from app.port.exceptions import ForbiddenException, NotFoundException
 from app.domain.certification.src.index import (
     Course,
-    CourseAsset,
     CourseCategory,
     CourseChapter,
     CourseEnrollment,
     UserChapterProgress,
 )
 from app.domain.community.src.index import QuizCourseLibraryBinding, QuizLibrary
+from app.domain.user.src.index import User
+from app.port.exceptions import ForbiddenException, NotFoundException
 from app.schemas.common import PaginatedData
 from app.schemas.course import (
+    ChapterPlaybackResponse,
     ChapterProgressResponse,
     ChapterProgressUpsert,
     ChapterResponse,
-    CourseDetailResponse,
     CourseChaptersResponse,
-    CourseAssetResponse,
-    CourseContentResponse,
+    CourseDetailResponse,
     CourseEnrollRequest,
     CourseEnrollmentResponse,
     CourseFilter,
@@ -30,22 +32,42 @@ from app.schemas.course import (
 )
 from app.services.course_entitlement import CourseEntitlementService
 from app.services.course_purchase import CoursePurchaseService
+from app.services.course_storage import CourseStorage
 
 
 class CourseService:
+    def __init__(self, storage: CourseStorage | None = None) -> None:
+        self.storage = storage or CourseStorage()
+
     @staticmethod
-    def _public_chapter(chapter: CourseChapter) -> ChapterResponse:
+    def _price_yuan(price: int) -> Decimal:
+        return (Decimal(price) / Decimal(100)).quantize(Decimal("0.01"))
+
+    async def _course_list_response(self, course: Course) -> CourseListResponse:
+        return CourseListResponse(
+            id=course.id,
+            title=course.title,
+            category=course.category,
+            description=course.description,
+            cover_url=await self.storage.signed_url(course.cover_storage_key),
+            price=course.price,
+            price_yuan=self._price_yuan(course.price),
+            teacher_name=course.teacher_name,
+        )
+
+    @staticmethod
+    def _chapter_response(
+        chapter: CourseChapter, *, can_play_course: bool, has_access: bool, preview_count: int
+    ) -> ChapterResponse:
+        is_preview = can_play_course or chapter.sort_order <= preview_count
         return ChapterResponse(
             id=chapter.id,
             title=chapter.title,
-            video_url=chapter.video_url,
-            video_source_type=chapter.video_source_type,
-            video_storage_key=None,
             duration=chapter.duration,
             sort_order=chapter.sort_order,
-            is_preview=chapter.is_preview,
+            is_preview=is_preview and not has_access,
+            can_play=is_preview,
         )
-
 
     async def list_courses(
         self, filters: CourseFilter | None = None, page: int = 1, page_size: int = 20
@@ -54,160 +76,138 @@ class CourseService:
             base = select(Course).where(Course.status == "published")
             if filters and filters.category:
                 base = base.where(Course.category == filters.category)
-            count_stmt = select(func.count()).select_from(base.subquery())
-            total = (await db.execute(count_stmt)).scalar() or 0
-            stmt = base.order_by(Course.id).offset((page - 1) * page_size).limit(page_size)
-            result = await db.execute(stmt)
-            courses = result.scalars().all()
-            return PaginatedData[CourseListResponse](
-                items=[CourseListResponse.model_validate(c) for c in courses],
+            total = int(
+                await db.scalar(select(func.count()).select_from(base.subquery())) or 0
+            )
+            rows = (
+                await db.execute(
+                    base.order_by(Course.id.desc())
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                )
+            ).scalars().all()
+            return PaginatedData(
+                items=[await self._course_list_response(row) for row in rows],
                 total=total,
                 page=page,
                 page_size=page_size,
             )
 
-    async def get_course(self, course_id: int, user_id: int | None = None) -> CourseDetailResponse:
+    async def list_categories(self) -> list[str]:
         async with get_db_ctx() as db:
-            stmt = (
-                select(Course)
-                .options(joinedload(Course.chapters))
-                .where(Course.id == course_id)
-            )
-            result = await db.execute(stmt)
-            course = result.unique().scalar_one_or_none()
-            if course is None:
-                raise NotFoundException("课程")
-
-            enrollment = None
-            if user_id is not None:
-                enrollment = await self._get_learning_enrollment(db, user_id, course_id)
-            if not course.is_active and enrollment is None:
-                raise NotFoundException("课程")
-
-            response = CourseDetailResponse.model_validate(course)
-
-            bound_libraries = list(
-                (
-                    await db.execute(
-                        select(QuizLibrary)
-                        .join(
-                            QuizCourseLibraryBinding,
-                            QuizCourseLibraryBinding.library_id == QuizLibrary.id,
-                        )
-                        .where(
-                            QuizCourseLibraryBinding.course_id == course_id,
-                            QuizCourseLibraryBinding.status == "active",
-                            QuizLibrary.access_mode == "course_entitlement",
-                            QuizLibrary.status.in_(("draft", "published", "suspended")),
-                        )
-                        .order_by(QuizLibrary.sort_order.asc(), QuizLibrary.id.asc())
-                    )
-                ).scalars()
-            )
-            modules_by_library = await CourseEntitlementService.list_library_modules(
-                db, [int(library.id) for library in bound_libraries]
-            )
-            response.included_quiz_libraries = [
-                CourseQuizLibrarySummary(
-                    id=int(library.id),
-                    library_code=library.library_code,
-                    name=library.name,
-                    description=library.description,
-                    cover_url=library.cover_url,
-                    status=library.status,
-                    available=(
-                        library.status == "published" and bool(library.v2_enabled)
-                    ),
-                    modules=[
-                        CourseQuizModuleSummary(
-                            id=int(module.id),
-                            name=module.name,
-                            description=module.description,
-                            status=module.status,
-                        )
-                        for module in modules_by_library.get(int(library.id), [])
-                    ],
+            return list(
+                await db.scalars(
+                    select(CourseCategory.name)
+                    .where(CourseCategory.is_active.is_(True))
+                    .order_by(CourseCategory.sort_order, CourseCategory.id)
                 )
-                for library in bound_libraries
-            ]
+            )
 
-            # 过滤活跃章节并按 sort_order 排序
-            active_chapters = [ch for ch in course.chapters if ch.is_active]
-            active_chapters.sort(key=lambda ch: ch.sort_order)
-            response.chapters = [self._public_chapter(ch) for ch in active_chapters]
-
-            if enrollment is not None:
-                response.has_access = True
-                response.enrollment_id = enrollment.id
-
-            # 试看时长：已购买为 null，否则返回课程设置的试看时长
-            if not response.has_access:
-                response.free_preview_seconds = course.free_preview_seconds
-            else:
-                response.free_preview_seconds = None
-
-            return response
-
-    async def get_content(self, user_id: int, course_id: int) -> CourseContentResponse:
+    async def get_course(
+        self, course_id: int, user_id: int | None = None
+    ) -> CourseDetailResponse:
         async with get_db_ctx() as db:
             course = await db.get(Course, course_id)
             if course is None:
                 raise NotFoundException("课程")
-            has_access = await self._has_learning_access(db, user_id, course_id)
-            if course.status == "draft" or not course.is_active and not has_access:
-                raise NotFoundException("课程")
-
-            asset_filter = CourseAsset.course_id == course_id
-            if not has_access:
-                asset_filter = and_(asset_filter, CourseAsset.is_preview.is_(True))
-            result = await db.execute(
-                select(CourseAsset)
-                .where(asset_filter)
-                .order_by(CourseAsset.sort_order, CourseAsset.id)
+            enrollment = (
+                await self._get_learning_enrollment(db, user_id, course_id)
+                if user_id is not None
+                else None
             )
-            assets = result.scalars().all()
-            return CourseContentResponse(
-                course_id=course.id,
-                title=course.title,
-                learning_access=has_access,
-                assets=[
-                    CourseAssetResponse(
-                        id=asset.id,
-                        course_id=asset.course_id,
-                        title=asset.title,
-                        asset_type=asset.asset_type,
-                        sort_order=asset.sort_order,
-                        is_preview=asset.is_preview,
-                        content_url=f"/api/course-assets/{asset.id}/content",
+            if not course.is_active and enrollment is None:
+                raise NotFoundException("课程")
+            chapters = list(
+                await db.scalars(
+                    select(CourseChapter)
+                    .where(CourseChapter.course_id == course_id)
+                    .order_by(CourseChapter.sort_order, CourseChapter.id)
+                )
+            )
+            has_access = enrollment is not None
+            can_play_course = has_access or course.price == 0
+            bound_libraries = list(
+                await db.scalars(
+                    select(QuizLibrary)
+                    .join(
+                        QuizCourseLibraryBinding,
+                        QuizCourseLibraryBinding.library_id == QuizLibrary.id,
                     )
-                    for asset in assets
+                    .where(
+                        QuizCourseLibraryBinding.course_id == course_id,
+                        QuizCourseLibraryBinding.status == "active",
+                        QuizLibrary.access_mode == "course_entitlement",
+                        QuizLibrary.status.in_(("draft", "published", "suspended")),
+                    )
+                    .order_by(QuizLibrary.sort_order, QuizLibrary.id)
+                )
+            )
+            modules_by_library = await CourseEntitlementService.list_library_modules(
+                db, [int(library.id) for library in bound_libraries]
+            )
+            return CourseDetailResponse(
+                id=course.id,
+                title=course.title,
+                category=course.category,
+                description=course.description,
+                cover_url=await self.storage.signed_url(course.cover_storage_key),
+                price=course.price,
+                price_yuan=self._price_yuan(course.price),
+                teacher_name=course.teacher_name,
+                status=course.status,
+                has_access=has_access,
+                enrollment_id=enrollment.id if enrollment else None,
+                preview_chapter_count=(
+                    0 if course.price == 0 else course.preview_chapter_count
+                ),
+                chapter_count=len(chapters),
+                chapters=[
+                    self._chapter_response(
+                        chapter,
+                        can_play_course=can_play_course,
+                        has_access=has_access,
+                        preview_count=course.preview_chapter_count,
+                    )
+                    for chapter in chapters
+                ],
+                included_quiz_libraries=[
+                    CourseQuizLibrarySummary(
+                        id=int(library.id),
+                        library_code=library.library_code,
+                        name=library.name,
+                        description=library.description,
+                        cover_url=library.cover_url,
+                        status=library.status,
+                        available=(
+                            library.status == "published" and bool(library.v2_enabled)
+                        ),
+                        modules=[
+                            CourseQuizModuleSummary(
+                                id=int(module.id),
+                                name=module.name,
+                                description=module.description,
+                                status=module.status,
+                            )
+                            for module in modules_by_library.get(int(library.id), [])
+                        ],
+                    )
+                    for library in bound_libraries
                 ],
             )
 
-    async def list_categories(self) -> list[str]:
-        async with get_db_ctx() as db:
-            result = await db.execute(
-                select(CourseCategory.name)
-                .where(CourseCategory.is_active.is_(True))
-                .order_by(CourseCategory.sort_order, CourseCategory.id)
-            )
-            return [row[0] for row in result.all()]
-
-    async def enroll(self, user_id: int, data: CourseEnrollRequest) -> CourseEnrollmentResponse:
+    async def enroll(self, user_id: int, data: CourseEnrollRequest):
         purchase = await CoursePurchaseService().purchase(
-            user_id,
-            data.course_id,
-            allow_paid=False,
+            user_id, data.course_id, allow_paid=False
         )
         async with get_db_ctx() as db:
-            stmt = (
-                select(CourseEnrollment)
-                .options(joinedload(CourseEnrollment.course))
-                .where(CourseEnrollment.id == purchase.enrollment_id)
-            )
-            result = await db.execute(stmt)
-            enrollment = result.scalar_one()
-            return CourseEnrollmentResponse.model_validate(enrollment)
+            enrollment = (
+                await db.execute(
+                    select(CourseEnrollment)
+                    .options(joinedload(CourseEnrollment.course))
+                    .where(CourseEnrollment.id == purchase.enrollment_id)
+                )
+            ).unique().scalar_one()
+            return await self._enrollment_response(enrollment)
 
     async def my_courses(
         self, user_id: int, page: int = 1, page_size: int = 20
@@ -218,43 +218,44 @@ class CourseService:
                 .options(joinedload(CourseEnrollment.course))
                 .where(CourseEnrollment.user_id == user_id)
             )
-            count_stmt = select(func.count()).select_from(base.subquery())
-            total = (await db.execute(count_stmt)).scalar() or 0
-            stmt = base.order_by(CourseEnrollment.id.desc()).offset(
-                (page - 1) * page_size
-            ).limit(page_size)
-            result = await db.execute(stmt)
-            enrollments = result.scalars().all()
-            return PaginatedData[CourseEnrollmentResponse](
-                items=[CourseEnrollmentResponse.model_validate(e) for e in enrollments],
+            total = int(
+                await db.scalar(select(func.count()).select_from(base.subquery())) or 0
+            )
+            rows = (
+                await db.execute(
+                    base.order_by(CourseEnrollment.id.desc())
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                )
+            ).unique().scalars().all()
+            return PaginatedData(
+                items=[await self._enrollment_response(row) for row in rows],
                 total=total,
                 page=page,
                 page_size=page_size,
             )
 
-    # ==================== 章节与学习进度 ====================
-
-    @staticmethod
-    async def check_has_access(user_id: int, course_id: int) -> bool:
-        """判断用户是否有课程学习权限。"""
-        async with get_db_ctx() as db:
-            return await CourseService._has_learning_access(db, user_id, course_id)
+    async def _enrollment_response(
+        self, enrollment: CourseEnrollment
+    ) -> CourseEnrollmentResponse:
+        return CourseEnrollmentResponse(
+            id=enrollment.id,
+            course=await self._course_list_response(enrollment.course),
+            order_id=enrollment.order_id,
+            status=enrollment.status,
+            learning_access=enrollment.learning_access,
+            access_granted_at=enrollment.access_granted_at,
+            access_revoked_at=enrollment.access_revoked_at,
+            created_at=enrollment.created_at,
+        )
 
     async def get_chapters(
-        self, course_id: int, user_id: int | None = None
+        self, course_id: int, user_id: int | None
     ) -> CourseChaptersResponse:
-        """返回 { free_preview_seconds, chapters, progress }。"""
         async with get_db_ctx() as db:
-            stmt = (
-                select(Course)
-                .options(joinedload(Course.chapters))
-                .where(Course.id == course_id)
-            )
-            result = await db.execute(stmt)
-            course = result.unique().scalar_one_or_none()
+            course = await db.get(Course, course_id)
             if course is None:
                 raise NotFoundException("课程")
-
             has_access = (
                 await self._has_learning_access(db, user_id, course_id)
                 if user_id is not None
@@ -262,97 +263,130 @@ class CourseService:
             )
             if not course.is_active and not has_access:
                 raise NotFoundException("课程")
-
-            active_chapters = [ch for ch in course.chapters if ch.is_active]
-            active_chapters.sort(key=lambda ch: ch.sort_order)
-
-            free_seconds = None if has_access else course.free_preview_seconds
-
-            progress = None
-            if user_id is not None:
-                progress = await self._build_progress(user_id, course_id)
-
+            rows = list(
+                await db.scalars(
+                    select(CourseChapter)
+                    .where(CourseChapter.course_id == course_id)
+                    .order_by(CourseChapter.sort_order, CourseChapter.id)
+                )
+            )
+            can_play_course = has_access or course.price == 0
+            progress = await self._build_progress(db, user_id, course_id) if user_id else None
             return CourseChaptersResponse(
-                free_preview_seconds=free_seconds,
-                chapters=[self._public_chapter(ch) for ch in active_chapters],
+                preview_chapter_count=(
+                    0 if course.price == 0 else course.preview_chapter_count
+                ),
+                chapters=[
+                    self._chapter_response(
+                        row,
+                        can_play_course=can_play_course,
+                        has_access=has_access,
+                        preview_count=course.preview_chapter_count,
+                    )
+                    for row in rows
+                ],
                 progress=progress,
             )
+
+    async def issue_playback(
+        self, user_id: int, course_id: int, chapter_id: int
+    ) -> ChapterPlaybackResponse:
+        async with get_db_ctx() as db:
+            user = await db.get(User, user_id)
+            if user is None or not user.is_active:
+                raise ForbiddenException("用户账号不可用")
+            course = await db.get(Course, course_id)
+            chapter = await db.get(CourseChapter, chapter_id)
+            if course is None or chapter is None or chapter.course_id != course_id:
+                raise NotFoundException("课程章节")
+            has_access = await self._has_learning_access(db, user_id, course_id)
+            can_play = (
+                has_access
+                or course.price == 0
+                or chapter.sort_order <= course.preview_chapter_count
+            )
+            if not can_play:
+                raise ForbiddenException("无课程学习权限")
+            from app.domain.certification.src.index import CourseAuditLog
+
+            db.add(
+                CourseAuditLog(
+                    actor_type="user",
+                    actor_id=user_id,
+                    action="course.chapter.playback_issued",
+                    object_type="course_chapter",
+                    object_id=chapter.id,
+                    result="succeeded",
+                    summary={"course_id": course_id, "preview": not has_access},
+                )
+            )
+            await db.commit()
+        expires_at = int(time()) + 300
+        return ChapterPlaybackResponse(
+            chapter_id=chapter_id,
+            url=await self.storage.signed_url(
+                chapter.video_storage_key,
+                download_filename=chapter.original_filename,
+            ),
+            expires_at=expires_at,
+        )
 
     async def get_progress(
         self, user_id: int, course_id: int
     ) -> ChapterProgressResponse:
-        return await self._build_progress(user_id, course_id)
+        async with get_db_ctx() as db:
+            return await self._build_progress(db, user_id, course_id)
 
     async def upsert_progress(
         self, user_id: int, course_id: int, data: ChapterProgressUpsert
     ) -> ChapterProgressResponse:
         async with get_db_ctx() as db:
-            # 获取章节 duration
             chapter = await db.get(CourseChapter, data.chapter_id)
-            if (
-                chapter is None
-                or chapter.course_id != course_id
-                or not chapter.is_active
-            ):
-                raise NotFoundException("章节")
-
-            # 5 秒容差自动判完成
-            is_completed = data.is_completed or (
-                chapter.duration is not None
-                and data.last_position_seconds >= chapter.duration - 5
-            )
-
-            stmt = select(UserChapterProgress).where(
-                UserChapterProgress.user_id == user_id,
-                UserChapterProgress.course_id == course_id,
-                UserChapterProgress.chapter_id == data.chapter_id,
-            )
-            result = await db.execute(stmt)
-            progress = result.scalar_one_or_none()
-
-            if progress is None:
-                progress = UserChapterProgress(
-                    user_id=user_id,
-                    course_id=course_id,
-                    chapter_id=data.chapter_id,
-                    last_position_seconds=data.last_position_seconds,
-                    is_completed=is_completed,
-                )
-                db.add(progress)
-            else:
-                progress.last_position_seconds = max(
-                    progress.last_position_seconds, data.last_position_seconds
-                )
-                progress.is_completed = progress.is_completed or is_completed
-
-            await db.commit()
-            await db.refresh(progress)
-
-            return await self._build_progress(user_id, course_id)
-
-    @staticmethod
-    async def _build_progress(user_id: int, course_id: int) -> ChapterProgressResponse:
-        """构造学习进度响应。"""
-        async with get_db_ctx() as db:
-            rows = (
+            if chapter is None or chapter.course_id != course_id:
+                raise NotFoundException("课程章节")
+            row = (
                 await db.execute(
                     select(UserChapterProgress).where(
                         UserChapterProgress.user_id == user_id,
                         UserChapterProgress.course_id == course_id,
-                    ).order_by(UserChapterProgress.updated_at.desc())
+                        UserChapterProgress.chapter_id == data.chapter_id,
+                    )
                 )
-            ).scalars().all()
+            ).scalar_one_or_none()
+            if row is None:
+                row = UserChapterProgress(
+                    user_id=user_id,
+                    course_id=course_id,
+                    chapter_id=data.chapter_id,
+                    last_position_seconds=data.last_position_seconds,
+                    is_completed=data.is_completed,
+                )
+                db.add(row)
+            else:
+                row.last_position_seconds = max(
+                    row.last_position_seconds, data.last_position_seconds
+                )
+                row.is_completed = row.is_completed or data.is_completed
+            await db.commit()
+            return await self._build_progress(db, user_id, course_id)
 
-            if not rows:
-                return ChapterProgressResponse()
-
-            completed_ids = [r.chapter_id for r in rows if r.is_completed]
-            latest = max(rows, key=lambda r: r.updated_at)
-            return ChapterProgressResponse(
-                last_chapter_id=latest.chapter_id,
-                last_position_seconds=latest.last_position_seconds,
-                completed_chapter_ids=completed_ids,
+    async def _build_progress(
+        self, db, user_id: int, course_id: int
+    ) -> ChapterProgressResponse:
+        rows = (
+            await db.execute(
+                select(UserChapterProgress).where(
+                    UserChapterProgress.user_id == user_id,
+                    UserChapterProgress.course_id == course_id,
+                )
             )
+        ).scalars().all()
+        last = max(rows, key=lambda item: item.updated_at, default=None)
+        return ChapterProgressResponse(
+            last_chapter_id=last.chapter_id if last else None,
+            last_position_seconds=last.last_position_seconds if last else 0,
+            completed_chapter_ids=[row.chapter_id for row in rows if row.is_completed],
+        )
 
     @staticmethod
     async def _get_learning_enrollment(db, user_id: int, course_id: int):
@@ -367,7 +401,8 @@ class CourseService:
             )
         ).scalar_one_or_none()
 
-    @staticmethod
-    async def _has_learning_access(db, user_id: int, course_id: int) -> bool:
-        enrollment = await CourseService._get_learning_enrollment(db, user_id, course_id)
-        return enrollment is not None
+    @classmethod
+    async def _has_learning_access(cls, db, user_id: int, course_id: int) -> bool:
+        return (
+            await cls._get_learning_enrollment(db, user_id, course_id) is not None
+        )

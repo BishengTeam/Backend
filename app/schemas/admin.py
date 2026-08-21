@@ -13,7 +13,7 @@ class AdminInfo(BaseModel):
     id: int
     username: str
     display_name: str
-    role: Literal["super_admin", "quiz_admin", "h3c_admin"]
+    role: Literal["super_admin", "quiz_admin", "h3c_admin", "course_admin"]
     is_active: bool
     must_change_password: bool
     locked_until: datetime | None = None

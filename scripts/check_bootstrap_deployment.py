@@ -174,7 +174,7 @@ def main() -> None:
     require(production_seed, "PRODUCTION_SEED_VERSION", "versioned production seed")
     require(
         production_seed,
-        'PRODUCTION_SEED_VERSION = "2026.08.17.1"',
+        'PRODUCTION_SEED_VERSION = "2026.08.21.1"',
         "course-domain-aware production seed version",
     )
     require(

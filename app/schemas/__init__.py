@@ -26,9 +26,6 @@ from app.schemas.certification import CertificationFilter, CertificationResponse
 
 # Course schemas
 from app.schemas.course import (
-    CourseAssetPlaybackResponse,
-    CourseAssetResponse,
-    CourseContentResponse,
     CourseDetailResponse,
     CourseEnrollRequest,
     CourseEnrollmentResponse,
@@ -36,6 +33,7 @@ from app.schemas.course import (
     CourseListResponse,
     CoursePurchaseRequest,
     CoursePurchaseResponse,
+    ChapterPlaybackResponse,
 )
 
 # Order schemas

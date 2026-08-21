@@ -3,12 +3,12 @@
 from app.domain.certification.src.model.certification import Certification
 from app.domain.certification.src.model.course import (
     Course,
-    CourseAsset,
     CourseAuditLog,
     CourseCategory,
     CourseEnrollment,
     CourseEntitlementJob,
     CourseEntitlementJobItem,
+    CourseUpload,
 )
 from app.domain.certification.src.model.course_chapter import CourseChapter
 from app.domain.certification.src.model.user_chapter_progress import UserChapterProgress
@@ -21,10 +21,10 @@ __all__ = [
     "CourseAuditLog",
     "CourseCategory",
     "CourseChapter",
-    "CourseAsset",
     "CourseEnrollment",
     "CourseEntitlementJob",
     "CourseEntitlementJobItem",
+    "CourseUpload",
     "Job",
     "JobApplication",
     "CompetitionReg",

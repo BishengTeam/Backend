@@ -1,9 +1,10 @@
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
-from app.schemas.course import ChapterCreate, ChapterResponse, ChapterSortItem, ChapterUpdate, CourseStatus, EnrollmentStatus, VideoSourceType
+from app.schemas.course import CourseStatus, EnrollmentStatus
 
 
 CourseLifecycleAction = Literal["publish", "offline", "archive", "restore"]
@@ -37,11 +38,11 @@ class AdminCourseCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=256)
     category: str = Field(..., min_length=1, max_length=64)
     description: str | None = None
-    cover_url: str | None = Field(None, max_length=512)
-    price: int = Field(..., ge=0)
+    cover_upload_id: int = Field(..., gt=0)
+    price_yuan: Decimal = Field(..., ge=0, decimal_places=2)
     teacher_name: str | None = Field(None, max_length=64)
     teacher_contact: str | None = Field(None, max_length=128)
-    free_preview_seconds: int | None = Field(None, ge=0)
+    preview_chapter_count: int = Field(0, ge=0)
     model_config = {"extra": "forbid"}
 
 
@@ -49,11 +50,10 @@ class AdminCourseUpdate(BaseModel):
     title: str | None = Field(None, min_length=1, max_length=256)
     category: str | None = Field(None, min_length=1, max_length=64)
     description: str | None = None
-    cover_url: str | None = Field(None, max_length=512)
-    price: int | None = Field(None, ge=0)
+    cover_upload_id: int | None = Field(None, gt=0)
     teacher_name: str | None = Field(None, max_length=64)
     teacher_contact: str | None = Field(None, max_length=128)
-    free_preview_seconds: int | None = Field(None, ge=0)
+    preview_chapter_count: int | None = Field(None, ge=0)
     model_config = {"extra": "forbid"}
 
 
@@ -64,12 +64,59 @@ class AdminCourseListItem(BaseModel):
     description: str | None = None
     cover_url: str | None = None
     price: int
+    price_yuan: Decimal
     teacher_name: str | None = None
     teacher_contact: str | None = None
-    free_preview_seconds: int | None = None
+    preview_chapter_count: int
     status: CourseStatus
     bound_quiz_library_count: int = 0
     enrollment_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AdminCoursePriceUpdate(BaseModel):
+    price_yuan: Decimal = Field(..., ge=0, decimal_places=2)
+
+    model_config = {"extra": "forbid"}
+
+
+class AdminChapterUpdate(BaseModel):
+    title: str | None = Field(None, min_length=1, max_length=256)
+    duration: int | None = Field(None, gt=0)
+    sort_order: int | None = Field(None, ge=1)
+
+    model_config = {"extra": "forbid"}
+
+
+class AdminChapterSortItem(BaseModel):
+    id: int = Field(..., gt=0)
+    sort_order: int = Field(..., ge=1)
+
+
+class AdminChapterReplaceVideo(BaseModel):
+    upload_id: int = Field(..., gt=0)
+
+    model_config = {"extra": "forbid"}
+
+
+class AdminChapterBatchCreate(BaseModel):
+    upload_ids: list[int] = Field(..., min_length=1, max_length=50)
+
+    model_config = {"extra": "forbid"}
+
+
+class AdminChapterResponse(BaseModel):
+    id: int
+    title: str
+    video_storage_key: str
+    original_filename: str
+    content_type: str
+    size_bytes: int
+    duration: int
+    sort_order: int
     created_at: datetime
     updated_at: datetime
 
@@ -98,17 +145,6 @@ class AdminCourseEnrollmentListItem(BaseModel):
     created_at: datetime
 
 
-class AdminCourseAssetResponse(BaseModel):
-    id: int
-    course_id: int
-    title: str
-    storage_key: str
-    asset_type: str
-    sort_order: int
-    is_preview: bool
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
 
 
 class AdminCourseBindingCreate(BaseModel):
@@ -194,7 +230,7 @@ class AdminCourseAuditListItem(BaseModel):
 
 
 class AdminCourseChapterPage(BaseModel):
-    items: list[ChapterResponse]
+    items: list[AdminChapterResponse]
     total: int
     page: int
     page_size: int

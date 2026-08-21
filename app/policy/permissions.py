@@ -12,4 +12,9 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "h3c:refund",
         "h3c:order_close",
     ],
+    "course_admin": [
+        "course:read",
+        "course:write",
+        "course:publish",
+    ],
 }

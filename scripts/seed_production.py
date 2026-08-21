@@ -25,7 +25,7 @@ from app.domain.order.src.index import PriceConfig
 from app.domain.user.src.index import AdminUser
 
 
-PRODUCTION_SEED_VERSION = "2026.08.17.1"
+PRODUCTION_SEED_VERSION = "2026.08.21.1"
 
 # ``crs001`` intentionally removes the old fake course dataset and rebuilds
 # the domain.  Production bootstrap does not invent course categories or
@@ -36,7 +36,7 @@ COURSE_REQUIRED_TABLES = (
     "quiz_course_library_binding",
     "course_category",
     "course_chapter",
-    "course_asset",
+    "course_upload",
     "course_enrollment",
     "user_chapter_progress",
     "quiz_library_entitlement",
