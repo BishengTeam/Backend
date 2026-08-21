@@ -46,20 +46,20 @@ jobs:
 
     steps:
       - name: Check out release tooling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: tooling
           fetch-depth: 1
 
       - name: Check out target Backend
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ inputs.backend_ref }}
           path: Backend
           fetch-depth: 1
 
       - name: Check out target Admin
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: BishengTeam/Admin
           ref: ${{ inputs.admin_ref }}
@@ -89,7 +89,7 @@ jobs:
           fi
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -115,9 +115,9 @@ jobs:
           python -m pytest -q -p no:cacheprovider tests/integration/db
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: Admin/package-lock.json
 
