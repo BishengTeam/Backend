@@ -331,7 +331,6 @@ async def test_payment_refund_and_private_content_authorization(
     )
     assert paid.status == "completed"
     assert paid.processed is True
-
     async with course_context.factory() as db:
         course = await db.get(Course, data.paid_course_id)
         course.status = "offline"
@@ -339,7 +338,7 @@ async def test_payment_refund_and_private_content_authorization(
         await db.commit()
 
     paid_chapters = await course_context.course_service.get_chapters(
-        data.paid_user_id, data.paid_course_id
+        data.paid_course_id, data.paid_user_id
     )
     assert [chapter.id for chapter in paid_chapters.chapters] == [
         data.preview_chapter_id,
@@ -347,8 +346,14 @@ async def test_payment_refund_and_private_content_authorization(
     ]
     assert all(chapter.can_play for chapter in paid_chapters.chapters)
 
+    async with course_context.factory() as db:
+        course = await db.get(Course, data.paid_course_id)
+        course.status = "published"
+        course.is_active = True
+        await db.commit()
+
     preview_chapters = await course_context.course_service.get_chapters(
-        data.other_user_id, data.paid_course_id
+        data.paid_course_id, data.other_user_id
     )
     assert [
         chapter.id for chapter in preview_chapters.chapters if chapter.can_play
@@ -413,8 +418,8 @@ async def test_payment_refund_and_private_content_authorization(
         )
 
     refunded_preview = await course_context.course_service.get_chapters(
-        data.other_user_id,
         data.paid_course_id,
+        data.other_user_id,
     )
     assert [
         chapter.id for chapter in refunded_preview.chapters if chapter.can_play
