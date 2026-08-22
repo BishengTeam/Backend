@@ -2,12 +2,13 @@ from decimal import Decimal
 from pathlib import Path
 
 from fastapi.routing import APIRoute
+import pytest
 from pydantic import ValidationError
 
 from app.main import app
 from app.schemas.admin_course import AdminCourseCreate
 from app.schemas.course import CourseDetailResponse
-from app.services.course_storage import validate_upload
+from app.services.course_storage import CourseStorage, validate_upload
 
 
 def _route(method: str, path: str) -> APIRoute:
@@ -103,6 +104,37 @@ def test_upload_limits_are_frozen() -> None:
             assert "支持" in str(exc)
         else:
             raise AssertionError("unsupported course upload extension must be rejected")
+
+
+@pytest.mark.asyncio
+async def test_course_video_part_signing_uses_string_query_params(monkeypatch) -> None:
+    signed: dict[str, object] = {}
+
+    class Bucket:
+        def sign_url(self, method, key, expires, params=None):
+            signed.update(
+                method=method,
+                key=key,
+                expires=expires,
+                params=params,
+            )
+            return "https://oss.example/signed-part"
+
+    monkeypatch.setattr(CourseStorage, "_bucket", staticmethod(lambda: Bucket()))
+
+    url = await CourseStorage.part_url(
+        "course/default/chapters/video.mp4", "oss-upload-id", 2
+    )
+
+    assert url == "https://oss.example/signed-part"
+    assert signed["method"] == "PUT"
+    assert signed["key"] == "course/default/chapters/video.mp4"
+    assert signed["expires"] == 3600
+    assert signed["params"] == {"partNumber": "2", "uploadId": "oss-upload-id"}
+    assert all(
+        isinstance(value, str)
+        for value in signed["params"].values()  # type: ignore[union-attr]
+    )
 
 
 def test_course_admin_permissions_split_daily_and_high_risk_operations() -> None:

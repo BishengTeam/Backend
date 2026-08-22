@@ -157,7 +157,10 @@ class CourseStorage:
                 "PUT",
                 object_key,
                 COURSE_UPLOAD_SIGN_TTL_SECONDS,
-                params={"partNumber": part_number, "uploadId": oss_upload_id},
+                params={
+                    "partNumber": str(part_number),
+                    "uploadId": str(oss_upload_id),
+                },
             )
 
         return await asyncio.to_thread(_sign)
