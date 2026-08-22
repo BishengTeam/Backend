@@ -374,6 +374,8 @@ class CourseUploadService:
                         summary={"count": len(created)},
                     )
                 )
+                for chapter in created:
+                    await db.refresh(chapter)
                 return created
 
     async def replace_video(
@@ -412,6 +414,7 @@ class CourseUploadService:
                 )
                 if old_key != upload.object_key:
                     pass
+                await db.refresh(chapter)
             if old_key != upload.object_key:
                 try:
                     await self.storage.delete(old_key)

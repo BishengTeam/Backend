@@ -175,6 +175,7 @@ class AdminCourseService:
                     object_id=row.id,
                     after={"name": row.name, "sort_order": row.sort_order},
                 )
+                await db.refresh(row)
                 return AdminCourseCategoryResponse.model_validate(row)
 
     async def update_category(
@@ -205,6 +206,7 @@ class AdminCourseService:
                     before=before,
                     after=after,
                 )
+                await db.refresh(row)
                 return AdminCourseCategoryResponse.model_validate(row)
 
     async def list_courses(
@@ -328,6 +330,7 @@ class AdminCourseService:
                     object_id=course.id,
                     after=self._course_fields(course),
                 )
+                await db.refresh(course)
                 return await self._list_item(db, course)
 
     async def get_course(self, course_id: int) -> AdminCourseListItem:
@@ -368,6 +371,7 @@ class AdminCourseService:
                     before=before,
                     after=self._course_fields(course),
                 )
+                await db.refresh(course)
                 return await self._list_item(db, course)
         if replacement_cover_key:
             await self.storage.delete(replacement_cover_key)
@@ -398,6 +402,7 @@ class AdminCourseService:
                     before=before,
                     after={"price": course.price},
                 )
+                await db.refresh(course)
                 return await self._list_item(db, course)
 
     async def _list_item(self, db, course: Course) -> AdminCourseListItem:
@@ -495,6 +500,7 @@ class AdminCourseService:
                     before=before,
                     after={"status": course.status},
                 )
+                await db.refresh(course)
                 return await self._list_item(db, course)
 
     async def _close_pending_enrollments(self, db, course_id: int) -> int:
@@ -646,6 +652,7 @@ class AdminCourseService:
                         "sort_order": row.sort_order,
                     },
                 )
+                await db.refresh(row)
                 return AdminChapterResponse.model_validate(row)
 
     async def replace_chapter_video(

@@ -1,13 +1,16 @@
 from decimal import Decimal
+from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import sys
+from contextlib import asynccontextmanager
 
 from fastapi.routing import APIRoute
 import pytest
 from pydantic import ValidationError
 
 import app.api.admin.courses as courses_api
+import app.services.admin_course as admin_course_module
 from app.main import app
 from app.schemas.admin_course import AdminChapterUpdate, AdminChapterResponse, AdminCourseCreate
 from app.schemas.course import CourseDetailResponse
@@ -84,6 +87,88 @@ def test_admin_chapter_response_contains_workbench_metadata() -> None:
 
 def test_admin_chapter_update_cannot_override_file_derived_duration() -> None:
     assert "duration" not in AdminChapterUpdate.model_fields
+
+
+@pytest.mark.asyncio
+async def test_chapter_update_refreshes_server_generated_timestamp_before_response(
+    monkeypatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+
+    class Chapter:
+        def __init__(self):
+            self.id = 8
+            self.course_id = 1
+            self.title = "old title"
+            self.video_storage_key = "course/video.mp4"
+            self.original_filename = "video.mp4"
+            self.content_type = "video/mp4"
+            self.size_bytes = 1024
+            self.duration = 18
+            self.sort_order = 2
+            self.created_at = now
+            self._timestamp_loaded = True
+            self._updated_at = now
+
+        @property
+        def updated_at(self):
+            if not self._timestamp_loaded:
+                raise RuntimeError("server-generated timestamp requires refresh")
+            return self._updated_at
+
+    class Transaction:
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, *args):
+            return None
+
+    class Database:
+        def __init__(self, row):
+            self.row = row
+            self.refresh_count = 0
+
+        def begin(self):
+            return Transaction()
+
+        def add(self, item):
+            return None
+
+        async def get(self, model, item_id):
+            return self.row if item_id == self.row.id else None
+
+        async def flush(self):
+            self.row._timestamp_loaded = False
+
+        async def refresh(self, row):
+            self.refresh_count += 1
+            row._timestamp_loaded = True
+            row._updated_at = now
+
+    chapter = Chapter()
+    database = Database(chapter)
+
+    @asynccontextmanager
+    async def database_context():
+        yield database
+
+    monkeypatch.setattr(
+        admin_course_module,
+        "get_db_ctx",
+        lambda: database_context(),
+    )
+
+    result = await admin_course_module.AdminCourseService().update_chapter_metadata(
+        1,
+        8,
+        AdminChapterUpdate(title="new title", sort_order=3),
+        admin_id=9,
+    )
+
+    assert database.refresh_count == 1
+    assert result.title == "new title"
+    assert result.sort_order == 3
+    assert result.updated_at == now
 
 
 @pytest.mark.asyncio
