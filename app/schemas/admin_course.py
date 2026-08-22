@@ -85,7 +85,6 @@ class AdminCoursePriceUpdate(BaseModel):
 
 class AdminChapterUpdate(BaseModel):
     title: str | None = Field(None, min_length=1, max_length=256)
-    duration: int | None = Field(None, gt=0)
     sort_order: int | None = Field(None, ge=1)
 
     model_config = {"extra": "forbid"}

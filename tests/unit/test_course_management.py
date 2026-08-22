@@ -82,6 +82,10 @@ def test_admin_chapter_response_contains_workbench_metadata() -> None:
     }
 
 
+def test_admin_chapter_update_cannot_override_file_derived_duration() -> None:
+    assert "duration" not in AdminChapterUpdate.model_fields
+
+
 @pytest.mark.asyncio
 async def test_update_chapter_endpoint_does_not_read_course_id_from_response(
     monkeypatch,

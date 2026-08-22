@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 from datetime import datetime, timedelta, timezone
 
@@ -19,6 +20,7 @@ from app.services.course_storage import COURSE_DEFAULT_PART_SIZE, CourseStorage
 
 PENDING_UPLOAD_RETENTION = timedelta(days=7)
 COMPLETED_UPLOAD_RETENTION = timedelta(hours=24)
+_logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -411,5 +413,10 @@ class CourseUploadService:
                 if old_key != upload.object_key:
                     pass
             if old_key != upload.object_key:
-                await self.storage.delete(old_key)
+                try:
+                    await self.storage.delete(old_key)
+                except Exception:
+                    _logger.warning(
+                        "replaced course video cleanup failed; object remains for manual cleanup"
+                    )
             return chapter

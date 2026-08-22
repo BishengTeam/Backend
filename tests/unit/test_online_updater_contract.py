@@ -27,6 +27,8 @@ def test_online_updater_shell_contract():
     assert "value = json.loads(sys.argv[1])" in source
     assert '"$new_backend_image" python scripts/oss_backup.py' not in source
     assert source.count('--installation-dir "$DEPLOYMENT_ROOT/installation" \\') == 2
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES" in source
+    assert "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES" in source
 
 
 def test_oss_backup_uploads_an_open_file(tmp_path, monkeypatch):

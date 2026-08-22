@@ -583,6 +583,14 @@ log "running new Alembic migration"
 DATABASE_TOUCHED=1
 compose_for "$new_compose" "$new_release_work" run --rm --no-deps migration >/dev/null
 
+log "ensuring the runtime database role can modify application tables"
+compose_for "$old_compose" "$old_release_env" exec -T db \
+  sh -c "exec psql -U \"\$POSTGRES_USER\" -d \"$runtime_db_name\" -v ON_ERROR_STOP=1" \
+  <<<"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO $runtime_db_user;
+GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO $runtime_db_user;
+ALTER DEFAULT PRIVILEGES FOR ROLE $runtime_db_user IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO $runtime_db_user;
+ALTER DEFAULT PRIVILEGES FOR ROLE $runtime_db_user IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO $runtime_db_user;" >/dev/null
+
 log "starting new Backend, quiz-worker and Admin"
 compose_for "$new_compose" "$new_release_work" up -d uploads-init app quiz-worker admin >/dev/null
 NEW_STARTED=1

@@ -629,7 +629,6 @@ class AdminCourseService:
                     raise NotFoundException("章节")
                 before = {
                     "title": row.title,
-                    "duration": row.duration,
                     "sort_order": row.sort_order,
                 }
                 for key, value in data.model_dump(exclude_unset=True).items():
@@ -644,7 +643,6 @@ class AdminCourseService:
                     before=before,
                     after={
                         "title": row.title,
-                        "duration": row.duration,
                         "sort_order": row.sort_order,
                     },
                 )
