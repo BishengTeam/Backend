@@ -266,6 +266,19 @@ class CourseStorage:
         await asyncio.to_thread(_delete)
 
     @classmethod
+    async def object_exists(cls, object_key: str) -> bool:
+        def _exists() -> bool:
+            try:
+                cls._bucket().head_object(object_key)
+                return True
+            except Exception as exc:
+                if getattr(exc, "status", None) == 404:
+                    return False
+                raise
+
+        return await asyncio.to_thread(_exists)
+
+    @classmethod
     async def signed_url(
         cls,
         object_key: str,
@@ -283,7 +296,11 @@ class CourseStorage:
                     )
                 }
             return cls._bucket().sign_url(
-                "GET", object_key, ttl_seconds, params=params
+                "GET",
+                object_key,
+                ttl_seconds,
+                params=params,
+                slash_safe=True,
             )
 
         return await asyncio.to_thread(_sign)

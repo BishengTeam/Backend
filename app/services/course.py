@@ -14,7 +14,7 @@ from app.domain.certification.src.index import (
 )
 from app.domain.community.src.index import QuizCourseLibraryBinding, QuizLibrary
 from app.domain.user.src.index import User
-from app.port.exceptions import ForbiddenException, NotFoundException
+from app.port.exceptions import ForbiddenException, NotFoundException, ThirdPartyException
 from app.schemas.common import PaginatedData
 from app.schemas.course import (
     ChapterPlaybackResponse,
@@ -307,6 +307,8 @@ class CourseService:
             )
             if not can_play:
                 raise ForbiddenException("无课程学习权限")
+            if not await self.storage.object_exists(chapter.video_storage_key):
+                raise ThirdPartyException("课程视频文件不存在，请重新上传视频")
             from app.domain.certification.src.index import CourseAuditLog
 
             db.add(

@@ -267,6 +267,48 @@ async def test_course_video_part_signing_uses_string_query_params(monkeypatch) -
 
 
 @pytest.mark.asyncio
+async def test_course_playback_url_preserves_object_key_slashes(monkeypatch) -> None:
+    calls = {}
+
+    class Bucket:
+        def sign_url(self, method, key, expires, params=None, slash_safe=False):
+            calls.update(
+                method=method,
+                key=key,
+                expires=expires,
+                params=params,
+                slash_safe=slash_safe,
+            )
+            return "https://oss.example/signed"
+
+    monkeypatch.setattr(CourseStorage, "_bucket", staticmethod(lambda: Bucket()))
+
+    url = await CourseStorage.signed_url(
+        "course/default/chapters/video.mp4",
+        download_filename="视频.mp4",
+    )
+
+    assert url == "https://oss.example/signed"
+    assert calls["method"] == "GET"
+    assert calls["key"] == "course/default/chapters/video.mp4"
+    assert calls["slash_safe"] is True
+
+
+@pytest.mark.asyncio
+async def test_course_storage_reports_missing_object(monkeypatch) -> None:
+    class NotFound(Exception):
+        status = 404
+
+    class Bucket:
+        def head_object(self, key):
+            raise NotFound()
+
+    monkeypatch.setattr(CourseStorage, "_bucket", staticmethod(lambda: Bucket()))
+
+    assert await CourseStorage.object_exists("course/missing.mp4") is False
+
+
+@pytest.mark.asyncio
 async def test_course_video_parts_read_oss_result_and_follow_pagination(
     monkeypatch,
 ) -> None:
