@@ -110,6 +110,7 @@ class AdminChapterBatchCreate(BaseModel):
 
 class AdminChapterResponse(BaseModel):
     id: int
+    course_id: int
     title: str
     video_storage_key: str
     original_filename: str

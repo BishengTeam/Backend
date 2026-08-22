@@ -7,8 +7,9 @@ from fastapi.routing import APIRoute
 import pytest
 from pydantic import ValidationError
 
+import app.api.admin.courses as courses_api
 from app.main import app
-from app.schemas.admin_course import AdminCourseCreate
+from app.schemas.admin_course import AdminChapterUpdate, AdminChapterResponse, AdminCourseCreate
 from app.schemas.course import CourseDetailResponse
 from app.services.course_storage import CourseStorage, validate_upload
 
@@ -63,6 +64,43 @@ def test_course_detail_contract_contains_preview_count_and_quiz_directory() -> N
     )
     assert response.included_quiz_libraries == []
     assert not hasattr(response, "free_preview_seconds")
+
+
+def test_admin_chapter_response_contains_workbench_metadata() -> None:
+    assert set(AdminChapterResponse.model_fields) >= {
+        "id",
+        "course_id",
+        "title",
+        "video_storage_key",
+        "original_filename",
+        "content_type",
+        "size_bytes",
+        "duration",
+        "sort_order",
+        "created_at",
+        "updated_at",
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_chapter_endpoint_does_not_read_course_id_from_response(
+    monkeypatch,
+) -> None:
+    class Service:
+        async def update_chapter_metadata(self, course_id, chapter_id, data, *, admin_id):
+            assert (course_id, chapter_id, admin_id) == (1, 2, 9)
+            assert data.title == "新章节标题"
+            return AdminChapterUpdate(title=data.title)
+
+    monkeypatch.setattr(courses_api, "AdminCourseService", Service)
+    response = await courses_api.update_chapter(
+        course_id=1,
+        chapter_id=2,
+        body=AdminChapterUpdate(title="新章节标题"),
+        admin=SimpleNamespace(id=9),
+    )
+
+    assert response.data.title == "新章节标题"
 
 
 def test_public_course_contract_does_not_expose_storage_keys() -> None:

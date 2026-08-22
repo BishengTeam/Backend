@@ -258,12 +258,10 @@ async def update_chapter(
     body: AdminChapterUpdate = ...,
     admin=Depends(require_permission("course:write")),
 ):
-    row = await AdminCourseService().update_chapter_metadata(
+    chapter = await AdminCourseService().update_chapter_metadata(
         course_id, chapter_id, body, admin_id=admin.id
     )
-    if row.course_id != course_id:
-        raise BusinessException("章节不属于当前课程")
-    return success(data=row)
+    return success(data=chapter)
 
 
 @router.post(
