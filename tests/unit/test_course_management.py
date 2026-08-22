@@ -1,5 +1,7 @@
 from decimal import Decimal
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
+import sys
 
 from fastapi.routing import APIRoute
 import pytest
@@ -135,6 +137,112 @@ async def test_course_video_part_signing_uses_string_query_params(monkeypatch) -
         isinstance(value, str)
         for value in signed["params"].values()  # type: ignore[union-attr]
     )
+
+
+@pytest.mark.asyncio
+async def test_course_video_parts_read_oss_result_and_follow_pagination(
+    monkeypatch,
+) -> None:
+    class PartResult:
+        def __init__(self, parts, is_truncated, next_marker):
+            self.parts = parts
+            self.is_truncated = is_truncated
+            self.next_marker = next_marker
+
+        def __iter__(self):
+            raise TypeError("OSS ListPartsResult is not iterable")
+
+    class Bucket:
+        calls = []
+
+        def list_parts(self, key, upload_id, marker="", max_parts=1000):
+            self.calls.append((key, upload_id, marker, max_parts))
+            if marker == "":
+                return PartResult(
+                    [SimpleNamespace(part_number=1, size=16, etag='"etag-1"')],
+                    True,
+                    "2",
+                )
+            return PartResult(
+                [SimpleNamespace(part_number=2, size=4, etag="etag-2")],
+                False,
+                "",
+            )
+
+    bucket = Bucket()
+    monkeypatch.setattr(CourseStorage, "_bucket", staticmethod(lambda: bucket))
+
+    result = await CourseStorage.list_parts("course/video.mp4", "upload-id")
+
+    assert result == [
+        {"part_number": 1, "size_bytes": 16, "etag": "etag-1"},
+        {"part_number": 2, "size_bytes": 4, "etag": "etag-2"},
+    ]
+    assert bucket.calls == [
+        ("course/video.mp4", "upload-id", "", 1000),
+        ("course/video.mp4", "upload-id", "2", 1000),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_course_video_complete_uses_all_listed_parts(monkeypatch) -> None:
+    class PartResult:
+        def __init__(self, parts):
+            self.parts = parts
+            self.is_truncated = False
+            self.next_marker = ""
+
+    class FakePartInfo:
+        def __init__(self, part_number, etag):
+            self.part_number = part_number
+            self.etag = etag
+
+    class Bucket:
+        completed = None
+
+        def list_parts(self, key, upload_id, marker="", max_parts=1000):
+            assert (key, upload_id, marker, max_parts) == (
+                "course/video.mp4",
+                "upload-id",
+                "",
+                1000,
+            )
+            return PartResult(
+                [
+                    SimpleNamespace(part_number=1, size=16, etag="etag-1"),
+                    SimpleNamespace(part_number=2, size=4, etag="etag-2"),
+                ]
+            )
+
+        def complete_multipart_upload(self, key, upload_id, parts):
+            self.completed = (key, upload_id, parts)
+
+        def head_object(self, key):
+            return SimpleNamespace(
+                content_length=20,
+                headers={"Content-Type": "video/mp4"},
+            )
+
+    bucket = Bucket()
+    monkeypatch.setattr(CourseStorage, "_bucket", staticmethod(lambda: bucket))
+    oss_module = ModuleType("oss2")
+    models_module = ModuleType("oss2.models")
+    models_module.PartInfo = FakePartInfo
+    oss_module.models = models_module
+    monkeypatch.setitem(sys.modules, "oss2", oss_module)
+    monkeypatch.setitem(sys.modules, "oss2.models", models_module)
+
+    uploaded = await CourseStorage.complete(
+        "course/video.mp4", "upload-id", 20
+    )
+
+    assert uploaded.size_bytes == 20
+    assert uploaded.content_type == "video/mp4"
+    assert bucket.completed[0] == "course/video.mp4"
+    assert [(part.part_number, part.etag) for part in bucket.completed[2]] == [
+        (1, "etag-1"),
+        (2, "etag-2"),
+    ]
 
 
 def test_course_admin_permissions_split_daily_and_high_risk_operations() -> None:

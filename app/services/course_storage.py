@@ -4,7 +4,7 @@ import asyncio
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import quote
 
 from sqlalchemy import select
@@ -178,19 +178,37 @@ class CourseStorage:
     async def list_parts(cls, object_key: str, oss_upload_id: str) -> list[dict]:
         if not oss_upload_id:
             return []
+
         def _list() -> list[dict]:
-            parts = []
-            for part in cls._bucket().list_parts(object_key, oss_upload_id):
-                parts.append(
+            parts = cls._list_all_parts(cls._bucket(), object_key, oss_upload_id)
+            normalized = []
+            for part in parts:
+                normalized.append(
                     {
                         "part_number": int(part.part_number),
                         "size_bytes": int(part.size),
                         "etag": str(part.etag).strip('"'),
                     }
                 )
-            return parts
+            return normalized
 
         return await asyncio.to_thread(_list)
+
+    @staticmethod
+    def _list_all_parts(
+        bucket: Any, object_key: str, oss_upload_id: str
+    ) -> list[Any]:
+        parts: list[Any] = []
+        marker = ""
+        while True:
+            result = bucket.list_parts(
+                object_key, oss_upload_id, marker=marker, max_parts=1000
+            )
+            parts.extend(result.parts)
+            if not result.is_truncated or not result.next_marker:
+                break
+            marker = result.next_marker
+        return parts
 
     @classmethod
     async def complete(
@@ -209,7 +227,7 @@ class CourseStorage:
                     size_bytes=int(head.content_length),
                     content_type=head.headers.get("Content-Type"),
                 )
-            raw_parts = list(bucket.list_parts(object_key, oss_upload_id))
+            raw_parts = cls._list_all_parts(bucket, object_key, oss_upload_id)
             uploaded = sum(int(part.size) for part in raw_parts)
             if uploaded != expected_size:
                 raise ValidationException("视频分片大小与声明不一致")
