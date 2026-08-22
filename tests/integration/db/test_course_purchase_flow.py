@@ -66,6 +66,7 @@ async def course_context(monkeypatch, tmp_path):
     context.course_service.storage.signed_url = AsyncMock(
         return_value="https://signed.example.invalid/course-object"
     )
+    context.course_service.storage.object_exists = AsyncMock(return_value=True)
     try:
         yield context
     finally:
