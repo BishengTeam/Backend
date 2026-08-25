@@ -481,15 +481,35 @@ class QuizExamService:
                 else:
                     return await self._serialize_exam(db, existing, server_time=now)
 
-            is_v2 = data.scope_type is not None
-            if is_v2:
+            selections: list[tuple[str, int]] = []
+            if data.scope_type is not None:
                 assert data.scope_id is not None
-                library, point_ids, paths = await self.v2._resolve_scope(
-                    db, user_id, str(data.scope_type), int(data.scope_id)
+                selections.append((str(data.scope_type), int(data.scope_id)))
+            elif data.scopes is not None:
+                selections.extend(
+                    (str(item.scope_type), int(item.scope_id)) for item in data.scopes
                 )
-                path_by_point = {
-                    int(item["point_id"]): item["path"] for item in paths
-                }
+            is_v2 = bool(selections)
+            if is_v2:
+                resolved_library = None
+                point_ids: list[int] = []
+                path_by_point: dict[int, list] = {}
+                for scope_type, scope_id in selections:
+                    scope_library, scope_point_ids, scope_paths = await self.v2._resolve_scope(
+                        db, user_id, scope_type, scope_id
+                    )
+                    if resolved_library is None:
+                        resolved_library = scope_library
+                    elif int(resolved_library.id) != int(scope_library.id):
+                        raise ValidationException("智能组卷仅支持同一题库内的范围")
+                    for point_id in scope_point_ids:
+                        if point_id not in path_by_point:
+                            point_ids.append(point_id)
+                    for path_item in scope_paths:
+                        path_by_point.setdefault(
+                            int(path_item["point_id"]), path_item["path"]
+                        )
+                library = resolved_library
                 rows = list(
                     (
                         await db.execute(
@@ -567,8 +587,8 @@ class QuizExamService:
                 user_id=user_id,
                 category_id=data.category_id,
                 library_id=(int(library.id) if is_v2 else None),
-                scope_type=(str(data.scope_type) if is_v2 else None),
-                scope_id=(int(data.scope_id) if is_v2 else None),
+                scope_type=(str(data.scope_type) if data.scope_type is not None else None),
+                scope_id=(int(data.scope_id) if data.scope_id is not None else None),
                 question_count=data.question_count,
                 duration_seconds=_DURATION_SECONDS,
                 status=_IN_PROGRESS,

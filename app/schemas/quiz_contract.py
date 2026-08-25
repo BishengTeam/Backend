@@ -464,22 +464,33 @@ class QuizStatsResponse(QuizContractModel):
     exam: QuizExamStats
 
 
+class QuizExamScopeSelection(QuizContractModel):
+    scope_type: QuizPracticeScopeType
+    scope_id: int = Field(ge=1)
+
+
 class QuizExamCreate(QuizContractModel):
     category_id: int | None = Field(default=None, ge=1)
     scope_type: QuizPracticeScopeType | None = None
     scope_id: int | None = Field(default=None, ge=1)
+    scopes: list[QuizExamScopeSelection] | None = Field(
+        default=None, min_length=1, max_length=20
+    )
     question_count: int = Field(ge=10, le=100)
 
     @model_validator(mode="after")
     def validate_scope(self) -> "QuizExamCreate":
         legacy = self.category_id is not None
         v2 = self.scope_type is not None or self.scope_id is not None
-        if legacy == v2:
+        multi = self.scopes is not None
+        if sum(bool(item) for item in (legacy, v2, multi)) != 1:
             raise ValueError(
-                "exactly one of category_id or scope_type + scope_id is required"
+                "exactly one of category_id, scope_type + scope_id, or scopes is required"
             )
         if v2 and (self.scope_type is None or self.scope_id is None):
             raise ValueError("V2 exam requires scope_type and scope_id")
+        if multi and len({(item.scope_type, item.scope_id) for item in self.scopes}) != len(self.scopes):
+            raise ValueError("scopes must not contain duplicates")
         return self
 
 

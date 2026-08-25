@@ -24,6 +24,7 @@ from app.schemas.quiz_contract import (
     QuizExamCreate,
     QuizExamInProgressDetail,
     QuizExamQuestionResult,
+    QuizExamScopeSelection,
 )
 from app.services.quiz_exam import QuizExamService
 
@@ -70,6 +71,31 @@ def test_exam_request_is_strictly_bounded_and_duration_is_frozen() -> None:
         QuizExamCreate(category_id=1, scope_type="library", scope_id=2, question_count=10)
     with pytest.raises(ValidationError):
         QuizExamCreate(scope_type="library", question_count=10)
+    multi = QuizExamCreate(
+        scopes=[
+            QuizExamScopeSelection(scope_type="module", scope_id=7),
+            QuizExamScopeSelection(scope_type="knowledge_point", scope_id=9),
+        ],
+        question_count=15,
+    )
+    assert multi.category_id is None
+    assert multi.scope_type is None
+    assert multi.scopes is not None and len(multi.scopes) == 2
+    with pytest.raises(ValidationError, match="duplicates"):
+        QuizExamCreate(
+            scopes=[
+                QuizExamScopeSelection(scope_type="module", scope_id=7),
+                QuizExamScopeSelection(scope_type="module", scope_id=7),
+            ],
+            question_count=10,
+        )
+    with pytest.raises(ValidationError, match="exactly one"):
+        QuizExamCreate(
+            scope_type="module",
+            scope_id=7,
+            scopes=[QuizExamScopeSelection(scope_type="module", scope_id=8)],
+            question_count=10,
+        )
 
     # The response models make the fixed duration and state-specific fields
     # explicit, preventing accidental leakage through a generic dict response.

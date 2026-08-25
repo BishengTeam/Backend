@@ -32,12 +32,13 @@ from app.domain.community.src.rule.quiz import (
 from app.domain.order.src.index import Order
 from app.domain.plan.src.index import Plan  # noqa: F401 - resolve Order.plan_id FK
 from app.domain.user.src.index import AdminUser, User
-from app.port.exceptions import QuizV2Exception
+from app.port.exceptions import QuizV2Exception, ValidationException
 from app.schemas.admin_quiz_contract import (
     AdminQuizQuestionUpdate,
     AdminQuizVersionRequest,
 )
 from app.schemas.quiz_contract import QuizExamAnswerSave, QuizExamCreate
+from app.schemas.quiz_contract import QuizExamScopeSelection
 from app.services.admin_quiz_v2 import AdminQuizV2Service
 from app.services.quiz_exam import QuizExamService
 
@@ -416,6 +417,59 @@ async def test_course_exam_is_hidden_without_entitlement_and_available_with_it(
     assert exam.library_id == env.paid_library.id
     assert exam.scope_type == "knowledge_point"
     assert len(exam.questions) == 10
+
+
+async def test_multi_scope_exam_mixes_modules_and_points_within_one_library(
+    quiz_v2_exam_env,
+) -> None:
+    env = quiz_v2_exam_env
+    exam = await env.exam_service.create_exam(
+        env.free_user_id,
+        QuizExamCreate(
+            scopes=[
+                QuizExamScopeSelection(
+                    scope_type="module", scope_id=env.free_module.id
+                ),
+                QuizExamScopeSelection(
+                    scope_type="knowledge_point", scope_id=env.free_points[1].id
+                ),
+            ],
+            question_count=15,
+        ),
+    )
+    assert exam.library_id == env.free_library.id
+    assert exam.scope_type is None
+    assert exam.scope_id is None
+    assert len(exam.questions) == 15
+    point_ids = {int(point.id) for point in env.free_points}
+    assert {
+        question.knowledge_point_id
+        for question in exam.questions
+        if question.knowledge_point_id is not None
+    } <= point_ids
+    await env.exam_service.abandon_exam(env.free_user_id, exam.id)
+
+
+async def test_multi_scope_exam_rejects_cross_library_selection(
+    quiz_v2_exam_env,
+) -> None:
+    env = quiz_v2_exam_env
+    with pytest.raises(ValidationException, match="同一题库"):
+        await env.exam_service.create_exam(
+            env.entitled_user_id,
+            QuizExamCreate(
+                scopes=[
+                    QuizExamScopeSelection(
+                        scope_type="module", scope_id=env.free_module.id
+                    ),
+                    QuizExamScopeSelection(
+                        scope_type="knowledge_point", scope_id=env.paid_point.id
+                    ),
+                ],
+                question_count=10,
+            ),
+        )
+
 
 
 async def test_v2_exam_freezes_revision_path_and_updates_wrong_book_and_stats(
