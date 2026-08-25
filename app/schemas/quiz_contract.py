@@ -105,6 +105,32 @@ class QuizLibraryCatalogDetail(QuizLibraryCatalogItem):
     modules: list[QuizModuleCatalogItem]
 
 
+class QuizScopeProgressBase(QuizContractModel):
+    question_count: int = Field(ge=0)
+    answered_questions: int = Field(ge=0)
+    accuracy: Decimal = Field(ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _validate_counts(self) -> "QuizScopeProgressBase":
+        if self.answered_questions > self.question_count:
+            raise ValueError("scope progress cannot exceed the question total")
+        return self
+
+
+class QuizKnowledgePointProgress(QuizScopeProgressBase):
+    knowledge_point_id: int
+
+
+class QuizModuleProgress(QuizScopeProgressBase):
+    module_id: int
+    knowledge_points: list[QuizKnowledgePointProgress]
+
+
+class QuizLibraryProgressResponse(QuizScopeProgressBase):
+    library_id: int
+    modules: list[QuizModuleProgress]
+
+
 class QuizQuestionListQuery(QuizContractModel):
     category_id: int | None = Field(default=None, ge=1)
     question_type: QuizQuestionType | None = None

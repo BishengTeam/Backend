@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -759,3 +760,102 @@ async def test_wrong_only_review_and_revision_stats_follow_frozen_revision(
         assert wrong_item.status == "cleared"
         assert wrong_item.review_count == 1
         assert wrong_item.last_reviewed_at == clock["now"]
+
+
+async def test_library_progress_reports_first_attempt_stats_per_catalog_node(
+    quiz_v2_catalog_env,
+) -> None:
+    env = quiz_v2_catalog_env
+    await _grant_entitlement(env)
+    for index in range(2):
+        question = await env.admin_service.create_question(
+            AdminQuizQuestionCreate(
+                knowledge_point_id=env.point.id,
+                question_type="single_choice",
+                question_text=f"{env.prefix} 进度题目 {index}",
+                options={"A": "甲", "B": "乙", "C": "丙"},
+                correct_answer="A",
+                explanation="甲正确。",
+            ),
+            admin_id=env.admin_id,
+        )
+        await env.admin_service.publish_question_revision(
+            question.id,
+            AdminQuizVersionRequest(lock_version=question.lock_version),
+            admin_id=env.admin_id,
+        )
+    other_module = await env.admin_service.create_module(
+        AdminQuizModuleCreate(library_id=env.library.id, name="进度模块"),
+        admin_id=env.admin_id,
+    )
+    other_point = await env.admin_service.create_knowledge_point(
+        AdminQuizKnowledgePointCreate(module_id=other_module.id, name="进度知识点"),
+        admin_id=env.admin_id,
+    )
+    untouched = await env.admin_service.create_question(
+        AdminQuizQuestionCreate(
+            knowledge_point_id=other_point.id,
+            question_type="judge",
+            question_text=f"{env.prefix} 未练习题目",
+            correct_answer="A",
+            explanation="正确。",
+        ),
+        admin_id=env.admin_id,
+    )
+    await env.admin_service.publish_question_revision(
+        untouched.id,
+        AdminQuizVersionRequest(lock_version=untouched.lock_version),
+        admin_id=env.admin_id,
+    )
+
+    session = await env.user_service.create_practice_session(
+        env.user_id,
+        QuizPracticeSessionCreate(
+            mode="full",
+            scope_type="knowledge_point",
+            scope_id=env.point.id,
+        ),
+    )
+    assert len(session.questions) == 3
+
+    async def attempt(position: int, answer: str, key: str) -> None:
+        item = session.questions[position - 1]
+        await env.practice_service.submit_attempt(
+            env.user_id,
+            session.id,
+            QuizPracticeAttemptCreate(
+                session_question_id=item.session_question_id,
+                idempotency_key=key,
+                user_answer=answer,
+            ),
+        )
+
+    await attempt(1, "A", "progress-1")
+    await attempt(2, "A", "progress-2")
+    # A re-attempt must stay out of first-attempt statistics.
+    await attempt(1, "B", "progress-1-retry")
+    await attempt(3, "B", "progress-3")
+
+    progress = await env.user_service.get_library_progress(
+        env.user_id, env.library.id
+    )
+    assert progress.library_id == env.library.id
+    assert progress.question_count == 4
+    assert progress.answered_questions == 3
+    assert progress.accuracy == Decimal("66.7")
+    assert [item.module_id for item in progress.modules] == [
+        env.module.id,
+        other_module.id,
+    ]
+    practiced_module = progress.modules[0]
+    assert practiced_module.question_count == 3
+    assert practiced_module.answered_questions == 3
+    assert practiced_module.accuracy == Decimal("66.7")
+    assert [item.knowledge_point_id for item in practiced_module.knowledge_points] == [
+        env.point.id
+    ]
+    untouched_module = progress.modules[1]
+    assert untouched_module.module_id == other_module.id
+    assert untouched_module.question_count == 1
+    assert untouched_module.answered_questions == 0
+    assert untouched_module.accuracy == Decimal("0.0")

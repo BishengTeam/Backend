@@ -90,12 +90,13 @@ from app.schemas.quiz_contract import (
     QuizStatsResponse,
     QuizLibraryCatalogDetail,
     QuizLibraryCatalogItem,
+    QuizLibraryProgressResponse,
     QuizWrongBookItem,
     QuizWrongBookQuery,
 )
 
 
-QUIZ_CONTRACT_VERSION = "2026-08-15"
+QUIZ_CONTRACT_VERSION = "2026-08-25"
 
 
 class QuizErrorCode(IntEnum):
@@ -163,6 +164,9 @@ QUIZ_API_CONTRACTS: tuple[QuizEndpointContract, ...] = (
     ),
     QuizEndpointContract(
         "GET", "/api/quiz/libraries/{library_id}", "user", APIResponse[QuizLibraryCatalogDetail]
+    ),
+    QuizEndpointContract(
+        "GET", "/api/quiz/libraries/{library_id}/progress", "user", APIResponse[QuizLibraryProgressResponse]
     ),
     QuizEndpointContract(
         "GET", "/api/quiz/practice-scopes/preview", "user", APIResponse[QuizPracticeScopePreview]

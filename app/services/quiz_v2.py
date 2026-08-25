@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from sqlalchemy import and_, func, or_, select
 
@@ -24,10 +25,13 @@ from app.port.exceptions import QuizV2Exception
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.domain.community.src.rule.quiz import QuizPracticeMode
 from app.schemas.quiz_contract import (
+    QuizKnowledgePointProgress,
     QuizKnowledgePointCatalogItem,
     QuizLibraryCatalogDetail,
     QuizLibraryCatalogItem,
+    QuizLibraryProgressResponse,
     QuizModuleCatalogItem,
+    QuizModuleProgress,
     QuizPracticeAttemptResult,
     QuizPracticeQuestionState,
     QuizPracticeScopePreview,
@@ -470,6 +474,168 @@ class QuizV2Service:
                     library, question_count, len(module_items)
                 ).model_dump(),
                 details=library.details,
+                modules=module_items,
+            )
+
+    async def get_library_progress(
+        self, user_id: int, library_id: int
+    ) -> QuizLibraryProgressResponse:
+        """Practice-only progress for every catalog node of one library.
+
+        The counting rules intentionally mirror ``QuizPracticeService.get_stats``
+        with an explicit scope: ``answered_questions`` is the number of distinct
+        questions with at least one practice attempt and ``accuracy`` is the
+        first-attempt accuracy. Exam answers are deliberately excluded so the
+        catalog numbers always agree with the stats page.
+        """
+
+        async with get_db_ctx() as db:
+            await self._require_user(db, user_id)
+            await self._require_accessible_library(db, user_id, library_id)
+            rows = (
+                await db.execute(
+                    select(
+                        QuizQuestion.knowledge_point_id,
+                        func.count(func.distinct(QuizQuestion.id)),
+                        func.count(func.distinct(QuizQuestion.id)).filter(
+                            QuizPracticeAttempt.id.is_not(None)
+                        ),
+                        func.count(QuizPracticeAttempt.id).filter(
+                            QuizPracticeAttempt.is_first_attempt.is_(True)
+                        ),
+                        func.count(QuizPracticeAttempt.id).filter(
+                            QuizPracticeAttempt.is_first_attempt.is_(True),
+                            QuizPracticeAttempt.is_correct.is_(True),
+                        ),
+                    )
+                    .select_from(QuizQuestion)
+                    .outerjoin(
+                        QuizPracticeSessionQuestion,
+                        QuizPracticeSessionQuestion.question_id == QuizQuestion.id,
+                    )
+                    .outerjoin(
+                        QuizPracticeAttempt,
+                        and_(
+                            QuizPracticeAttempt.session_question_id
+                            == QuizPracticeSessionQuestion.id,
+                            QuizPracticeAttempt.user_id == user_id,
+                        ),
+                    )
+                    .join(
+                        QuizKnowledgePoint,
+                        QuizKnowledgePoint.id == QuizQuestion.knowledge_point_id,
+                    )
+                    .join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
+                    .where(
+                        QuizQuestion.library_id == library_id,
+                        QuizQuestion.status == "published",
+                        QuizQuestion.current_revision_id.is_not(None),
+                        QuizKnowledgePoint.status == "active",
+                        QuizKnowledgePoint.system_kind == "none",
+                        QuizModule.status == "active",
+                        QuizModule.system_kind == "none",
+                    )
+                    .group_by(QuizQuestion.knowledge_point_id)
+                )
+            ).all()
+            by_point: dict[int, tuple[int, int, int, int]] = {}
+            for point_id, total, answered, first_attempts, first_correct in rows:
+                by_point[int(point_id)] = (
+                    int(total),
+                    int(answered),
+                    int(first_attempts),
+                    int(first_correct),
+                )
+
+            def summarize(
+                totals: list[tuple[int, int, int, int]],
+            ) -> tuple[int, int, Decimal]:
+                question_count = sum(item[0] for item in totals)
+                answered_questions = sum(item[1] for item in totals)
+                first_attempts = sum(item[2] for item in totals)
+                first_correct = sum(item[3] for item in totals)
+                accuracy = (
+                    (Decimal(first_correct) * Decimal("100") / Decimal(first_attempts)).quantize(
+                        Decimal("0.1")
+                    )
+                    if first_attempts
+                    else Decimal("0.0")
+                )
+                return question_count, answered_questions, accuracy
+
+            modules = list(
+                (
+                    await db.execute(
+                        select(QuizModule)
+                        .where(
+                            QuizModule.library_id == library_id,
+                            QuizModule.status == "active",
+                            QuizModule.system_kind == "none",
+                        )
+                        .order_by(QuizModule.sort_order.asc(), QuizModule.id.asc())
+                    )
+                ).scalars()
+            )
+            points = list(
+                (
+                    await db.execute(
+                        select(QuizKnowledgePoint)
+                        .where(
+                            QuizKnowledgePoint.library_id == library_id,
+                            QuizKnowledgePoint.status == "active",
+                            QuizKnowledgePoint.system_kind == "none",
+                        )
+                        .order_by(
+                            QuizKnowledgePoint.module_id.asc(),
+                            QuizKnowledgePoint.sort_order.asc(),
+                            QuizKnowledgePoint.id.asc(),
+                        )
+                    )
+                ).scalars()
+            )
+            points_by_module: dict[int, list[QuizKnowledgePoint]] = {}
+            for point in points:
+                if by_point.get(int(point.id), (0, 0, 0, 0))[0] > 0:
+                    points_by_module.setdefault(int(point.module_id), []).append(point)
+
+            module_items: list[QuizModuleProgress] = []
+            for module in modules:
+                module_points = points_by_module.get(int(module.id), [])
+                if not module_points:
+                    continue
+                point_items: list[QuizKnowledgePointProgress] = []
+                for point in module_points:
+                    point_total, point_answered, point_accuracy = summarize(
+                        [by_point[int(point.id)]]
+                    )
+                    point_items.append(
+                        QuizKnowledgePointProgress(
+                            knowledge_point_id=int(point.id),
+                            question_count=point_total,
+                            answered_questions=point_answered,
+                            accuracy=point_accuracy,
+                        )
+                    )
+                module_total, module_answered, module_accuracy = summarize(
+                    [by_point[int(point.id)] for point in module_points]
+                )
+                module_items.append(
+                    QuizModuleProgress(
+                        module_id=int(module.id),
+                        question_count=module_total,
+                        answered_questions=module_answered,
+                        accuracy=module_accuracy,
+                        knowledge_points=point_items,
+                    )
+                )
+            library_total, library_answered, library_accuracy = summarize(
+                [by_point[int(point.id)] for point in points if int(point.id) in by_point]
+            )
+            return QuizLibraryProgressResponse(
+                library_id=library_id,
+                question_count=library_total,
+                answered_questions=library_answered,
+                accuracy=library_accuracy,
                 modules=module_items,
             )
 

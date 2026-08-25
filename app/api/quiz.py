@@ -39,6 +39,7 @@ from app.schemas.quiz_contract import (
     QuizPracticeScopePreview,
     QuizPracticeSkipResponse,
     QuizPublicQuestion,
+    QuizLibraryProgressResponse,
     QuizQuestionListQuery,
     QuizStatsResponse as QuizContractStatsResponse,
     QuizStatsQuery,
@@ -160,6 +161,33 @@ async def get_quiz_library(
 ) -> APIResponse[QuizLibraryCatalogDetail]:
     return success(
         data=await QuizV2Service().get_library(current_user.id, library_id)
+    )
+
+
+@router.get(
+    "/libraries/{library_id}/progress",
+    response_model=APIResponse[QuizLibraryProgressResponse],
+    summary="题库章节练习进度",
+    description="""
+小程序 **题库目录** 使用。
+
+**使用场景**: 展开题库目录时加载整库/模块/知识点三层的练习进度。
+
+**口径**: 仅统计练习作答（含错题专项）；已做为去重题目数，正确率为首答正确率；模拟考试不计入。
+
+**响应**: 库汇总 + 模块列表（含各自知识点列表），每级含总题数、已做题数、正确率。
+
+**认证**: 需登录
+    """,
+)
+async def get_quiz_library_progress(
+    library_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[QuizLibraryProgressResponse]:
+    return success(
+        data=await QuizV2Service().get_library_progress(
+            current_user.id, library_id
+        )
     )
 
 

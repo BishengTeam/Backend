@@ -1,7 +1,7 @@
 {
   "admin_operation_count": 53,
-  "fingerprint_sha256": "67d88ede707dd1f3d599bcdb3fb58d20012f9810c1ee0f2cc59e06e2e71530de",
-  "operation_count": 81,
+  "fingerprint_sha256": "4c72e9be12972896413981520523d26b4334ef7955502c989996e7cceeddd51b",
+  "operation_count": 82,
   "operations": [
     {
       "auth": "admin",
@@ -482,6 +482,13 @@
     {
       "auth": "user",
       "method": "GET",
+      "path": "/api/quiz/libraries/{library_id}/progress",
+      "permission": null,
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "user",
+      "method": "GET",
       "path": "/api/quiz/practice-history",
       "permission": null,
       "rate_limit_per_minute": null
@@ -571,7 +578,7 @@
       "rate_limit_per_minute": null
     }
   ],
-  "quiz_contract_version": "2026-08-15",
+  "quiz_contract_version": "2026-08-25",
   "removed_operation_count": 14,
   "removed_operations": [
     {
@@ -632,5 +639,5 @@
     }
   ],
   "schema_version": 1,
-  "user_operation_count": 28
+  "user_operation_count": 29
 }
