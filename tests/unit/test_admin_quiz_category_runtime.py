@@ -193,6 +193,7 @@ def _question(*, status: str = "draft", lock_version: int = 1):
         correct_answer="A",
         explanation="解析",
         image_urls=[],
+        option_image_urls={},
         ever_published=status != "draft",
         published_at=datetime(2026, 1, 1, tzinfo=timezone.utc) if status != "draft" else None,
         disabled_at=datetime(2026, 2, 1, tzinfo=timezone.utc) if status == "disabled" else None,

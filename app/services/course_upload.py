@@ -412,9 +412,13 @@ class CourseUploadService:
                         summary={"course_id": course_id},
                     )
                 )
-                if old_key != upload.object_key:
-                    pass
+                # Refreshing before flush makes SQLAlchemy reload the old row
+                # and discard the in-memory replacement. Flush first so the
+                # response timestamp is loaded from the row we are committing.
+                await db.flush()
                 await db.refresh(chapter)
+                if chapter.video_storage_key != upload.object_key:
+                    raise BusinessException("章节视频替换未生效，已阻止删除旧视频")
             if old_key != upload.object_key:
                 try:
                     await self.storage.delete(old_key)

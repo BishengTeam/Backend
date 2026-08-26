@@ -11,10 +11,13 @@ from pydantic import ValidationError
 
 import app.api.admin.courses as courses_api
 import app.services.admin_course as admin_course_module
+import app.services.course_upload as course_upload_module
 from app.main import app
 from app.schemas.admin_course import AdminChapterUpdate, AdminChapterResponse, AdminCourseCreate
 from app.schemas.course import CourseDetailResponse
+from app.services.course_upload import CourseUploadService
 from app.services.course_storage import CourseStorage, validate_upload
+from app.domain.certification.src.index import CourseChapter, CourseUpload
 
 
 def _route(method: str, path: str) -> APIRoute:
@@ -25,6 +28,10 @@ def _route(method: str, path: str) -> APIRoute:
         and route.path == path
         and method in route.methods
     )
+
+
+def now_for_test() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def test_online_course_contract_requires_upload_and_uses_yuan() -> None:
@@ -190,6 +197,196 @@ async def test_update_chapter_endpoint_does_not_read_course_id_from_response(
     )
 
     assert response.data.title == "新章节标题"
+
+
+@pytest.mark.asyncio
+async def test_replace_course_video_flushes_binding_before_refresh_and_cleanup(
+    monkeypatch,
+) -> None:
+    chapter = CourseChapter(
+        id=8,
+        course_id=1,
+        title="旧课程名",
+        video_storage_key="course/old.mp4",
+        original_filename="old.mp4",
+        content_type="video/mp4",
+        size_bytes=100,
+        duration=10,
+        sort_order=1,
+    )
+    upload = CourseUpload(
+        id=34,
+        course_id=1,
+        kind="chapter_video",
+        object_key="course/new.mp4",
+        original_filename="new.mp4",
+        content_type="video/mp4",
+        size_bytes=200,
+        status="completed",
+        title="新课程名",
+        duration=20,
+        sort_order=1,
+        part_size=8 * 1024 * 1024,
+        expires_at=now_for_test(),
+    )
+
+    class Transaction:
+        def __init__(self, database):
+            self.database = database
+
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            self.database.committed = exc_type is None
+            return False
+
+    class Database:
+        def __init__(self):
+            self.committed = False
+            self.flushed_key = chapter.video_storage_key
+
+        def begin(self):
+            return Transaction(self)
+
+        def add(self, item):
+            return None
+
+        async def get(self, model, item_id):
+            if model is CourseUpload and item_id == upload.id:
+                return upload
+            if model is CourseChapter and item_id == chapter.id:
+                return chapter
+            return None
+
+        async def flush(self):
+            self.flushed_key = chapter.video_storage_key
+
+        async def refresh(self, row):
+            row.video_storage_key = self.flushed_key
+
+    class Storage:
+        def __init__(self):
+            self.deleted = []
+
+        async def delete(self, object_key):
+            self.deleted.append(object_key)
+
+    database = Database()
+    storage = Storage()
+
+    @asynccontextmanager
+    async def database_context():
+        yield database
+
+    monkeypatch.setattr(
+        course_upload_module,
+        "get_db_ctx",
+        lambda: database_context(),
+    )
+
+    result = await CourseUploadService(storage=storage).replace_video(
+        1, 8, 34, admin_id=9
+    )
+
+    assert result.video_storage_key == "course/new.mp4"
+    assert upload.status == "bound"
+    assert database.committed is True
+    assert storage.deleted == ["course/old.mp4"]
+
+
+@pytest.mark.asyncio
+async def test_replace_course_video_blocks_cleanup_when_binding_does_not_persist(
+    monkeypatch,
+) -> None:
+    chapter = CourseChapter(
+        id=8,
+        course_id=1,
+        title="课程名",
+        video_storage_key="course/old.mp4",
+        original_filename="old.mp4",
+        content_type="video/mp4",
+        size_bytes=100,
+        duration=10,
+        sort_order=1,
+    )
+    upload = CourseUpload(
+        id=34,
+        course_id=1,
+        kind="chapter_video",
+        object_key="course/new.mp4",
+        original_filename="new.mp4",
+        content_type="video/mp4",
+        size_bytes=200,
+        status="completed",
+        title="课程名",
+        duration=20,
+        sort_order=1,
+        part_size=8 * 1024 * 1024,
+        expires_at=now_for_test(),
+    )
+
+    class Transaction:
+        def __init__(self, database):
+            self.database = database
+
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            self.database.committed = exc_type is None
+            return False
+
+    class Database:
+        def __init__(self):
+            self.committed = False
+
+        def begin(self):
+            return Transaction(self)
+
+        def add(self, item):
+            return None
+
+        async def get(self, model, item_id):
+            if model is CourseUpload and item_id == upload.id:
+                return upload
+            if model is CourseChapter and item_id == chapter.id:
+                return chapter
+            return None
+
+        async def flush(self):
+            return None
+
+        async def refresh(self, row):
+            row.video_storage_key = "course/old.mp4"
+
+    class Storage:
+        def __init__(self):
+            self.deleted = []
+
+        async def delete(self, object_key):
+            self.deleted.append(object_key)
+
+    database = Database()
+    storage = Storage()
+
+    @asynccontextmanager
+    async def database_context():
+        yield database
+
+    monkeypatch.setattr(
+        course_upload_module,
+        "get_db_ctx",
+        lambda: database_context(),
+    )
+
+    with pytest.raises(course_upload_module.BusinessException):
+        await CourseUploadService(storage=storage).replace_video(
+            1, 8, 34, admin_id=9
+        )
+
+    assert database.committed is False
+    assert storage.deleted == []
 
 
 def test_public_course_contract_does_not_expose_storage_keys() -> None:
