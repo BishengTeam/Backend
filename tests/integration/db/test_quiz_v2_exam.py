@@ -489,7 +489,7 @@ async def test_manual_exam_creates_exam_from_explicit_selection(
     assert exam.scope_type == "library"
     assert exam.scope_id == env.free_library.id
     assert exam.question_count == 10
-    assert [item.question_id for item in exam.questions] == question_ids
+    assert [item.id for item in exam.questions] == question_ids
     assert all(item.question_revision_id for item in exam.questions)
     await env.exam_service.abandon_exam(env.free_user_id, exam.id)
 
