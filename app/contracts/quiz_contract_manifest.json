@@ -1,6 +1,6 @@
 {
   "admin_operation_count": 56,
-  "fingerprint_sha256": "3be43a34d465202831bd45408e8c6132c0f6207c86bd125f1130313979ef0c8e",
+  "fingerprint_sha256": "c1c92f0194d9e72ad48239f0ddeae9c060fb9811ae2ecddacb4a180ce33e3bb3",
   "operation_count": 88,
   "operations": [
     {
@@ -621,7 +621,7 @@
     }
   ],
   "quiz_contract_version": "2026-08-25",
-  "removed_operation_count": 14,
+  "removed_operation_count": 13,
   "removed_operations": [
     {
       "method": "POST",
@@ -674,10 +674,6 @@
     {
       "method": "POST",
       "path": "/api/quiz/wrong-book"
-    },
-    {
-      "method": "DELETE",
-      "path": "/api/quiz/wrong-book/{id}"
     }
   ],
   "schema_version": 1,
