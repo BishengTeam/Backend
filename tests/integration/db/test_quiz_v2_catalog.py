@@ -898,6 +898,9 @@ async def test_behavior_stats_report_daily_trend_user_ranking_and_wrong_order(
     )
 
     service = AdminQuizService()
+    # The per-question stats table is refreshed by the background worker;
+    # run one aggregation pass so the ranking endpoint sees the attempt.
+    await service.aggregate_question_stats()
     daily = await service.get_daily_stats(AdminQuizDailyStatsQuery(days=7))
     assert len(daily) == 7
     today_item = daily[-1]

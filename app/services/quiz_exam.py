@@ -592,8 +592,19 @@ class QuizExamService:
                 user_id=user_id,
                 category_id=data.category_id,
                 library_id=(int(library.id) if is_v2 else None),
-                scope_type=(str(data.scope_type) if data.scope_type is not None else None),
-                scope_id=(int(data.scope_id) if data.scope_id is not None else None),
+                # Multi-scope selections record the coarsest truthful scope
+                # (the whole library) because ck_quiz_exam_scope requires a
+                # complete V2 scope triple whenever library_id is present.
+                scope_type=(
+                    str(data.scope_type)
+                    if data.scope_type is not None
+                    else ("library" if is_v2 else None)
+                ),
+                scope_id=(
+                    int(data.scope_id)
+                    if data.scope_id is not None
+                    else (int(library.id) if is_v2 else None)
+                ),
                 question_count=data.question_count,
                 duration_seconds=_DURATION_SECONDS,
                 status=_IN_PROGRESS,
@@ -783,8 +794,8 @@ class QuizExamService:
                 user_id=user_id,
                 category_id=None,
                 library_id=library_id,
-                scope_type=None,
-                scope_id=None,
+                scope_type="library",
+                scope_id=library_id,
                 question_count=len(data.question_ids),
                 duration_seconds=_DURATION_SECONDS,
                 status=_IN_PROGRESS,

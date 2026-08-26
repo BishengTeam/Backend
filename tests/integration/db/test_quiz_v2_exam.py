@@ -443,8 +443,8 @@ async def test_multi_scope_exam_mixes_modules_and_points_within_one_library(
         ),
     )
     assert exam.library_id == env.free_library.id
-    assert exam.scope_type is None
-    assert exam.scope_id is None
+    assert exam.scope_type == "library"
+    assert exam.scope_id == env.free_library.id
     assert len(exam.questions) == 15
     point_ids = {int(point.id) for point in env.free_points}
     assert {
@@ -486,7 +486,8 @@ async def test_manual_exam_creates_exam_from_explicit_selection(
         QuizManualExamCreate(question_ids=question_ids),
     )
     assert exam.library_id == env.free_library.id
-    assert exam.scope_type is None
+    assert exam.scope_type == "library"
+    assert exam.scope_id == env.free_library.id
     assert exam.question_count == 10
     assert [item.question_id for item in exam.questions] == question_ids
     assert all(item.question_revision_id for item in exam.questions)
