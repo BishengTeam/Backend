@@ -1291,6 +1291,34 @@ class QuizPracticeService:
             item.cleared_at = now
             stats.active_wrong_count = max(0, stats.active_wrong_count - 1)
 
+    async def clear_wrong_item(
+        self,
+        user_id: int,
+        question_id: int,
+    ) -> bool:
+        """Manually remove one question from the user's wrong book."""
+
+        async with get_db_ctx() as db:
+            await self._lock_user(db, user_id)
+            item = (
+                await db.execute(
+                    select(QuizWrongItem)
+                    .where(
+                        QuizWrongItem.user_id == user_id,
+                        QuizWrongItem.question_id == question_id,
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if item is None or item.status != _WRONG_ACTIVE:
+                return False
+            item.status = _WRONG_CLEARED
+            item.cleared_at = self._now()
+            stats = await self._ensure_stats(db, user_id)
+            stats.active_wrong_count = max(0, stats.active_wrong_count - 1)
+            await db.commit()
+            return True
+
     @staticmethod
     def _wrong_book_snapshot(snapshot) -> dict[str, object]:
         return {

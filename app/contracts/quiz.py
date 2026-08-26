@@ -285,6 +285,12 @@ QUIZ_API_CONTRACTS: tuple[QuizEndpointContract, ...] = (
         query_model=QuizWrongBookQuery,
     ),
     QuizEndpointContract(
+        "DELETE",
+        "/api/quiz/wrong-book/{question_id}",
+        "user",
+        APIResponse[None],
+    ),
+    QuizEndpointContract(
         "GET",
         "/api/quiz/collections",
         "user",

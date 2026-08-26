@@ -1,7 +1,7 @@
 {
   "admin_operation_count": 56,
-  "fingerprint_sha256": "94886e19149c22fae8dc2cc12ca2482111517b29465e9d292c9cfe30a2f604a2",
-  "operation_count": 87,
+  "fingerprint_sha256": "3be43a34d465202831bd45408e8c6132c0f6207c86bd125f1130313979ef0c8e",
+  "operation_count": 88,
   "operations": [
     {
       "auth": "admin",
@@ -611,6 +611,13 @@
       "path": "/api/quiz/wrong-book",
       "permission": null,
       "rate_limit_per_minute": null
+    },
+    {
+      "auth": "user",
+      "method": "DELETE",
+      "path": "/api/quiz/wrong-book/{question_id}",
+      "permission": null,
+      "rate_limit_per_minute": null
     }
   ],
   "quiz_contract_version": "2026-08-25",
@@ -674,5 +681,5 @@
     }
   ],
   "schema_version": 1,
-  "user_operation_count": 31
+  "user_operation_count": 32
 }

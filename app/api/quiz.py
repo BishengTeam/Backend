@@ -487,6 +487,31 @@ async def list_wrong_book(
     return success(data=result)
 
 
+@router.delete("/wrong-book/{question_id}",
+    response_model=APIResponse[dict],
+    summary="移出错题本",
+    description="""
+小程序 **错题练习** 页面使用。
+
+**使用场景**: 用户在错题专项练习中手动将当前题移出错题本。
+
+**路径参数**: `question_id` 题目 ID
+
+**响应**: `{"cleared": true}` 或 `{"cleared": false}`（不在错题本中）
+
+**认证**: 需登录
+    """,
+)
+async def clear_wrong_item(
+    question_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[dict]:
+    cleared = await QuizPracticeService().clear_wrong_item(
+        current_user.id, question_id
+    )
+    return success(data={"cleared": cleared})
+
+
 @router.get("/collections",
     response_model=APIResponse[PaginatedData[QuizCollectionItem]],
     summary="收藏列表",
