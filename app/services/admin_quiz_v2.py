@@ -183,6 +183,7 @@ class AdminQuizV2Service:
             "question_type": question.question_type,
             "question_text": question.question_text,
             "options": question.options,
+            "option_image_urls": question.option_image_urls,
             "correct_answer": question.correct_answer,
             "explanation": question.explanation,
             "image_urls": question.image_urls,
@@ -236,6 +237,7 @@ class AdminQuizV2Service:
             correct_answer=question.correct_answer,
             explanation=question.explanation,
             image_urls=list(question.image_urls or []),
+            option_image_urls=dict(question.option_image_urls or {}),
             ever_published=bool(question.ever_published),
             published_at=question.published_at,
             disabled_at=question.disabled_at,
@@ -285,6 +287,7 @@ class AdminQuizV2Service:
         correct_answer: object,
         explanation: object,
         image_urls: object,
+        option_image_urls: object = None,
         require_publishable: bool,
     ):
         try:
@@ -295,6 +298,7 @@ class AdminQuizV2Service:
                 correct_answer=correct_answer,
                 explanation=explanation,
                 image_urls=image_urls,
+                option_image_urls=option_image_urls,
                 require_publishable=require_publishable,
             )
         except QuizRuleViolation as exc:
@@ -324,6 +328,7 @@ class AdminQuizV2Service:
         question.normalized_question_text = normalized.normalized_question_text
         question.question_text_hash = normalized.question_text_hash
         question.options = normalized.options
+        question.option_image_urls = normalized.option_image_urls
         question.correct_answer = normalized.correct_answer
         question.explanation = normalized.explanation
         question.image_urls = normalized.image_urls
@@ -347,6 +352,7 @@ class AdminQuizV2Service:
             normalized_question_text=normalized.normalized_question_text,
             question_text_hash=normalized.question_text_hash,
             options=normalized.options,
+            option_image_urls=normalized.option_image_urls,
             correct_answer=normalized.correct_answer,
             explanation=normalized.explanation,
             image_urls=normalized.image_urls,
@@ -1734,6 +1740,7 @@ class AdminQuizV2Service:
             correct_answer=data.correct_answer,
             explanation=data.explanation,
             image_urls=data.image_urls,
+            option_image_urls=data.option_image_urls,
             require_publishable=False,
         )
         async with get_db_ctx() as db:
@@ -1853,6 +1860,11 @@ class AdminQuizV2Service:
                 image_urls=(
                     data.image_urls if "image_urls" in fields else source.image_urls
                 ),
+                option_image_urls=(
+                    data.option_image_urls
+                    if "option_image_urls" in fields
+                    else source.option_image_urls
+                ),
                 require_publishable=bool(question.ever_published),
             )
             if await self._stem_taken(
@@ -1952,6 +1964,7 @@ class AdminQuizV2Service:
                 correct_answer=pending.correct_answer,
                 explanation=pending.explanation,
                 image_urls=pending.image_urls,
+                option_image_urls=pending.option_image_urls,
                 require_publishable=True,
             )
             if await self._stem_taken(
@@ -2118,6 +2131,7 @@ class AdminQuizV2Service:
                             options=pending.options,
                             correct_answer=pending.correct_answer,
                             explanation=pending.explanation,
+                                                            option_image_urls=pending.option_image_urls,
                             image_urls=pending.image_urls,
                             require_publishable=True,
                         )
@@ -2181,6 +2195,7 @@ class AdminQuizV2Service:
                         question_text=pending.question_text,
                         options=pending.options,
                         correct_answer=pending.correct_answer,
+                                                              option_image_urls=pending.option_image_urls,
                         explanation=pending.explanation,
                         image_urls=pending.image_urls,
                         require_publishable=True,

@@ -269,6 +269,7 @@ class QuizPracticeService:
             "question_type": str(question.question_type),
             "question_text": question.question_text,
             "options": dict(question.options or {}),
+            "option_image_urls": dict(getattr(question, "option_image_urls", None) or {}),
             "correct_answer": question.correct_answer,
             "explanation": question.explanation or "",
             "image_urls": list(question.image_urls or []),
@@ -299,6 +300,7 @@ class QuizPracticeService:
             question_type=str(snapshot["question_type"]),
             question_text=str(snapshot["question_text"]),
             options=dict(snapshot.get("options") or {}),
+            option_image_urls=dict(snapshot.get("option_image_urls") or {}),
             image_urls=list(snapshot.get("image_urls") or []),
         )
 
@@ -325,6 +327,7 @@ class QuizPracticeService:
             question_type=str(question.question_type),
             question_text=question.question_text,
             options=dict(question.options or {}),
+            option_image_urls=dict(getattr(question, "option_image_urls", None) or {}),
             image_urls=list(question.image_urls or []),
         )
 
@@ -589,6 +592,7 @@ class QuizPracticeService:
                         question_type=snapshot["question_type"],
                         question_text=snapshot["question_text"],
                         options=snapshot["options"],
+                        option_image_urls=snapshot.get("option_image_urls") or {},
                         correct_answer=snapshot["correct_answer"],
                         explanation=snapshot["explanation"],
                         image_urls=snapshot["image_urls"],
@@ -722,6 +726,7 @@ class QuizPracticeService:
                     question_type=snapshot.question_type,
                     question_text=snapshot.question_text,
                     options=dict(snapshot.options or {}),
+                    option_image_urls=dict(getattr(snapshot, "option_image_urls", None) or {}),
                     image_urls=list(snapshot.image_urls or []),
                     session_question_id=int(snapshot.id),
                     position=int(snapshot.position),

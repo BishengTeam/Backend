@@ -150,6 +150,7 @@ def test_public_exam_projections_never_expose_answers_before_settlement() -> Non
         "question_text": "题目 1",
         "options": {"A": "一", "B": "二", "C": "三", "D": "四"},
         "image_urls": ["https://cdn.example.com/exam-stem.png"],
+        "option_image_urls": {},
     }
     assert "correct_answer" not in payload
     assert "explanation" not in payload

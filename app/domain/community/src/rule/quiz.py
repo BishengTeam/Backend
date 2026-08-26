@@ -6,7 +6,7 @@ import hashlib
 import re
 import unicodedata
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TypeAlias
 
@@ -126,6 +126,7 @@ class NormalizedQuizQuestion:
     correct_answer: QuizAnswer | None
     explanation: str | None
     image_urls: list[str]
+    option_image_urls: dict[str, str] = field(default_factory=dict)
 
 
 def _enum_value(value: str | StrEnum, enum_type: type[StrEnum], field: str) -> StrEnum:
@@ -271,15 +272,62 @@ def _normalize_options_mapping(options: Mapping[object, object]) -> dict[str, st
         key = _normalize_option_key(raw_key, field="options")
         if key in normalized:
             raise QuizRuleViolation("options", f"选项 {key} 重复")
-        value = _clean_text(
-            raw_value,
-            field=f"options.{key}",
-            max_length=1024,
-            required=True,
-        )
-        assert value is not None
-        normalized[key] = value
+        if raw_value is None:
+            normalized[key] = ""
+        else:
+            value = _clean_text(
+                raw_value,
+                field=f"options.{key}",
+                max_length=1024,
+                required=False,
+            )
+            normalized[key] = value or ""
     return {key: normalized[key] for key in _OPTION_KEYS if key in normalized}
+
+
+def normalize_option_image_urls(
+    value: object,
+    *,
+    options: Mapping[str, str] | None,
+    question_type: QuizQuestionType,
+) -> dict[str, str]:
+    """Validate the optional per-option image map and text-or-image rule."""
+
+    if value is None or value == "" or value == {}:
+        value = {}
+    if not isinstance(value, Mapping):
+        raise QuizRuleViolation("option_image_urls", "选项图片必须是对象")
+
+    normalized: dict[str, str] = {}
+    for raw_key, raw_url in value.items():
+        key = _normalize_option_key(raw_key, field="option_image_urls")
+        if key in normalized:
+            raise QuizRuleViolation("option_image_urls", f"选项 {key} 图片重复")
+        if not isinstance(raw_url, str):
+            raise QuizRuleViolation(f"option_image_urls.{key}", "选项图片 URL 必须是字符串")
+        url = raw_url.strip()
+        if not url:
+            continue
+        if len(url) > 512:
+            raise QuizRuleViolation(f"option_image_urls.{key}", "图片 URL 长度不能超过 512")
+        if not re.match(r"^https?://", url, flags=re.IGNORECASE):
+            raise QuizRuleViolation(
+                f"option_image_urls.{key}", "图片 URL 必须以 http:// 或 https:// 开头"
+            )
+        normalized[key] = url
+
+    if normalized and question_type is QuizQuestionType.JUDGE:
+        raise QuizRuleViolation("option_image_urls", "判断题不支持选项图片")
+    if options is not None:
+        unknown = sorted(set(normalized) - set(options))
+        if unknown:
+            raise QuizRuleViolation(
+                "option_image_urls", f"选项图片不能指向不存在的选项：{','.join(unknown)}"
+            )
+        for key, text in options.items():
+            if not text and key not in normalized:
+                raise QuizRuleViolation(f"options.{key}", "选项必须填写文字或图片")
+    return normalized
 
 
 def _normalize_correct_answer(
@@ -327,6 +375,7 @@ def normalize_question_payload(
     correct_answer: object = None,
     explanation: object = None,
     image_urls: object = None,
+    option_image_urls: object = None,
     require_publishable: bool = False,
 ) -> NormalizedQuizQuestion:
     normalized_type = _enum_value(
@@ -361,6 +410,11 @@ def normalize_question_payload(
         required=require_publishable,
     )
     normalized_image_urls = normalize_image_urls(image_urls)
+    normalized_option_image_urls = normalize_option_image_urls(
+        option_image_urls,
+        options=normalized_options,
+        question_type=normalized_type,
+    )
     return NormalizedQuizQuestion(
         question_type=normalized_type,
         question_text=display_text,
@@ -370,6 +424,7 @@ def normalize_question_payload(
         correct_answer=normalized_answer,
         explanation=normalized_explanation,
         image_urls=normalized_image_urls,
+        option_image_urls=normalized_option_image_urls,
     )
 
 

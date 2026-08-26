@@ -172,6 +172,68 @@ def test_question_rules_allow_incomplete_drafts_but_reject_invalid_publish() -> 
         )
 
 
+def test_question_rules_support_option_images_with_text_or_image_minimum() -> None:
+    options = {"A": "80", "B": "", "C": "22"}
+    normalized = normalize_question_payload(
+        question_type="single_choice",
+        question_text="HTTP 默认端口是？",
+        options=options,
+        option_image_urls={"B": "https://cdn.example.com/option-b.png"},
+        correct_answer="A",
+        explanation="HTTP 默认使用 80。",
+        require_publishable=True,
+    )
+    assert normalized.options == {"A": "80", "B": "", "C": "22"}
+    assert normalized.option_image_urls == {
+        "B": "https://cdn.example.com/option-b.png"
+    }
+
+    # Pure-image options are valid as long as every option has text or image.
+    pure_image = normalize_question_payload(
+        question_type="single_choice",
+        question_text="选择正确的拓扑图",
+        options={"A": None, "B": None, "C": "文字选项"},
+        option_image_urls={
+            "A": "https://cdn.example.com/a.png",
+            "B": "https://cdn.example.com/b.png",
+        },
+        correct_answer="C",
+        explanation="C 为文字选项。",
+        require_publishable=True,
+    )
+    assert pure_image.options == {"A": "", "B": "", "C": "文字选项"}
+
+    with pytest.raises(QuizRuleViolation, match="文字或图片"):
+        normalize_question_payload(
+            question_type="single_choice",
+            question_text="缺少内容",
+            options={"A": "80", "B": "", "C": "22"},
+        )
+
+    with pytest.raises(QuizRuleViolation, match="不存在的选项"):
+        normalize_question_payload(
+            question_type="single_choice",
+            question_text="越界图片",
+            options={"A": "80", "B": "443", "C": "22"},
+            option_image_urls={"D": "https://cdn.example.com/d.png"},
+        )
+
+    with pytest.raises(QuizRuleViolation, match="判断题"):
+        normalize_question_payload(
+            question_type="judge",
+            question_text="判断",
+            option_image_urls={"A": "https://cdn.example.com/a.png"},
+        )
+
+    with pytest.raises(QuizRuleViolation, match="http"):
+        normalize_question_payload(
+            question_type="single_choice",
+            question_text="非法图片地址",
+            options={"A": "80", "B": "443", "C": "22"},
+            option_image_urls={"A": "ftp://cdn.example.com/a.png"},
+        )
+
+
 def test_submitted_answers_are_canonical_and_exact_match_only() -> None:
     options = {"A": "一", "B": "二", "C": "三", "D": "四"}
     assert normalize_submitted_answer(

@@ -106,6 +106,7 @@ def test_public_question_projection_never_contains_answer_or_explanation() -> No
         "question_text": "Which option is correct?",
         "options": {"A": "One", "B": "Two", "C": "Three"},
         "image_urls": ["https://cdn.example.com/stem.png"],
+        "option_image_urls": {},
     }
     assert "correct_answer" not in QuizPublicQuestion.model_fields
     assert "explanation" not in QuizPublicQuestion.model_fields

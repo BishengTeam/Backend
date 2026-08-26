@@ -190,6 +190,7 @@ class QuizService:
                 question_type=question.question_type,
                 question_text=question.question_text,
                 options=question.options or {},
+                option_image_urls=dict(getattr(question, "option_image_urls", None) or {}),
                 correct_answer=question.correct_answer,
                 explanation=question.explanation or "",
                 image_urls=list(question.image_urls or []),

@@ -148,6 +148,7 @@ class QuizPublicQuestion(QuizContractModel):
     question_text: str
     options: dict[str, str]
     image_urls: list[str] = Field(default_factory=list)
+    option_image_urls: dict[str, str] = Field(default_factory=dict)
 
 
 class QuizCategoryPathItem(QuizContractModel):

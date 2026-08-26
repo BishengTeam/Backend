@@ -422,6 +422,7 @@ class QuizQuestion(Base, _QuizTimestampMixin):
     normalized_question_text: Mapped[str] = mapped_column(String(1024), nullable=False)
     question_text_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
     options: Mapped[dict[str, str] | None] = mapped_column(JSONB)
+    option_image_urls: Mapped[dict[str, str] | None] = mapped_column(JSONB)
     correct_answer: Mapped[str | list[str] | None] = mapped_column(JSONB)
     explanation: Mapped[str | None] = mapped_column(String(1024))
     image_urls: Mapped[list[str]] = mapped_column(
@@ -495,6 +496,7 @@ class QuizQuestionRevision(Base, _QuizCreatedAtMixin):
     normalized_question_text: Mapped[str] = mapped_column(String(1024), nullable=False)
     question_text_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
     options: Mapped[dict[str, str] | None] = mapped_column(JSONB)
+    option_image_urls: Mapped[dict[str, str] | None] = mapped_column(JSONB)
     correct_answer: Mapped[str | list[str] | None] = mapped_column(JSONB)
     explanation: Mapped[str | None] = mapped_column(String(1024))
     image_urls: Mapped[list[str]] = mapped_column(
@@ -845,6 +847,7 @@ class QuizPracticeSessionQuestion(Base, _QuizTimestampMixin):
     question_type: Mapped[str] = mapped_column(String(24), nullable=False)
     question_text: Mapped[str] = mapped_column(String(1024), nullable=False)
     options: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False)
+    option_image_urls: Mapped[dict[str, str] | None] = mapped_column(JSONB)
     correct_answer: Mapped[str | list[str]] = mapped_column(JSONB, nullable=False)
     explanation: Mapped[str] = mapped_column(String(1024), nullable=False)
     image_urls: Mapped[list[str]] = mapped_column(
@@ -1178,6 +1181,7 @@ class QuizExamQuestion(Base, _QuizTimestampMixin):
     question_type: Mapped[str] = mapped_column(String(24), nullable=False)
     question_text: Mapped[str] = mapped_column(String(1024), nullable=False)
     options: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False)
+    option_image_urls: Mapped[dict[str, str] | None] = mapped_column(JSONB)
     correct_answer: Mapped[str | list[str]] = mapped_column(JSONB, nullable=False)
     explanation: Mapped[str] = mapped_column(String(1024), nullable=False)
     image_urls: Mapped[list[str]] = mapped_column(

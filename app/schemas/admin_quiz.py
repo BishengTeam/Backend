@@ -41,6 +41,7 @@ class AdminQuizQuestionCreate(BaseModel):
     correct_answer: str = Field(..., min_length=1, max_length=256)
     explanation: str | None = Field(None, max_length=1024)
     image_urls: list[str] = Field(default_factory=list, max_length=9)
+    option_image_urls: dict | None = None
 
 
 class AdminQuizQuestionUpdate(BaseModel):
@@ -51,6 +52,7 @@ class AdminQuizQuestionUpdate(BaseModel):
     correct_answer: str | None = Field(None, min_length=1, max_length=256)
     explanation: str | None = Field(None, max_length=1024)
     image_urls: list[str] | None = Field(None, max_length=9)
+    option_image_urls: dict | None = None
 
 
 class AdminQuizQuestionItem(BaseModel):
@@ -60,6 +62,7 @@ class AdminQuizQuestionItem(BaseModel):
     question_type: Literal["single_choice", "multiple_choice", "judge"] = Field(default="single_choice", min_length=1, max_length=16)
     explanation: str | None = Field(None, max_length=1024)
     image_urls: list[str] = Field(default_factory=list, max_length=9)
+    option_image_urls: dict | None = None
 
 
 class AdminQuizImportJsonRequest(BaseModel):

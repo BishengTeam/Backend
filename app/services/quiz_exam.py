@@ -130,6 +130,7 @@ class QuizExamService:
             question_type=snapshot.question_type,
             question_text=snapshot.question_text,
             options=dict(sorted((snapshot.options or {}).items())),
+            option_image_urls=dict(getattr(snapshot, "option_image_urls", None) or {}),
             image_urls=list(snapshot.image_urls or []),
         )
 
@@ -611,6 +612,7 @@ class QuizExamService:
                         "correct_answer": revision.correct_answer,
                         "explanation": revision.explanation or "",
                         "image_urls": list(revision.image_urls or []),
+                        "option_image_urls": dict(getattr(revision, "option_image_urls", None) or {}),
                         "question_lock_version": int(question.lock_version),
                     }
                 else:
@@ -627,6 +629,7 @@ class QuizExamService:
                         question_type=snapshot["question_type"],
                         question_text=snapshot["question_text"],
                         options=snapshot["options"],
+                        option_image_urls=snapshot.get("option_image_urls") or {},
                         correct_answer=snapshot["correct_answer"],
                         explanation=snapshot["explanation"],
                         image_urls=snapshot["image_urls"],

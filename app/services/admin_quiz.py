@@ -332,6 +332,7 @@ class AdminQuizService:
         correct_answer: object,
         explanation: object,
         image_urls: object,
+        option_image_urls: object = None,
         require_publishable: bool,
     ):
         # The pre-contract admin UI sent multi-select answers as "AC". Accept
@@ -352,6 +353,7 @@ class AdminQuizService:
                 correct_answer=correct_answer,
                 explanation=explanation,
                 image_urls=image_urls,
+                option_image_urls=option_image_urls,
                 require_publishable=require_publishable,
             )
         except QuizRuleViolation as exc:
@@ -883,6 +885,7 @@ class AdminQuizService:
                 correct_answer=data.correct_answer,
                 explanation=data.explanation,
                 image_urls=data.image_urls,
+                option_image_urls=data.option_image_urls,
                 require_publishable=False,
             )
             if await self._question_text_taken(
@@ -902,6 +905,7 @@ class AdminQuizService:
                 correct_answer=normalized.correct_answer,
                 explanation=normalized.explanation,
                 image_urls=normalized.image_urls,
+                option_image_urls=normalized.option_image_urls,
                 ever_published=False,
                 lock_version=1,
                 created_by=admin_id,
@@ -999,6 +1003,11 @@ class AdminQuizService:
                     if "image_urls" in fields
                     else question.image_urls
                 ),
+                option_image_urls=(
+                    data.option_image_urls
+                    if "option_image_urls" in fields
+                    else question.option_image_urls
+                ),
                 require_publishable=question.ever_published,
             )
             target_category_id = data.category_id if data.category_id is not None else question.category_id
@@ -1017,6 +1026,7 @@ class AdminQuizService:
             question.correct_answer = normalized.correct_answer
             question.explanation = normalized.explanation
             question.image_urls = normalized.image_urls
+            question.option_image_urls = normalized.option_image_urls
             if data.category_id is not None:
                 question.category_id = data.category_id
                 target_category.ever_had_question = True
@@ -1154,6 +1164,7 @@ class AdminQuizService:
                     correct_answer=question.correct_answer,
                     explanation=question.explanation,
                     image_urls=question.image_urls,
+                    option_image_urls=question.option_image_urls,
                     require_publishable=True,
                 )
                 if await self._question_text_taken(
@@ -1190,6 +1201,7 @@ class AdminQuizService:
                     correct_answer=question.correct_answer,
                     explanation=question.explanation,
                     image_urls=question.image_urls,
+                    option_image_urls=question.option_image_urls,
                     require_publishable=True,
                 )
                 question.options = normalized.options
@@ -1316,6 +1328,7 @@ class AdminQuizService:
                             correct_answer=question.correct_answer,
                             explanation=question.explanation,
                             image_urls=question.image_urls,
+                            option_image_urls=question.option_image_urls,
                             require_publishable=True,
                         )
                         if await self._question_text_taken(
@@ -1369,6 +1382,7 @@ class AdminQuizService:
                     question.correct_answer = normalized.correct_answer  # type: ignore[union-attr]
                     question.explanation = normalized.explanation  # type: ignore[union-attr]
                     question.image_urls = normalized.image_urls  # type: ignore[union-attr]
+                    question.option_image_urls = normalized.option_image_urls  # type: ignore[union-attr]
                     question.normalized_question_text = normalized.normalized_question_text  # type: ignore[union-attr]
                     question.question_text_hash = normalized.question_text_hash  # type: ignore[union-attr]
                     question.status = QuizQuestionStatus.PUBLISHED.value
@@ -3267,14 +3281,17 @@ class AdminQuizService:
             "correct_answer",
             "explanation",
         ]
-        if reader.fieldnames != expected_headers:
+        extended_headers = expected_headers + [
+            f"option_image_{letter}" for letter in "abcd"
+        ]
+        if reader.fieldnames not in (expected_headers, extended_headers):
             return [], [
                 self._import_error(
                     row=None,
                     question_index=None,
                     field=None,
                     error_code="invalid_csv_header",
-                    message="CSV 表头必须严格为固定六列",
+                    message="CSV 表头必须为固定六列或含选项图片列（option_image_a-d）的十列",
                 )
             ]
         data_row_count = 0
@@ -3303,6 +3320,11 @@ class AdminQuizService:
                 options = json.loads(options_text) if options_text else None
                 answer_text = (raw.get("correct_answer") or "").strip()
                 answer: object = json.loads(answer_text) if answer_text.startswith("[") else answer_text
+                option_image_urls = {
+                    letter.upper(): url.strip()
+                    for letter in "abcd"
+                    if (url := (raw.get(f"option_image_{letter}") or "")).strip()
+                }
                 item = {
                     "category_path": path,
                     "question_type": (raw.get("question_type") or "").strip(),
@@ -3310,6 +3332,7 @@ class AdminQuizService:
                     "options": options,
                     "correct_answer": answer,
                     "explanation": (raw.get("explanation") or "") or None,
+                    "option_image_urls": option_image_urls,
                 }
                 rows.append((row_no, AdminQuizImportQuestion.model_validate(item)))
             except (ValueError, TypeError, json.JSONDecodeError, PydanticValidationError) as exc:
@@ -3455,6 +3478,7 @@ class AdminQuizService:
                     correct_answer=item.correct_answer,
                     explanation=item.explanation,
                     image_urls=item.image_urls,
+                    option_image_urls=item.option_image_urls,
                     require_publishable=False,
                 )
             except QuizRuleViolation as exc:
@@ -3702,6 +3726,7 @@ class AdminQuizService:
                     correct_answer=item.correct_answer,
                     explanation=item.explanation,
                     image_urls=item.image_urls,
+                    option_image_urls=item.option_image_urls,
                     require_publishable=False,
                 )
             except QuizRuleViolation as exc:
@@ -4023,6 +4048,7 @@ class AdminQuizService:
                 correct_answer=item.correct_answer,
                 explanation=item.explanation,
                 image_urls=item.image_urls,
+                option_image_urls=item.option_image_urls,
                 require_publishable=False,
             )
             db.add(
@@ -4037,6 +4063,7 @@ class AdminQuizService:
                     correct_answer=normalized.correct_answer,
                     explanation=normalized.explanation,
                     image_urls=normalized.image_urls,
+                    option_image_urls=normalized.option_image_urls,
                     ever_published=False,
                     lock_version=1,
                     created_by=current.admin_id,
@@ -4074,6 +4101,7 @@ class AdminQuizService:
                 correct_answer=item.correct_answer,
                 explanation=item.explanation,
                 image_urls=item.image_urls,
+                option_image_urls=item.option_image_urls,
                 require_publishable=False,
             )
             question = QuizQuestion(
@@ -4089,6 +4117,7 @@ class AdminQuizService:
                 correct_answer=normalized.correct_answer,
                 explanation=normalized.explanation,
                 image_urls=normalized.image_urls,
+                option_image_urls=normalized.option_image_urls,
                 ever_published=False,
                 stem_reserved=True,
                 lock_version=1,
@@ -4109,6 +4138,7 @@ class AdminQuizService:
                 correct_answer=normalized.correct_answer,
                 explanation=normalized.explanation,
                 image_urls=normalized.image_urls,
+                option_image_urls=normalized.option_image_urls,
                 created_by=current.admin_id,
             )
             db.add(revision)
@@ -4894,6 +4924,11 @@ class AdminQuizService:
                     correct_answer = row.get(header_map["correct_answer"], "").strip()
                     explanation = row.get(header_map.get("explanation", ""), "").strip() or None
                     image_urls = row.get(header_map.get("image_urls", ""), "").strip()
+                    option_image_urls = {
+                        suffix.upper(): url.strip()
+                        for suffix in ("a", "b", "c", "d")
+                        if (url := row.get(header_map.get(f"option_image_{suffix}", ""), "")).strip()
+                    }
 
                     if not question_type or not question_text or not correct_answer:
                         skipped += 1
@@ -4934,6 +4969,7 @@ class AdminQuizService:
                         correct_answer=correct_answer,
                         explanation=explanation,
                         image_urls=image_urls,
+                        option_image_urls=option_image_urls,
                         require_publishable=False,
                     )
                     if await self._question_text_taken(
@@ -4953,6 +4989,7 @@ class AdminQuizService:
                         correct_answer=normalized.correct_answer,
                         explanation=normalized.explanation,
                         image_urls=normalized.image_urls,
+                        option_image_urls=normalized.option_image_urls,
                         ever_published=False,
                         lock_version=1,
                         created_by=admin_id,
@@ -5009,6 +5046,7 @@ class AdminQuizService:
                         correct_answer=item.correct_answer,
                         explanation=item.explanation,
                         image_urls=item.image_urls,
+                        option_image_urls=item.option_image_urls,
                         require_publishable=False,
                     )
                     if await self._question_text_taken(
@@ -5028,6 +5066,7 @@ class AdminQuizService:
                         correct_answer=normalized.correct_answer,
                         explanation=normalized.explanation,
                         image_urls=normalized.image_urls,
+                        option_image_urls=normalized.option_image_urls,
                         ever_published=False,
                         lock_version=1,
                         created_by=admin_id,
@@ -5107,6 +5146,13 @@ class AdminQuizService:
         for letter in "abcdefgh":
             for template in (f"option_{letter}", f"{letter}", f"选项{letter.upper()}"):
                 aliases.setdefault(f"option_{letter}", []).append(template)
+        for letter in "abcd":
+            aliases[f"option_image_{letter}"] = [
+                f"option_image_{letter}",
+                f"option_image_{letter.upper()}",
+                f"选项图片{letter.upper()}",
+                f"选项图{letter.upper()}",
+            ]
 
         header_map: dict[str, str] = {}
         for field in fieldnames:
