@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Literal
 
@@ -317,6 +317,10 @@ class AdminQuizStatsQuestionQuery(QuizContractModel):
     status: QuizQuestionStatus | None = None
     include_deleted: bool = False
     keyword: str | None = Field(default=None, min_length=1, max_length=128)
+    sort: Literal["updated_at", "practice_first_attempts", "practice_wrong_count"] = (
+        "updated_at"
+    )
+    order: Literal["asc", "desc"] = "desc"
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
 
@@ -339,6 +343,33 @@ class AdminQuizQuestionStatsListItem(QuizContractModel):
     exam_correct: int = Field(ge=0)
     exam_accuracy: Decimal = Field(ge=0, le=100)
     aggregated_through: datetime | None = None
+
+
+class AdminQuizDailyStatsQuery(QuizContractModel):
+    days: Literal[7, 30, 90] = 30
+
+
+class AdminQuizDailyStatsItem(QuizContractModel):
+    date: date
+    practice_attempts: int = Field(ge=0)
+    active_users: int = Field(ge=0)
+
+
+class AdminQuizUserStatsQuery(QuizContractModel):
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=100)
+
+
+class AdminQuizUserStatsListItem(QuizContractModel):
+    user_id: int
+    nickname: str | None = None
+    phone_masked: str | None = None
+    practice_total_attempts: int = Field(ge=0)
+    practice_first_attempts: int = Field(ge=0)
+    practice_first_correct: int = Field(ge=0)
+    practice_answered_questions: int = Field(ge=0)
+    checkin_days: int = Field(ge=0)
+    consecutive_days: int = Field(ge=0)
 
 
 class AdminQuizCsvImportMetadata(QuizContractModel):

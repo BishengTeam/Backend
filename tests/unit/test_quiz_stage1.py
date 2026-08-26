@@ -36,6 +36,7 @@ from app.port.config import Settings
 from app.schemas.admin_quiz_contract import (
     AdminQuizCategoryUpdate,
     AdminQuizQuestionCreate,
+    AdminQuizStatsQuestionQuery,
 )
 from app.schemas.quiz_contract import (
     QuizExamAbandonedDetail,
@@ -234,6 +235,18 @@ def test_question_rules_support_option_images_with_text_or_image_minimum() -> No
         )
 
 
+def test_behavior_stats_queries_are_strictly_bounded() -> None:
+    default = AdminQuizStatsQuestionQuery()
+    assert default.sort == "updated_at"
+    assert default.order == "desc"
+    ranking = AdminQuizStatsQuestionQuery(sort="practice_wrong_count", order="asc")
+    assert ranking.sort == "practice_wrong_count"
+    with pytest.raises(ValidationError):
+        AdminQuizStatsQuestionQuery(sort="wrong_rate")
+    with pytest.raises(ValidationError):
+        AdminQuizStatsQuestionQuery(order="random")
+
+
 def test_submitted_answers_are_canonical_and_exact_match_only() -> None:
     options = {"A": "一", "B": "二", "C": "三", "D": "四"}
     assert normalize_submitted_answer(
@@ -249,7 +262,7 @@ def test_submitted_answers_are_canonical_and_exact_match_only() -> None:
 
 
 def test_contract_registry_is_complete_strict_and_machine_readable() -> None:
-    assert len(QUIZ_API_CONTRACTS) == 84
+    assert len(QUIZ_API_CONTRACTS) == 86
     keys = {(entry.method, entry.path) for entry in QUIZ_API_CONTRACTS}
     assert len(keys) == len(QUIZ_API_CONTRACTS)
     assert {

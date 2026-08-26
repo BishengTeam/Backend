@@ -43,8 +43,11 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizLibraryStatusUpdate,
     AdminQuizLibraryUpdate,
     AdminQuizModuleCreate,
+    AdminQuizDailyStatsQuery,
     AdminQuizQuestionCreate,
     AdminQuizQuestionUpdate,
+    AdminQuizStatsQuestionQuery,
+    AdminQuizUserStatsQuery,
     AdminQuizVersionRequest,
 )
 from app.schemas.quiz_contract import (
@@ -55,6 +58,7 @@ from app.schemas.quiz_contract import (
     QuizWrongBookQuery,
 )
 from app.services.admin_quiz_v2 import AdminQuizV2Service
+from app.services.admin_quiz import AdminQuizService
 from app.services.quiz_practice import QuizPracticeService
 from app.services.quiz_v2 import QuizV2Service
 
@@ -859,3 +863,59 @@ async def test_library_progress_reports_first_attempt_stats_per_catalog_node(
     assert untouched_module.question_count == 1
     assert untouched_module.answered_questions == 0
     assert untouched_module.accuracy == Decimal("0.0")
+
+
+async def test_behavior_stats_report_daily_trend_user_ranking_and_wrong_order(
+    quiz_v2_catalog_env,
+    monkeypatch,
+) -> None:
+    env = quiz_v2_catalog_env
+    await _grant_entitlement(env)
+
+    @asynccontextmanager
+    async def admin_db_ctx():
+        async with env.factory() as session:
+            yield session
+
+    monkeypatch.setattr("app.services.admin_quiz.get_db_ctx", admin_db_ctx)
+    session = await env.user_service.create_practice_session(
+        env.user_id,
+        QuizPracticeSessionCreate(
+            mode="full",
+            scope_type="knowledge_point",
+            scope_id=env.point.id,
+        ),
+    )
+    item = session.questions[0]
+    await env.practice_service.submit_attempt(
+        env.user_id,
+        session.id,
+        QuizPracticeAttemptCreate(
+            session_question_id=item.session_question_id,
+            idempotency_key="behavior-wrong",
+            user_answer="B",
+        ),
+    )
+
+    service = AdminQuizService()
+    daily = await service.get_daily_stats(AdminQuizDailyStatsQuery(days=7))
+    assert len(daily) == 7
+    today_item = daily[-1]
+    assert today_item.practice_attempts >= 1
+    assert today_item.active_users == 1
+    assert all(entry.practice_attempts >= 0 for entry in daily)
+
+    users = await service.list_user_stats(
+        AdminQuizUserStatsQuery(page=1, page_size=20)
+    )
+    assert users.total >= 1
+    top = users.items[0]
+    assert top.user_id == env.user_id
+    assert top.practice_total_attempts >= 1
+
+    ranking = await service.list_question_stats(
+        AdminQuizStatsQuestionQuery(sort="practice_wrong_count", order="desc")
+    )
+    wrong_item = ranking.items[0]
+    assert wrong_item.practice_first_attempts >= 1
+    assert wrong_item.practice_first_correct == 0

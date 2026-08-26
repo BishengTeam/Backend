@@ -38,6 +38,10 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizQuestionStatsListItem,
     AdminQuizStatsOverviewResponse,
     AdminQuizStatsQuestionQuery,
+    AdminQuizDailyStatsQuery,
+    AdminQuizDailyStatsItem,
+    AdminQuizUserStatsQuery,
+    AdminQuizUserStatsListItem,
     AdminQuizQuestionUpdate,
     AdminQuizVersionRequest,
     AdminQuizContentStatusUpdate,
@@ -504,6 +508,8 @@ async def admin_stats_question_query(
     status: QuizQuestionStatus | None = Query(None),
     include_deleted: bool = Query(False),
     keyword: str | None = Query(None, min_length=1, max_length=128),
+    sort: str = Query("updated_at"),
+    order: str = Query("desc"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ) -> AdminQuizStatsQuestionQuery:
@@ -517,6 +523,8 @@ async def admin_stats_question_query(
             "status": status,
             "include_deleted": include_deleted,
             "keyword": keyword,
+            "sort": sort,
+            "order": order,
             "page": page,
             "page_size": page_size,
         },
@@ -1015,6 +1023,36 @@ async def list_question_stats(
     _admin=Depends(require_permission("quiz:list")),
 ) -> APIResponse[PaginatedData[AdminQuizQuestionStatsListItem]]:
     return success(data=await AdminQuizService().list_question_stats(query))
+
+
+@router.get(
+    "/stats/daily",
+    response_model=APIResponse[list[AdminQuizDailyStatsItem]],
+    summary="每日刷题量与活跃人数趋势",
+)
+async def get_daily_stats(
+    days: int = Query(30),
+    _admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[list[AdminQuizDailyStatsItem]]:
+    query = _validated_query(AdminQuizDailyStatsQuery, {"days": days})
+    return success(data=await AdminQuizService().get_daily_stats(query))
+
+
+@router.get(
+    "/stats/users",
+    response_model=APIResponse[PaginatedData[AdminQuizUserStatsListItem]],
+    summary="用户做题排行榜",
+)
+async def list_user_stats(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    _admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[PaginatedData[AdminQuizUserStatsListItem]]:
+    query = _validated_query(
+        AdminQuizUserStatsQuery,
+        {"page": page, "page_size": page_size},
+    )
+    return success(data=await AdminQuizService().list_user_stats(query))
 
 
 @router.get("/audit-logs",

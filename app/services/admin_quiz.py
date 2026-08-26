@@ -43,10 +43,13 @@ from app.domain.community.src.index import (
     QuizPracticeSession,
     QuizPracticeSessionQuestion,
     QuizCollection,
+    QuizCheckin,
     QuizWrongItem,
     QuizQuestion,
     QuizQuestionStats,
+    QuizUserStats,
 )
+from app.domain.user.src.index import User, UserProfile
 from app.domain.community.src.rule.quiz import (
     QuizCategoryStatus,
     QuizQuestionStatus,
@@ -79,6 +82,10 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizQuestionStatsListItem,
     AdminQuizStatsOverviewResponse,
     AdminQuizStatsQuestionQuery,
+    AdminQuizDailyStatsQuery,
+    AdminQuizDailyStatsItem,
+    AdminQuizUserStatsQuery,
+    AdminQuizUserStatsListItem,
     AdminQuizVersionRequest,
     AdminQuizAuditLogResponse,
     AdminQuizAuditQuery,
@@ -1736,7 +1743,7 @@ class AdminQuizService:
                         QuizQuestionStats.question_id == QuizQuestion.id,
                     )
                     .where(*filters)
-                    .order_by(QuizQuestion.updated_at.desc(), QuizQuestion.id.desc())
+                    .order_by(*self._question_stats_order(query))
                     .offset((query.page - 1) * query.page_size)
                     .limit(query.page_size)
                 )
@@ -1781,6 +1788,116 @@ class AdminQuizService:
             page=query.page,
             page_size=query.page_size,
         )
+
+    @staticmethod
+    def _question_stats_order(query: AdminQuizStatsQuestionQuery) -> list:
+        attempts = func.coalesce(QuizQuestionStats.practice_first_attempts, 0)
+        correct = func.coalesce(QuizQuestionStats.practice_first_correct, 0)
+        if query.sort == "practice_wrong_count":
+            primary = attempts - correct
+        elif query.sort == "practice_first_attempts":
+            primary = attempts
+        else:
+            primary = QuizQuestion.updated_at
+        direction = primary.desc() if query.order == "desc" else primary.asc()
+        id_direction = (
+            QuizQuestion.id.desc() if query.order == "desc" else QuizQuestion.id.asc()
+        )
+        return [direction, id_direction]
+
+    async def get_daily_stats(
+        self, query: AdminQuizDailyStatsQuery
+    ) -> list[AdminQuizDailyStatsItem]:
+        """Daily practice volume and active users from the check-in ledger."""
+
+        async with get_db_ctx() as db:
+            today = datetime.now(timezone.utc).date()
+            start = today - timedelta(days=query.days - 1)
+            rows = (
+                await db.execute(
+                    select(
+                        QuizCheckin.checkin_date,
+                        func.sum(QuizCheckin.questions_completed),
+                        func.count(func.distinct(QuizCheckin.user_id)),
+                    )
+                    .where(
+                        QuizCheckin.checkin_date >= start,
+                        QuizCheckin.checkin_date <= today,
+                    )
+                    .group_by(QuizCheckin.checkin_date)
+                )
+            ).all()
+        by_date = {
+            row[0]: (int(row[1] or 0), int(row[2] or 0)) for row in rows
+        }
+        items: list[AdminQuizDailyStatsItem] = []
+        for offset in range(query.days):
+            day = start + timedelta(days=offset)
+            attempts, active_users = by_date.get(day, (0, 0))
+            items.append(
+                AdminQuizDailyStatsItem(
+                    date=day,
+                    practice_attempts=attempts,
+                    active_users=active_users,
+                )
+            )
+        return items
+
+    async def list_user_stats(
+        self, query: AdminQuizUserStatsQuery
+    ) -> PaginatedData[AdminQuizUserStatsListItem]:
+        """Leaderboard of users ranked by cumulative practice attempts."""
+
+        async with get_db_ctx() as db:
+            base = (
+                select(QuizUserStats, User, UserProfile)
+                .select_from(QuizUserStats)
+                .join(User, User.id == QuizUserStats.user_id)
+                .outerjoin(UserProfile, UserProfile.user_id == QuizUserStats.user_id)
+            )
+            total = int(
+                await db.scalar(select(func.count()).select_from(base.subquery()))
+                or 0
+            )
+            rows = (
+                await db.execute(
+                    base.order_by(
+                        QuizUserStats.practice_total_attempts.desc(),
+                        QuizUserStats.user_id.asc(),
+                    )
+                    .offset((query.page - 1) * query.page_size)
+                    .limit(query.page_size)
+                )
+            ).all()
+        items = [
+            AdminQuizUserStatsListItem(
+                user_id=int(stats.user_id),
+                nickname=getattr(profile, "nickname", None),
+                phone_masked=self._mask_phone(
+                    getattr(user, "phone", None)
+                    or getattr(profile, "phone", None)
+                ),
+                practice_total_attempts=int(stats.practice_total_attempts),
+                practice_first_attempts=int(stats.practice_first_attempts),
+                practice_first_correct=int(stats.practice_first_correct),
+                practice_answered_questions=int(stats.practice_answered_questions),
+                checkin_days=int(stats.checkin_days),
+                consecutive_days=int(stats.consecutive_days),
+            )
+            for stats, user, profile in rows
+        ]
+        return PaginatedData[AdminQuizUserStatsListItem](
+            items=items,
+            total=total,
+            page=query.page,
+            page_size=query.page_size,
+        )
+
+    @staticmethod
+    def _mask_phone(phone: str | None) -> str | None:
+        if not phone or len(phone) < 7:
+            return phone
+        return f"{phone[:3]}****{phone[-4:]}"
 
     async def aggregate_question_stats(
         self,
