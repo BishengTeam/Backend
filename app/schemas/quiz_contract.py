@@ -138,6 +138,23 @@ class QuizQuestionListQuery(QuizContractModel):
     page_size: int = Field(default=20, ge=1, le=100)
 
 
+class QuizLibraryQuestionQuery(QuizContractModel):
+    scope_type: QuizPracticeScopeType = "library"
+    scope_id: int | None = Field(default=None, ge=1)
+    question_type: QuizQuestionType | None = None
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> "QuizLibraryQuestionQuery":
+        if self.scope_type == "library":
+            if self.scope_id is not None:
+                raise ValueError("library scope does not accept scope_id")
+        elif self.scope_id is None:
+            raise ValueError("module and knowledge_point scopes require scope_id")
+        return self
+
+
 class QuizPublicQuestion(QuizContractModel):
     id: int
     category_id: int | None = None
@@ -468,6 +485,18 @@ class QuizStatsResponse(QuizContractModel):
 class QuizExamScopeSelection(QuizContractModel):
     scope_type: QuizPracticeScopeType
     scope_id: int = Field(ge=1)
+
+
+class QuizManualExamCreate(QuizContractModel):
+    question_ids: list[Annotated[int, Field(ge=1)]] = Field(
+        min_length=10, max_length=100
+    )
+
+    @model_validator(mode="after")
+    def validate_question_ids(self) -> "QuizManualExamCreate":
+        if len(set(self.question_ids)) != len(self.question_ids):
+            raise ValueError("question_ids must not contain duplicates")
+        return self
 
 
 class QuizExamCreate(QuizContractModel):

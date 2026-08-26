@@ -90,7 +90,9 @@ from app.schemas.quiz_contract import (
     QuizStatsResponse,
     QuizLibraryCatalogDetail,
     QuizLibraryCatalogItem,
+    QuizLibraryQuestionQuery,
     QuizLibraryProgressResponse,
+    QuizManualExamCreate,
     QuizWrongBookItem,
     QuizWrongBookQuery,
 )
@@ -167,6 +169,13 @@ QUIZ_API_CONTRACTS: tuple[QuizEndpointContract, ...] = (
     ),
     QuizEndpointContract(
         "GET", "/api/quiz/libraries/{library_id}/progress", "user", APIResponse[QuizLibraryProgressResponse]
+    ),
+    QuizEndpointContract(
+        "GET",
+        "/api/quiz/libraries/{library_id}/questions",
+        "user",
+        APIResponse[PaginatedData[QuizPublicQuestion]],
+        query_model=QuizLibraryQuestionQuery,
     ),
     QuizEndpointContract(
         "GET", "/api/quiz/practice-scopes/preview", "user", APIResponse[QuizPracticeScopePreview]
@@ -319,6 +328,15 @@ QUIZ_API_CONTRACTS: tuple[QuizEndpointContract, ...] = (
         "/api/quiz/exams/current",
         "user",
         APIResponse[QuizExamDetailResponse | None],
+    ),
+    QuizEndpointContract(
+        "POST",
+        "/api/quiz/exams/manual",
+        "user",
+        APIResponse[QuizExamDetailResponse],
+        body_model=QuizManualExamCreate,
+        errors=_CONFLICT_ERRORS,
+        example={"request": {"question_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]}},
     ),
     QuizEndpointContract(
         "GET",

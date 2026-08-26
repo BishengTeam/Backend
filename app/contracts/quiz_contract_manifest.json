@@ -1,7 +1,7 @@
 {
   "admin_operation_count": 53,
-  "fingerprint_sha256": "4c72e9be12972896413981520523d26b4334ef7955502c989996e7cceeddd51b",
-  "operation_count": 82,
+  "fingerprint_sha256": "d85004603bc611437696b7fc54c17d5036b9e17027168266ea502cb9e55db41f",
+  "operation_count": 84,
   "operations": [
     {
       "auth": "admin",
@@ -439,6 +439,13 @@
     },
     {
       "auth": "user",
+      "method": "POST",
+      "path": "/api/quiz/exams/manual",
+      "permission": null,
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "user",
       "method": "GET",
       "path": "/api/quiz/exams/{exam_id}",
       "permission": null,
@@ -483,6 +490,13 @@
       "auth": "user",
       "method": "GET",
       "path": "/api/quiz/libraries/{library_id}/progress",
+      "permission": null,
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "user",
+      "method": "GET",
+      "path": "/api/quiz/libraries/{library_id}/questions",
       "permission": null,
       "rate_limit_per_minute": null
     },
@@ -639,5 +653,5 @@
     }
   ],
   "schema_version": 1,
-  "user_operation_count": 29
+  "user_operation_count": 31
 }

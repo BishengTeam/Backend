@@ -39,6 +39,7 @@ from app.schemas.admin_quiz_contract import (
 )
 from app.schemas.quiz_contract import QuizExamAnswerSave, QuizExamCreate
 from app.schemas.quiz_contract import QuizExamScopeSelection
+from app.schemas.quiz_contract import QuizManualExamCreate
 from app.services.admin_quiz_v2 import AdminQuizV2Service
 from app.services.quiz_exam import QuizExamService
 
@@ -228,6 +229,7 @@ async def quiz_v2_exam_env(monkeypatch):
         await db.flush()
 
         free_questions: list[QuizQuestion] = []
+        paid_questions: list[QuizQuestion] = []
         for point_index, point in enumerate(free_points, start=1):
             for question_index in range(1, 11):
                 free_questions.append(
@@ -244,13 +246,15 @@ async def quiz_v2_exam_env(monkeypatch):
                     )
                 )
         for question_index in range(1, 11):
-            await _seed_question(
-                db,
-                admin_id=admin.id,
-                library_id=paid_library.id,
-                point_id=paid_point.id,
-                stem=f"{prefix} 课程判断题 {question_index}",
-                now=now,
+            paid_questions.append(
+                await _seed_question(
+                    db,
+                    admin_id=admin.id,
+                    library_id=paid_library.id,
+                    point_id=paid_point.id,
+                    stem=f"{prefix} 课程判断题 {question_index}",
+                    now=now,
+                )
             )
 
         binding = QuizCourseLibraryBinding(
@@ -295,6 +299,7 @@ async def quiz_v2_exam_env(monkeypatch):
         free_points=free_points,
         paid_point=paid_point,
         free_questions=free_questions,
+        paid_questions=paid_questions,
         course_id=int(course.id),
         order_id=int(order.id),
     )
@@ -468,6 +473,41 @@ async def test_multi_scope_exam_rejects_cross_library_selection(
                 ],
                 question_count=10,
             ),
+        )
+
+
+async def test_manual_exam_creates_exam_from_explicit_selection(
+    quiz_v2_exam_env,
+) -> None:
+    env = quiz_v2_exam_env
+    question_ids = [int(question.id) for question in env.free_questions[:10]]
+    exam = await env.exam_service.create_manual_exam(
+        env.free_user_id,
+        QuizManualExamCreate(question_ids=question_ids),
+    )
+    assert exam.library_id == env.free_library.id
+    assert exam.scope_type is None
+    assert exam.question_count == 10
+    assert [item.question_id for item in exam.questions] == question_ids
+    assert all(item.question_revision_id for item in exam.questions)
+    await env.exam_service.abandon_exam(env.free_user_id, exam.id)
+
+
+async def test_manual_exam_rejects_cross_library_and_unavailable_questions(
+    quiz_v2_exam_env,
+) -> None:
+    env = quiz_v2_exam_env
+    free_ids = [int(question.id) for question in env.free_questions[:9]]
+    paid_ids = [int(question.id) for question in env.paid_questions[:1]]
+    with pytest.raises(ValidationException, match="同一题库"):
+        await env.exam_service.create_manual_exam(
+            env.entitled_user_id,
+            QuizManualExamCreate(question_ids=[*free_ids, *paid_ids]),
+        )
+    with pytest.raises(Exception, match="不存在或不可用"):
+        await env.exam_service.create_manual_exam(
+            env.free_user_id,
+            QuizManualExamCreate(question_ids=[*free_ids, 999999999]),
         )
 
 

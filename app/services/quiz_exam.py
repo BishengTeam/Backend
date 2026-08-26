@@ -15,6 +15,9 @@ from app.domain.community.src.index import (
     QuizExam,
     QuizExamAnswer,
     QuizExamQuestion,
+    QuizKnowledgePoint,
+    QuizLibrary,
+    QuizModule,
     QuizQuestionRevision,
     QuizQuestionRevisionStats,
     QuizQuestion,
@@ -41,6 +44,7 @@ from app.schemas.quiz_contract import (
     QuizExamActionResponse,
     QuizExamAnswerSaved,
     QuizExamCreate,
+    QuizManualExamCreate,
     QuizExamDetailResponse,
     QuizExamInProgressDetail,
     QuizExamListItem,
@@ -623,6 +627,195 @@ class QuizExamService:
                         exam_id=exam.id,
                         question_id=question.id,
                         question_revision_id=(revision.id if revision is not None else None),
+                        position=position,
+                        category_id=snapshot["category_id"],
+                        category_path=snapshot["category_path"],
+                        question_type=snapshot["question_type"],
+                        question_text=snapshot["question_text"],
+                        options=snapshot["options"],
+                        option_image_urls=snapshot.get("option_image_urls") or {},
+                        correct_answer=snapshot["correct_answer"],
+                        explanation=snapshot["explanation"],
+                        image_urls=snapshot["image_urls"],
+                        question_lock_version=snapshot["question_lock_version"],
+                    )
+                )
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+                winner = (
+                    await db.execute(
+                        select(QuizExam)
+                        .where(
+                            QuizExam.user_id == user_id,
+                            QuizExam.status == _IN_PROGRESS,
+                        )
+                        .order_by(QuizExam.id.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if winner is None:
+                    raise
+                return await self._serialize_exam(db, winner, server_time=self._now())
+            return await self._serialize_exam(db, exam, server_time=now)
+
+
+    async def create_manual_exam(
+        self,
+        user_id: int,
+        data: QuizManualExamCreate,
+    ) -> QuizExamDetailResponse:
+        """Create an exam from an explicit, validated question selection."""
+
+        async with get_db_ctx() as db:
+            await self.practice._lock_user(db, user_id)
+            now = self._now()
+            existing = (
+                await db.execute(
+                    select(QuizExam)
+                    .where(
+                        QuizExam.user_id == user_id,
+                        QuizExam.status == _IN_PROGRESS,
+                    )
+                    .order_by(QuizExam.started_at.desc(), QuizExam.id.desc())
+                    .limit(1)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                if existing.deadline_at <= now:
+                    await self._settle_locked(
+                        db,
+                        existing,
+                        status=_TIMED_OUT,
+                        settled_at=now,
+                    )
+                    await db.commit()
+                else:
+                    return await self._serialize_exam(db, existing, server_time=now)
+
+            rows = list(
+                (
+                    await db.execute(
+                        select(QuizQuestion, QuizQuestionRevision)
+                        .join(
+                            QuizQuestionRevision,
+                            QuizQuestionRevision.id
+                            == QuizQuestion.current_revision_id,
+                        )
+                        .where(
+                            QuizQuestion.id.in_(data.question_ids),
+                            QuizQuestion.status == _PUBLISHED,
+                            QuizQuestionRevision.status == "published",
+                        )
+                    )
+                ).all()
+            )
+            by_question = {
+                int(question.id): (question, revision)
+                for question, revision in rows
+            }
+            missing = sorted(set(data.question_ids) - set(by_question))
+            if missing:
+                preview = ",".join(str(item) for item in missing[:5])
+                raise BusinessException(
+                    f"以下题目不存在或不可用：{preview}"
+                    + ("…" if len(missing) > 5 else "")
+                )
+            library_ids = {
+                int(question.library_id)
+                for question, _revision in rows
+                if question.library_id is not None
+            }
+            if len(library_ids) != 1 or any(
+                question.library_id is None for question, _revision in rows
+            ):
+                raise ValidationException("手动组卷仅支持同一题库内的题目")
+            library_id = library_ids.pop()
+            library = await db.get(QuizLibrary, library_id)
+            if library is None:
+                raise NotFoundException("题库")
+            entitled = (
+                await db.execute(
+                    select(QuizLibrary.id).where(
+                        QuizLibrary.id == library_id,
+                        self.v2._visible_clause(user_id),
+                    )
+                )
+            ).scalar_one_or_none()
+            if entitled is None:
+                raise NotFoundException("题库")
+
+            point_ids = sorted(
+                {
+                    int(question.knowledge_point_id)
+                    for question, _revision in rows
+                    if question.knowledge_point_id is not None
+                }
+            )
+            point_rows = (
+                await db.execute(
+                    select(QuizKnowledgePoint, QuizModule)
+                    .join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
+                    .where(QuizKnowledgePoint.id.in_(point_ids))
+                )
+            ).all()
+            path_by_point = {
+                int(point.id): [
+                    {"id": int(library.id), "name": library.name, "kind": "library"},
+                    {"id": int(module.id), "name": module.name, "kind": "module"},
+                    {
+                        "id": int(point.id),
+                        "name": point.name,
+                        "kind": "knowledge_point",
+                    },
+                ]
+                for point, module in point_rows
+            }
+            if any(
+                int(question.knowledge_point_id) not in path_by_point
+                for question, _revision in rows
+            ):
+                raise ValidationException("手动组卷包含不可用的知识点")
+
+            exam = QuizExam(
+                user_id=user_id,
+                category_id=None,
+                library_id=library_id,
+                scope_type=None,
+                scope_id=None,
+                question_count=len(data.question_ids),
+                duration_seconds=_DURATION_SECONDS,
+                status=_IN_PROGRESS,
+                started_at=now,
+                deadline_at=now + timedelta(seconds=_DURATION_SECONDS),
+                lock_version=1,
+            )
+            db.add(exam)
+            await db.flush()
+            for position, question_id in enumerate(data.question_ids, start=1):
+                question, revision = by_question[int(question_id)]
+                snapshot = {
+                    "category_id": None,
+                    "category_path": path_by_point[int(question.knowledge_point_id)],
+                    "question_type": revision.question_type,
+                    "question_text": revision.question_text,
+                    "options": dict(revision.options or {}),
+                    "correct_answer": revision.correct_answer,
+                    "explanation": revision.explanation or "",
+                    "image_urls": list(revision.image_urls or []),
+                    "option_image_urls": dict(
+                        getattr(revision, "option_image_urls", None) or {}
+                    ),
+                    "question_lock_version": int(question.lock_version),
+                }
+                snapshot["options"] = dict(sorted((snapshot["options"] or {}).items()))
+                db.add(
+                    QuizExamQuestion(
+                        exam_id=exam.id,
+                        question_id=question.id,
+                        question_revision_id=revision.id,
                         position=position,
                         category_id=snapshot["category_id"],
                         category_path=snapshot["category_path"],

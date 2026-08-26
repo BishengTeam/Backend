@@ -24,6 +24,7 @@ from app.domain.user.src.index import User
 from app.port.exceptions import QuizV2Exception
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.domain.community.src.rule.quiz import QuizPracticeMode
+from app.schemas.common import PaginatedData
 from app.schemas.quiz_contract import (
     QuizKnowledgePointProgress,
     QuizKnowledgePointCatalogItem,
@@ -39,11 +40,113 @@ from app.schemas.quiz_contract import (
     QuizPracticeSessionResponse,
     QuizPracticeSkipResponse,
     QuizCategoryPathItem,
+    QuizLibraryQuestionQuery,
+    QuizPublicQuestion,
 )
 
 
 class QuizV2Service:
     _SESSION_WINDOW_DAYS = 7
+
+    async def list_library_questions(
+        self,
+        user_id: int,
+        library_id: int,
+        query: QuizLibraryQuestionQuery,
+    ) -> PaginatedData[QuizPublicQuestion]:
+        """Browse questions of one visible library scope for manual assembly."""
+
+        async with get_db_ctx() as db:
+            await self._require_user(db, user_id)
+            scope_id = int(query.scope_id) if query.scope_type != "library" else int(library_id)
+            await self._resolve_scope(db, user_id, query.scope_type, scope_id)
+            conditions = [
+                QuizQuestion.library_id == library_id,
+                QuizQuestion.status == "published",
+                QuizQuestion.current_revision_id.is_not(None),
+                QuizKnowledgePoint.status == "active",
+                QuizKnowledgePoint.system_kind == "none",
+            ]
+            if query.scope_type == "knowledge_point":
+                conditions.append(QuizQuestion.knowledge_point_id == scope_id)
+            elif query.scope_type == "module":
+                conditions.append(
+                    QuizQuestion.knowledge_point_id.in_(
+                        select(QuizKnowledgePoint.id).where(
+                            QuizKnowledgePoint.module_id == scope_id,
+                            QuizKnowledgePoint.status == "active",
+                            QuizKnowledgePoint.system_kind == "none",
+                        )
+                    )
+                )
+            else:
+                conditions.append(
+                    QuizQuestion.knowledge_point_id.in_(
+                        select(QuizKnowledgePoint.id).where(
+                            QuizKnowledgePoint.library_id == library_id,
+                            QuizKnowledgePoint.status == "active",
+                            QuizKnowledgePoint.system_kind == "none",
+                        )
+                    )
+                )
+            if query.question_type is not None:
+                conditions.append(QuizQuestion.question_type == query.question_type)
+            base = (
+                select(QuizQuestion)
+                .join(
+                    QuizKnowledgePoint,
+                    QuizKnowledgePoint.id == QuizQuestion.knowledge_point_id,
+                )
+                .where(*conditions)
+            )
+            total = int(
+                (
+                    await db.execute(
+                        select(func.count()).select_from(base.subquery())
+                    )
+                ).scalar()
+                or 0
+            )
+            rows = list(
+                (
+                    await db.execute(
+                        base.order_by(QuizQuestion.id.asc())
+                        .offset((query.page - 1) * query.page_size)
+                        .limit(query.page_size)
+                    )
+                ).scalars()
+            )
+            items = [
+                QuizPublicQuestion(
+                    id=int(question.id),
+                    category_id=None,
+                    library_id=int(question.library_id),
+                    knowledge_point_id=(
+                        int(question.knowledge_point_id)
+                        if question.knowledge_point_id is not None
+                        else None
+                    ),
+                    question_revision_id=(
+                        int(question.current_revision_id)
+                        if question.current_revision_id is not None
+                        else None
+                    ),
+                    question_type=question.question_type,
+                    question_text=question.question_text,
+                    options=dict(question.options or {}),
+                    image_urls=list(question.image_urls or []),
+                    option_image_urls=dict(
+                        getattr(question, "option_image_urls", None) or {}
+                    ),
+                )
+                for question in rows
+            ]
+            return PaginatedData(
+                items=items,
+                total=total,
+                page=query.page,
+                page_size=query.page_size,
+            )
 
     @staticmethod
     def _now() -> datetime:

@@ -27,6 +27,7 @@ from app.schemas.quiz_contract import (
     QuizExamDetailResponse,
     QuizExamListItem,
     QuizExamListQuery,
+    QuizManualExamCreate,
     QuizPracticeAbandonResponse,
     QuizPracticeAnswerSave,
     QuizPracticeAnswerSaved,
@@ -40,6 +41,7 @@ from app.schemas.quiz_contract import (
     QuizPracticeSkipResponse,
     QuizPublicQuestion,
     QuizLibraryProgressResponse,
+    QuizLibraryQuestionQuery,
     QuizQuestionListQuery,
     QuizStatsResponse as QuizContractStatsResponse,
     QuizStatsQuery,
@@ -129,6 +131,25 @@ async def quiz_exam_list_query(
     return QuizExamListQuery(page=page, page_size=page_size)
 
 
+async def quiz_library_question_query(
+    scope_type: str = Query("library"),
+    scope_id: int | None = Query(None, ge=1),
+    question_type: QuizQuestionType | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+) -> QuizLibraryQuestionQuery:
+    return _validated_query(
+        QuizLibraryQuestionQuery,
+        {
+            "scope_type": scope_type,
+            "scope_id": scope_id,
+            "question_type": question_type,
+            "page": page,
+            "page_size": page_size,
+        },
+    )
+
+
 async def quiz_stats_query(
     scope_type: QuizPracticeScopeType | None = Query(None),
     scope_id: int | None = Query(None, ge=1),
@@ -187,6 +208,34 @@ async def get_quiz_library_progress(
     return success(
         data=await QuizV2Service().get_library_progress(
             current_user.id, library_id
+        )
+    )
+
+
+@router.get(
+    "/libraries/{library_id}/questions",
+    response_model=APIResponse[PaginatedData[QuizPublicQuestion]],
+    summary="题库范围题目列表（手动组卷选题）",
+    description="""
+小程序 **手动组卷选题页** 使用。
+
+**使用场景**: 按模块/知识点浏览题目用于手动组卷，支持题型筛选与分页。
+
+**查询参数**: `scope_type`（library/module/knowledge_point，默认整库）、`scope_id`（module/knowledge_point 时必填）、`question_type`、`page`、`page_size`。
+
+**响应**: 分页题目数据（含题干图片与选项图片），不含答案与解析。
+
+**认证**: 需登录
+    """,
+)
+async def list_library_questions(
+    library_id: int = Path(..., ge=1),
+    query: QuizLibraryQuestionQuery = Depends(quiz_library_question_query),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[PaginatedData[QuizPublicQuestion]]:
+    return success(
+        data=await QuizV2Service().list_library_questions(
+            current_user.id, library_id, query
         )
     )
 
@@ -593,6 +642,28 @@ async def get_current_exam_v2(
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[QuizExamDetailResponse | None]:
     result = await QuizExamService().get_current_exam(current_user.id)
+    return success(data=result)
+
+
+@router.post(
+    "/exams/manual",
+    response_model=APIResponse[QuizExamDetailResponse],
+    summary="手动组卷创建考试",
+    description="""
+小程序 **手动组卷** 使用。
+
+**使用场景**: 用户按显式题目 ID 列表创建 60 分钟模拟考试。
+
+**规则**: 10-100 题、不可重复；所有题目必须属于同一题库且当前用户对该题库有权限；题目顺序按选择顺序固定。
+
+**认证**: 需登录
+    """,
+)
+async def create_manual_exam(
+    body: QuizManualExamCreate,
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[QuizExamDetailResponse]:
+    result = await QuizExamService().create_manual_exam(current_user.id, body)
     return success(data=result)
 
 

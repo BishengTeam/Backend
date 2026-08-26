@@ -25,6 +25,7 @@ from app.schemas.quiz_contract import (
     QuizExamInProgressDetail,
     QuizExamQuestionResult,
     QuizExamScopeSelection,
+    QuizManualExamCreate,
 )
 from app.services.quiz_exam import QuizExamService
 
@@ -100,6 +101,20 @@ def test_exam_request_is_strictly_bounded_and_duration_is_frozen() -> None:
     # The response models make the fixed duration and state-specific fields
     # explicit, preventing accidental leakage through a generic dict response.
     assert "correct_answer" not in QuizExamInProgressDetail.model_fields
+
+
+def test_manual_exam_request_requires_unique_bounded_question_ids() -> None:
+    ids = list(range(1, 11))
+    manual = QuizManualExamCreate(question_ids=ids)
+    assert manual.question_ids == ids
+    with pytest.raises(ValidationError):
+        QuizManualExamCreate(question_ids=ids[:9])
+    with pytest.raises(ValidationError):
+        QuizManualExamCreate(question_ids=list(range(1, 102)))
+    with pytest.raises(ValidationError, match="duplicates"):
+        QuizManualExamCreate(question_ids=[*ids, 1])
+    with pytest.raises(ValidationError):
+        QuizManualExamCreate(question_ids=[0, *ids[1:]])
 
 
 def test_exam_answer_shape_is_canonical_but_lock_version_stays_client_owned() -> None:
