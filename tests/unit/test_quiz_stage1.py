@@ -262,7 +262,7 @@ def test_submitted_answers_are_canonical_and_exact_match_only() -> None:
 
 
 def test_contract_registry_is_complete_strict_and_machine_readable() -> None:
-    assert len(QUIZ_API_CONTRACTS) == 86
+    assert len(QUIZ_API_CONTRACTS) == 87
     keys = {(entry.method, entry.path) for entry in QUIZ_API_CONTRACTS}
     assert len(keys) == len(QUIZ_API_CONTRACTS)
     assert {
@@ -543,3 +543,24 @@ async def test_quiz_task_registry_runs_all_processors_and_isolates_failures() ->
     assert calls == ["first", "broken", "last"]
     with pytest.raises(ValueError, match="already registered"):
         registry.register("first", first)
+
+
+def test_quiz_image_upload_rules_are_strict() -> None:
+    from app.port.exceptions import ValidationException
+    from app.schemas.admin_quiz_contract import AdminQuizImageUploadCreate
+    from app.services.quiz_image_upload import QuizImageUploadService
+
+    valid = AdminQuizImageUploadCreate(
+        filename="topology.png", content_type="image/png", size_bytes=65536
+    )
+    assert QuizImageUploadService.validate(valid) == ".png"
+    with pytest.raises(ValidationException, match="JPG"):
+        QuizImageUploadService.validate(
+            AdminQuizImageUploadCreate(
+                filename="video.mp4", content_type="video/mp4", size_bytes=65536
+            )
+        )
+    with pytest.raises(ValidationError, match="size_bytes"):
+        AdminQuizImageUploadCreate(
+            filename="big.png", content_type="image/png", size_bytes=11 * 1024 * 1024
+        )

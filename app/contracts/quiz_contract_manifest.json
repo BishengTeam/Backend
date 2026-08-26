@@ -1,7 +1,7 @@
 {
-  "admin_operation_count": 55,
-  "fingerprint_sha256": "e190baa9c6607d13745002450c7e76f1233613ab94868adb8cea1d873993e79f",
-  "operation_count": 86,
+  "admin_operation_count": 56,
+  "fingerprint_sha256": "94886e19149c22fae8dc2cc12ca2482111517b29465e9d292c9cfe30a2f604a2",
+  "operation_count": 87,
   "operations": [
     {
       "auth": "admin",
@@ -386,6 +386,13 @@
       "method": "GET",
       "path": "/admin/quiz/stats/users",
       "permission": "quiz:list",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/uploads",
+      "permission": "quiz:write",
       "rate_limit_per_minute": null
     },
     {

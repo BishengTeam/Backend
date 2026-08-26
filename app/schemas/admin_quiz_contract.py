@@ -372,6 +372,19 @@ class AdminQuizUserStatsListItem(QuizContractModel):
     consecutive_days: int = Field(ge=0)
 
 
+class AdminQuizImageUploadCreate(QuizContractModel):
+    filename: str = Field(min_length=1, max_length=255)
+    content_type: str = Field(min_length=1, max_length=128)
+    size_bytes: int = Field(gt=0, le=10 * 1024 * 1024)
+
+
+class AdminQuizImageUploadResponse(QuizContractModel):
+    object_key: str
+    upload_url: str
+    public_url: str
+    expires_at: datetime
+
+
 class AdminQuizCsvImportMetadata(QuizContractModel):
     filename: str = Field(min_length=1, max_length=255)
     size_bytes: int = Field(ge=1, le=10 * 1024 * 1024)

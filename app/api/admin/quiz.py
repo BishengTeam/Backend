@@ -42,6 +42,8 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizDailyStatsItem,
     AdminQuizUserStatsQuery,
     AdminQuizUserStatsListItem,
+    AdminQuizImageUploadCreate,
+    AdminQuizImageUploadResponse,
     AdminQuizQuestionUpdate,
     AdminQuizVersionRequest,
     AdminQuizContentStatusUpdate,
@@ -65,6 +67,7 @@ from app.schemas.admin_quiz_contract import (
 )
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.services.admin_quiz import AdminQuizService
+from app.services.quiz_image_upload import QuizImageUploadService
 from app.services.admin_quiz_v2 import AdminQuizV2Service
 from app.domain.community.src.rule.quiz import (
     QuizCategoryStatus,
@@ -1053,6 +1056,18 @@ async def list_user_stats(
         {"page": page, "page_size": page_size},
     )
     return success(data=await AdminQuizService().list_user_stats(query))
+
+
+@router.post(
+    "/uploads",
+    response_model=APIResponse[AdminQuizImageUploadResponse],
+    summary="题库图片直传 OSS 预签名",
+)
+async def create_quiz_image_upload(
+    body: AdminQuizImageUploadCreate,
+    _admin=Depends(require_permission("quiz:write")),
+) -> APIResponse[AdminQuizImageUploadResponse]:
+    return success(data=await QuizImageUploadService().create(body))
 
 
 @router.get("/audit-logs",
