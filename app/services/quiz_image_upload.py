@@ -20,6 +20,7 @@ from app.services.course_storage import CourseStorage
 
 QUIZ_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 QUIZ_IMAGE_SIGN_TTL_SECONDS = 3600
+QUIZ_IMAGE_READ_TTL_SECONDS = 7 * 24 * 3600
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 _IMAGE_CONTENT_TYPES = {
     "",
@@ -48,6 +49,61 @@ def _public_base_url() -> str:
     if not host:
         raise ThirdPartyException("题库图片 OSS Endpoint 无效")
     return f"https://{bucket}.{host}"
+
+
+def _quiz_base_or_none() -> str | None:
+    try:
+        return _public_base_url()
+    except ThirdPartyException:
+        return None
+
+
+def extract_quiz_image_key(value: str) -> str | None:
+    """Extract the quiz-images object key from a clean/signed URL or bare key."""
+
+    if not value:
+        return None
+    if value.startswith("quiz-images/"):
+        return value.split("?", 1)[0]
+    base = _quiz_base_or_none()
+    if base and value.startswith(f"{base}/"):
+        key = value[len(base) + 1 :].split("?", 1)[0]
+        if key.startswith("quiz-images/"):
+            return key
+    return None
+
+
+def sign_quiz_media_urls(values: list[str]) -> list[str]:
+    """Return display URLs, re-signing quiz OSS links like course covers."""
+
+    if not values or _quiz_base_or_none() is None:
+        return list(values)
+    keys = [extract_quiz_image_key(value) for value in values]
+    if not any(keys):
+        return list(values)
+
+    def _sign_all() -> list[str]:
+        bucket = CourseStorage._bucket()
+        return [
+            (
+                bucket.sign_url(
+                    "GET", key, QUIZ_IMAGE_READ_TTL_SECONDS, slash_safe=True
+                )
+                if key
+                else value
+            )
+            for key, value in zip(keys, values)
+        ]
+
+    return _sign_all()
+
+
+def sign_quiz_media_map(mapping: dict[str, str] | None) -> dict[str, str]:
+    if not mapping:
+        return {}
+    keys = list(mapping.keys())
+    values = sign_quiz_media_urls([mapping[key] for key in keys])
+    return dict(zip(keys, values))
 
 
 class QuizImageUploadService:
@@ -79,10 +135,11 @@ class QuizImageUploadService:
             )
 
         upload_url = await asyncio.to_thread(_sign)
+        public_url = sign_quiz_media_urls([f"{_public_base_url()}/{object_key}"])[0]
         now = datetime.now(timezone.utc)
         return AdminQuizImageUploadResponse(
             object_key=object_key,
             upload_url=upload_url,
-            public_url=f"{_public_base_url()}/{object_key}",
+            public_url=public_url,
             expires_at=now + timedelta(seconds=QUIZ_IMAGE_SIGN_TTL_SECONDS),
         )

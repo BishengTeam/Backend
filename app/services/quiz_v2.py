@@ -8,6 +8,7 @@ from decimal import Decimal
 from sqlalchemy import and_, func, or_, select
 
 from app.adapter.database import get_db_ctx
+from app.services.quiz_image_upload import sign_quiz_media_map, sign_quiz_media_urls
 from app.domain.community.src.index import (
     QuizKnowledgePoint,
     QuizLibrary,
@@ -134,8 +135,8 @@ class QuizV2Service:
                     question_type=question.question_type,
                     question_text=question.question_text,
                     options=dict(question.options or {}),
-                    image_urls=list(question.image_urls or []),
-                    option_image_urls=dict(
+                    image_urls=sign_quiz_media_urls(list(question.image_urls or [])),
+                    option_image_urls=sign_quiz_media_map(
                         getattr(question, "option_image_urls", None) or {}
                     ),
                 )
@@ -1005,10 +1006,10 @@ class QuizV2Service:
                         question_type=revision.question_type,
                         question_text=revision.question_text,
                         options=dict(revision.options or {}),
-                        option_image_urls=dict(getattr(revision, "option_image_urls", None) or {}),
+                        option_image_urls=sign_quiz_media_map(getattr(revision, "option_image_urls", None) or {}),
                         correct_answer=revision.correct_answer,
                         explanation=revision.explanation or "",
-                        image_urls=list(revision.image_urls or []),
+                        image_urls=sign_quiz_media_urls(list(revision.image_urls or [])),
                         question_lock_version=question.lock_version,
                         skip_count=0,
                     )
@@ -1118,8 +1119,8 @@ class QuizV2Service:
                     question_type=snapshot.question_type,
                     question_text=snapshot.question_text,
                     options=dict(snapshot.options or {}),
-                    option_image_urls=dict(getattr(snapshot, "option_image_urls", None) or {}),
-                    image_urls=list(snapshot.image_urls or []),
+                    option_image_urls=sign_quiz_media_map(getattr(snapshot, "option_image_urls", None) or {}),
+                    image_urls=sign_quiz_media_urls(list(snapshot.image_urls or [])),
                     session_question_id=int(snapshot.id),
                     position=int(snapshot.position),
                     category_path=[

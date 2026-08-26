@@ -13,6 +13,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.adapter.database import get_db_ctx
+from app.services.quiz_image_upload import sign_quiz_media_map, sign_quiz_media_urls
 from app.adapter.logging import client_ip_var, request_id_var
 from app.domain.community.src.index import (
     QuizAdminAuditLog,
@@ -196,7 +197,10 @@ class AdminQuizV2Service:
     def _revision_response(
         revision: QuizQuestionRevision,
     ) -> AdminQuizQuestionRevisionResponse:
-        return AdminQuizQuestionRevisionResponse.model_validate(revision)
+        response = AdminQuizQuestionRevisionResponse.model_validate(revision)
+        response.image_urls = sign_quiz_media_urls(list(response.image_urls or []))
+        response.option_image_urls = sign_quiz_media_map(response.option_image_urls)
+        return response
 
     @classmethod
     async def _question_response(
@@ -236,8 +240,8 @@ class AdminQuizV2Service:
             options=question.options,
             correct_answer=question.correct_answer,
             explanation=question.explanation,
-            image_urls=list(question.image_urls or []),
-            option_image_urls=dict(question.option_image_urls or {}),
+            image_urls=sign_quiz_media_urls(list(question.image_urls or [])),
+            option_image_urls=sign_quiz_media_map(dict(question.option_image_urls or {})),
             ever_published=bool(question.ever_published),
             published_at=question.published_at,
             disabled_at=question.disabled_at,

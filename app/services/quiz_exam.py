@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
 from app.adapter.database import get_db_ctx
+from app.services.quiz_image_upload import sign_quiz_media_map, sign_quiz_media_urls
 from app.domain.community.src.index import (
     QuizExam,
     QuizExamAnswer,
@@ -134,8 +135,8 @@ class QuizExamService:
             question_type=snapshot.question_type,
             question_text=snapshot.question_text,
             options=dict(sorted((snapshot.options or {}).items())),
-            option_image_urls=dict(getattr(snapshot, "option_image_urls", None) or {}),
-            image_urls=list(snapshot.image_urls or []),
+            option_image_urls=sign_quiz_media_map(getattr(snapshot, "option_image_urls", None) or {}),
+            image_urls=sign_quiz_media_urls(list(snapshot.image_urls or [])),
         )
 
     @staticmethod

@@ -564,3 +564,36 @@ def test_quiz_image_upload_rules_are_strict() -> None:
         AdminQuizImageUploadCreate(
             filename="big.png", content_type="image/png", size_bytes=11 * 1024 * 1024
         )
+
+
+def test_quiz_media_signing_extracts_keys_and_passes_external_through(monkeypatch) -> None:
+    from app.services.quiz_image_upload import (
+        extract_quiz_image_key,
+        sign_quiz_media_map,
+        sign_quiz_media_urls,
+    )
+    from app.port.config import settings as app_settings
+
+    monkeypatch.setattr(
+        app_settings, "ALIYUN_OSS_ENDPOINT", "https://oss-cn-chengdu.aliyuncs.com"
+    )
+    monkeypatch.setattr(app_settings, "ALIYUN_OSS_BUCKET", "materials-20260817")
+
+    key = extract_quiz_image_key(
+        "https://materials-20260817.oss-cn-chengdu.aliyuncs.com/quiz-images/inst/a.png"
+    )
+    assert key == "quiz-images/inst/a.png"
+    signed_key = extract_quiz_image_key(
+        "https://materials-20260817.oss-cn-chengdu.aliyuncs.com/quiz-images/inst/a.png"
+        "?Expires=1&Signature=x"
+    )
+    assert signed_key == "quiz-images/inst/a.png"
+    assert extract_quiz_image_key("https://cdn.example.com/other.png") is None
+    assert extract_quiz_image_key("quiz-images/bare.png") == "quiz-images/bare.png"
+
+    # Without a configured OSS bucket the values pass through untouched.
+    external = ["https://cdn.example.com/x.png"]
+    assert sign_quiz_media_urls(external) == external
+    assert sign_quiz_media_map({"A": "https://cdn.example.com/x.png"}) == {
+        "A": "https://cdn.example.com/x.png"
+    }
