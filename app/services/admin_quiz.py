@@ -8,6 +8,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
+from zoneinfo import ZoneInfo
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -1811,7 +1812,7 @@ class AdminQuizService:
         """Daily practice volume and active users from the check-in ledger."""
 
         async with get_db_ctx() as db:
-            today = datetime.now(timezone.utc).date()
+            today = datetime.now(ZoneInfo(settings.APP_TIMEZONE)).date()
             start = today - timedelta(days=query.days - 1)
             rows = (
                 await db.execute(
