@@ -54,3 +54,4 @@ uvicorn app.main:app --reload
 `RENSHE_TEMPLATE_DIR`。首次超级管理员只允许显式执行
 `python scripts/init_super_admin.py`，所需开关、用户名和强密码见
 `.env.example`；应用启动和种子脚本都不会自动创建管理员。
+
