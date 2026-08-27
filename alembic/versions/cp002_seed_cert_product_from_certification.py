@@ -26,10 +26,10 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    conn = op.get_bind()
-    if conn is None:
-        # 离线 SQL 模式不支持数据迁移，安全跳过
+    # 离线 SQL 模式不支持数据迁移，安全跳过
+    if op.get_context().is_offline_mode():
         return
+    conn = op.get_bind()
     # 表可能不存在（CI 干净环境），安全跳过
     has_table = conn.execute(sa.text(
         "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='certification')"
