@@ -554,7 +554,7 @@ async def test_audit_query_is_redacted_read_only_and_audits_itself(monkeypatch) 
     audit_route = next(
         route
         for route in app.routes
-        if getattr(route, "path", None) == "/admin/renshe/audit-logs"
+        if getattr(route, "path", None) == "/admin/cert-products/renshe/audit-logs"
     )
     assert audit_route.methods == {"GET"}
 
@@ -604,6 +604,6 @@ async def test_audit_query_http_requires_admin_authentication() -> None:
         transport=ASGITransport(app=app),
         base_url="http://test",
     ) as client:
-        response = await client.get("/admin/renshe/audit-logs")
+        response = await client.get("/admin/cert-products/renshe/audit-logs")
 
     assert response.status_code == 401

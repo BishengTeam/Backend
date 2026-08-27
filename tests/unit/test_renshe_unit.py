@@ -325,9 +325,9 @@ def test_user_and_admin_renshe_routes_are_registered_without_enterprise_routes()
         ("POST", "/api/renshe/applications/{application_id}/submit"),
         ("POST", "/api/renshe/applications/{application_id}/refunds"),
         ("GET", "/api/renshe/verification-materials/{kind}/signed-url"),
-        ("POST", "/admin/renshe/applications/{application_id}/initial-review"),
-        ("POST", "/admin/renshe/applications/{application_id}/external-review"),
-        ("POST", "/admin/renshe/refunds/{refund_id}/decision"),
+        ("POST", "/admin/cert-products/renshe/applications/{application_id}/initial-review"),
+        ("POST", "/admin/cert-products/renshe/applications/{application_id}/external-review"),
+        ("POST", "/admin/cert-products/renshe/refunds/{refund_id}/decision"),
     }
     registered = {
         (method, route.path)
@@ -340,8 +340,8 @@ def test_user_and_admin_renshe_routes_are_registered_without_enterprise_routes()
 
 def test_super_admin_guards_refund_decision_review_correction_and_batch_finalize():
     for method, path in (
-        ("POST", "/admin/renshe/refunds/{refund_id}/decision"),
-        ("POST", "/admin/renshe/reviews/{review_id}/corrections"),
+        ("POST", "/admin/cert-products/renshe/refunds/{refund_id}/decision"),
+        ("POST", "/admin/cert-products/renshe/reviews/{review_id}/corrections"),
         ("PUT", "/admin/certifications/{code}/plans/{plan_id}/finalize"),
     ):
         dependency_names = {
@@ -570,18 +570,18 @@ def test_export_row_uses_frozen_student_mapping_and_leaves_work_fields_blank():
 
 def test_export_and_private_download_routes_are_registered():
     required = {
-        ("POST", "/admin/renshe/plans/{plan_id}/exports"),
-        ("GET", "/admin/renshe/plans/{plan_id}/exports"),
-        ("GET", "/admin/renshe/exports/{job_id}"),
-        ("POST", "/admin/renshe/exports/{job_id}/retry"),
-        ("GET", "/admin/renshe/materials/{material_id}/signed-url"),
+        ("POST", "/admin/cert-products/renshe/plans/{plan_id}/exports"),
+        ("GET", "/admin/cert-products/renshe/plans/{plan_id}/exports"),
+        ("GET", "/admin/cert-products/renshe/exports/{job_id}"),
+        ("POST", "/admin/cert-products/renshe/exports/{job_id}/retry"),
+        ("GET", "/admin/cert-products/renshe/materials/{material_id}/signed-url"),
         (
             "GET",
-            "/admin/renshe/users/{user_id}/verification-materials/{kind}/signed-url",
+            "/admin/cert-products/renshe/users/{user_id}/verification-materials/{kind}/signed-url",
         ),
-        ("GET", "/admin/renshe/export-volumes/{volume_id}/signed-url"),
-        ("GET", "/admin/renshe/plans/{plan_id}/cleanup-runs"),
-        ("POST", "/admin/renshe/cleanup-runs/{run_id}/retry"),
+        ("GET", "/admin/cert-products/renshe/export-volumes/{volume_id}/signed-url"),
+        ("GET", "/admin/cert-products/renshe/plans/{plan_id}/cleanup-runs"),
+        ("POST", "/admin/cert-products/renshe/cleanup-runs/{run_id}/retry"),
     }
     registered = {
         (method, route.path)
@@ -643,7 +643,7 @@ async def test_admin_application_list_masks_pii_and_applies_new_filters(monkeypa
 def test_admin_application_openapi_exposes_filter_and_masked_response_contract():
     app.openapi_schema = None
     schema = app.openapi()
-    operation = schema["paths"]["/admin/renshe/applications"]["get"]
+    operation = schema["paths"]["/admin/cert-products/renshe/applications"]["get"]
     parameter_names = {parameter["name"] for parameter in operation["parameters"]}
     assert {
         "plan_id",
@@ -1113,7 +1113,7 @@ def test_cleanup_retry_requires_super_admin():
     dependency_names = {
         getattr(dependency.call, "__name__", "")
         for dependency in _route(
-            "POST", "/admin/renshe/cleanup-runs/{run_id}/retry"
+            "POST", "/admin/cert-products/renshe/cleanup-runs/{run_id}/retry"
         ).dependant.dependencies
     }
     assert "require_super_admin" in dependency_names
