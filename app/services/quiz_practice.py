@@ -265,8 +265,16 @@ class QuizPracticeService:
     ) -> dict[str, object]:
         return {
             "question_id": int(question.id),
-            "category_id": int(question.category_id),
-            "category_path": cls._category_path(question.category_id, by_id),
+            "category_id": (
+                int(question.category_id)
+                if question.category_id is not None
+                else None
+            ),
+            "category_path": (
+                cls._category_path(question.category_id, by_id)
+                if question.category_id is not None
+                else []
+            ),
             "question_type": str(question.question_type),
             "question_text": question.question_text,
             "options": dict(question.options or {}),
@@ -513,8 +521,13 @@ class QuizPracticeService:
         self,
         db,
         user_id: int,
-        scope_ids: set[int],
     ) -> list[tuple[QuizWrongItem, QuizQuestion]]:
+        """Select the user's latest active wrong items regardless of hierarchy.
+
+        Wrong-book items are user-scoped: every published question the user
+        answered wrong should be selectable for the dedicated practice, no
+        matter whether it belongs to a legacy category or a V2 library.
+        """
         result = await db.execute(
             select(QuizWrongItem, QuizQuestion)
             .join(QuizQuestion, QuizQuestion.id == QuizWrongItem.question_id)
@@ -522,7 +535,6 @@ class QuizPracticeService:
                 QuizWrongItem.user_id == user_id,
                 QuizWrongItem.status == _WRONG_ACTIVE,
                 QuizQuestion.status == _PUBLISHED,
-                QuizQuestion.category_id.in_(scope_ids),
             )
             .order_by(QuizWrongItem.latest_wrong_at.desc(), QuizWrongItem.id.desc())
             .limit(settings.QUIZ_WRONG_MAX_QUESTION_COUNT)
@@ -563,7 +575,7 @@ class QuizPracticeService:
                 )
             else:
                 requested_count = settings.QUIZ_WRONG_MAX_QUESTION_COUNT
-                wrong_rows = await self._select_wrong_questions(db, user_id, scope_ids)
+                wrong_rows = await self._select_wrong_questions(db, user_id)
                 questions = [question for _, question in wrong_rows]
             if not questions:
                 raise BusinessException("当前范围没有可用题目")
@@ -723,7 +735,11 @@ class QuizPracticeService:
             questions.append(
                 QuizPracticeQuestionState(
                     id=int(snapshot.question_id),
-                    category_id=int(snapshot.category_id),
+                    category_id=(
+                        int(snapshot.category_id)
+                        if snapshot.category_id is not None
+                        else None
+                    ),
                     question_type=snapshot.question_type,
                     question_text=snapshot.question_text,
                     options=dict(snapshot.options or {}),
