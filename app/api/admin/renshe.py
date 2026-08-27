@@ -25,7 +25,7 @@ from app.schemas.renshe import (
 from app.services.renshe_review import RensheReviewService
 
 
-router = APIRouter(prefix="/renshe", tags=["管理后台-人社报名"])
+router = APIRouter(prefix="/cert-products/renshe", tags=["管理后台-人社报名"])
 
 
 def _client_ip(request: Request) -> str | None:

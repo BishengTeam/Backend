@@ -81,6 +81,8 @@ from app.models.deployment_acceptance import (
     DeploymentAcceptanceEvent,
 )
 
+from app.models.cert_product import CertProduct
+
 __all__ = [
     "Activity",
     "ActivityRegistration",
@@ -106,6 +108,7 @@ __all__ = [
     "DeletedIdentityHash",
     "DeploymentAcceptance",
     "DeploymentAcceptanceEvent",
+    "CertProduct",
     "Inventory",
     "InventoryRecord",
     "Job",

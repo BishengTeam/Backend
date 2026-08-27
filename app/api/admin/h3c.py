@@ -27,7 +27,7 @@ from app.services.h3c_refund import H3cRefundService
 from app.services.h3c_registration import H3cRegistrationService
 
 
-router = APIRouter(prefix="/h3c", tags=["管理后台-H3C 认证"])
+router = APIRouter(prefix="/cert-products/h3c", tags=["管理后台-H3C 认证"])
 
 
 @router.post(
