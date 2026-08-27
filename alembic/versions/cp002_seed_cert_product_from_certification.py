@@ -20,7 +20,7 @@ VENDOR_MAP = {
 }
 
 revision: str = 'cp002_seed_cert_product'
-down_revision: str = 'cp001_create_cert_product'
+down_revision: str | Sequence[str] = ('cp001_create_cert_product', 'quiz009')
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
