@@ -6,6 +6,11 @@ Revises: h3c001
 from alembic import op
 import sqlalchemy as sa
 
+revision = "cp001_create_cert_product"
+down_revision = "h3c001"
+branch_labels = None
+depends_on = None
+
 
 def upgrade() -> None:
     op.create_table(
