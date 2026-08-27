@@ -1,7 +1,7 @@
 """seed cert_product from existing certification table
 
 Revision ID: cp002_seed_cert_product
-Revises: cp001_create_cert_product
+Revises: cp001_create_cert_product, quiz009
 """
 from alembic import op
 from collections.abc import Sequence
@@ -27,6 +27,9 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     conn = op.get_bind()
+    if conn is None:
+        # 离线 SQL 模式不支持数据迁移，安全跳过
+        return
     # 表可能不存在（CI 干净环境），安全跳过
     has_table = conn.execute(sa.text(
         "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='certification')"
@@ -38,8 +41,7 @@ def upgrade() -> None:
         code, vendor, name, chinese_name, is_active = row
         new_type = VENDOR_MAP.get(vendor)
         if not new_type:
-            continue  # 跳过未识别的 vendor
-        # 跳过已存在的 code（幂等）
+            continue
         exists = conn.execute(
             sa.text('SELECT 1 FROM cert_product WHERE code = :code'),
             {'code': code},
