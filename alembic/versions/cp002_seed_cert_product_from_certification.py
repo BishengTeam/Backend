@@ -25,6 +25,12 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     conn = op.get_bind()
+    # 表可能不存在（CI 干净环境），安全跳过
+    has_table = conn.execute(sa.text(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='certification')"
+    )).scalar()
+    if not has_table:
+        return
     old_rows = conn.execute(sa.text('SELECT code, vendor, name, chinese_name, is_active FROM certification')).fetchall()
     for row in old_rows:
         code, vendor, name, chinese_name, is_active = row
