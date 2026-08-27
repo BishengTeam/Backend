@@ -4,6 +4,8 @@ Revision ID: cp002_seed_cert_product
 Revises: cp001_create_cert_product
 """
 from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
 
 
