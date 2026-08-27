@@ -243,7 +243,7 @@ def _add_renshe_contract_metadata(schema: dict) -> None:
     for path, path_item in schema.get("paths", {}).items():
         if (
             "/api/renshe" not in path
-            and "/admin/renshe" not in path
+            and "/admin/cert-products/renshe" not in path
             and path not in RENSHE_ADDITIONAL_CONTRACT_PATHS
         ):
             continue

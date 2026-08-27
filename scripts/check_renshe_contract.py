@@ -44,22 +44,22 @@ EXPECTED_PATHS: dict[str, set[str]] = {
     "/api/payment/orders/{order_id}/sync": {"post"},
     "/api/payment/callback": {"post"},
     "/api/payment/refund-callback": {"post"},
-    "/admin/renshe/applications": {"get"},
-    "/admin/renshe/applications/{application_id}": {"get"},
-    "/admin/renshe/applications/{application_id}/external-review": {"post"},
-    "/admin/renshe/applications/{application_id}/initial-review": {"post"},
-    "/admin/renshe/cleanup-runs/{run_id}/retry": {"post"},
-    "/admin/renshe/export-volumes/{volume_id}/signed-url": {"get"},
-    "/admin/renshe/exports/{job_id}": {"get"},
-    "/admin/renshe/exports/{job_id}/retry": {"post"},
-    "/admin/renshe/materials/{material_id}/signed-url": {"get"},
-    "/admin/renshe/plans/{plan_id}/cleanup-runs": {"get"},
-    "/admin/renshe/plans/{plan_id}/exports": {"get", "post"},
-    "/admin/renshe/refunds": {"get"},
-    "/admin/renshe/refunds/{refund_id}/decision": {"post"},
-    "/admin/renshe/audit-logs": {"get"},
-    "/admin/renshe/reviews/{review_id}/corrections": {"post"},
-    "/admin/renshe/users/{user_id}/verification-materials/{kind}/signed-url": {
+    "/admin/cert-products/renshe/applications": {"get"},
+    "/admin/cert-products/renshe/applications/{application_id}": {"get"},
+    "/admin/cert-products/renshe/applications/{application_id}/external-review": {"post"},
+    "/admin/cert-products/renshe/applications/{application_id}/initial-review": {"post"},
+    "/admin/cert-products/renshe/cleanup-runs/{run_id}/retry": {"post"},
+    "/admin/cert-products/renshe/export-volumes/{volume_id}/signed-url": {"get"},
+    "/admin/cert-products/renshe/exports/{job_id}": {"get"},
+    "/admin/cert-products/renshe/exports/{job_id}/retry": {"post"},
+    "/admin/cert-products/renshe/materials/{material_id}/signed-url": {"get"},
+    "/admin/cert-products/renshe/plans/{plan_id}/cleanup-runs": {"get"},
+    "/admin/cert-products/renshe/plans/{plan_id}/exports": {"get", "post"},
+    "/admin/cert-products/renshe/refunds": {"get"},
+    "/admin/cert-products/renshe/refunds/{refund_id}/decision": {"post"},
+    "/admin/cert-products/renshe/audit-logs": {"get"},
+    "/admin/cert-products/renshe/reviews/{review_id}/corrections": {"post"},
+    "/admin/cert-products/renshe/users/{user_id}/verification-materials/{kind}/signed-url": {
         "get"
     },
     "/admin/certifications/{code}/plans/{plan_id}/impact": {"get"},
@@ -140,7 +140,7 @@ def build_report() -> tuple[dict, list[str]]:
         for path, method, operation in _operations(paths)
         if (
             "/api/renshe" in path
-            or "/admin/renshe" in path
+            or "/admin/cert-products/renshe" in path
             or path in ADDITIONAL_RENSHE_PATHS
         )
     ]
