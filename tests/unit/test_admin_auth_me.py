@@ -8,7 +8,7 @@ class TestRolePermissions:
         assert set(ROLE_PERMISSIONS) == {
             "super_admin",
             "quiz_admin",
-            "h3c_admin",
+            "cert_admin",
             "course_admin",
         }
 
@@ -53,4 +53,22 @@ class TestRolePermissions:
             "course:read",
             "course:write",
             "course:publish",
+        }
+
+    def test_cert_admin_manages_all_certification_business(self):
+        from app.policy.permissions import ROLE_PERMISSIONS
+
+        permissions = ROLE_PERMISSIONS["cert_admin"]
+        assert set(permissions) == {
+            "content:read",
+            "content:list",
+            "content:write",
+            "user:list",
+            "user:write",
+            "order:list",
+            "h3c:batch_manage",
+            "h3c:review",
+            "h3c:export",
+            "h3c:refund",
+            "h3c:order_close",
         }

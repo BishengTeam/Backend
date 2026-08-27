@@ -23,7 +23,7 @@ class AdminSettingsUserCreate(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=64)
     # The creation API deliberately omits ``super_admin`` from this literal.
     # Super admin remains non-creatable; fixed staff roles are code-owned.
-    role: Literal["quiz_admin", "h3c_admin", "course_admin"] = "quiz_admin"
+    role: Literal["quiz_admin", "cert_admin", "course_admin"] = "quiz_admin"
 
     model_config = {"extra": "forbid"}
 
@@ -73,7 +73,7 @@ class AdminSettingsUserListItem(BaseModel):
     id: int
     username: str
     display_name: str
-    role: Literal["super_admin", "quiz_admin", "h3c_admin", "course_admin"]
+    role: Literal["super_admin", "quiz_admin", "cert_admin", "course_admin"]
     is_active: bool
     must_change_password: bool
     locked_until: datetime | None = None

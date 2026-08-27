@@ -113,7 +113,7 @@ async def _seed(context):
         admin = AdminUser(
             username=f"{context.prefix}_admin",
             password_hash="integration-only-hash",
-            role="h3c_admin",
+            role="cert_admin",
             must_change_password=False,
         )
         db.add(admin)

@@ -24,7 +24,7 @@ class TestTwoRoleRbac:
         assert set(ROLE_PERMISSIONS) == {
             "super_admin",
             "quiz_admin",
-            "h3c_admin",
+            "cert_admin",
             "course_admin",
         }
 
