@@ -14,6 +14,11 @@ class AdminActivityCreate(BaseModel):
     end_time: datetime | None = Field(None, description="结束时间")
     max_participants: int = Field(0, ge=0, description="最大参与人数")
     is_active: bool = Field(True, description="是否上架")
+    related_cert_id: int | None = Field(None, description="转化目标：关联认证（certification.id）")
+    related_course_id: int | None = Field(None, description="转化目标：关联课程")
+    live_url: str | None = Field(None, max_length=512, description="直播/会议链接")
+    group_qrcode_url: str | None = Field(None, max_length=512, description="答疑群二维码")
+    registration_deadline: datetime | None = Field(None, description="报名截止时间")
 
 
 class AdminActivityUpdate(BaseModel):
@@ -25,6 +30,11 @@ class AdminActivityUpdate(BaseModel):
     end_time: datetime | None = Field(None, description="结束时间")
     max_participants: int | None = Field(None, ge=0, description="最大参与人数")
     is_active: bool | None = Field(None, description="是否上架")
+    related_cert_id: int | None = Field(None, description="关联认证")
+    related_course_id: int | None = Field(None, description="关联课程")
+    live_url: str | None = Field(None, max_length=512, description="直播/会议链接")
+    group_qrcode_url: str | None = Field(None, max_length=512, description="答疑群二维码")
+    registration_deadline: datetime | None = Field(None, description="报名截止时间")
 
 
 class AdminActivityListItem(ActivityResponse):

@@ -67,6 +67,12 @@ class ActivityService:
             if activity.end_time is not None and activity.end_time <= datetime.now(timezone.utc):
                 raise BusinessException("活动已结束，无法报名")
 
+            if (
+                activity.registration_deadline is not None
+                and activity.registration_deadline <= datetime.now(timezone.utc)
+            ):
+                raise BusinessException("活动报名已截止")
+
             if activity.max_participants > 0:
                 count = (
                     await db.execute(

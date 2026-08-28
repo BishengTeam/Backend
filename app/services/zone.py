@@ -4,12 +4,12 @@ from sqlalchemy import select
 
 from app.adapter.database import get_db_ctx
 from app.domain.content.src.index import Activity, Training, Zone
-from app.domain.certification.src.index import Certification, CompetitionReg, Course, Job
+from app.domain.certification.src.index import Certification, Competition, Course, Job
 from app.domain.content.src.model.banner import Banner
 from app.schemas.activity import ActivityResponse
 from app.schemas.admin_training import AdminTrainingListItem
 from app.schemas.certification import CertificationResponse
-from app.schemas.competition import CompetitionRegResponse
+from app.schemas.competition import CompetitionListItem
 from app.schemas.course import CourseListResponse
 from app.schemas.job import JobResponse
 from app.schemas.zone import (
@@ -31,7 +31,7 @@ _ENTITY_QUERIES: dict[str, tuple] = {
     "activities":      (Activity,       ActivityResponse,          True),
     "certifications":  (Certification,  CertificationResponse,     True),
     "trainings":       (Training,       AdminTrainingListItem,          True),
-    "competitions":    (CompetitionReg, CompetitionRegResponse,    False),
+    "competitions":    (Competition,      CompetitionListItem,           True),
     "jobs":            (Job,            JobResponse,               True),
 }
 

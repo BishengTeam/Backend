@@ -13,7 +13,7 @@ from app.domain.certification.src.model.course import (
 from app.domain.certification.src.model.course_chapter import CourseChapter
 from app.domain.certification.src.model.user_chapter_progress import UserChapterProgress
 from app.domain.certification.src.model.job import Job, JobApplication
-from app.domain.certification.src.model.competition import CompetitionReg
+from app.domain.certification.src.model.competition import Competition, CompetitionTrack, CompetitionReg
 
 __all__ = [
     "Certification",

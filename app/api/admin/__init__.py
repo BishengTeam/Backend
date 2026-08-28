@@ -6,7 +6,8 @@ from app.api.admin.auth import router as auth_router
 from app.api.admin.banners import router as banners_router
 from app.api.admin.cert_products import router as cert_products_router
 from app.api.admin.certifications import router as cert_router
-from app.api.admin.competition import router as competition_router
+from app.api.admin.competition import router as competition_legacy_router
+from app.api.admin.competitions import router as competitions_router
 from app.api.admin.coupons import router as coupons_router
 from app.api.admin.deployment_acceptance import router as deployment_acceptance_router
 from app.api.admin.jobs import router as jobs_router
@@ -53,6 +54,7 @@ router.include_router(statistics_router)
 router.include_router(system_updates_router)
 router.include_router(h3c_router)
 router.include_router(settings_router)
-router.include_router(competition_router)
+router.include_router(competition_legacy_router)
+router.include_router(competitions_router)
 router.include_router(training_router)
 router.include_router(upload_router)

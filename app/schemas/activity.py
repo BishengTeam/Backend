@@ -15,6 +15,11 @@ class ActivityResponse(BaseModel):
     end_time: datetime | None = None
     max_participants: int = 0
     is_active: bool = True
+    related_cert_id: int | None = None
+    related_course_id: int | None = None
+    live_url: str | None = None
+    group_qrcode_url: str | None = None
+    registration_deadline: datetime | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

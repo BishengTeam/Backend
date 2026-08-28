@@ -24,6 +24,11 @@ class AdminActivityService:
         Activity.end_time,
         Activity.max_participants,
         Activity.is_active,
+        Activity.related_cert_id,
+        Activity.related_course_id,
+        Activity.live_url,
+        Activity.group_qrcode_url,
+        Activity.registration_deadline,
         Activity.created_at,
     )
 

@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field, model_serializer
 from app.schemas.activity import ActivityResponse
 from app.schemas.admin_training import AdminTrainingListItem
 from app.schemas.certification import CertificationResponse
-from app.schemas.competition import CompetitionRegResponse
+from app.schemas.competition import CompetitionListItem
 from app.schemas.course import CourseListResponse
 from app.schemas.job import JobResponse
 
@@ -42,7 +42,6 @@ class ZoneBrief(BaseModel):
     title: str
     cover_url: str | None = None
     description: str | None = None
-    link_url: str | None = None
     sort_order: int
 
     model_config = {"from_attributes": True}
@@ -61,7 +60,7 @@ class ZoneSectionData(BaseModel):
     activities: list[ActivityResponse] | None = None
     certifications: list[CertificationResponse] | None = None
     trainings: list[AdminTrainingListItem] | None = None
-    competitions: list[CompetitionRegResponse] | None = None
+    competitions: list[CompetitionListItem] | None = None
     jobs: list[JobResponse] | None = None
 
     @model_serializer(mode='wrap')

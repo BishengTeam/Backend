@@ -122,3 +122,17 @@ def test_user_job_apply_endpoint_is_removed() -> None:
 def test_job_service_apply_is_deprecated() -> None:
     source = (REPO_ROOT / "app/services/job.py").read_text()
     assert "已弃用" in source and "async def apply" in source
+
+
+def test_competitions_use_competition_permissions() -> None:
+    routes = _parse_routes("app/api/admin/competitions.py")
+    assert routes
+    assert all(
+        r.permission in {"competition:list", "competition:write"} for r in routes
+    )
+    assert any(
+        r.method == "GET"
+        and r.path.endswith("/{competition_id}/registrations")
+        and r.permission == "competition:list"
+        for r in routes
+    )

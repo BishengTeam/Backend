@@ -15,12 +15,8 @@ class AdminZoneService:
         Zone.title,
         Zone.cover_url,
         Zone.description,
-        Zone.link_url,
         Zone.sort_order,
         Zone.is_active,
-        Zone.is_banner,
-        Zone.start_time,
-        Zone.end_time,
         Zone.created_at,
     )
 

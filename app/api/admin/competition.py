@@ -19,11 +19,11 @@ router = APIRouter(prefix="/competition", tags=["管理后台-竞赛导出"])
 
 **响应**: CSV 文件下载
 
-**认证**: 需 `content:write` 权限
+**认证**: 需 `competition:list` 权限
     """,
 )
 async def export_competition(
-    _admin=Depends(require_permission("content:write")),
+    _admin=Depends(require_permission("competition:list")),
 ):
     csv_content = await AdminCompetitionService().export_csv()
     return PlainTextResponse(

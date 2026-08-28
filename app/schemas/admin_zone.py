@@ -8,12 +8,8 @@ class AdminZoneCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=256)
     cover_url: str | None = Field(None, max_length=512)
     description: str | None = None
-    link_url: str | None = Field(None, max_length=512)
     sort_order: int = 0
     is_active: bool = True
-    is_banner: bool = False
-    start_time: datetime | None = None
-    end_time: datetime | None = None
 
 
 class AdminZoneUpdate(BaseModel):
@@ -21,12 +17,8 @@ class AdminZoneUpdate(BaseModel):
     title: str | None = Field(None, min_length=1, max_length=256)
     cover_url: str | None = Field(None, max_length=512)
     description: str | None = None
-    link_url: str | None = Field(None, max_length=512)
     sort_order: int | None = None
     is_active: bool | None = None
-    is_banner: bool | None = None
-    start_time: datetime | None = None
-    end_time: datetime | None = None
 
 
 class AdminZoneStatusToggle(BaseModel):
@@ -44,12 +36,8 @@ class AdminZoneListItem(BaseModel):
     title: str
     cover_url: str | None = None
     description: str | None = None
-    link_url: str | None = None
     sort_order: int
     is_active: bool
-    is_banner: bool
-    start_time: datetime | None = None
-    end_time: datetime | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

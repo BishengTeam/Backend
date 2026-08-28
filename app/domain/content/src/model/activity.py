@@ -17,6 +17,16 @@ class Activity(Base, TimestampMixin):
     end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     max_participants: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # ── 线上营销活动扩展 ──
+    related_cert_id: Mapped[int | None] = mapped_column(
+        ForeignKey("certification.id", ondelete="SET NULL")
+    )
+    related_course_id: Mapped[int | None] = mapped_column(
+        ForeignKey("course.id", ondelete="SET NULL")
+    )
+    live_url: Mapped[str | None] = mapped_column(String(512))
+    group_qrcode_url: Mapped[str | None] = mapped_column(String(512))
+    registration_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ActivityRegistration(Base, TimestampMixin):
