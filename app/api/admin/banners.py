@@ -1,23 +1,29 @@
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, Path, Query
 
 from app.middleware.auth import require_permission
 from app.schemas.admin import AdminBatchDeleteRequest
 from app.schemas.admin_banner import BannerCreate, BannerListItem, BannerUpdate
-from app.schemas.common import APIResponse, success
+from app.schemas.common import APIResponse, PaginatedData, success
 from app.services.admin_banner import AdminBannerService
 
 router = APIRouter(prefix="/banners", tags=["管理后台-Banner管理"])
 
 
 @router.get("",
-    response_model=APIResponse[list[BannerListItem]],
+    response_model=APIResponse[PaginatedData[BannerListItem]],
     summary="Banner 列表",
     description="""
 管理后台 **Banner 管理** 页面使用。
 
-**页面路径**: `/admin/banners`
+**页面路径**: `/operations/homepage`
 
-**使用场景**: 页面加载时获取所有 Banner（含已下架），按 sort 升序排列。
+**使用场景**: 首页配置-轮播图 Tab 加载 Banner 列表（含已下架），
+支持关键词搜索与分页，按 sort 升序排列。
+
+**查询参数**:
+- `keyword`: 按图片地址/跳转链接模糊搜索
+- `page`: 页码，从 1 开始
+- `page_size`: 每页条数，默认 20，最大 100
 
 **认证**: 需 `homepage:list` 权限
 
@@ -27,9 +33,7 @@ router = APIRouter(prefix="/banners", tags=["管理后台-Banner管理"])
 |------|------|------|
 | id | int | Banner ID |
 | image_url | str | 图片 URL |
-| jump_link | str | 跳转链接（target_type=url 时生效） |
-| target_type | str | 跳转资源类型：`cert` / `course` / `activity` / `zone` / `url` |
-| target_id | int | 跳转资源 ID（target_type=url 时为空） |
+| jump_link | str | 跳转链接：站内页面路径（如 /pages/course/detail?id=1）或外部 URL |
 | sort | int | 排序权重，越小越靠前 |
 | start_time | str(ISO 8601) | 生效开始时间，空表示不限 |
 | end_time | str(ISO 8601) | 生效结束时间，空表示不限 |
@@ -38,9 +42,12 @@ router = APIRouter(prefix="/banners", tags=["管理后台-Banner管理"])
     """,
 )
 async def list_banners(
+    keyword: str | None = Query(None, description="按图片地址/跳转链接模糊搜索"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     _admin=Depends(require_permission("homepage:list")),
-) -> APIResponse[list[BannerListItem]]:
-    result = await AdminBannerService().list_banners()
+) -> APIResponse[PaginatedData[BannerListItem]]:
+    result = await AdminBannerService().list_banners(keyword, page, page_size)
     return success(data=result)
 
 
@@ -59,15 +66,12 @@ async def list_banners(
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | image_url | str | ✅ | — | Banner 图片 URL，最长 512 字符 |
-| jump_link | str | 否 | null | 跳转链接（target_type=url 时生效） |
-| target_type | str | 否 | null | 跳转资源类型：`cert` / `course` / `activity` / `zone` / `url` |
-| target_id | int | 否 | null | 跳转资源 ID（target_type=url 时为空），≥1 |
+| jump_link | str | 否 | null | 跳转链接：站内页面路径或外部 URL |
 | sort | int | 否 | 0 | 排序权重 |
 | start_time | str(ISO 8601) | 否 | null | 生效开始时间 |
 | end_time | str(ISO 8601) | 否 | null | 生效结束时间 |
 | is_active | bool | 否 | true | 是否启用 |
 
-**跳转规则**: 前端优先使用 `target_type` + `target_id` 拼接页面路径；仅当 `target_type="url"` 时使用 `jump_link` 直接跳转。
 
 **认证**: 需 `content:banner` 权限
     """,

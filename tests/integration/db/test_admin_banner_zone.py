@@ -84,8 +84,8 @@ async def test_list_banners(test_context):
     await AdminBannerService().create(
         BannerCreate(image_url=f"{prefix}_img", sort=1)
     )
-    banners = await AdminBannerService().list_banners()
-    assert len(banners) >= 1, f"Expected at least 1 banner, got {len(banners)}"
+    result = await AdminBannerService().list_banners()
+    assert result.total >= 1, f"Expected at least 1 banner, got {result.total}"
 
 
 async def test_update_banner(test_context):
@@ -123,8 +123,8 @@ async def test_delete_banner(test_context):
 
     await svc.delete(created.id)
 
-    banners = await svc.list_banners()
-    banner_ids = [b.id for b in banners]
+    result = await svc.list_banners(page=1, page_size=100)
+    banner_ids = [b.id for b in result.items]
     assert created.id not in banner_ids, (
         f"Deleted banner {created.id} still present in list"
     )
@@ -189,8 +189,8 @@ async def test_batch_delete_banners(test_context):
         f"Expected 3 deleted, got {deleted_count}"
     )
 
-    banners = await svc.list_banners()
-    banner_ids = {b.id for b in banners}
+    result = await svc.list_banners(page=1, page_size=100)
+    banner_ids = {b.id for b in result.items}
     for cid in created_ids:
         assert cid not in banner_ids, (
             f"Banner {cid} still present after batch_delete"
@@ -276,3 +276,24 @@ async def test_update_zones_sort(test_context):
     assert zone_map[z2.id].sort_order == 20, (
         f"Expected sort_order=20, got {zone_map[z2.id].sort_order}"
     )
+
+
+async def test_list_banners_keyword_and_pagination(test_context):
+    """keyword 模糊搜索 + 分页元数据与前端 PageData 契约一致"""
+    from app.schemas.admin_banner import BannerCreate
+    from app.services.admin_banner import AdminBannerService
+
+    factory, prefix = test_context
+    svc = AdminBannerService()
+
+    for i in range(3):
+        await svc.create(BannerCreate(image_url=f"{prefix}_img_{i}", sort=i))
+
+    result = await svc.list_banners(keyword=f"{prefix}_img", page=1, page_size=2)
+    assert result.page == 1 and result.page_size == 2
+    assert result.total == 3
+    assert len(result.items) == 2
+
+    page2 = await svc.list_banners(keyword=f"{prefix}_img", page=2, page_size=2)
+    assert page2.total == 3
+    assert len(page2.items) == 1

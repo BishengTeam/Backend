@@ -1,19 +1,48 @@
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import NotFoundException
 from app.domain.content.src.index import Banner
 from app.schemas.admin_banner import BannerCreate, BannerListItem, BannerUpdate
+from app.schemas.common import PaginatedData
 
 
 class AdminBannerService:
 
-    async def list_banners(self) -> list[BannerListItem]:
+    async def list_banners(
+        self,
+        keyword: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> PaginatedData[BannerListItem]:
         async with get_db_ctx() as db:
-            stmt = select(Banner).order_by(Banner.sort, Banner.id.desc())
-            result = await db.execute(stmt)
-            banners = result.scalars().all()
-            return [BannerListItem.model_validate(b) for b in banners]
+            base = select(Banner)
+            if keyword:
+                pattern = f"%{keyword}%"
+                base = base.where(
+                    or_(
+                        Banner.image_url.ilike(pattern),
+                        Banner.jump_link.ilike(pattern),
+                    )
+                )
+            total = (
+                await db.execute(
+                    select(func.count()).select_from(base.subquery())
+                )
+            ).scalar() or 0
+            rows = (
+                await db.execute(
+                    base.order_by(Banner.sort, Banner.id.desc())
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                )
+            ).scalars().all()
+            return PaginatedData(
+                items=[BannerListItem.model_validate(b) for b in rows],
+                total=total,
+                page=page,
+                page_size=page_size,
+            )
 
     async def create(self, data: BannerCreate) -> BannerListItem:
         async with get_db_ctx() as db:

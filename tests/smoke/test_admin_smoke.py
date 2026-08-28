@@ -37,8 +37,8 @@ CASES = [
     ("GET", "/admin/quiz/categories", lambda d: isinstance(d, list)),
     ("GET", "/admin/quiz/questions?page=1&page_size=10", lambda d: isinstance(d.get("items"), list)),
 
-    # ── Banners (returns list directly, not paginated)
-    ("GET", "/admin/banners", lambda d: isinstance(d, list)),
+    # ── Banners (paginated)
+    ("GET", "/admin/banners?page=1&page_size=10", lambda d: isinstance(d.get("items"), list)),
 
     # ── Zones ──
     ("GET", "/admin/zones?page=1&page_size=10", lambda d: isinstance(d.get("items"), list)),

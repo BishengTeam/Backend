@@ -8,9 +8,7 @@ VALID_TARGET_TYPES = ("cert", "course", "activity", "zone", "url")
 
 class BannerCreate(BaseModel):
     image_url: str = Field(..., min_length=1, max_length=512, description="Banner 图片 URL")
-    jump_link: str | None = Field(None, max_length=512, description="跳转链接（target_type=url 时使用）")
-    target_type: str | None = Field(None, max_length=32, description="跳转资源类型: cert / course / activity / zone / url")
-    target_id: int | None = Field(None, ge=1, description="跳转资源 ID，target_type=url 时为空")
+    jump_link: str | None = Field(None, max_length=512, description="跳转链接：站内页面路径或外部 URL")
     sort: int = Field(0, description="排序权重，越小越靠前")
     start_time: datetime | None = Field(None, description="生效开始时间，ISO 8601")
     end_time: datetime | None = Field(None, description="生效结束时间，ISO 8601")
@@ -19,9 +17,7 @@ class BannerCreate(BaseModel):
 
 class BannerUpdate(BaseModel):
     image_url: str | None = Field(None, min_length=1, max_length=512, description="Banner 图片 URL")
-    jump_link: str | None = Field(None, max_length=512, description="跳转链接")
-    target_type: str | None = Field(None, max_length=32, description="跳转资源类型: cert / course / activity / zone / url")
-    target_id: int | None = Field(None, ge=1, description="跳转资源 ID")
+    jump_link: str | None = Field(None, max_length=512, description="跳转链接：站内页面路径或外部 URL")
     sort: int | None = Field(None, description="排序权重，越小越靠前")
     start_time: datetime | None = Field(None, description="生效开始时间，ISO 8601")
     end_time: datetime | None = Field(None, description="生效结束时间，ISO 8601")
@@ -31,9 +27,7 @@ class BannerUpdate(BaseModel):
 class BannerListItem(BaseModel):
     id: int = Field(..., description="Banner ID")
     image_url: str = Field(..., description="Banner 图片 URL")
-    jump_link: str | None = Field(None, description="跳转链接")
-    target_type: str | None = Field(None, description="跳转资源类型: cert / course / activity / zone / url")
-    target_id: int | None = Field(None, description="跳转资源 ID")
+    jump_link: str | None = Field(None, description="跳转链接：站内页面路径或外部 URL")
     sort: int = Field(..., description="排序权重")
     start_time: datetime | None = Field(None, description="生效开始时间")
     end_time: datetime | None = Field(None, description="生效结束时间")
