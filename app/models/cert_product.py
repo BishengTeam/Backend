@@ -1,4 +1,5 @@
 from sqlalchemy import Boolean, Integer, String
+from sqlalchemy import ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.adapter.database import Base, TimestampMixin
@@ -8,6 +9,9 @@ class CertProduct(Base, TimestampMixin):
     __tablename__ = "cert_product"
 
     type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    catalog_id: Mapped[int | None] = mapped_column(
+        ForeignKey("cert_product_catalog.id", ondelete="SET NULL"), nullable=True
+    )
     code: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     chinese_name: Mapped[str] = mapped_column(String(128), nullable=False)

@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, Path, Query
 from app.middleware.auth import require_permission
 from app.schemas.admin_cert_product import (
     CertProductCreate,
+    CertProductCatalogResponse,
     CertProductResponse,
     CertProductStats,
     CertProductUpdate,
@@ -11,6 +12,30 @@ from app.schemas.common import APIResponse, PaginatedData, success
 from app.services.admin_cert_product import AdminCertProductService
 
 router = APIRouter(prefix="/cert-products", tags=["管理后台-认证产品"])
+
+
+@router.get(
+    "/catalog",
+    response_model=APIResponse[list[CertProductCatalogResponse]],
+    summary="认证产品目录",
+    description="""
+管理后台 **认证产品** 选择框数据源。
+
+**使用场景**: 新增认证产品时，从厂商价格表导入的受控目录中选取编码；
+认证管理员只能从目录选择，超级管理员可解锁自由输入。
+
+**查询参数**: `type` 按认证类型过滤（h3c / renshe）
+
+**响应**: 目录列表，`instantiated` 标记是否已创建为产品
+    """,
+)
+async def list_catalog(
+    type: str | None = Query(None, description="认证类型筛选：h3c / renshe"),
+    _admin=Depends(require_permission("content:read")),
+) -> APIResponse[list[CertProductCatalogResponse]]:
+    """获取认证产品目录"""
+    result = await AdminCertProductService().list_catalog(type)
+    return success(data=result)
 
 
 @router.get(

@@ -1,13 +1,16 @@
 from sqlalchemy import Integer as SAInteger, func, select
 
 from app.adapter.database import get_db_ctx
-from app.domain.order.src.index import Order
+from app.domain.order.src.index import Order, PriceConfig
 from app.domain.plan.src.index import Plan
 from app.models.cert_product import CertProduct
-from app.port.exceptions import NotFoundException
+from app.models.cert_product_catalog import CertProductCatalog
+from app.port.exceptions import BusinessException, NotFoundException
 from app.schemas.admin_cert_product import (
     CertProductCreate,
+    CertProductPrice,
     CertProductResponse,
+    CertProductCatalogResponse,
     CertProductStats,
     CertProductUpdate,
 )
@@ -18,8 +21,29 @@ TYPE_LABELS: dict[str, str] = {
     "renshe": "人社认证",
 }
 
+PRICE_USER_TYPES = ("student", "normal")
+
 
 class AdminCertProductService:
+    async def list_catalog(
+        self, type: str | None
+    ) -> list[CertProductCatalogResponse]:
+        """列出产品目录，标记是否已创建为产品（供选择框过滤）"""
+        async with get_db_ctx() as db:
+            stmt = select(CertProductCatalog).order_by(CertProductCatalog.code.asc())
+            if type:
+                stmt = stmt.where(CertProductCatalog.type == type)
+            rows = (await db.execute(stmt)).scalars().all()
+            used_codes = {
+                row[0] for row in (await db.execute(select(CertProduct.code))).all()
+            }
+            return [
+                CertProductCatalogResponse.model_validate(
+                    row
+                ).model_copy(update={"instantiated": row.code in used_codes})
+                for row in rows
+            ]
+
     async def list_products(
         self,
         type: str | None,
@@ -47,9 +71,15 @@ class AdminCertProductService:
                 .limit(page_size)
             )
             result = await db.execute(stmt)
+            products = result.scalars().all()
+            prices_by_code = await self._load_active_prices(
+                db, [product.code for product in products]
+            )
             items = [
-                CertProductResponse.model_validate(row, from_attributes=True)
-                for row in result.scalars().all()
+                CertProductResponse.model_validate(
+                    product
+                ).model_copy(update={"prices": prices_by_code.get(product.code, [])})
+                for product in products
             ]
             return PaginatedData[CertProductResponse](
                 items=items,
@@ -62,8 +92,17 @@ class AdminCertProductService:
         """创建认证产品"""
         async with get_db_ctx() as db:
             async with db.begin():
+                if data.catalog_id is not None:
+                    catalog = await db.get(CertProductCatalog, data.catalog_id)
+                    if catalog is None:
+                        raise NotFoundException("认证产品目录")
+                    if catalog.type != data.type:
+                        raise BusinessException("目录项与认证类型不匹配")
+                    if data.code != catalog.code:
+                        raise BusinessException("产品编码必须与目录项一致")
                 product = CertProduct(
                     type=data.type,
+                    catalog_id=data.catalog_id,
                     code=data.code,
                     name=data.name,
                     chinese_name=data.chinese_name,
@@ -73,14 +112,21 @@ class AdminCertProductService:
                 )
                 db.add(product)
                 await db.flush()
+                await self._sync_prices(db, data.code, data.prices)
                 await db.refresh(product)
-            return CertProductResponse.model_validate(product, from_attributes=True)
+            prices = await self._load_active_prices(db, [product.code])
+            return CertProductResponse.model_validate(
+                product
+            ).model_copy(update={"prices": prices.get(product.code, [])})
 
     async def get_by_code(self, code: str) -> CertProductResponse:
         """按 code 获取单个认证产品"""
         async with get_db_ctx() as db:
             product = await self._get_or_404(db, code)
-            return CertProductResponse.model_validate(product, from_attributes=True)
+            prices = await self._load_active_prices(db, [product.code])
+            return CertProductResponse.model_validate(
+                product
+            ).model_copy(update={"prices": prices.get(product.code, [])})
 
     async def update(self, code: str, data: CertProductUpdate) -> CertProductResponse:
         """按 code 更新认证产品"""
@@ -88,11 +134,16 @@ class AdminCertProductService:
             async with db.begin():
                 product = await self._get_or_404(db, code)
                 update_data = data.model_dump(exclude_unset=True)
+                update_data.pop("prices", None)
                 for field, value in update_data.items():
                     setattr(product, field, value)
+                await self._sync_prices(db, product.code, data.prices)
                 await db.flush()
                 await db.refresh(product)
-            return CertProductResponse.model_validate(product, from_attributes=True)
+            prices = await self._load_active_prices(db, [product.code])
+            return CertProductResponse.model_validate(
+                product
+            ).model_copy(update={"prices": prices.get(product.code, [])})
 
     async def deactivate(self, code: str) -> None:
         """软删除（设 is_active=False）"""
@@ -109,7 +160,7 @@ class AdminCertProductService:
                 select(
                     CertProduct.type,
                     func.count().label("product_count"),
-                    func.sum(func.cast(CertProduct.is_active, Integer)).label("active_product_count"),
+                    func.sum(func.cast(CertProduct.is_active, SAInteger)).label("active_product_count"),
                 )
                 .group_by(CertProduct.type)
                 .subquery()
@@ -174,3 +225,66 @@ class AdminCertProductService:
         if product is None:
             raise NotFoundException("认证产品")
         return product
+
+    @staticmethod
+    async def _load_active_prices(
+        db, codes: list[str]
+    ) -> dict[str, list[CertProductPrice]]:
+        """按产品编码批量加载生效价格，返回 {code: [price, ...]}"""
+        if not codes:
+            return {}
+        rows = (
+            await db.execute(
+                select(PriceConfig).where(
+                    PriceConfig.product_type.in_(codes),
+                    PriceConfig.is_active.is_(True),
+                    PriceConfig.user_type.in_(PRICE_USER_TYPES),
+                )
+            )
+        ).scalars().all()
+        by_code: dict[str, list[CertProductPrice]] = {}
+        for row in rows:
+            by_code.setdefault(row.product_type, []).append(
+                CertProductPrice(
+                    user_type=row.user_type,
+                    price_cents=row.price,
+                )
+            )
+        return by_code
+
+    @staticmethod
+    async def _sync_prices(
+        db, code: str, prices: list[CertProductPrice] | None
+    ) -> None:
+        """将产品价格同步到 price_config。
+
+        prices 为 None 表示调用方未传、保持不动；
+        否则 student/normal 档位以传入列表为准（新增/更新/停用多余档位），
+        空列表会停用该产品全部标准档位。操作幂等。
+        """
+        if prices is None:
+            return
+        wanted = {item.user_type: item.price_cents for item in prices}
+        rows = (
+            await db.execute(
+                select(PriceConfig).where(
+                    PriceConfig.product_type == code,
+                    PriceConfig.user_type.in_(PRICE_USER_TYPES),
+                )
+            )
+        ).scalars().all()
+        for row in rows:
+            if row.user_type in wanted:
+                row.price = wanted.pop(row.user_type)
+                row.is_active = True
+            else:
+                row.is_active = False
+        for user_type, price_cents in wanted.items():
+            db.add(
+                PriceConfig(
+                    product_type=code,
+                    user_type=user_type,
+                    price=price_cents,
+                    is_active=True,
+                )
+            )
