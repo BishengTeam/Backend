@@ -195,7 +195,14 @@ def test_initial_admin_is_concurrent_idempotent_and_seed_repeats_cleanly(
             {"admin_id": first_id},
         ) == 1
         assert connection.scalar(text("SELECT count(*) FROM certification")) == 4
-        assert connection.scalar(text("SELECT count(*) FROM price_config")) == 8
+        # 只统计 bootstrap 基线编码；价格表迁移（如 cp004 的 GB0-* 产品）
+        # 会额外写入目录化产品的价格行，不能假设全表只有种子数据。
+        assert connection.scalar(
+            text(
+                "SELECT count(*) FROM price_config "
+                "WHERE product_type IN ('H3C-NE', 'SF-CSE', 'NISP-1', 'RS-ZY')"
+            )
+        ) == 8
         for table_name in COURSE_REQUIRED_TABLES:
             assert connection.scalar(
                 text("SELECT to_regclass(:qualified_name) IS NOT NULL"),
