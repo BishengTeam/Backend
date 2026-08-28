@@ -28,6 +28,12 @@ class JobService:
             return PaginatedData(items=items, total=total, page=page, page_size=page_size)
 
     async def apply(self, user_id: int, job_id: int) -> JobApplication:
+        """已弃用：客户端投递功能已下线，保留仅为兼容存量数据读取。
+
+        2026-08 运营模块重构决定：招聘只做岗位录入，求职者通过岗位
+        联系方式自行联系企业。本方法不再有任何调用方，后续版本随
+        job_application 表一并清理。
+        """
         async with get_db_ctx() as db:
             job = await db.get(Job, job_id)
             if job is None or not job.is_active:

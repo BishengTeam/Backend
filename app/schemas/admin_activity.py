@@ -29,3 +29,16 @@ class AdminActivityUpdate(BaseModel):
 
 class AdminActivityListItem(ActivityResponse):
     """管理端活动列表项 — 字段与 ActivityResponse 完全一致，通过继承复用"""
+
+class AdminActivityRegistrationListItem(BaseModel):
+    """管理端活动报名列表项"""
+
+    id: int
+    activity_id: int
+    user_id: int
+    name: str
+    phone: str
+    remark: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

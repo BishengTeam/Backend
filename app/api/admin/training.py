@@ -30,7 +30,7 @@ async def list_trainings(
     keyword: str | None = Query(None, description="按标题关键词模糊搜索"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
-    _admin=Depends(require_permission("content:list")),
+    _admin=Depends(require_permission("training:list")),
 ) -> APIResponse[PaginatedData[AdminTrainingListItem]]:
     """分页查询培训列表，支持按标题关键词模糊搜索"""
     result = await AdminTrainingService().list_trainings(keyword, page, page_size)
@@ -54,7 +54,7 @@ async def list_trainings(
 )
 async def create_training(
     body: AdminTrainingCreate,
-    _admin=Depends(require_permission("content:write")),
+    _admin=Depends(require_permission("training:write")),
 ) -> APIResponse[AdminTrainingListItem]:
     """创建新培训"""
     result = await AdminTrainingService().create(body)
@@ -82,7 +82,7 @@ async def create_training(
 async def update_training(
     body: AdminTrainingUpdate,
     training_id: int = Path(..., description="培训 ID"),
-    _admin=Depends(require_permission("content:write")),
+    _admin=Depends(require_permission("training:write")),
 ) -> APIResponse[AdminTrainingListItem]:
     """更新指定培训信息"""
     result = await AdminTrainingService().update(training_id, body)
@@ -107,7 +107,7 @@ async def update_training(
 )
 async def delete_training(
     training_id: int = Path(..., description="培训 ID"),
-    _admin=Depends(require_permission("content:write")),
+    _admin=Depends(require_permission("training:write")),
 ):
     """下架指定培训"""
     await AdminTrainingService().deactivate(training_id)

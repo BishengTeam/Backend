@@ -30,7 +30,7 @@ async def list_jobs(
     keyword: str | None = Query(None, description="按标题关键词模糊搜索"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
-    _admin=Depends(require_permission("content:list")),
+    _admin=Depends(require_permission("job:list")),
 ):
     """分页查询岗位列表，支持按标题关键词模糊搜索"""
     result = await AdminJobService().list_jobs(keyword, page, page_size)
@@ -54,7 +54,7 @@ async def list_jobs(
 )
 async def create_job(
     body: AdminJobCreate,
-    _admin=Depends(require_permission("content:write")),
+    _admin=Depends(require_permission("job:write")),
 ):
     """创建新岗位"""
     result = await AdminJobService().create(body)
@@ -82,7 +82,7 @@ async def create_job(
 async def update_job(
     body: AdminJobUpdate,
     job_id: int = Path(..., description="岗位 ID"),
-    _admin=Depends(require_permission("content:write")),
+    _admin=Depends(require_permission("job:write")),
 ):
     """更新指定岗位信息"""
     result = await AdminJobService().update(job_id, body)
@@ -107,7 +107,7 @@ async def update_job(
 )
 async def delete_job(
     job_id: int = Path(..., description="岗位 ID"),
-    _admin=Depends(require_permission("content:write")),
+    _admin=Depends(require_permission("job:write")),
 ):
     """下架指定岗位"""
     await AdminJobService().deactivate(job_id)

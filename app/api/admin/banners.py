@@ -19,7 +19,7 @@ router = APIRouter(prefix="/banners", tags=["管理后台-Banner管理"])
 
 **使用场景**: 页面加载时获取所有 Banner（含已下架），按 sort 升序排列。
 
-**认证**: 需 `content:list` 权限
+**认证**: 需 `homepage:list` 权限
 
 **响应字段**:
 
@@ -38,7 +38,7 @@ router = APIRouter(prefix="/banners", tags=["管理后台-Banner管理"])
     """,
 )
 async def list_banners(
-    _admin=Depends(require_permission("content:list")),
+    _admin=Depends(require_permission("homepage:list")),
 ) -> APIResponse[list[BannerListItem]]:
     result = await AdminBannerService().list_banners()
     return success(data=result)
@@ -74,7 +74,7 @@ async def list_banners(
 )
 async def create_banner(
     body: BannerCreate,
-    _admin=Depends(require_permission("content:banner")),
+    _admin=Depends(require_permission("homepage:write")),
 ) -> APIResponse[BannerListItem]:
     result = await AdminBannerService().create(body)
     return success(data=result)
@@ -104,7 +104,7 @@ async def create_banner(
 async def update_banner(
     body: BannerUpdate,
     banner_id: int = Path(..., ge=1),
-    _admin=Depends(require_permission("content:banner")),
+    _admin=Depends(require_permission("homepage:write")),
 ) -> APIResponse[BannerListItem]:
     result = await AdminBannerService().update(banner_id, body)
     return success(data=result)
@@ -131,7 +131,7 @@ async def update_banner(
 )
 async def delete_banner(
     banner_id: int = Path(..., ge=1),
-    _admin=Depends(require_permission("content:banner")),
+    _admin=Depends(require_permission("homepage:write")),
 ):
     await AdminBannerService().delete(banner_id)
     return success(message="Banner 已删除")
@@ -160,7 +160,7 @@ async def delete_banner(
 )
 async def batch_delete_banners(
     body: AdminBatchDeleteRequest,
-    _admin=Depends(require_permission("content:banner")),
+    _admin=Depends(require_permission("homepage:write")),
 ):
     count = await AdminBannerService().batch_delete(body.ids)
     return success(data=count, message=f"已删除 {count} 个 Banner")
