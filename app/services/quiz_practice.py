@@ -92,6 +92,7 @@ _PRACTICE_COMPLETED = QuizPracticeSessionStatus.COMPLETED.value
 _PRACTICE_ABANDONED = QuizPracticeSessionStatus.ABANDONED.value
 _WRONG_ACTIVE = QuizWrongStatus.ACTIVE.value
 _WRONG_CLEARED = QuizWrongStatus.CLEARED.value
+_WRONG_CLEAR_CORRECT_STREAK = 3
 _SETTLED_EXAMS = ("completed", "timed_out")
 
 
@@ -1298,13 +1299,14 @@ class QuizPracticeService:
                 .with_for_update()
             )
         ).scalar_one_or_none()
-        if (
-            item is not None
-            and item.status == _WRONG_ACTIVE
-            and item.latest_wrong_at < session.started_at
-        ):
+        if item is not None and item.status == _WRONG_ACTIVE:
+            item.consecutive_correct_count += 1
+            if item.consecutive_correct_count < _WRONG_CLEAR_CORRECT_STREAK:
+                return
             item.status = _WRONG_CLEARED
             item.cleared_at = now
+            item.wrong_count = 0
+            item.consecutive_correct_count = 0
             stats.active_wrong_count = max(0, stats.active_wrong_count - 1)
 
     async def clear_wrong_item(
@@ -1330,6 +1332,8 @@ class QuizPracticeService:
                 return False
             item.status = _WRONG_CLEARED
             item.cleared_at = self._now()
+            item.wrong_count = 0
+            item.consecutive_correct_count = 0
             stats = await self._ensure_stats(db, user_id)
             stats.active_wrong_count = max(0, stats.active_wrong_count - 1)
             await db.commit()
@@ -1359,6 +1363,7 @@ class QuizPracticeService:
         snapshot: dict[str, object],
         occurred_at: datetime,
         stats: QuizUserStats,
+        resets_correct_streak: bool = True,
     ) -> None:
         item = (
             await db.execute(
@@ -1379,13 +1384,20 @@ class QuizPracticeService:
                     first_wrong_at=occurred_at,
                     latest_wrong_at=occurred_at,
                     latest_wrong_snapshot=snapshot,
+                    wrong_count=1,
+                    consecutive_correct_count=0,
                 )
             )
             stats.active_wrong_count += 1
             return
         if item.status == _WRONG_CLEARED:
+            item.wrong_count = 0
+            item.consecutive_correct_count = 0
             stats.active_wrong_count += 1
         item.status = _WRONG_ACTIVE
+        item.wrong_count += 1
+        if resets_correct_streak:
+            item.consecutive_correct_count = 0
         item.latest_wrong_at = occurred_at
         item.latest_wrong_snapshot = snapshot
 
@@ -1409,6 +1421,7 @@ class QuizPracticeService:
             snapshot=self._wrong_book_snapshot(snapshot),
             occurred_at=settled_at,
             stats=stats,
+            resets_correct_streak=False,
         )
 
     async def abandon_session(
@@ -1579,6 +1592,7 @@ class QuizPracticeService:
                         usable_for_practice=question.status == _PUBLISHED and effective,
                         first_wrong_at=item.first_wrong_at,
                         latest_wrong_at=item.latest_wrong_at,
+                        wrong_count=int(item.wrong_count),
                     )
                 )
             return PaginatedData(

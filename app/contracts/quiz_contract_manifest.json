@@ -620,7 +620,7 @@
       "rate_limit_per_minute": null
     }
   ],
-  "quiz_contract_version": "2026-08-25",
+  "quiz_contract_version": "2026-08-29",
   "removed_operation_count": 13,
   "removed_operations": [
     {

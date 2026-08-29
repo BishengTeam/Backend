@@ -929,6 +929,13 @@ class QuizWrongItem(Base, _QuizTimestampMixin):
         CheckConstraint(
             "review_count >= 0", name="ck_quiz_wrong_item_review_count"
         ),
+        CheckConstraint(
+            "wrong_count >= 0", name="ck_quiz_wrong_item_wrong_count"
+        ),
+        CheckConstraint(
+            "consecutive_correct_count >= 0",
+            name="ck_quiz_wrong_item_consecutive_correct_count",
+        ),
         UniqueConstraint("user_id", "question_id", name="uq_quiz_wrong_item_user_question"),
         Index("ix_quiz_wrong_item_recent", "user_id", "status", "latest_wrong_at", "id"),
     )
@@ -950,6 +957,12 @@ class QuizWrongItem(Base, _QuizTimestampMixin):
         Integer, nullable=False, default=0, server_default="0"
     )
     last_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    wrong_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    consecutive_correct_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
 
 
 class QuizQuestionRevisionStats(Base, _QuizTimestampMixin):

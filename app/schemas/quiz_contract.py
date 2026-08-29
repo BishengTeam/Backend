@@ -394,6 +394,7 @@ class QuizWrongBookItem(QuizContractModel):
     usable_for_practice: bool
     first_wrong_at: datetime
     latest_wrong_at: datetime
+    wrong_count: int = Field(ge=1)
 
 
 class QuizCollectionCreate(QuizContractModel):

@@ -104,7 +104,7 @@ from app.schemas.quiz_contract import (
 )
 
 
-QUIZ_CONTRACT_VERSION = "2026-08-25"
+QUIZ_CONTRACT_VERSION = "2026-08-29"
 
 
 class QuizErrorCode(IntEnum):

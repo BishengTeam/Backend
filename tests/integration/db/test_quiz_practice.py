@@ -414,12 +414,12 @@ async def test_snapshot_idempotency_reanswers_history_stats_and_abandonment(
         )
 
 
-async def test_wrong_book_add_same_session_retention_and_later_session_clear(
+async def test_wrong_book_counts_and_three_correct_streak(
     quiz_practice_env,
 ) -> None:
     env = quiz_practice_env
-    category = await _create_category(env, "wrong-clear")
-    await _create_questions(env, category, 2, suffix="wrong-clear")
+    category = await _create_category(env, "wrong-streak")
+    await _create_questions(env, category, 2, suffix="wrong-streak")
     normal = await env.service.create_session(
         env.user.id,
         _normal_session(category.id),
@@ -442,23 +442,120 @@ async def test_wrong_book_add_same_session_retention_and_later_session_clear(
     )
     assert wrong_book.total == 1
     assert wrong_book.items[0].question_id == target.id
+    assert wrong_book.items[0].wrong_count == 1
     await env.service.abandon_session(env.user.id, normal.id)
 
-    wrong_session = await env.service.create_session(
+    exam_snapshot: QuizPracticeSessionQuestion | None = None
+    for index in (1, 2):
+        wrong_session = await env.service.create_session(
+            env.user.id,
+            QuizPracticeSessionCreate(mode="wrong"),
+        )
+        assert wrong_session.actual_count == 1
+        assert wrong_session.questions[0].id == target.id
+        exam_snapshot = wrong_session.questions[0]
+        await env.service.submit_attempt(
+            env.user.id,
+            wrong_session.id,
+            _attempt(
+                wrong_session.questions[0].session_question_id,
+                f"correct-{index:04d}",
+                "A",
+            ),
+        )
+        await env.service.abandon_session(env.user.id, wrong_session.id)
+        still_active = await env.service.list_wrong_book(
+            env.user.id,
+            QuizWrongBookQuery(page=1, page_size=20),
+        )
+        assert still_active.total == 1
+        async with env.factory() as db:
+            item = (
+                await db.execute(
+                    select(QuizWrongItem).where(
+                        QuizWrongItem.user_id == env.user.id,
+                        QuizWrongItem.question_id == target.id,
+                    )
+                )
+            ).scalar_one()
+            assert item.status == "active"
+            assert item.wrong_count == 1
+            assert item.consecutive_correct_count == index
+
+    assert exam_snapshot is not None
+    async with env.factory() as db:
+        stats_row = (
+            await db.execute(
+                select(QuizUserStats)
+                .where(QuizUserStats.user_id == env.user.id)
+                .with_for_update()
+            )
+        ).scalar_one()
+        await env.service.apply_settled_exam_wrong_book(
+            db,
+            user_id=env.user.id,
+            snapshot=exam_snapshot,
+            is_correct=False,
+            settled_at=datetime.now(timezone.utc),
+            stats=stats_row,
+        )
+        await db.commit()
+
+    async with env.factory() as db:
+        item = (
+            await db.execute(
+                select(QuizWrongItem).where(
+                    QuizWrongItem.user_id == env.user.id,
+                    QuizWrongItem.question_id == target.id,
+                )
+            )
+        ).scalar_one()
+        assert item.status == "active"
+        assert item.wrong_count == 2
+        assert item.consecutive_correct_count == 2
+
+    wrong_again_session = await env.service.create_session(
         env.user.id,
         QuizPracticeSessionCreate(mode="wrong"),
     )
-    assert wrong_session.actual_count == 1
-    assert wrong_session.questions[0].id == target.id
     await env.service.submit_attempt(
         env.user.id,
-        wrong_session.id,
+        wrong_again_session.id,
         _attempt(
-            wrong_session.questions[0].session_question_id,
-            "wrong-0003",
-            "A",
+            wrong_again_session.questions[0].session_question_id,
+            "wrong-cycle-2",
+            "B",
         ),
     )
+    await env.service.abandon_session(env.user.id, wrong_again_session.id)
+    async with env.factory() as db:
+        item = (
+            await db.execute(
+                select(QuizWrongItem).where(
+                    QuizWrongItem.user_id == env.user.id,
+                    QuizWrongItem.question_id == target.id,
+                )
+            )
+        ).scalar_one()
+        assert item.wrong_count == 3
+        assert item.consecutive_correct_count == 0
+
+    for index in range(3):
+        wrong_session = await env.service.create_session(
+            env.user.id,
+            QuizPracticeSessionCreate(mode="wrong"),
+        )
+        assert wrong_session.questions[0].id == target.id
+        await env.service.submit_attempt(
+            env.user.id,
+            wrong_session.id,
+            _attempt(
+                wrong_session.questions[0].session_question_id,
+                f"mastery-{index:02d}",
+                "A",
+            ),
+        )
+        await env.service.abandon_session(env.user.id, wrong_session.id)
 
     cleared_book = await env.service.list_wrong_book(
         env.user.id,
@@ -476,50 +573,15 @@ async def test_wrong_book_add_same_session_retention_and_later_session_clear(
         ).scalar_one()
         assert item.status == "cleared"
         assert item.cleared_at is not None
-        cleared_at = item.cleared_at
-        snapshot = (
-            await db.execute(
-                select(QuizPracticeSessionQuestion).where(
-                    QuizPracticeSessionQuestion.id
-                    == wrong_session.questions[0].session_question_id
-                )
-            )
-        ).scalar_one()
-        stats_row = (
-            await db.execute(
-                select(QuizUserStats)
-                .where(QuizUserStats.user_id == env.user.id)
-                .with_for_update()
-            )
-        ).scalar_one()
-        await env.service.apply_settled_exam_wrong_book(
-            db,
-            user_id=env.user.id,
-            snapshot=snapshot,
-            is_correct=False,
-            settled_at=datetime.now(timezone.utc),
-            stats=stats_row,
-        )
-        await db.commit()
-
-    async with env.factory() as db:
-        reactivated = (
-            await db.execute(
-                select(QuizWrongItem).where(
-                    QuizWrongItem.user_id == env.user.id,
-                    QuizWrongItem.question_id == target.id,
-                )
-            )
-        ).scalar_one()
-        assert reactivated.status == "active"
-        assert reactivated.cleared_at == cleared_at
+        assert item.wrong_count == 0
+        assert item.consecutive_correct_count == 0
 
     stats = await env.service.get_stats(env.user.id)
-    assert stats.practice.total_attempts == 3
-    assert stats.practice.first_attempts == 2
-    assert stats.practice.first_correct_attempts == 1
+    assert stats.practice.total_attempts == 9
+    assert stats.practice.first_attempts == 9
+    assert stats.practice.first_correct_attempts == 5
     assert stats.practice.answered_questions == 1
-    assert stats.practice.active_wrong_count == 1
+    assert stats.practice.active_wrong_count == 0
 
 
 async def test_wrong_practice_uses_latest_twenty_in_fixed_order(
