@@ -586,8 +586,10 @@ async def test_wrong_book_counts_and_three_correct_streak(
         assert item.consecutive_correct_count == 0
 
     stats = await env.service.get_stats(env.user.id)
-    assert stats.practice.total_attempts == 9
-    assert stats.practice.first_attempts == 9
+    # The settled-exam branch updates the wrong book without creating a
+    # practice attempt, so the counters only cover the eight real submits.
+    assert stats.practice.total_attempts == 8
+    assert stats.practice.first_attempts == 7
     assert stats.practice.first_correct_attempts == 5
     assert stats.practice.answered_questions == 1
     assert stats.practice.active_wrong_count == 0
