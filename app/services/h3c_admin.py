@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db_ctx
-from app.domain.certification.src.index import Certification
+from app.models.cert_product import CertProduct
 from app.domain.h3c.src.index import (
     H3C_REGISTRATION_TYPES,
     H3cExamBatch,
@@ -60,25 +60,27 @@ class H3cAdminBatchService:
     ) -> H3cExamBatchResponse:
         async with get_db_ctx() as db:
             async with db.begin():
-                certification = await db.scalar(
-                    select(Certification)
-                    .where(Certification.code == data.certification_code)
+                product = await db.scalar(
+                    select(CertProduct)
+                    .where(
+                        CertProduct.code == data.certification_code,
+                        CertProduct.type == "h3c",
+                        CertProduct.is_active.is_(True),
+                    )
                     .with_for_update()
                 )
-                if certification is None or not certification.is_active:
-                    raise BusinessException("H3C 认证类型不存在或已下架")
-                if certification.vendor != "H3C":
-                    raise BusinessException("仅支持创建 H3C 认证考试批次")
+                if product is None:
+                    raise BusinessException("认证产品不存在或未上架，请先在认证管理中上架")
                 duplicate = await db.scalar(
                     select(Plan.id).where(
-                        Plan.product_type == certification.code,
+                        Plan.product_type == product.code,
                         Plan.name == data.name,
                     )
                 )
                 if duplicate is not None:
                     raise ConflictException("同名 H3C 考试批次已存在")
                 plan = Plan(
-                    product_type=certification.code,
+                    product_type=product.code,
                     name=data.name,
                     apply_start=data.apply_start,
                     apply_end=data.apply_end,
@@ -412,9 +414,6 @@ class H3cAdminBatchService:
     @staticmethod
     async def _response(db: AsyncSession, batch: H3cExamBatch) -> H3cExamBatchResponse:
         plan = await db.get(Plan, batch.plan_id)
-        certification = await db.scalar(
-            select(Certification).where(Certification.code == plan.product_type)
-        )
         occupied = await db.scalar(
             select(func.count())
             .select_from(Order)
@@ -426,7 +425,7 @@ class H3cAdminBatchService:
         return H3cExamBatchResponse(
             id=batch.id,
             plan_id=plan.id,
-            certification_code=certification.code if certification else plan.product_type,
+            certification_code=plan.product_type,
             name=plan.name,
             status=plan.status,
             apply_start=plan.apply_start,

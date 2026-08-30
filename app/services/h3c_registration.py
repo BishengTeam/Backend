@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db_ctx
-from app.domain.certification.src.index import Certification
+from app.models.cert_product import CertProduct
 from app.domain.h3c.src.index import (
     H3C_REGISTRATION_TYPES,
     H3cExamBatch,
@@ -107,19 +107,18 @@ class H3cRegistrationService:
         async with get_db_ctx() as db:
             rows = (
                 await db.execute(
-                    select(H3cExamBatch, Plan, Certification)
+                    select(H3cExamBatch, Plan, CertProduct)
                     .join(Plan, Plan.id == H3cExamBatch.plan_id)
-                    .join(Certification, Certification.code == Plan.product_type)
+                    .join(CertProduct, CertProduct.code == Plan.product_type)
                     .where(
                         Plan.status == "published",
-                        Certification.vendor == "H3C",
-                        Certification.is_active.is_(True),
+                        CertProduct.type == "h3c",
                     )
                     .order_by(Plan.sort_order.desc(), Plan.id.desc())
                 )
             ).all()
             result: list[H3cUserExamBatchResponse] = []
-            for batch, plan, certification in rows:
+            for batch, plan, product in rows:
                 occupied = await db.scalar(
                     select(func.count())
                     .select_from(Order)
@@ -133,7 +132,7 @@ class H3cRegistrationService:
                     H3cUserExamBatchResponse(
                         id=batch.id,
                         plan_id=plan.id,
-                        certification_code=certification.code,
+                        certification_code=product.code,
                         name=plan.name,
                         status=plan.status,
                         apply_start=plan.apply_start,
