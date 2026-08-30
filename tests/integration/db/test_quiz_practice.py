@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -385,6 +386,8 @@ async def test_snapshot_idempotency_reanswers_history_stats_and_abandonment(
     assert stats.practice.total_attempts == 2
     assert stats.practice.first_attempts == 1
     assert stats.practice.first_correct_attempts == 1
+    # The retry flipped the only question to wrong under the latest-attempt rule.
+    assert stats.practice.latest_accuracy == Decimal("0.0")
     assert stats.practice.answered_questions == 1
     assert stats.practice.today_questions == 2
 
@@ -396,6 +399,7 @@ async def test_snapshot_idempotency_reanswers_history_stats_and_abandonment(
     assert scoped_stats.practice.first_attempts == 0
     assert scoped_stats.practice.answered_questions == 0
     assert scoped_stats.practice.accuracy == 0
+    assert scoped_stats.practice.latest_accuracy == Decimal("0.0")
 
     abandoned = await env.service.abandon_session(env.user.id, session.id)
     assert abandoned.status == "abandoned"

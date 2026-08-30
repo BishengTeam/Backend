@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 
 from app.adapter.database import get_db_ctx
 from app.services.quiz_image_upload import sign_quiz_media_map, sign_quiz_media_urls
@@ -36,6 +36,7 @@ from app.schemas.quiz_contract import (
     QuizModuleProgress,
     QuizPracticeAttemptResult,
     QuizPracticeQuestionState,
+    QuizPracticeScopeLastSession,
     QuizPracticeScopePreview,
     QuizPracticeSessionCreate,
     QuizPracticeSessionResponse,
@@ -596,6 +597,29 @@ class QuizV2Service:
         async with get_db_ctx() as db:
             await self._require_user(db, user_id)
             await self._require_accessible_library(db, user_id, library_id)
+            latest_attempt = (
+                select(
+                    QuizPracticeSessionQuestion.question_id.label("question_id"),
+                    QuizPracticeAttempt.is_correct.label("is_correct"),
+                    func.row_number()
+                    .over(
+                        partition_by=QuizPracticeSessionQuestion.question_id,
+                        order_by=(
+                            QuizPracticeAttempt.submitted_at.desc(),
+                            QuizPracticeAttempt.id.desc(),
+                        ),
+                    )
+                    .label("rn"),
+                )
+                .select_from(QuizPracticeAttempt)
+                .join(
+                    QuizPracticeSessionQuestion,
+                    QuizPracticeSessionQuestion.id
+                    == QuizPracticeAttempt.session_question_id,
+                )
+                .where(QuizPracticeAttempt.user_id == user_id)
+                .subquery()
+            )
             rows = (
                 await db.execute(
                     select(
@@ -611,6 +635,9 @@ class QuizV2Service:
                             QuizPracticeAttempt.is_first_attempt.is_(True),
                             QuizPracticeAttempt.is_correct.is_(True),
                         ),
+                        func.count(func.distinct(latest_attempt.c.question_id)).filter(
+                            latest_attempt.c.is_correct.is_(True)
+                        ),
                     )
                     .select_from(QuizQuestion)
                     .outerjoin(
@@ -623,6 +650,13 @@ class QuizV2Service:
                             QuizPracticeAttempt.session_question_id
                             == QuizPracticeSessionQuestion.id,
                             QuizPracticeAttempt.user_id == user_id,
+                        ),
+                    )
+                    .outerjoin(
+                        latest_attempt,
+                        and_(
+                            latest_attempt.c.question_id == QuizQuestion.id,
+                            latest_attempt.c.rn == 1,
                         ),
                     )
                     .join(
@@ -642,22 +676,31 @@ class QuizV2Service:
                     .group_by(QuizQuestion.knowledge_point_id)
                 )
             ).all()
-            by_point: dict[int, tuple[int, int, int, int]] = {}
-            for point_id, total, answered, first_attempts, first_correct in rows:
+            by_point: dict[int, tuple[int, int, int, int, int]] = {}
+            for (
+                point_id,
+                total,
+                answered,
+                first_attempts,
+                first_correct,
+                latest_correct,
+            ) in rows:
                 by_point[int(point_id)] = (
                     int(total),
                     int(answered),
                     int(first_attempts),
                     int(first_correct),
+                    int(latest_correct),
                 )
 
             def summarize(
-                totals: list[tuple[int, int, int, int]],
-            ) -> tuple[int, int, Decimal]:
+                totals: list[tuple[int, int, int, int, int]],
+            ) -> tuple[int, int, Decimal, Decimal]:
                 question_count = sum(item[0] for item in totals)
                 answered_questions = sum(item[1] for item in totals)
                 first_attempts = sum(item[2] for item in totals)
                 first_correct = sum(item[3] for item in totals)
+                latest_correct = sum(item[4] for item in totals)
                 accuracy = (
                     (Decimal(first_correct) * Decimal("100") / Decimal(first_attempts)).quantize(
                         Decimal("0.1")
@@ -665,7 +708,14 @@ class QuizV2Service:
                     if first_attempts
                     else Decimal("0.0")
                 )
-                return question_count, answered_questions, accuracy
+                latest_accuracy = (
+                    (Decimal(latest_correct) * Decimal("100") / Decimal(answered_questions)).quantize(
+                        Decimal("0.1")
+                    )
+                    if answered_questions
+                    else Decimal("0.0")
+                )
+                return question_count, answered_questions, accuracy, latest_accuracy
 
             modules = list(
                 (
@@ -699,7 +749,7 @@ class QuizV2Service:
             )
             points_by_module: dict[int, list[QuizKnowledgePoint]] = {}
             for point in points:
-                if by_point.get(int(point.id), (0, 0, 0, 0))[0] > 0:
+                if by_point.get(int(point.id), (0, 0, 0, 0, 0))[0] > 0:
                     points_by_module.setdefault(int(point.module_id), []).append(point)
 
             module_items: list[QuizModuleProgress] = []
@@ -709,7 +759,7 @@ class QuizV2Service:
                     continue
                 point_items: list[QuizKnowledgePointProgress] = []
                 for point in module_points:
-                    point_total, point_answered, point_accuracy = summarize(
+                    point_total, point_answered, point_accuracy, point_latest = summarize(
                         [by_point[int(point.id)]]
                     )
                     point_items.append(
@@ -718,9 +768,10 @@ class QuizV2Service:
                             question_count=point_total,
                             answered_questions=point_answered,
                             accuracy=point_accuracy,
+                            latest_accuracy=point_latest,
                         )
                     )
-                module_total, module_answered, module_accuracy = summarize(
+                module_total, module_answered, module_accuracy, module_latest = summarize(
                     [by_point[int(point.id)] for point in module_points]
                 )
                 module_items.append(
@@ -729,10 +780,11 @@ class QuizV2Service:
                         question_count=module_total,
                         answered_questions=module_answered,
                         accuracy=module_accuracy,
+                        latest_accuracy=module_latest,
                         knowledge_points=point_items,
                     )
                 )
-            library_total, library_answered, library_accuracy = summarize(
+            library_total, library_answered, library_accuracy, library_latest = summarize(
                 [by_point[int(point.id)] for point in points if int(point.id) in by_point]
             )
             return QuizLibraryProgressResponse(
@@ -740,6 +792,7 @@ class QuizV2Service:
                 question_count=library_total,
                 answered_questions=library_answered,
                 accuracy=library_accuracy,
+                latest_accuracy=library_latest,
                 modules=module_items,
             )
 
@@ -887,6 +940,74 @@ class QuizV2Service:
                     existing = None
                 if changed:
                     await db.commit()
+            last_completed = (
+                await db.execute(
+                    select(QuizPracticeSession)
+                    .where(
+                        QuizPracticeSession.user_id == user_id,
+                        QuizPracticeSession.scope_type == scope_type,
+                        QuizPracticeSession.scope_id == scope_id,
+                        QuizPracticeSession.status == "completed",
+                    )
+                    .order_by(
+                        QuizPracticeSession.completed_at.desc(),
+                        QuizPracticeSession.id.desc(),
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            last_session_payload: QuizPracticeScopeLastSession | None = None
+            if last_completed is not None:
+                ranked_attempts = (
+                    select(
+                        QuizPracticeAttempt.session_question_id.label("sqid"),
+                        QuizPracticeAttempt.is_correct.label("is_correct"),
+                        func.row_number()
+                        .over(
+                            partition_by=QuizPracticeAttempt.session_question_id,
+                            order_by=(
+                                QuizPracticeAttempt.attempt_no.desc(),
+                                QuizPracticeAttempt.id.desc(),
+                            ),
+                        )
+                        .label("rn"),
+                    )
+                    .where(
+                        QuizPracticeAttempt.session_id == last_completed.id,
+                        QuizPracticeAttempt.user_id == user_id,
+                    )
+                    .subquery()
+                )
+                settled = (
+                    await db.execute(
+                        select(
+                            func.count(ranked_attempts.c.sqid),
+                            func.sum(
+                                case(
+                                    (ranked_attempts.c.is_correct.is_(True), 1),
+                                    else_=0,
+                                )
+                            ),
+                        ).where(ranked_attempts.c.rn == 1)
+                    )
+                ).one()
+                answered_count = int(settled[0] or 0)
+                correct_count = int(settled[1] or 0)
+                last_session_payload = QuizPracticeScopeLastSession(
+                    session_id=int(last_completed.id),
+                    answered_count=answered_count,
+                    correct_count=correct_count,
+                    accuracy=(
+                        (
+                            Decimal(correct_count)
+                            * Decimal("100")
+                            / Decimal(answered_count)
+                        ).quantize(Decimal("0.1"))
+                        if answered_count
+                        else None
+                    ),
+                    completed_at=last_completed.completed_at,
+                )
             return QuizPracticeScopePreview(
                 library_id=int(library.id),
                 scope_type=scope_type,
@@ -897,6 +1018,7 @@ class QuizV2Service:
                 requires_large_scope_confirmation=count > 100,
                 unfinished_session_id=(int(existing.id) if existing else None),
                 unfinished_session_expires_at=(existing.expires_at if existing else None),
+                last_completed_session=last_session_payload,
             )
 
     async def _expire_if_needed(self, db, session: QuizPracticeSession) -> None:

@@ -11,7 +11,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, func, or_, select, union
+from sqlalchemy import and_, case, func, or_, select, union
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
@@ -1813,6 +1813,66 @@ class QuizPracticeService:
                 for row in rows
             ]
 
+    async def _latest_attempt_accuracy(
+        self,
+        db,
+        user_id: int,
+        question_filters: list | None = None,
+    ) -> Decimal:
+        """Accuracy based on each question's most recent practice attempt.
+
+        A question answered in several sessions counts once, with its latest
+        attempt deciding correctness. ``question_filters`` narrows the pool to
+        a scope (mirroring the published-status rule of scoped stats); when
+        omitted every attempt of the user is considered, matching the global
+        stats-table behaviour.
+        """
+        stmt = (
+            select(
+                QuizPracticeSessionQuestion.question_id.label("question_id"),
+                QuizPracticeAttempt.is_correct.label("is_correct"),
+                func.row_number()
+                .over(
+                    partition_by=QuizPracticeSessionQuestion.question_id,
+                    order_by=(
+                        QuizPracticeAttempt.submitted_at.desc(),
+                        QuizPracticeAttempt.id.desc(),
+                    ),
+                )
+                .label("rn"),
+            )
+            .select_from(QuizPracticeAttempt)
+            .join(
+                QuizPracticeSessionQuestion,
+                QuizPracticeSessionQuestion.id
+                == QuizPracticeAttempt.session_question_id,
+            )
+            .where(QuizPracticeAttempt.user_id == user_id)
+        )
+        if question_filters:
+            stmt = stmt.join(
+                QuizQuestion,
+                QuizQuestion.id == QuizPracticeSessionQuestion.question_id,
+            ).where(*question_filters)
+        ranked = stmt.subquery()
+        row = (
+            await db.execute(
+                select(
+                    func.count(ranked.c.question_id),
+                    func.sum(case((ranked.c.is_correct.is_(True), 1), else_=0)),
+                ).where(ranked.c.rn == 1)
+            )
+        ).one()
+        answered = int(row[0] or 0)
+        correct = int(row[1] or 0)
+        return (
+            (Decimal(correct) * Decimal("100") / Decimal(answered)).quantize(
+                Decimal("0.1")
+            )
+            if answered
+            else Decimal("0.0")
+        )
+
     async def _scoped_practice_stats(
         self,
         db,
@@ -1966,11 +2026,15 @@ class QuizPracticeService:
             if first_attempts
             else Decimal("0.0")
         )
+        latest_accuracy = await self._latest_attempt_accuracy(
+            db, user_id, list(base_conditions[1:])
+        )
         return QuizPracticeStats(
             total_attempts=total_attempts,
             first_attempts=first_attempts,
             first_correct_attempts=first_correct,
             accuracy=accuracy,
+            latest_accuracy=latest_accuracy,
             answered_questions=answered_questions,
             active_wrong_count=active_wrong_count,
             active_collection_count=active_collection_count,
@@ -1996,6 +2060,7 @@ class QuizPracticeService:
                     first_attempts=0,
                     first_correct_attempts=0,
                     accuracy=Decimal("0.0"),
+                    latest_accuracy=Decimal("0.0"),
                     answered_questions=0,
                     active_wrong_count=0,
                     active_collection_count=0,
@@ -2048,6 +2113,7 @@ class QuizPracticeService:
                     first_attempts=first_attempts,
                     first_correct_attempts=first_correct,
                     accuracy=accuracy,
+                    latest_accuracy=await self._latest_attempt_accuracy(db, user_id),
                     answered_questions=int(stats.practice_answered_questions),
                     active_wrong_count=int(stats.active_wrong_count),
                     active_collection_count=int(stats.active_collection_count),

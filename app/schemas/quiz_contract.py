@@ -109,6 +109,7 @@ class QuizScopeProgressBase(QuizContractModel):
     question_count: int = Field(ge=0)
     answered_questions: int = Field(ge=0)
     accuracy: Decimal = Field(ge=0, le=100)
+    latest_accuracy: Decimal = Field(default=Decimal("0.0"), ge=0, le=100)
 
     @model_validator(mode="after")
     def _validate_counts(self) -> "QuizScopeProgressBase":
@@ -206,6 +207,20 @@ class QuizPracticeSessionCreate(QuizContractModel):
         return self
 
 
+class QuizPracticeScopeLastSession(QuizContractModel):
+    """Most recent completed practice round for the previewed scope.
+
+    ``accuracy`` uses the settled per-question results of that round only and
+    is ``None`` when the round somehow settled without any graded answer.
+    """
+
+    session_id: int = Field(ge=1)
+    answered_count: int = Field(ge=0)
+    correct_count: int = Field(ge=0)
+    accuracy: Decimal | None = Field(default=None, ge=0, le=100)
+    completed_at: datetime
+
+
 class QuizPracticeScopePreview(QuizContractModel):
     library_id: int
     scope_type: QuizPracticeScopeType
@@ -217,6 +232,7 @@ class QuizPracticeScopePreview(QuizContractModel):
     requires_large_scope_confirmation: bool
     unfinished_session_id: int | None = None
     unfinished_session_expires_at: datetime | None = None
+    last_completed_session: QuizPracticeScopeLastSession | None = None
 
 
 class QuizPracticeAttemptResult(QuizContractModel):
@@ -447,6 +463,7 @@ class QuizPracticeStats(QuizContractModel):
     first_attempts: int = Field(ge=0)
     first_correct_attempts: int = Field(ge=0)
     accuracy: Decimal = Field(ge=0, le=100)
+    latest_accuracy: Decimal = Field(default=Decimal("0.0"), ge=0, le=100)
     answered_questions: int = Field(ge=0)
     active_wrong_count: int = Field(ge=0)
     active_collection_count: int = Field(ge=0)

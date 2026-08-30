@@ -378,6 +378,73 @@ async def test_catalog_hides_unentitled_course_library(quiz_v2_catalog_env) -> N
         env.user_id, session.id, session.questions[0].session_question_id
     )
     assert skipped.skip_count == 1
+
+
+async def test_scope_preview_reports_last_completed_round(quiz_v2_catalog_env) -> None:
+    env = quiz_v2_catalog_env
+    await _grant_entitlement(env)
+    question = await env.admin_service.create_question(
+        AdminQuizQuestionCreate(
+            knowledge_point_id=env.point.id,
+            question_type="single_choice",
+            question_text=f"{env.prefix} 最近一轮题目",
+            options={"A": "甲", "B": "乙", "C": "丙"},
+            correct_answer="A",
+            explanation="甲正确。",
+        ),
+        admin_id=env.admin_id,
+    )
+    await env.admin_service.publish_question_revision(
+        question.id,
+        AdminQuizVersionRequest(lock_version=question.lock_version),
+        admin_id=env.admin_id,
+    )
+
+    fresh = await env.user_service.preview_practice_scope(
+        env.user_id, "module", env.module.id, "full"
+    )
+    assert fresh.question_count == 2
+    assert fresh.last_completed_session is None
+
+    session = await env.user_service.create_practice_session(
+        env.user_id,
+        QuizPracticeSessionCreate(
+            mode="full",
+            scope_type="knowledge_point",
+            scope_id=env.point.id,
+        ),
+    )
+    assert len(session.questions) == 2
+    await env.practice_service.submit_attempt(
+        env.user_id,
+        session.id,
+        QuizPracticeAttemptCreate(
+            session_question_id=session.questions[0].session_question_id,
+            idempotency_key="last-round-first",
+            user_answer="A",
+        ),
+    )
+    await env.practice_service.submit_attempt(
+        env.user_id,
+        session.id,
+        QuizPracticeAttemptCreate(
+            session_question_id=session.questions[1].session_question_id,
+            idempotency_key="last-round-second",
+            user_answer="B",
+        ),
+    )
+    settled = await env.practice_service.submit_session(env.user_id, session.id)
+    assert settled.status == "completed"
+
+    preview = await env.user_service.preview_practice_scope(
+        env.user_id, "knowledge_point", env.point.id, "full"
+    )
+    assert preview.last_completed_session is not None
+    assert preview.last_completed_session.session_id == session.id
+    assert preview.last_completed_session.answered_count == 2
+    assert preview.last_completed_session.correct_count == 1
+    assert preview.last_completed_session.accuracy == Decimal("50.0")
+    assert preview.last_completed_session.completed_at is not None
     with pytest.raises(ConflictException, match="只能跳过一次"):
         await env.user_service.skip_practice_question(
             env.user_id, session.id, session.questions[0].session_question_id
@@ -847,6 +914,7 @@ async def test_library_progress_reports_first_attempt_stats_per_catalog_node(
     assert progress.question_count == 4
     assert progress.answered_questions == 3
     assert progress.accuracy == Decimal("66.7")
+    assert progress.latest_accuracy == Decimal("33.3")
     assert [item.module_id for item in progress.modules] == [
         env.module.id,
         other_module.id,
@@ -855,6 +923,7 @@ async def test_library_progress_reports_first_attempt_stats_per_catalog_node(
     assert practiced_module.question_count == 3
     assert practiced_module.answered_questions == 3
     assert practiced_module.accuracy == Decimal("66.7")
+    assert practiced_module.latest_accuracy == Decimal("33.3")
     assert [item.knowledge_point_id for item in practiced_module.knowledge_points] == [
         env.point.id
     ]
@@ -863,6 +932,7 @@ async def test_library_progress_reports_first_attempt_stats_per_catalog_node(
     assert untouched_module.question_count == 1
     assert untouched_module.answered_questions == 0
     assert untouched_module.accuracy == Decimal("0.0")
+    assert untouched_module.latest_accuracy == Decimal("0.0")
 
 
 async def test_behavior_stats_report_daily_trend_user_ranking_and_wrong_order(
