@@ -36,6 +36,7 @@ from app.port.config import Settings
 from app.schemas.admin_quiz_contract import (
     AdminQuizCategoryUpdate,
     AdminQuizQuestionCreate,
+    AdminQuizQuestionQuery,
     AdminQuizStatsQuestionQuery,
 )
 from app.schemas.quiz_contract import (
@@ -247,6 +248,14 @@ def test_behavior_stats_queries_are_strictly_bounded() -> None:
         AdminQuizStatsQuestionQuery(order="random")
 
 
+def test_question_query_supports_question_id_lookup() -> None:
+    assert AdminQuizQuestionQuery().question_id is None
+    query = AdminQuizQuestionQuery(question_id=12)
+    assert query.question_id == 12
+    with pytest.raises(ValidationError):
+        AdminQuizQuestionQuery(category_id=3, question_id=12)
+
+
 def test_submitted_answers_are_canonical_and_exact_match_only() -> None:
     options = {"A": "一", "B": "二", "C": "三", "D": "四"}
     assert normalize_submitted_answer(
@@ -262,7 +271,7 @@ def test_submitted_answers_are_canonical_and_exact_match_only() -> None:
 
 
 def test_contract_registry_is_complete_strict_and_machine_readable() -> None:
-    assert len(QUIZ_API_CONTRACTS) == 88
+    assert len(QUIZ_API_CONTRACTS) == 89
     keys = {(entry.method, entry.path) for entry in QUIZ_API_CONTRACTS}
     assert len(keys) == len(QUIZ_API_CONTRACTS)
     assert {

@@ -1660,6 +1660,8 @@ class AdminQuizV2Service:
             stmt = select(QuizQuestion).where(QuizQuestion.library_id.is_not(None))
             if not query.include_deleted:
                 stmt = stmt.where(QuizQuestion.status != "deleted")
+            if query.question_id is not None:
+                stmt = stmt.where(QuizQuestion.id == query.question_id)
             if query.library_id is not None:
                 stmt = stmt.where(QuizQuestion.library_id == query.library_id)
             if query.module_id is not None:

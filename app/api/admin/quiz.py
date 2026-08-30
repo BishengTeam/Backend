@@ -441,6 +441,7 @@ async def admin_question_query(
     library_id: int | None = Query(None, ge=1),
     module_id: int | None = Query(None, ge=1),
     knowledge_point_id: int | None = Query(None, ge=1),
+    question_id: int | None = Query(None, ge=1),
     question_type: QuizQuestionType | None = Query(None),
     status: QuizQuestionStatus | None = Query(None),
     keyword: str | None = Query(None, min_length=1, max_length=128),
@@ -456,6 +457,7 @@ async def admin_question_query(
             "library_id": library_id,
             "module_id": module_id,
             "knowledge_point_id": knowledge_point_id,
+            "question_id": question_id,
             "question_type": question_type,
             "status": status,
             "keyword": keyword,
@@ -631,7 +633,12 @@ async def list_questions(
 ) -> APIResponse[PaginatedData[AdminQuizQuestionResponse]]:
     if any(
         value is not None
-        for value in (query.library_id, query.module_id, query.knowledge_point_id)
+        for value in (
+            query.library_id,
+            query.module_id,
+            query.knowledge_point_id,
+            query.question_id,
+        )
     ) or query.include_deleted:
         return success(data=await AdminQuizV2Service().list_questions(query))
     result = await AdminQuizService().list_questions(
