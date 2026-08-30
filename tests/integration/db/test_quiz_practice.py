@@ -457,7 +457,15 @@ async def test_wrong_book_counts_and_three_correct_streak(
         )
         assert wrong_session.actual_count == 1
         assert wrong_session.questions[0].id == target.id
-        exam_snapshot = wrong_session.questions[0]
+        async with env.factory() as db:
+            exam_snapshot = (
+                await db.execute(
+                    select(QuizPracticeSessionQuestion).where(
+                        QuizPracticeSessionQuestion.id
+                        == wrong_session.questions[0].session_question_id
+                    )
+                )
+            ).scalar_one()
         await env.service.submit_attempt(
             env.user.id,
             wrong_session.id,
