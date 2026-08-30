@@ -113,6 +113,7 @@ class AdminQuizQuestionQuery(QuizContractModel):
     library_id: int | None = Field(default=None, ge=1)
     module_id: int | None = Field(default=None, ge=1)
     knowledge_point_id: int | None = Field(default=None, ge=1)
+    question_id: int | None = Field(default=None, ge=1)
     question_type: QuizQuestionType | None = None
     status: QuizQuestionStatus | None = None
     keyword: str | None = Field(default=None, min_length=1, max_length=128)
@@ -122,7 +123,12 @@ class AdminQuizQuestionQuery(QuizContractModel):
 
     @model_validator(mode="after")
     def validate_hierarchy_filters(self) -> "AdminQuizQuestionQuery":
-        v2_filters = [self.library_id, self.module_id, self.knowledge_point_id]
+        v2_filters = [
+            self.library_id,
+            self.module_id,
+            self.knowledge_point_id,
+            self.question_id,
+        ]
         if self.category_id is not None and any(value is not None for value in v2_filters):
             raise ValueError("legacy category_id cannot be combined with V2 hierarchy filters")
         return self
@@ -394,6 +400,18 @@ class AdminQuizUserPracticeDay(QuizContractModel):
     accuracy: Decimal = Field(ge=0, le=100)
 
 
+class AdminQuizUserExamRound(QuizContractModel):
+    exam_id: int
+    status: Literal["in_progress", "completed", "timed_out", "abandoned"]
+    started_at: datetime
+    settled_at: datetime | None = None
+    question_count: int = Field(ge=10, le=100)
+    correct_count: int | None = Field(default=None, ge=0)
+    wrong_count: int | None = Field(default=None, ge=0)
+    unanswered_count: int | None = Field(default=None, ge=0)
+    score: Decimal | None = Field(default=None, ge=0, le=100)
+
+
 class AdminQuizUserPracticeStats(QuizContractModel):
     user_id: int
     library_id: int
@@ -406,6 +424,11 @@ class AdminQuizUserPracticeStats(QuizContractModel):
     first_accuracy: Decimal = Field(ge=0, le=100)
     active_days: int = Field(ge=0)
     daily: list[AdminQuizUserPracticeDay]
+    exam_rounds: list[AdminQuizUserExamRound]
+    exam_settled_count: int = Field(ge=0)
+    exam_average_score: Decimal | None = Field(default=None, ge=0, le=100)
+    exam_highest_score: Decimal | None = Field(default=None, ge=0, le=100)
+    exam_latest_score: Decimal | None = Field(default=None, ge=0, le=100)
 
 
 class AdminQuizImageUploadCreate(QuizContractModel):

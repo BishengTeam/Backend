@@ -90,6 +90,7 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizUserPracticeQuery,
     AdminQuizUserPracticeDay,
     AdminQuizUserPracticeStats,
+    AdminQuizUserExamRound,
     AdminQuizVersionRequest,
     AdminQuizAuditLogResponse,
     AdminQuizAuditQuery,
@@ -1902,9 +1903,9 @@ class AdminQuizService:
     ) -> AdminQuizUserPracticeStats:
         """One student's practice activity in one library for a date range.
 
-        Attempts (including retries) drive the numbers; exam answers are a
-        separate domain and are deliberately excluded.  Days are bucketed in
-        the application timezone so the chart matches the check-in calendar.
+        Attempts (including retries) drive the practice numbers; settled exam
+        rounds are listed in their own section.  Days are bucketed in the
+        application timezone so the chart matches the check-in calendar.
         """
 
         timezone_name = settings.APP_TIMEZONE
@@ -1980,11 +1981,53 @@ class AdminQuizService:
                     .order_by(practice_day.asc())
                 )
             ).all()
+            exam_rows = (
+                await db.execute(
+                    select(QuizExam)
+                    .where(
+                        QuizExam.user_id == query.user_id,
+                        QuizExam.library_id == query.library_id,
+                        QuizExam.started_at >= start_at,
+                        QuizExam.started_at < end_at,
+                    )
+                    .order_by(QuizExam.started_at.desc(), QuizExam.id.desc())
+                )
+            ).scalars().all()
 
         total_attempts = int(summary[0] or 0)
         answered_questions = int(summary[1] or 0)
         first_attempts = int(summary[2] or 0)
         first_correct = int(summary[3] or 0)
+        exam_rounds: list[AdminQuizUserExamRound] = []
+        for exam in exam_rows:
+            exam_rounds.append(
+                AdminQuizUserExamRound(
+                    exam_id=int(exam.id),
+                    status=str(exam.status),
+                    started_at=exam.started_at,
+                    settled_at=(exam.submitted_at or exam.timed_out_at),
+                    question_count=int(exam.question_count),
+                    correct_count=(
+                        int(exam.correct_count)
+                        if exam.correct_count is not None
+                        else None
+                    ),
+                    wrong_count=(
+                        int(exam.wrong_count) if exam.wrong_count is not None else None
+                    ),
+                    unanswered_count=(
+                        int(exam.unanswered_count)
+                        if exam.unanswered_count is not None
+                        else None
+                    ),
+                    score=exam.score,
+                )
+            )
+        settled_scores = [
+            (round.settled_at, round.score)
+            for round in exam_rounds
+            if round.settled_at is not None and round.score is not None
+        ]
         daily: list[AdminQuizUserPracticeDay] = []
         for row_day, attempts, correct in daily_rows:
             attempts = int(attempts or 0)
@@ -2021,6 +2064,19 @@ class AdminQuizService:
             ),
             active_days=len(daily),
             daily=daily,
+            exam_rounds=exam_rounds,
+            exam_settled_count=len(settled_scores),
+            exam_average_score=(
+                (
+                    sum(item[1] for item in settled_scores) / len(settled_scores)
+                ).quantize(Decimal("0.1"))
+                if settled_scores
+                else None
+            ),
+            exam_highest_score=(
+                max(item[1] for item in settled_scores) if settled_scores else None
+            ),
+            exam_latest_score=(max(settled_scores)[1] if settled_scores else None),
         )
 
     @staticmethod

@@ -55,6 +55,8 @@ from app.schemas.admin_quiz_contract import (
 )
 from app.schemas.quiz_contract import (
     QuizCollectionCreate,
+    QuizExamAnswerSave,
+    QuizExamCreate,
     QuizPracticeAnswerSave,
     QuizPracticeAttemptCreate,
     QuizPracticeSessionCreate,
@@ -62,6 +64,7 @@ from app.schemas.quiz_contract import (
 )
 from app.services.admin_quiz_v2 import AdminQuizV2Service
 from app.services.admin_quiz import AdminQuizService
+from app.services.quiz_exam import QuizExamService
 from app.services.quiz_practice import QuizPracticeService
 from app.services.quiz_v2 import QuizV2Service
 
@@ -1014,8 +1017,9 @@ async def test_admin_user_practice_stats_filter_student_library_and_range(
             yield session
 
     monkeypatch.setattr("app.services.admin_quiz.get_db_ctx", admin_db_ctx)
+    monkeypatch.setattr("app.services.quiz_exam.get_db_ctx", admin_db_ctx)
 
-    for index in range(2):
+    for index in range(9):
         question = await env.admin_service.create_question(
             AdminQuizQuestionCreate(
                 knowledge_point_id=env.point.id,
@@ -1041,7 +1045,7 @@ async def test_admin_user_practice_stats_filter_student_library_and_range(
             scope_id=env.point.id,
         ),
     )
-    assert len(session.questions) == 3
+    assert len(session.questions) == 10
     for position, answer in enumerate(("A", "B", "A"), start=1):
         await env.practice_service.submit_attempt(
             env.user_id,
@@ -1052,6 +1056,26 @@ async def test_admin_user_practice_stats_filter_student_library_and_range(
                 user_answer=answer,
             ),
         )
+
+    exam_service = QuizExamService()
+    exam = await exam_service.create_exam(
+        env.user_id,
+        QuizExamCreate(
+            scope_type="knowledge_point",
+            scope_id=env.point.id,
+            question_count=10,
+        ),
+    )
+    assert exam.status == "in_progress"
+    for question in exam.questions[:8]:
+        await exam_service.save_answer(
+            env.user_id,
+            exam.id,
+            question.exam_question_id,
+            QuizExamAnswerSave(user_answer="A", lock_version=0),
+        )
+    settled_exam = await exam_service.submit_exam(env.user_id, exam.id)
+    assert settled_exam.status == "completed"
 
     service = AdminQuizService()
     today = datetime.now(ZoneInfo(settings.APP_TIMEZONE)).date()
@@ -1074,6 +1098,20 @@ async def test_admin_user_practice_stats_filter_student_library_and_range(
     assert result.daily[0].attempts == 3
     assert result.daily[0].correct == 2
     assert result.daily[0].accuracy == Decimal("66.7")
+    assert len(result.exam_rounds) == 1
+    exam_round = result.exam_rounds[0]
+    assert exam_round.exam_id == exam.id
+    assert exam_round.status == "completed"
+    assert exam_round.question_count == 10
+    assert exam_round.correct_count == 8
+    assert exam_round.wrong_count == 0
+    assert exam_round.unanswered_count == 2
+    assert exam_round.score == Decimal("80.0")
+    assert exam_round.settled_at is not None
+    assert result.exam_settled_count == 1
+    assert result.exam_average_score == Decimal("80.0")
+    assert result.exam_highest_score == Decimal("80.0")
+    assert result.exam_latest_score == Decimal("80.0")
 
     outside = await service.get_user_practice_stats(
         AdminQuizUserPracticeQuery(
@@ -1086,6 +1124,9 @@ async def test_admin_user_practice_stats_filter_student_library_and_range(
     assert outside.total_attempts == 0
     assert outside.daily == []
     assert outside.active_days == 0
+    assert outside.exam_rounds == []
+    assert outside.exam_settled_count == 0
+    assert outside.exam_average_score is None
 
     with pytest.raises(NotFoundException):
         await service.get_user_practice_stats(
