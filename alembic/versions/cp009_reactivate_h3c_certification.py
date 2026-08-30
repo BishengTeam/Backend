@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 revision: str = 'cp009_reactivate_h3c'
-down_revision: str | Sequence[str] = 'cp008_competition_mgmt'
+down_revision: str | Sequence[str] = 'merge_heads_002'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
