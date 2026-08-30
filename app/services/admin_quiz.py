@@ -5,7 +5,6 @@ import hmac
 import io
 import json
 import re
-import time
 import uuid
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
@@ -3167,7 +3166,7 @@ class AdminQuizService:
         admin_id: int,
         token: str,
     ) -> bytes:
-        if expires < int(time.time()):
+        if expires < int(datetime.now(timezone.utc).timestamp()):
             raise ValidationException("题库导入文件链接已过期")
         payload = f"{job_id}:{object_kind}:{expires}:{admin_id}"
         expected = hmac.new(

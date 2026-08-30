@@ -20,6 +20,9 @@ from app.domain.community.src.index import (
     QuizCheckin,
     QuizCollection,
     QuizCourseLibraryBinding,
+    QuizExam,
+    QuizExamAnswer,
+    QuizExamQuestion,
     QuizKnowledgePoint,
     QuizLibrary,
     QuizLibraryEntitlement,
@@ -235,6 +238,15 @@ async def quiz_v2_catalog_env(monkeypatch):
                     QuizPracticeSession.library_id == library.id,
                 )
             )
+            # 考试题快照引用 quiz_question_revision（RESTRICT），必须先清理考试数据。
+            exam_ids = select(QuizExam.id).where(QuizExam.user_id == user.id)
+            await db.execute(
+                delete(QuizExamAnswer).where(QuizExamAnswer.exam_id.in_(exam_ids))
+            )
+            await db.execute(
+                delete(QuizExamQuestion).where(QuizExamQuestion.exam_id.in_(exam_ids))
+            )
+            await db.execute(delete(QuizExam).where(QuizExam.user_id == user.id))
             await db.execute(
                 delete(QuizWrongItem).where(
                     QuizWrongItem.user_id == user.id,
