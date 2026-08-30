@@ -43,7 +43,7 @@ class CourseService:
     def _price_yuan(price: int) -> Decimal:
         return (Decimal(price) / Decimal(100)).quantize(Decimal("0.01"))
 
-    async def _course_list_response(self, course: Course) -> CourseListResponse:
+    async def course_list_response(self, course: Course) -> CourseListResponse:
         return CourseListResponse(
             id=course.id,
             title=course.title,
@@ -87,7 +87,7 @@ class CourseService:
                 )
             ).scalars().all()
             return PaginatedData(
-                items=[await self._course_list_response(row) for row in rows],
+                items=[await self.course_list_response(row) for row in rows],
                 total=total,
                 page=page,
                 page_size=page_size,
@@ -240,7 +240,7 @@ class CourseService:
     ) -> CourseEnrollmentResponse:
         return CourseEnrollmentResponse(
             id=enrollment.id,
-            course=await self._course_list_response(enrollment.course),
+            course=await self.course_list_response(enrollment.course),
             order_id=enrollment.order_id,
             status=enrollment.status,
             learning_access=enrollment.learning_access,

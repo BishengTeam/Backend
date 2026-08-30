@@ -10,7 +10,6 @@ from app.schemas.activity import ActivityResponse
 from app.schemas.admin_training import AdminTrainingListItem
 from app.schemas.certification import CertificationResponse
 from app.schemas.competition import CompetitionListItem
-from app.schemas.course import CourseListResponse
 from app.schemas.job import JobResponse
 from app.schemas.zone import (
     BannerBrief,
@@ -19,6 +18,7 @@ from app.schemas.zone import (
     ZoneBrief,
     ZoneSectionData,
 )
+from app.services.course import CourseService
 
 # Maximum items per zone_type in home aggregation
 HOME_ZONE_LIMIT = 10
@@ -27,7 +27,6 @@ ALL_ZONE_TYPES = ("cert", "study", "competition", "activity", "employment", "tra
 
 # Entity query config: (model_class, response_schema, has_is_active_filter)
 _ENTITY_QUERIES: dict[str, tuple] = {
-    "courses":         (Course,         CourseListResponse,        True),
     "activities":      (Activity,       ActivityResponse,          True),
     "certifications":  (Certification,  CertificationResponse,     True),
     "trainings":       (Training,       AdminTrainingListItem,          True),
@@ -37,6 +36,8 @@ _ENTITY_QUERIES: dict[str, tuple] = {
 
 
 class ZoneService:
+    def __init__(self, course_service: CourseService | None = None) -> None:
+        self._course_service = course_service or CourseService()
 
     # ── B-P0.1 首页聚合 ───────────────────────────────────────────
 
@@ -78,6 +79,24 @@ class ZoneService:
 
             # ── Entity data ──────────────────────────────────────
             entity_data: dict[str, list] = {}
+
+            # Course rows store a private OSS key, not a public cover URL, and
+            # need fen→yuan conversion, so they must reuse CourseService's
+            # serializer. CourseListResponse deliberately has no
+            # from_attributes support; model_validate on the ORM row raised
+            # ValidationError and turned the homepage into a 500.
+            course_stmt = (
+                select(Course)
+                .where(Course.is_active == True)
+                .order_by(Course.id.desc())
+                .limit(HOME_ZONE_LIMIT)
+            )
+            course_rows = (await db.execute(course_stmt)).scalars().all()
+            entity_data["courses"] = [
+                await self._course_service.course_list_response(row)
+                for row in course_rows
+            ]
+
             for field_name, (model_cls, schema_cls, active_filter) in _ENTITY_QUERIES.items():
                 stmt = select(model_cls)
                 if active_filter:
