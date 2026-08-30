@@ -378,6 +378,20 @@ async def test_catalog_hides_unentitled_course_library(quiz_v2_catalog_env) -> N
         env.user_id, session.id, session.questions[0].session_question_id
     )
     assert skipped.skip_count == 1
+    with pytest.raises(ConflictException, match="只能跳过一次"):
+        await env.user_service.skip_practice_question(
+            env.user_id, session.id, session.questions[0].session_question_id
+        )
+    replacement = await env.user_service.create_practice_session(
+        env.user_id,
+        QuizPracticeSessionCreate(
+            mode="full",
+            scope_type="knowledge_point",
+            scope_id=env.point.id,
+            restart_existing=True,
+        ),
+    )
+    assert replacement.id != session.id
 
 
 async def test_scope_preview_reports_last_completed_round(quiz_v2_catalog_env) -> None:
@@ -445,20 +459,6 @@ async def test_scope_preview_reports_last_completed_round(quiz_v2_catalog_env) -
     assert preview.last_completed_session.correct_count == 1
     assert preview.last_completed_session.accuracy == Decimal("50.0")
     assert preview.last_completed_session.completed_at is not None
-    with pytest.raises(ConflictException, match="只能跳过一次"):
-        await env.user_service.skip_practice_question(
-            env.user_id, session.id, session.questions[0].session_question_id
-        )
-    replacement = await env.user_service.create_practice_session(
-        env.user_id,
-        QuizPracticeSessionCreate(
-            mode="full",
-            scope_type="knowledge_point",
-            scope_id=env.point.id,
-            restart_existing=True,
-        ),
-    )
-    assert replacement.id != session.id
 
 
 async def test_practice_saves_full_answer_card_and_grades_only_on_final_submit(
@@ -828,7 +828,11 @@ async def test_wrong_only_review_and_revision_stats_follow_frozen_revision(
                 )
             )
         ).scalar_one()
-        assert wrong_item.status == "cleared"
+        # Since the mastery rework one correct review no longer clears the
+        # item; three consecutive correct answers are required instead.
+        assert wrong_item.status == "active"
+        assert wrong_item.consecutive_correct_count == 1
+        assert wrong_item.wrong_count == 1
         assert wrong_item.review_count == 1
         assert wrong_item.last_reviewed_at == clock["now"]
 

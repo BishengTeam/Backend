@@ -467,7 +467,6 @@ async def test_wrong_book_counts_and_three_correct_streak(
                 "A",
             ),
         )
-        await env.service.abandon_session(env.user.id, wrong_session.id)
         still_active = await env.service.list_wrong_book(
             env.user.id,
             QuizWrongBookQuery(page=1, page_size=20),
@@ -531,7 +530,6 @@ async def test_wrong_book_counts_and_three_correct_streak(
             "B",
         ),
     )
-    await env.service.abandon_session(env.user.id, wrong_again_session.id)
     async with env.factory() as db:
         item = (
             await db.execute(
@@ -559,7 +557,6 @@ async def test_wrong_book_counts_and_three_correct_streak(
                 "A",
             ),
         )
-        await env.service.abandon_session(env.user.id, wrong_session.id)
 
     cleared_book = await env.service.list_wrong_book(
         env.user.id,
