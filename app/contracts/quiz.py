@@ -41,6 +41,8 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizDailyStatsItem,
     AdminQuizUserStatsQuery,
     AdminQuizUserStatsListItem,
+    AdminQuizUserPracticeQuery,
+    AdminQuizUserPracticeStats,
     AdminQuizImageUploadCreate,
     AdminQuizImageUploadResponse,
     AdminQuizVersionRequest,
@@ -104,7 +106,7 @@ from app.schemas.quiz_contract import (
 )
 
 
-QUIZ_CONTRACT_VERSION = "2026-08-29"
+QUIZ_CONTRACT_VERSION = "2026-08-30"
 
 
 class QuizErrorCode(IntEnum):
@@ -750,6 +752,14 @@ QUIZ_API_CONTRACTS: tuple[QuizEndpointContract, ...] = (
         "admin",
         APIResponse[PaginatedData[AdminQuizUserStatsListItem]],
         query_model=AdminQuizUserStatsQuery,
+        permission="quiz:list",
+    ),
+    QuizEndpointContract(
+        "GET",
+        "/admin/quiz/stats/user-practice",
+        "admin",
+        APIResponse[AdminQuizUserPracticeStats],
+        query_model=AdminQuizUserPracticeQuery,
         permission="quiz:list",
     ),
     QuizEndpointContract(

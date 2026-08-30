@@ -372,6 +372,42 @@ class AdminQuizUserStatsListItem(QuizContractModel):
     consecutive_days: int = Field(ge=0)
 
 
+class AdminQuizUserPracticeQuery(QuizContractModel):
+    user_id: int = Field(ge=1)
+    library_id: int = Field(ge=1)
+    date_from: date
+    date_to: date
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "AdminQuizUserPracticeQuery":
+        if self.date_from > self.date_to:
+            raise ValueError("date_from cannot be after date_to")
+        if (self.date_to - self.date_from).days > 366:
+            raise ValueError("practice query range cannot exceed 366 days")
+        return self
+
+
+class AdminQuizUserPracticeDay(QuizContractModel):
+    date: date
+    attempts: int = Field(ge=0)
+    correct: int = Field(ge=0)
+    accuracy: Decimal = Field(ge=0, le=100)
+
+
+class AdminQuizUserPracticeStats(QuizContractModel):
+    user_id: int
+    library_id: int
+    date_from: date
+    date_to: date
+    total_attempts: int = Field(ge=0)
+    answered_questions: int = Field(ge=0)
+    first_attempts: int = Field(ge=0)
+    first_correct: int = Field(ge=0)
+    first_accuracy: Decimal = Field(ge=0, le=100)
+    active_days: int = Field(ge=0)
+    daily: list[AdminQuizUserPracticeDay]
+
+
 class AdminQuizImageUploadCreate(QuizContractModel):
     filename: str = Field(min_length=1, max_length=255)
     content_type: str = Field(min_length=1, max_length=128)

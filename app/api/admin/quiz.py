@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, File, Form, Path, Query, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
@@ -42,6 +42,8 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizDailyStatsItem,
     AdminQuizUserStatsQuery,
     AdminQuizUserStatsListItem,
+    AdminQuizUserPracticeQuery,
+    AdminQuizUserPracticeStats,
     AdminQuizImageUploadCreate,
     AdminQuizImageUploadResponse,
     AdminQuizQuestionUpdate,
@@ -1056,6 +1058,44 @@ async def list_user_stats(
         {"page": page, "page_size": page_size},
     )
     return success(data=await AdminQuizService().list_user_stats(query))
+
+
+@router.get(
+    "/stats/user-practice",
+    response_model=APIResponse[AdminQuizUserPracticeStats],
+    summary="学生题库练习情况查询",
+    description="""
+管理后台 **题库管理-用户行为** 页面使用。
+
+**使用场景**: 按学生 + 题库 + 时间段查询练习情况，返回汇总指标与按天分布。
+
+**查询参数**:
+- `user_id`: 学生用户 ID（必填）
+- `library_id`: 题库 ID（必填）
+- `date_from` / `date_to`: 时间段（含起止，跨度最多 366 天，必填）
+
+**口径**: 仅统计练习作答（含重做），考试作答不计入；按天分布按应用时区切日。
+
+**认证**: 需 `quiz:list` 权限
+    """,
+)
+async def get_user_practice_stats(
+    user_id: int = Query(..., ge=1),
+    library_id: int = Query(..., ge=1),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    _admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[AdminQuizUserPracticeStats]:
+    query = _validated_query(
+        AdminQuizUserPracticeQuery,
+        {
+            "user_id": user_id,
+            "library_id": library_id,
+            "date_from": date_from,
+            "date_to": date_to,
+        },
+    )
+    return success(data=await AdminQuizService().get_user_practice_stats(query))
 
 
 @router.post(

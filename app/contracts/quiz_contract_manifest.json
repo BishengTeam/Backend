@@ -1,7 +1,7 @@
 {
-  "admin_operation_count": 56,
-  "fingerprint_sha256": "c1c92f0194d9e72ad48239f0ddeae9c060fb9811ae2ecddacb4a180ce33e3bb3",
-  "operation_count": 88,
+  "admin_operation_count": 57,
+  "fingerprint_sha256": "1856ab1c27ad3be24d393938b43e8561c02c37dccbb34370fbd8bfc1ce2a78dd",
+  "operation_count": 89,
   "operations": [
     {
       "auth": "admin",
@@ -384,6 +384,13 @@
     {
       "auth": "admin",
       "method": "GET",
+      "path": "/admin/quiz/stats/user-practice",
+      "permission": "quiz:list",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "GET",
       "path": "/admin/quiz/stats/users",
       "permission": "quiz:list",
       "rate_limit_per_minute": null
@@ -620,7 +627,7 @@
       "rate_limit_per_minute": null
     }
   ],
-  "quiz_contract_version": "2026-08-29",
+  "quiz_contract_version": "2026-08-30",
   "removed_operation_count": 13,
   "removed_operations": [
     {

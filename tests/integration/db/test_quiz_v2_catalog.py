@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import delete, func, select
@@ -35,7 +36,8 @@ from app.domain.community.src.index import (
 from app.domain.order.src.index import Order
 from app.domain.plan.src.index import Plan  # noqa: F401 - resolve Order.plan_id mapper FK
 from app.domain.user.src.index import AdminUser, User
-from app.port.exceptions import ConflictException, QuizV2Exception
+from app.port.exceptions import ConflictException, NotFoundException, QuizV2Exception
+from app.port.config import settings
 from app.schemas.admin_quiz_contract import (
     AdminQuizCourseBindingCreate,
     AdminQuizKnowledgePointCreate,
@@ -46,6 +48,7 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizDailyStatsQuery,
     AdminQuizQuestionCreate,
     AdminQuizQuestionUpdate,
+    AdminQuizUserPracticeQuery,
     AdminQuizStatsQuestionQuery,
     AdminQuizUserStatsQuery,
     AdminQuizVersionRequest,
@@ -996,3 +999,100 @@ async def test_behavior_stats_report_daily_trend_user_ranking_and_wrong_order(
     wrong_item = ranking.items[0]
     assert wrong_item.practice_first_attempts >= 1
     assert wrong_item.practice_first_correct == 0
+
+
+async def test_admin_user_practice_stats_filter_student_library_and_range(
+    quiz_v2_catalog_env,
+    monkeypatch,
+) -> None:
+    env = quiz_v2_catalog_env
+    await _grant_entitlement(env)
+
+    @asynccontextmanager
+    async def admin_db_ctx():
+        async with env.factory() as session:
+            yield session
+
+    monkeypatch.setattr("app.services.admin_quiz.get_db_ctx", admin_db_ctx)
+
+    for index in range(2):
+        question = await env.admin_service.create_question(
+            AdminQuizQuestionCreate(
+                knowledge_point_id=env.point.id,
+                question_type="single_choice",
+                question_text=f"{env.prefix} 学生练习查询题目 {index}",
+                options={"A": "甲", "B": "乙", "C": "丙"},
+                correct_answer="A",
+                explanation="甲正确。",
+            ),
+            admin_id=env.admin_id,
+        )
+        await env.admin_service.publish_question_revision(
+            question.id,
+            AdminQuizVersionRequest(lock_version=question.lock_version),
+            admin_id=env.admin_id,
+        )
+
+    session = await env.user_service.create_practice_session(
+        env.user_id,
+        QuizPracticeSessionCreate(
+            mode="full",
+            scope_type="knowledge_point",
+            scope_id=env.point.id,
+        ),
+    )
+    assert len(session.questions) == 3
+    for position, answer in enumerate(("A", "B", "A"), start=1):
+        await env.practice_service.submit_attempt(
+            env.user_id,
+            session.id,
+            QuizPracticeAttemptCreate(
+                session_question_id=session.questions[position - 1].session_question_id,
+                idempotency_key=f"user-practice-{position}",
+                user_answer=answer,
+            ),
+        )
+
+    service = AdminQuizService()
+    today = datetime.now(ZoneInfo(settings.APP_TIMEZONE)).date()
+    result = await service.get_user_practice_stats(
+        AdminQuizUserPracticeQuery(
+            user_id=env.user_id,
+            library_id=env.library.id,
+            date_from=today,
+            date_to=today,
+        )
+    )
+    assert result.total_attempts == 3
+    assert result.answered_questions == 3
+    assert result.first_attempts == 3
+    assert result.first_correct == 2
+    assert result.first_accuracy == Decimal("66.7")
+    assert result.active_days == 1
+    assert len(result.daily) == 1
+    assert result.daily[0].date == today
+    assert result.daily[0].attempts == 3
+    assert result.daily[0].correct == 2
+    assert result.daily[0].accuracy == Decimal("66.7")
+
+    outside = await service.get_user_practice_stats(
+        AdminQuizUserPracticeQuery(
+            user_id=env.user_id,
+            library_id=env.library.id,
+            date_from=today - timedelta(days=10),
+            date_to=today - timedelta(days=1),
+        )
+    )
+    assert outside.total_attempts == 0
+    assert outside.daily == []
+    assert outside.active_days == 0
+
+    with pytest.raises(NotFoundException):
+        await service.get_user_practice_stats(
+            AdminQuizUserPracticeQuery(
+                user_id=99999999,
+                library_id=env.library.id,
+                date_from=today,
+                date_to=today,
+            )
+        )

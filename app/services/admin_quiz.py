@@ -9,13 +9,13 @@ import time
 import uuid
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError as PydanticValidationError
-from sqlalchemy import delete, exists, func, or_, select, text, union
+from sqlalchemy import case, delete, exists, func, or_, select, text, union
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
@@ -87,6 +87,9 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizDailyStatsItem,
     AdminQuizUserStatsQuery,
     AdminQuizUserStatsListItem,
+    AdminQuizUserPracticeQuery,
+    AdminQuizUserPracticeDay,
+    AdminQuizUserPracticeStats,
     AdminQuizVersionRequest,
     AdminQuizAuditLogResponse,
     AdminQuizAuditQuery,
@@ -1892,6 +1895,132 @@ class AdminQuizService:
             total=total,
             page=query.page,
             page_size=query.page_size,
+        )
+
+    async def get_user_practice_stats(
+        self, query: AdminQuizUserPracticeQuery
+    ) -> AdminQuizUserPracticeStats:
+        """One student's practice activity in one library for a date range.
+
+        Attempts (including retries) drive the numbers; exam answers are a
+        separate domain and are deliberately excluded.  Days are bucketed in
+        the application timezone so the chart matches the check-in calendar.
+        """
+
+        timezone_name = settings.APP_TIMEZONE
+        start_at = datetime.combine(query.date_from, time.min, tzinfo=ZoneInfo(timezone_name))
+        end_at = datetime.combine(
+            query.date_to + timedelta(days=1), time.min, tzinfo=ZoneInfo(timezone_name)
+        )
+        practice_day = func.date(
+            func.timezone(timezone_name, QuizPracticeAttempt.submitted_at)
+        ).label("practice_day")
+
+        async with get_db_ctx() as db:
+            user = (
+                await db.execute(select(User).where(User.id == query.user_id))
+            ).scalar_one_or_none()
+            if user is None:
+                raise NotFoundException("用户")
+            library = (
+                await db.execute(
+                    select(QuizLibrary).where(QuizLibrary.id == query.library_id)
+                )
+            ).scalar_one_or_none()
+            if library is None:
+                raise NotFoundException("题库")
+
+            base = (
+                select()
+                .select_from(QuizPracticeAttempt)
+                .join(
+                    QuizPracticeSessionQuestion,
+                    QuizPracticeSessionQuestion.id
+                    == QuizPracticeAttempt.session_question_id,
+                )
+                .join(
+                    QuizQuestion,
+                    QuizQuestion.id == QuizPracticeSessionQuestion.question_id,
+                )
+                .where(
+                    QuizPracticeAttempt.user_id == query.user_id,
+                    QuizQuestion.library_id == query.library_id,
+                    QuizPracticeAttempt.submitted_at >= start_at,
+                    QuizPracticeAttempt.submitted_at < end_at,
+                )
+            )
+            summary = (
+                await db.execute(
+                    base.with_only_columns(
+                        func.count(QuizPracticeAttempt.id),
+                        func.count(func.distinct(QuizPracticeSessionQuestion.question_id)),
+                        func.count(QuizPracticeAttempt.id).filter(
+                            QuizPracticeAttempt.is_first_attempt.is_(True)
+                        ),
+                        func.count(QuizPracticeAttempt.id).filter(
+                            QuizPracticeAttempt.is_first_attempt.is_(True),
+                            QuizPracticeAttempt.is_correct.is_(True),
+                        ),
+                    )
+                )
+            ).one()
+            daily_rows = (
+                await db.execute(
+                    base.with_only_columns(
+                        practice_day,
+                        func.count(QuizPracticeAttempt.id),
+                        func.sum(
+                            case(
+                                (QuizPracticeAttempt.is_correct.is_(True), 1),
+                                else_=0,
+                            )
+                        ),
+                    )
+                    .group_by(practice_day)
+                    .order_by(practice_day.asc())
+                )
+            ).all()
+
+        total_attempts = int(summary[0] or 0)
+        answered_questions = int(summary[1] or 0)
+        first_attempts = int(summary[2] or 0)
+        first_correct = int(summary[3] or 0)
+        daily: list[AdminQuizUserPracticeDay] = []
+        for row_day, attempts, correct in daily_rows:
+            attempts = int(attempts or 0)
+            correct = int(correct or 0)
+            daily.append(
+                AdminQuizUserPracticeDay(
+                    date=row_day,
+                    attempts=attempts,
+                    correct=correct,
+                    accuracy=(
+                        (Decimal(correct) * Decimal("100") / Decimal(attempts)).quantize(
+                            Decimal("0.1")
+                        )
+                        if attempts
+                        else Decimal("0.0")
+                    ),
+                )
+            )
+        return AdminQuizUserPracticeStats(
+            user_id=query.user_id,
+            library_id=query.library_id,
+            date_from=query.date_from,
+            date_to=query.date_to,
+            total_attempts=total_attempts,
+            answered_questions=answered_questions,
+            first_attempts=first_attempts,
+            first_correct=first_correct,
+            first_accuracy=(
+                (Decimal(first_correct) * Decimal("100") / Decimal(first_attempts)).quantize(
+                    Decimal("0.1")
+                )
+                if first_attempts
+                else Decimal("0.0")
+            ),
+            active_days=len(daily),
+            daily=daily,
         )
 
     @staticmethod
