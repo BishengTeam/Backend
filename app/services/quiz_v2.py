@@ -24,7 +24,10 @@ from app.domain.community.src.index import (
 from app.domain.user.src.index import User
 from app.port.exceptions import QuizV2Exception
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
-from app.domain.community.src.rule.quiz import QuizPracticeMode
+from app.domain.community.src.rule.quiz import (
+    OBJECTIVE_QUESTION_TYPES,
+    QuizPracticeMode,
+)
 from app.schemas.common import PaginatedData
 from app.schemas.quiz_contract import (
     QuizKnowledgePointProgress,
@@ -66,6 +69,7 @@ class QuizV2Service:
                 QuizQuestion.library_id == library_id,
                 QuizQuestion.status == "published",
                 QuizQuestion.current_revision_id.is_not(None),
+                QuizQuestion.question_type.in_(OBJECTIVE_QUESTION_TYPES),
                 QuizKnowledgePoint.status == "active",
                 QuizKnowledgePoint.system_kind == "none",
             ]
@@ -250,6 +254,7 @@ class QuizV2Service:
                     QuizQuestion.library_id.in_(library_ids),
                     QuizQuestion.status == "published",
                     QuizQuestion.current_revision_id.is_not(None),
+                    QuizQuestion.question_type.in_(OBJECTIVE_QUESTION_TYPES),
                     QuizKnowledgePoint.status == "active",
                     QuizModule.status == "active",
                 )
@@ -537,6 +542,7 @@ class QuizV2Service:
                             QuizQuestion.library_id == library_id,
                             QuizQuestion.status == "published",
                             QuizQuestion.current_revision_id.is_not(None),
+                            QuizQuestion.question_type.in_(OBJECTIVE_QUESTION_TYPES),
                         )
                         .group_by(QuizQuestion.knowledge_point_id)
                     )
@@ -668,6 +674,7 @@ class QuizV2Service:
                         QuizQuestion.library_id == library_id,
                         QuizQuestion.status == "published",
                         QuizQuestion.current_revision_id.is_not(None),
+                        QuizQuestion.question_type.in_(OBJECTIVE_QUESTION_TYPES),
                         QuizKnowledgePoint.status == "active",
                         QuizKnowledgePoint.system_kind == "none",
                         QuizModule.status == "active",
@@ -922,6 +929,7 @@ class QuizV2Service:
                 QuizQuestion.knowledge_point_id.in_(point_ids),
                 QuizQuestion.status == "published",
                 QuizQuestion.current_revision_id.is_not(None),
+                QuizQuestion.question_type.in_(OBJECTIVE_QUESTION_TYPES),
             )
             if mode == "wrong_only":
                 stmt = stmt.join(
@@ -1078,6 +1086,7 @@ class QuizV2Service:
                     QuizQuestion.knowledge_point_id.in_(point_ids),
                     QuizQuestion.status == "published",
                     QuizQuestionRevision.status == "published",
+                    QuizQuestion.question_type.in_(OBJECTIVE_QUESTION_TYPES),
                 )
             )
             if mode == "wrong_only":

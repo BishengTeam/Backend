@@ -4,6 +4,7 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "quiz:list", "quiz:write", "quiz:import",
         "quiz_content_edit", "quiz_content_publish", "quiz_library_manage",
         "course_quiz_bind",
+        "course_assignment_manage",
     ],
     "cert_admin": [
         "content:read",
@@ -19,8 +20,11 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "h3c:order_close",
     ],
     "course_admin": [
+        "quiz:list",
         "course:read",
         "course:write",
         "course:publish",
+        "course_assignment_manage",
+        "course_assignment_review",
     ],
 }

@@ -29,6 +29,7 @@ class TestRolePermissions:
             "quiz_content_publish",
             "quiz_library_manage",
             "course_quiz_bind",
+            "course_assignment_manage",
         ):
             assert permission in permissions
         for forbidden in (
@@ -50,9 +51,12 @@ class TestRolePermissions:
 
         permissions = ROLE_PERMISSIONS["course_admin"]
         assert set(permissions) == {
+            "quiz:list",
             "course:read",
             "course:write",
             "course:publish",
+            "course_assignment_manage",
+            "course_assignment_review",
         }
 
     def test_cert_admin_manages_all_certification_business(self):

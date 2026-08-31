@@ -21,6 +21,14 @@ class QuizQuestionType(StrEnum):
     SINGLE_CHOICE = "single_choice"
     MULTIPLE_CHOICE = "multiple_choice"
     JUDGE = "judge"
+    ESSAY = "essay"
+
+
+OBJECTIVE_QUESTION_TYPES = (
+    QuizQuestionType.SINGLE_CHOICE.value,
+    QuizQuestionType.MULTIPLE_CHOICE.value,
+    QuizQuestionType.JUDGE.value,
+)
 
 
 class QuizCategoryStatus(StrEnum):
@@ -124,6 +132,7 @@ class NormalizedQuizQuestion:
     question_text_hash: str
     options: dict[str, str] | None
     correct_answer: QuizAnswer | None
+    reference_answer: str | None
     explanation: str | None
     image_urls: list[str]
     option_image_urls: dict[str, str] = field(default_factory=dict)
@@ -229,6 +238,11 @@ def _normalize_options(
     *,
     require_publishable: bool,
 ) -> dict[str, str] | None:
+    if question_type is QuizQuestionType.ESSAY:
+        if options is None:
+            return None
+        raise QuizRuleViolation("options", "问答题不支持选项")
+
     if question_type is QuizQuestionType.JUDGE:
         if options is None:
             return dict(JUDGE_OPTIONS)
@@ -295,6 +309,10 @@ def normalize_option_image_urls(
 
     if value is None or value == "" or value == {}:
         value = {}
+    if question_type is QuizQuestionType.ESSAY:
+        if value:
+            raise QuizRuleViolation("option_image_urls", "问答题不支持选项图片")
+        return {}
     if not isinstance(value, Mapping):
         raise QuizRuleViolation("option_image_urls", "选项图片必须是对象")
 
@@ -337,6 +355,11 @@ def _normalize_correct_answer(
     options: dict[str, str] | None,
     require_publishable: bool,
 ) -> QuizAnswer | None:
+    if question_type is QuizQuestionType.ESSAY:
+        if answer is not None and answer != "":
+            raise QuizRuleViolation("correct_answer", "问答题不能配置唯一标准答案")
+        return None
+
     if answer is None or answer == "" or answer == []:
         if require_publishable:
             raise QuizRuleViolation("correct_answer", "发布前必须填写标准答案")
@@ -373,6 +396,7 @@ def normalize_question_payload(
     question_text: object,
     options: object = None,
     correct_answer: object = None,
+    reference_answer: object = None,
     explanation: object = None,
     image_urls: object = None,
     option_image_urls: object = None,
@@ -403,6 +427,18 @@ def normalize_question_payload(
         options=normalized_options,
         require_publishable=require_publishable,
     )
+    normalized_reference_answer = (
+        _clean_text(
+            reference_answer,
+            field="reference_answer",
+            max_length=5000,
+            required=False,
+        )
+        if normalized_type is QuizQuestionType.ESSAY
+        else None
+    )
+    if reference_answer is not None and normalized_type is not QuizQuestionType.ESSAY:
+        raise QuizRuleViolation("reference_answer", "仅问答题支持参考答案或评分标准")
     normalized_explanation = _clean_text(
         explanation,
         field="explanation",
@@ -422,6 +458,7 @@ def normalize_question_payload(
         question_text_hash=question_text_digest(normalized_text),
         options=normalized_options,
         correct_answer=normalized_answer,
+        reference_answer=normalized_reference_answer,
         explanation=normalized_explanation,
         image_urls=normalized_image_urls,
         option_image_urls=normalized_option_image_urls,
@@ -436,6 +473,17 @@ def normalize_submitted_answer(
 ) -> QuizAnswer:
     normalized_type = _enum_value(question_type, QuizQuestionType, "question_type")
     assert isinstance(normalized_type, QuizQuestionType)
+
+    if normalized_type is QuizQuestionType.ESSAY:
+        if isinstance(answer, str):
+            cleaned = answer.strip()
+            if not cleaned:
+                raise QuizRuleViolation("user_answer", "问答题答案不能为空")
+            if len(cleaned) > 5000:
+                raise QuizRuleViolation("user_answer", "问答题答案不能超过 5000 字")
+            return cleaned
+        raise QuizRuleViolation("user_answer", "问答题答案必须是字符串")
+
     normalized_options = _normalize_options_mapping(options)
 
     if normalized_type in {QuizQuestionType.SINGLE_CHOICE, QuizQuestionType.JUDGE}:

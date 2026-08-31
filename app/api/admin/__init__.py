@@ -12,6 +12,7 @@ from app.api.admin.coupons import router as coupons_router
 from app.api.admin.deployment_acceptance import router as deployment_acceptance_router
 from app.api.admin.jobs import router as jobs_router
 from app.api.admin.courses import router as courses_router
+from app.api.admin.course_assignments import router as course_assignments_router
 from app.api.admin.course_uploads import router as course_uploads_router
 from app.api.admin.orders import router as orders_router
 from app.api.admin.plans import router as plans_router
@@ -38,6 +39,7 @@ router.include_router(users_router)
 router.include_router(orders_router)
 router.include_router(reviews_router)
 router.include_router(courses_router)
+router.include_router(course_assignments_router)
 router.include_router(course_uploads_router)
 router.include_router(cert_router)
 router.include_router(plans_router, prefix="/certifications")

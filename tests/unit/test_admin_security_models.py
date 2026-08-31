@@ -38,6 +38,7 @@ QUIZ_ADMIN_PERMISSIONS = {
     "quiz_content_publish",
     "quiz_library_manage",
     "course_quiz_bind",
+    "course_assignment_manage",
 }
 
 

@@ -141,6 +141,7 @@ class AdminQuizQuestionCreate(QuizContractModel):
     question_text: str = Field(min_length=1, max_length=1024)
     options: dict[str, str] | None = None
     correct_answer: QuizAnswer | None = None
+    reference_answer: str | None = Field(default=None, max_length=5000)
     explanation: str | None = Field(default=None, max_length=1024)
     image_urls: list[str] = Field(default_factory=list, max_length=9)
     option_image_urls: dict[str, str] | None = None
@@ -154,6 +155,7 @@ class AdminQuizQuestionCreate(QuizContractModel):
             question_text=self.question_text,
             options=self.options,
             correct_answer=self.correct_answer,
+            reference_answer=self.reference_answer,
             explanation=self.explanation,
             image_urls=self.image_urls,
             option_image_urls=self.option_image_urls,
@@ -163,6 +165,7 @@ class AdminQuizQuestionCreate(QuizContractModel):
         self.question_text = normalized.question_text
         self.options = normalized.options
         self.correct_answer = normalized.correct_answer
+        self.reference_answer = normalized.reference_answer
         self.explanation = normalized.explanation
         self.image_urls = normalized.image_urls
         self.option_image_urls = normalized.option_image_urls
@@ -177,6 +180,7 @@ class AdminQuizQuestionUpdate(QuizContractModel):
     question_text: str | None = Field(default=None, min_length=1, max_length=1024)
     options: dict[str, str] | None = None
     correct_answer: QuizAnswer | None = None
+    reference_answer: str | None = Field(default=None, max_length=5000)
     explanation: str | None = Field(default=None, max_length=1024)
     image_urls: list[str] | None = Field(default=None, max_length=9)
     option_image_urls: dict[str, str] | None = None
@@ -201,6 +205,7 @@ class AdminQuizQuestionResponse(QuizContractModel):
     normalized_question_text: str
     options: dict[str, str] | None = None
     correct_answer: QuizAnswer | None = None
+    reference_answer: str | None = None
     explanation: str | None = None
     image_urls: list[str] = Field(default_factory=list)
     option_image_urls: dict[str, str] = Field(default_factory=dict)
@@ -231,6 +236,7 @@ class AdminQuizQuestionRevisionResponse(QuizContractModel):
     normalized_question_text: str
     options: dict[str, str] | None = None
     correct_answer: QuizAnswer | None = None
+    reference_answer: str | None = None
     explanation: str | None = None
     image_urls: list[str] = Field(default_factory=list)
     option_image_urls: dict[str, str] = Field(default_factory=dict)

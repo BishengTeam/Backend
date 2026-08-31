@@ -186,6 +186,7 @@ class AdminQuizV2Service:
             "options": question.options,
             "option_image_urls": question.option_image_urls,
             "correct_answer": question.correct_answer,
+            "reference_answer": question.reference_answer,
             "explanation": question.explanation,
             "image_urls": question.image_urls,
             "current_revision_id": question.current_revision_id,
@@ -239,6 +240,7 @@ class AdminQuizV2Service:
             normalized_question_text=question.normalized_question_text,
             options=question.options,
             correct_answer=question.correct_answer,
+            reference_answer=question.reference_answer,
             explanation=question.explanation,
             image_urls=sign_quiz_media_urls(list(question.image_urls or [])),
             option_image_urls=sign_quiz_media_map(dict(question.option_image_urls or {})),
@@ -290,6 +292,7 @@ class AdminQuizV2Service:
         options: object,
         correct_answer: object,
         explanation: object,
+        reference_answer: object = None,
         image_urls: object,
         option_image_urls: object = None,
         require_publishable: bool,
@@ -300,6 +303,7 @@ class AdminQuizV2Service:
                 question_text=question_text,
                 options=options,
                 correct_answer=correct_answer,
+                reference_answer=reference_answer,
                 explanation=explanation,
                 image_urls=image_urls,
                 option_image_urls=option_image_urls,
@@ -334,6 +338,7 @@ class AdminQuizV2Service:
         question.options = normalized.options
         question.option_image_urls = normalized.option_image_urls
         question.correct_answer = normalized.correct_answer
+        question.reference_answer = normalized.reference_answer
         question.explanation = normalized.explanation
         question.image_urls = normalized.image_urls
 
@@ -358,6 +363,7 @@ class AdminQuizV2Service:
             options=normalized.options,
             option_image_urls=normalized.option_image_urls,
             correct_answer=normalized.correct_answer,
+            reference_answer=normalized.reference_answer,
             explanation=normalized.explanation,
             image_urls=normalized.image_urls,
             published_at=published_at,
@@ -1744,6 +1750,7 @@ class AdminQuizV2Service:
             question_text=data.question_text,
             options=data.options,
             correct_answer=data.correct_answer,
+            reference_answer=data.reference_answer,
             explanation=data.explanation,
             image_urls=data.image_urls,
             option_image_urls=data.option_image_urls,
@@ -1860,6 +1867,11 @@ class AdminQuizV2Service:
                     if "correct_answer" in fields
                     else source.correct_answer
                 ),
+                reference_answer=(
+                    data.reference_answer
+                    if "reference_answer" in fields
+                    else source.reference_answer
+                ),
                 explanation=(
                     data.explanation if "explanation" in fields else source.explanation
                 ),
@@ -1968,6 +1980,7 @@ class AdminQuizV2Service:
                 question_text=pending.question_text,
                 options=pending.options,
                 correct_answer=pending.correct_answer,
+                reference_answer=pending.reference_answer,
                 explanation=pending.explanation,
                 image_urls=pending.image_urls,
                 option_image_urls=pending.option_image_urls,

@@ -330,7 +330,7 @@ class QuizQuestion(Base, _QuizTimestampMixin):
     __tablename__ = "quiz_question"
     __table_args__ = (
         CheckConstraint(
-            "question_type IN ('single_choice', 'multiple_choice', 'judge')",
+            "question_type IN ('single_choice', 'multiple_choice', 'judge', 'essay')",
             name="ck_quiz_question_type",
         ),
         CheckConstraint(
@@ -424,6 +424,7 @@ class QuizQuestion(Base, _QuizTimestampMixin):
     options: Mapped[dict[str, str] | None] = mapped_column(JSONB)
     option_image_urls: Mapped[dict[str, str] | None] = mapped_column(JSONB)
     correct_answer: Mapped[str | list[str] | None] = mapped_column(JSONB)
+    reference_answer: Mapped[str | None] = mapped_column(Text)
     explanation: Mapped[str | None] = mapped_column(String(1024))
     image_urls: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'")
@@ -457,7 +458,7 @@ class QuizQuestionRevision(Base, _QuizCreatedAtMixin):
     __tablename__ = "quiz_question_revision"
     __table_args__ = (
         CheckConstraint(
-            "question_type IN ('single_choice', 'multiple_choice', 'judge')",
+            "question_type IN ('single_choice', 'multiple_choice', 'judge', 'essay')",
             name="ck_quiz_question_revision_type",
         ),
         CheckConstraint(
@@ -498,6 +499,7 @@ class QuizQuestionRevision(Base, _QuizCreatedAtMixin):
     options: Mapped[dict[str, str] | None] = mapped_column(JSONB)
     option_image_urls: Mapped[dict[str, str] | None] = mapped_column(JSONB)
     correct_answer: Mapped[str | list[str] | None] = mapped_column(JSONB)
+    reference_answer: Mapped[str | None] = mapped_column(Text)
     explanation: Mapped[str | None] = mapped_column(String(1024))
     image_urls: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'")
