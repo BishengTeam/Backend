@@ -59,9 +59,6 @@ QUIZ_MIGRATION_PATHS = tuple(
 COURSE_QUIZ_MIGRATION_PATH = (
     REPO_ROOT / "alembic/versions/crs001_rebuild_course_domain.py"
 )
-COURSE_ASSIGNMENT_MIGRATION_PATH = (
-    REPO_ROOT / "alembic/versions/assignment001_course_assignment_review.py"
-)
 V2_MIGRATION_PATH = (
     REPO_ROOT / "alembic/versions/quiz004_expand_quiz_v2_domain.py"
 )
@@ -274,7 +271,7 @@ def test_submitted_answers_are_canonical_and_exact_match_only() -> None:
 
 
 def test_contract_registry_is_complete_strict_and_machine_readable() -> None:
-    assert len(QUIZ_API_CONTRACTS) == 90
+    assert len(QUIZ_API_CONTRACTS) == 89
     keys = {(entry.method, entry.path) for entry in QUIZ_API_CONTRACTS}
     assert len(keys) == len(QUIZ_API_CONTRACTS)
     assert {
@@ -390,13 +387,11 @@ def test_quiz_metadata_matches_the_rebuilt_domain() -> None:
     migration = _load_migration()
     v2_migration = _load_migration(V2_MIGRATION_PATH)
     v2_practice_migration = _load_migration(V2_PRACTICE_MIGRATION_PATH)
-    course_assignment_migration = _load_migration(COURSE_ASSIGNMENT_MIGRATION_PATH)
     expected = (
         set(migration.NEW_TABLES)
         | {"quiz_import_error"}
         | set(v2_migration.V2_TABLES)
         | set(v2_practice_migration.V2_PRACTICE_TABLES)
-        | set(course_assignment_migration.ASSIGNMENT_TABLES)
     )
     actual = {name for name in Base.metadata.tables if name.startswith("quiz_")}
     assert actual == expected
@@ -458,11 +453,7 @@ def test_destructive_migration_is_isolated_and_backup_gated() -> None:
     source = MIGRATION_PATH.read_text(encoding="utf-8")
     all_quiz_migration_source = "\n".join(
         path.read_text(encoding="utf-8")
-        for path in (
-            *QUIZ_MIGRATION_PATHS,
-            COURSE_QUIZ_MIGRATION_PATH,
-            COURSE_ASSIGNMENT_MIGRATION_PATH,
-        )
+        for path in (*QUIZ_MIGRATION_PATHS, COURSE_QUIZ_MIGRATION_PATH)
     )
     assert migration.revision == "quiz001"
     assert migration.down_revision == "rsh001"

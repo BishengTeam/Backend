@@ -6,10 +6,7 @@ from pydantic import ValidationError
 
 from app.port.exceptions import BusinessException
 from app.port.config import settings
-from app.middleware.auth import (
-    require_permission,
-    require_reauthenticated_super_admin,
-)
+from app.middleware.auth import require_permission
 from app.middleware.rate_limit import limiter, quiz_admin_key
 from app.schemas.admin_quiz_contract import (
     AdminQuizBatchRequest,
@@ -60,8 +57,6 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizKnowledgePointCreate,
     AdminQuizKnowledgePointResponse,
     AdminQuizKnowledgePointUpdate,
-    AdminQuizLibraryAccessModeConvert,
-    AdminQuizLibraryAccessModeConvertResponse,
     AdminQuizLibraryCreate,
     AdminQuizLibraryQuery,
     AdminQuizLibraryResponse,
@@ -190,23 +185,6 @@ async def transition_library(
 ) -> APIResponse[AdminQuizLibraryResponse]:
     return success(
         data=await AdminQuizV2Service().transition_library(
-            library_id, body, admin_id=admin.id
-        )
-    )
-
-
-@router.post(
-    "/libraries/{library_id}/convert-access-mode",
-    response_model=APIResponse[AdminQuizLibraryAccessModeConvertResponse],
-    summary="转换 V2 题库访问模式",
-)
-async def convert_library_access_mode(
-    body: AdminQuizLibraryAccessModeConvert,
-    library_id: int = Path(..., ge=1),
-    admin=Depends(require_reauthenticated_super_admin),
-) -> APIResponse[AdminQuizLibraryAccessModeConvertResponse]:
-    return success(
-        data=await AdminQuizV2Service().convert_library_access_mode(
             library_id, body, admin_id=admin.id
         )
     )

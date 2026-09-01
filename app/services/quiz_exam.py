@@ -24,7 +24,6 @@ from app.domain.community.src.index import (
     QuizQuestion,
 )
 from app.domain.community.src.rule.quiz import (
-    OBJECTIVE_QUESTION_TYPES,
     QuizExamStatus,
     QuizQuestionStatus,
     answers_match,
@@ -531,7 +530,6 @@ class QuizExamService:
                                 QuizQuestion.knowledge_point_id.in_(point_ids),
                                 QuizQuestion.status == _PUBLISHED,
                                 QuizQuestionRevision.status == "published",
-                                QuizQuestion.question_type.in_(OBJECTIVE_QUESTION_TYPES),
                             )
                             .order_by(func.random())
                             .limit(data.question_count)
@@ -722,7 +720,6 @@ class QuizExamService:
                             QuizQuestion.id.in_(data.question_ids),
                             QuizQuestion.status == _PUBLISHED,
                             QuizQuestionRevision.status == "published",
-                            QuizQuestion.question_type.in_(OBJECTIVE_QUESTION_TYPES),
                         )
                     )
                 ).all()

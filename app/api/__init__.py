@@ -8,7 +8,6 @@ from app.api.collection import router as collection_router
 from app.api.competition import router as competition_router
 from app.api.coupon import router as coupon_router
 from app.api.courses import router as courses_router
-from app.api.course_assignments import router as course_assignments_router
 from app.api.h3c import order_router as h3c_order_router
 from app.api.h3c import router as h3c_router
 from app.api.job import router as job_router
@@ -33,7 +32,6 @@ router.include_router(cert_router)
 router.include_router(user_router)
 router.include_router(chat_router)
 router.include_router(courses_router)
-router.include_router(course_assignments_router)
 router.include_router(h3c_router)
 router.include_router(h3c_order_router)
 router.include_router(plans_router)

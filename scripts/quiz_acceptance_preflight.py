@@ -579,7 +579,7 @@ def _load_contract_manifest() -> dict[str, Any]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise PreflightError("cannot read the frozen quiz contract manifest") from exc
-    if not isinstance(payload, dict) or payload.get("operation_count") != 90:
+    if not isinstance(payload, dict) or payload.get("operation_count") != 78:
         raise PreflightError("the frozen quiz contract manifest is invalid")
     return payload
 

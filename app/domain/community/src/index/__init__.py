@@ -27,15 +27,6 @@ from app.domain.community.src.model.quiz import (
     QuizUserStats,
     QuizWrongItem,
 )
-from app.domain.community.src.model.course_assignment import (
-    QuizCourseAssignment,
-    QuizCourseAssignmentAnswer,
-    QuizCourseAssignmentQuestion,
-    QuizCourseAssignmentReviewLog,
-    QuizCourseAssignmentSubmission,
-    QuizCourseAssignmentSubmissionQuestion,
-    QuizCourseAssignmentVersion,
-)
 from app.domain.community.src.model.quick_question import QuickQuestion
 from app.domain.community.src.model.share import Share
 from app.domain.community.src.model.collection import Collection
@@ -47,13 +38,6 @@ __all__ = [
     "QuizCheckin",
     "QuizCollection",
     "QuizCourseLibraryBinding",
-    "QuizCourseAssignment",
-    "QuizCourseAssignmentAnswer",
-    "QuizCourseAssignmentQuestion",
-    "QuizCourseAssignmentReviewLog",
-    "QuizCourseAssignmentSubmission",
-    "QuizCourseAssignmentSubmissionQuestion",
-    "QuizCourseAssignmentVersion",
     "QuizExam",
     "QuizExamAnswer",
     "QuizExamQuestion",
