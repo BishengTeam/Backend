@@ -320,18 +320,12 @@ async def create_binding(
     admin=Depends(require_super_admin),
 ):
     if body.backfill_confirmations != ["impact_confirmed"]:
-        raise BusinessException("请先确认绑定影响")
-    job = await CourseEntitlementService.create_binding(
-        course_id, body.library_id, admin_id=admin.id
-    )
-    message = (
-        "绑定已创建，课程发布后的新购用户将自动获得题库权益"
-        if job.status == "succeeded" and job.total_count == 0
-        else "绑定已创建，回补任务已排队"
-    )
+        raise BusinessException("请先确认绑定影响并执行回补")
     return success(
-        data=job,
-        message=message,
+        data=await CourseEntitlementService.create_binding(
+            course_id, body.library_id, admin_id=admin.id
+        ),
+        message="绑定已创建，回补任务已排队",
     )
 
 

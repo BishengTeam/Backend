@@ -233,7 +233,7 @@ class CourseEntitlementService:
                 or 0
             )
             blockers: list[str] = []
-            if course.status not in {"draft", "published"}:
+            if course.status != "published":
                 blockers.append("course_not_published")
             if library.access_mode != "course_entitlement":
                 blockers.append("library_not_course_entitlement")
@@ -292,8 +292,8 @@ class CourseEntitlementService:
             async with db.begin():
                 course = await cls._locked_course(db, course_id)
                 library = await cls._locked_library(db, library_id)
-                if course.status not in {"draft", "published"}:
-                    raise BusinessException("只有草稿或已发布课程可以绑定题库")
+                if course.status != "published":
+                    raise BusinessException("只有已发布课程可以绑定题库")
                 if library.access_mode != "course_entitlement":
                     raise BusinessException("题库不是课程权益模式")
                 if library.status != "published":
@@ -318,62 +318,40 @@ class CourseEntitlementService:
                 db.add(binding)
                 await db.flush()
 
-                if course.status == "draft":
-                    # A draft course cannot be purchased yet. Keep the binding
-                    # active for future fulfillment, but do not queue a backfill
-                    # job. A completed zero-count job preserves the route shape
-                    # and makes the no-backfill decision visible in task history.
-                    job = CourseEntitlementJob(
-                        course_id=course_id,
-                        library_id=library_id,
-                        binding_id=int(binding.id),
-                        action="backfill",
-                        status="succeeded",
-                        batch_size=COURSE_ENTITLEMENT_BATCH_SIZE,
-                        total_count=0,
-                        created_by=admin_id,
-                        started_at=cls._now(),
-                        finished_at=cls._now(),
-                    )
-                    db.add(job)
-                    await db.flush()
-                else:
-                    # Paid enrollments are represented by their immutable order
-                    # and can also be backfilled idempotently.
-                    paid_enrollments = list(
-                        (
-                            await db.execute(
-                                select(CourseEnrollment)
-                                .where(
-                                    CourseEnrollment.course_id == course_id,
-                                    CourseEnrollment.status.in_(
-                                        ACTIVE_ENROLLMENT_STATUSES
-                                    ),
-                                )
-                                .order_by(CourseEnrollment.id.asc())
+                # Paid enrollments are represented by their immutable order and
+                # can also be backfilled idempotently.
+                paid_enrollments = list(
+                    (
+                        await db.execute(
+                            select(CourseEnrollment)
+                            .where(
+                                CourseEnrollment.course_id == course_id,
+                                CourseEnrollment.status.in_(ACTIVE_ENROLLMENT_STATUSES),
                             )
-                        ).scalars()
-                    )
-                    job = CourseEntitlementJob(
-                        course_id=course_id,
-                        library_id=library_id,
-                        binding_id=int(binding.id),
-                        action="backfill",
-                        status="queued",
-                        batch_size=COURSE_ENTITLEMENT_BATCH_SIZE,
-                        total_count=len(paid_enrollments),
-                        created_by=admin_id,
-                    )
-                    db.add(job)
-                    await db.flush()
-                    db.add_all(
-                        CourseEntitlementJobItem(
-                            job_id=job.id,
-                            enrollment_id=enrollment.id,
-                            user_id=enrollment.user_id,
+                            .order_by(CourseEnrollment.id.asc())
                         )
-                        for enrollment in paid_enrollments
+                    ).scalars()
+                )
+                job = CourseEntitlementJob(
+                    course_id=course_id,
+                    library_id=library_id,
+                    binding_id=int(binding.id),
+                    action="backfill",
+                    status="queued",
+                    batch_size=COURSE_ENTITLEMENT_BATCH_SIZE,
+                    total_count=len(paid_enrollments),
+                    created_by=admin_id,
+                )
+                db.add(job)
+                await db.flush()
+                db.add_all(
+                    CourseEntitlementJobItem(
+                        job_id=job.id,
+                        enrollment_id=enrollment.id,
+                        user_id=enrollment.user_id,
                     )
+                    for enrollment in paid_enrollments
+                )
                 cls._audit(
                     db,
                     actor_id=admin_id,
