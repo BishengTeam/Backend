@@ -1249,17 +1249,25 @@ class QuizV2Service:
                         QuizCategoryPathItem.model_validate(item)
                         for item in snapshot.category_path
                     ],
-                    answered=user_answer is not None,
+                    # Essay questions are view-only in recite mode: reading
+                    # the reference answer IS the completion, so they never
+                    # block the current-question pointer or session progress.
+                    answered=(
+                        user_answer is not None
+                        or snapshot.question_type == "essay"
+                    ),
                     user_answer=user_answer,
                     answer_lock_version=int(snapshot.answer_lock_version),
                     correct_answer=(
                         snapshot.correct_answer
                         if session.status == "completed"
+                        or snapshot.question_type == "essay"
                         else None
                     ),
                     explanation=(
                         snapshot.explanation
                         if session.status == "completed"
+                        or snapshot.question_type == "essay"
                         else None
                     ),
                     is_correct=(
