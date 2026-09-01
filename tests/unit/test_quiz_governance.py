@@ -102,7 +102,7 @@ def test_runtime_openapi_matches_all_frozen_quiz_operations() -> None:
 
     for contract in QUIZ_API_CONTRACTS:
         operation = paths[contract.path][contract.method.lower()]
-        assert operation["x-quiz-contract-version"] == "2026-08-30"
+        assert operation["x-quiz-contract-version"] == "2026-09-01"
         assert operation["x-error-codes"]
         success_response = operation["responses"]["200"]
         assert success_response["content"]["application/json"]["schema"]

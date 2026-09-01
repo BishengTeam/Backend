@@ -710,6 +710,16 @@ class AdminQuizLibraryStatusUpdate(QuizContractModel):
     lock_version: int = Field(ge=1)
 
 
+class AdminQuizLibraryAccessModeConvert(QuizContractModel):
+    lock_version: int = Field(ge=1)
+    target_mode: QuizLibraryAccessMode
+
+
+class AdminQuizLibraryAccessModeConvertResponse(QuizContractModel):
+    library: AdminQuizLibraryResponse
+    sessions_affected: int = Field(ge=0)
+
+
 class AdminQuizCourseBindingCreate(QuizContractModel):
     course_id: int = Field(ge=1)
 

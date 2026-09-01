@@ -55,6 +55,8 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizKnowledgePointCreate,
     AdminQuizKnowledgePointResponse,
     AdminQuizKnowledgePointUpdate,
+    AdminQuizLibraryAccessModeConvert,
+    AdminQuizLibraryAccessModeConvertResponse,
     AdminQuizLibraryCreate,
     AdminQuizLibraryQuery,
     AdminQuizLibraryResponse,
@@ -106,7 +108,7 @@ from app.schemas.quiz_contract import (
 )
 
 
-QUIZ_CONTRACT_VERSION = "2026-08-30"
+QUIZ_CONTRACT_VERSION = "2026-09-01"
 
 
 class QuizErrorCode(IntEnum):
@@ -411,6 +413,12 @@ QUIZ_API_CONTRACTS: tuple[QuizEndpointContract, ...] = (
     QuizEndpointContract(
         "POST", "/admin/quiz/libraries/{library_id}/lifecycle", "admin",
         APIResponse[AdminQuizLibraryResponse], body_model=AdminQuizLibraryStatusUpdate,
+        permission="quiz_library_manage", errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "POST", "/admin/quiz/libraries/{library_id}/convert-access-mode", "admin",
+        APIResponse[AdminQuizLibraryAccessModeConvertResponse],
+        body_model=AdminQuizLibraryAccessModeConvert,
         permission="quiz_library_manage", errors=_CONFLICT_ERRORS,
     ),
     QuizEndpointContract(

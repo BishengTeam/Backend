@@ -1,7 +1,7 @@
 {
-  "admin_operation_count": 57,
-  "fingerprint_sha256": "1856ab1c27ad3be24d393938b43e8561c02c37dccbb34370fbd8bfc1ce2a78dd",
-  "operation_count": 89,
+  "admin_operation_count": 58,
+  "fingerprint_sha256": "e95b22f14a9ae417f4b1c3e27b81e760eaf8cc63ed960bed896f1901e9993e74",
+  "operation_count": 90,
   "operations": [
     {
       "auth": "admin",
@@ -211,6 +211,13 @@
       "method": "GET",
       "path": "/admin/quiz/libraries/{library_id}/content-tree",
       "permission": "quiz:list",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/libraries/{library_id}/convert-access-mode",
+      "permission": "quiz_library_manage",
       "rate_limit_per_minute": null
     },
     {
@@ -627,7 +634,7 @@
       "rate_limit_per_minute": null
     }
   ],
-  "quiz_contract_version": "2026-08-30",
+  "quiz_contract_version": "2026-09-01",
   "removed_operation_count": 13,
   "removed_operations": [
     {

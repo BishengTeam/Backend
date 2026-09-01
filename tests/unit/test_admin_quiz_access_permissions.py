@@ -8,7 +8,10 @@ import pytest
 
 from app.api.admin import quiz as quiz_api
 from app.policy.permissions import ROLE_PERMISSIONS
-from app.schemas.admin_quiz_contract import AdminQuizLibraryUpdate
+from app.schemas.admin_quiz_contract import (
+    AdminQuizLibraryAccessModeConvert,
+    AdminQuizLibraryUpdate,
+)
 from app.services.admin_quiz_v2 import AdminQuizV2Service
 
 
@@ -46,3 +49,46 @@ def test_library_access_change_uses_the_frozen_library_permission() -> None:
     assert "admin.role" not in route_source
     assert 'permission="quiz_library_manage"' in service_source
     assert "quiz_access_change" not in service_source
+
+
+@pytest.mark.asyncio
+async def test_access_mode_conversion_calls_dedicated_service(monkeypatch) -> None:
+    converted = SimpleNamespace(
+        library=SimpleNamespace(id=19, access_mode="course_entitlement"),
+        sessions_affected=2,
+    )
+    convert_access_mode = AsyncMock(return_value=converted)
+    monkeypatch.setattr(
+        AdminQuizV2Service,
+        "convert_library_access_mode",
+        convert_access_mode,
+    )
+    body = AdminQuizLibraryAccessModeConvert(
+        lock_version=4,
+        target_mode="course_entitlement",
+    )
+
+    response = await quiz_api.convert_library_access_mode(
+        body=body,
+        library_id=19,
+        admin=SimpleNamespace(id=7, role="super_admin"),
+    )
+
+    assert response.data is converted
+    convert_access_mode.assert_awaited_once_with(
+        19,
+        body,
+        admin_id=7,
+    )
+
+
+def test_access_mode_conversion_is_super_admin_reauthenticated() -> None:
+    route_source = inspect.getsource(quiz_api.convert_library_access_mode)
+    route_path = quiz_api.router.routes
+    assert 'Depends(require_reauthenticated_super_admin)' in route_source
+    assert "require_permission" not in route_source
+    assert any(
+        getattr(route, "path", None)
+        == "/quiz/libraries/{library_id}/convert-access-mode"
+        for route in route_path
+    )

@@ -28,6 +28,7 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizBatchTarget,
     AdminQuizContentStatusUpdate,
     AdminQuizKnowledgePointCreate,
+    AdminQuizLibraryAccessModeConvert,
     AdminQuizLibraryCreate,
     AdminQuizLibraryStatusUpdate,
     AdminQuizLibraryUpdate,
@@ -396,6 +397,62 @@ async def test_fixed_hierarchy_uniqueness_versions_and_bottom_up_delete(quiz_v2_
         assert persisted_point.restore_until is not None
         assert persisted_module.status == "deleted"
         assert persisted_module.restore_until is not None
+
+
+async def test_library_access_mode_conversion_versions_audit_and_transition_gate(
+    quiz_v2_env,
+) -> None:
+    env = quiz_v2_env
+    library = await env.service.create_library(
+        AdminQuizLibraryCreate(name=f"{env.prefix}访问模式转换"),
+        admin_id=env.admin_id,
+    )
+
+    with pytest.raises(ValidationException, match="不能转换"):
+        await env.service.convert_library_access_mode(
+            library.id,
+            AdminQuizLibraryAccessModeConvert(
+                lock_version=library.lock_version,
+                target_mode="access_mode_pending",
+            ),
+            admin_id=env.admin_id,
+        )
+
+    converted = await env.service.convert_library_access_mode(
+        library.id,
+        AdminQuizLibraryAccessModeConvert(
+            lock_version=library.lock_version,
+            target_mode="free",
+        ),
+        admin_id=env.admin_id,
+    )
+    assert converted.library.access_mode == "free"
+    assert converted.library.lock_version == library.lock_version + 1
+    assert converted.sessions_affected == 0
+
+    with pytest.raises(ConflictException):
+        await env.service.convert_library_access_mode(
+            library.id,
+            AdminQuizLibraryAccessModeConvert(
+                lock_version=library.lock_version,
+                target_mode="course_entitlement",
+            ),
+            admin_id=env.admin_id,
+        )
+
+    async with env.factory() as db:
+        audit = (
+            await db.execute(
+                select(QuizAdminAuditLog).where(
+                    QuizAdminAuditLog.admin_id == env.admin_id,
+                    QuizAdminAuditLog.object_id == library.id,
+                    QuizAdminAuditLog.action == "library.convert_access_mode",
+                )
+            )
+        ).scalar_one()
+        assert audit.permission == "quiz_library_manage"
+        assert audit.changed_fields["access_mode"]["before"] == "access_mode_pending"
+        assert audit.changed_fields["access_mode"]["after"] == "free"
 
 
 async def test_library_publication_gate_and_safe_delete_restore(quiz_v2_env) -> None:
