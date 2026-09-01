@@ -128,13 +128,17 @@ def test_exam_answer_shape_is_canonical_but_lock_version_stays_client_owned() ->
 def test_grading_is_exact_for_all_question_types_and_score_rounds_half_up() -> None:
     service = QuizExamService()
     single = _snapshot(correct_answer="A")
-    assert service._grade_answer(single, "a") == ("A", True)
+    assert service._grade_answer(single, "a") == ("A", True, Decimal(1))
     assert service._grade_answer(single, "B")[1] is False
 
     multiple = _snapshot(
         question_type="multiple_choice", correct_answer=["A", "C"]
     )
-    assert service._grade_answer(multiple, ["C", "A", "A"]) == (["A", "C"], True)
+    assert service._grade_answer(multiple, ["C", "A", "A"]) == (
+        ["A", "C"],
+        True,
+        Decimal(1),
+    )
     assert service._grade_answer(multiple, ["A"])[1] is False
     assert service._grade_answer(multiple, ["A", "B"])[1] is False
 

@@ -6,6 +6,7 @@ import asyncio
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -34,6 +35,11 @@ from app.schemas.quiz_contract import (
     QuizExamCreate,
     QuizExamListQuery,
 )
+from app.schemas.admin_quiz_review_contract import (
+    AdminQuizReviewSubmitRequest,
+    AdminQuizReviewVerdictItem,
+)
+from app.services.admin_quiz_review import AdminQuizReviewService
 from app.services.quiz_exam import QuizExamService
 from app.services.quiz_practice import QuizPracticeService
 
@@ -62,6 +68,7 @@ async def quiz_exam_env(monkeypatch):
 
     monkeypatch.setattr("app.services.quiz_exam.get_db_ctx", test_db_ctx)
     monkeypatch.setattr("app.services.quiz_practice.get_db_ctx", test_db_ctx)
+    monkeypatch.setattr("app.services.admin_quiz_review.get_db_ctx", test_db_ctx)
 
     async with factory() as db:
         admin = AdminUser(
@@ -194,6 +201,39 @@ async def _create_questions(
         return questions
 
 
+async def _create_essay_question(
+    env,
+    category: QuizCategory,
+    *,
+    suffix: str,
+) -> QuizQuestion:
+    now = datetime.now(timezone.utc)
+    async with env.factory() as db:
+        question_text = f"{env.prefix}_{suffix}_essay"
+        normalized = normalize_question_text(question_text)
+        question = QuizQuestion(
+            category_id=category.id,
+            question_type="essay",
+            status="published",
+            question_text=question_text,
+            normalized_question_text=normalized,
+            question_text_hash=question_text_digest(normalized),
+            options=None,
+            correct_answer="参考答案：从连接、可靠性、开销三方面作答。",
+            explanation="评分参考",
+            image_urls=[],
+            ever_published=True,
+            published_at=now,
+            lock_version=1,
+            created_by=env.admin.id,
+            updated_by=env.admin.id,
+        )
+        db.add(question)
+        await db.commit()
+        await db.refresh(question)
+        return question
+
+
 def _create_request(category_id: int, count: int = 10) -> QuizExamCreate:
     return QuizExamCreate(category_id=category_id, question_count=count)
 
@@ -205,6 +245,96 @@ async def _expire_exam(env, exam_id: int, now: datetime) -> None:
         exam.started_at = now - timedelta(seconds=3601)
         exam.deadline_at = now - timedelta(seconds=1)
         await db.commit()
+
+
+async def test_essay_exam_review_flow_hides_then_releases_scores(
+    quiz_exam_env,
+) -> None:
+    env = quiz_exam_env
+    category = await _create_category(env, "essay_flow")
+    await _create_questions(env, category, 9, suffix="essay_flow")
+    await _create_essay_question(env, category, suffix="essay_flow")
+
+    service = env.service
+    review_service = AdminQuizReviewService()
+    detail = await service.create_exam(env.user.id, _create_request(category.id))
+    assert detail.question_count == 10
+    essay_question = next(
+        question for question in detail.questions if question.question_type == "essay"
+    )
+    for question in detail.questions:
+        if question.question_type == "essay":
+            answer = "TCP 面向连接、可靠；UDP 无连接、轻量。"
+        elif question.question_type == "multiple_choice":
+            answer = ["A", "C"]
+        else:
+            answer = "A"
+        await service.save_answer(
+            env.user.id,
+            detail.id,
+            question.exam_question_id,
+            QuizExamAnswerSave(user_answer=answer, lock_version=0),
+        )
+
+    await service.submit_exam(env.user.id, detail.id)
+
+    async with env.factory() as db:
+        exam = await db.get(QuizExam, detail.id)
+        assert exam is not None
+        assert exam.status == "completed"
+        assert exam.review_status == "pending"
+        assert exam.correct_count is None
+        assert exam.score is None
+
+    pending_detail = await service.get_exam(env.user.id, detail.id)
+    assert pending_detail.status == "completed"
+    assert pending_detail.review_status == "pending"
+    assert not hasattr(pending_detail, "score")
+
+    await review_service.claim_review(detail.id, admin_id=env.admin.id)
+    review_detail = await review_service.get_review_detail(
+        detail.id, admin_id=env.admin.id
+    )
+    assert len(review_detail.questions) == 1
+    assert review_detail.questions[0].exam_question_id == essay_question.exam_question_id
+    assert review_detail.questions[0].answered is True
+    await review_service.submit_verdicts(
+        detail.id,
+        AdminQuizReviewSubmitRequest(
+            verdicts=[
+                AdminQuizReviewVerdictItem(
+                    exam_question_id=essay_question.exam_question_id,
+                    verdict="correct",
+                    comment="要点齐全",
+                )
+            ]
+        ),
+        admin_id=env.admin.id,
+    )
+    completed = await review_service.complete_review(
+        detail.id, admin_id=env.admin.id
+    )
+    assert completed.review_status == "completed"
+    assert completed.score == Decimal("100.0")
+    assert completed.correct_count == 10
+
+    settled = await service.get_exam(env.user.id, detail.id)
+    assert settled.status == "completed"
+    assert settled.review_status == "completed"
+    assert settled.score == Decimal("100.0")
+    essay_result = next(
+        question
+        for question in settled.questions
+        if question.question_type == "essay"
+    )
+    assert essay_result.score_ratio == Decimal("1.000")
+
+    recalled = await review_service.recall_review(
+        detail.id,
+        admin_id=env.admin.id,
+        is_super_admin=True,
+    )
+    assert recalled.review_status == "recalled"
 
 
 async def test_exam_subtree_selection_unique_active_snapshot_and_visibility(

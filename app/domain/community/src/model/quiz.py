@@ -330,7 +330,8 @@ class QuizQuestion(Base, _QuizTimestampMixin):
     __tablename__ = "quiz_question"
     __table_args__ = (
         CheckConstraint(
-            "question_type IN ('single_choice', 'multiple_choice', 'judge')",
+            "question_type IN "
+            "('single_choice', 'multiple_choice', 'judge', 'fill_blank', 'essay')",
             name="ck_quiz_question_type",
         ),
         CheckConstraint(
@@ -423,7 +424,7 @@ class QuizQuestion(Base, _QuizTimestampMixin):
     question_text_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
     options: Mapped[dict[str, str] | None] = mapped_column(JSONB)
     option_image_urls: Mapped[dict[str, str] | None] = mapped_column(JSONB)
-    correct_answer: Mapped[str | list[str] | None] = mapped_column(JSONB)
+    correct_answer: Mapped[str | list[str] | list[list[str]] | None] = mapped_column(JSONB)
     explanation: Mapped[str | None] = mapped_column(String(1024))
     image_urls: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'")
@@ -457,7 +458,8 @@ class QuizQuestionRevision(Base, _QuizCreatedAtMixin):
     __tablename__ = "quiz_question_revision"
     __table_args__ = (
         CheckConstraint(
-            "question_type IN ('single_choice', 'multiple_choice', 'judge')",
+            "question_type IN "
+            "('single_choice', 'multiple_choice', 'judge', 'fill_blank', 'essay')",
             name="ck_quiz_question_revision_type",
         ),
         CheckConstraint(
@@ -497,7 +499,7 @@ class QuizQuestionRevision(Base, _QuizCreatedAtMixin):
     question_text_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
     options: Mapped[dict[str, str] | None] = mapped_column(JSONB)
     option_image_urls: Mapped[dict[str, str] | None] = mapped_column(JSONB)
-    correct_answer: Mapped[str | list[str] | None] = mapped_column(JSONB)
+    correct_answer: Mapped[str | list[str] | list[list[str]] | None] = mapped_column(JSONB)
     explanation: Mapped[str | None] = mapped_column(String(1024))
     image_urls: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'")
@@ -805,7 +807,8 @@ class QuizPracticeSessionQuestion(Base, _QuizTimestampMixin):
     __table_args__ = (
         CheckConstraint("position >= 1", name="ck_quiz_practice_question_position"),
         CheckConstraint(
-            "question_type IN ('single_choice', 'multiple_choice', 'judge')",
+            "question_type IN "
+            "('single_choice', 'multiple_choice', 'judge', 'fill_blank', 'essay')",
             name="ck_quiz_practice_question_type",
         ),
         CheckConstraint(
@@ -848,7 +851,7 @@ class QuizPracticeSessionQuestion(Base, _QuizTimestampMixin):
     question_text: Mapped[str] = mapped_column(String(1024), nullable=False)
     options: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False)
     option_image_urls: Mapped[dict[str, str] | None] = mapped_column(JSONB)
-    correct_answer: Mapped[str | list[str]] = mapped_column(JSONB, nullable=False)
+    correct_answer: Mapped[str | list[str] | list[list[str]]] = mapped_column(JSONB, nullable=False)
     explanation: Mapped[str] = mapped_column(String(1024), nullable=False)
     image_urls: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'")
@@ -1000,6 +1003,9 @@ class QuizQuestionRevisionStats(Base, _QuizTimestampMixin):
     exam_correct: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0, server_default="0"
     )
+    exam_partial: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
     aggregated_through: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -1059,6 +1065,10 @@ class QuizExam(Base, _QuizTimestampMixin):
             name="ck_quiz_exam_status",
         ),
         CheckConstraint(
+            "review_status IN ('none', 'pending', 'in_progress', 'completed', 'recalled')",
+            name="ck_quiz_exam_review_status",
+        ),
+        CheckConstraint(
             "scope_type IS NULL OR scope_type IN "
             "('library', 'module', 'knowledge_point')",
             name="ck_quiz_exam_scope_type",
@@ -1086,7 +1096,11 @@ class QuizExam(Base, _QuizTimestampMixin):
         CheckConstraint(
             "((status IN ('in_progress', 'abandoned') AND correct_count IS NULL "
             "AND wrong_count IS NULL AND unanswered_count IS NULL AND score IS NULL) OR "
-            "(status IN ('completed', 'timed_out') AND correct_count IS NOT NULL "
+            "(status IN ('completed', 'timed_out') AND review_status IN "
+            "('pending', 'in_progress', 'recalled') AND correct_count IS NULL "
+            "AND wrong_count IS NULL AND unanswered_count IS NULL AND score IS NULL) OR "
+            "(status IN ('completed', 'timed_out') AND review_status IN "
+            "('none', 'completed') AND correct_count IS NOT NULL "
             "AND wrong_count IS NOT NULL AND unanswered_count IS NOT NULL "
             "AND score IS NOT NULL AND correct_count >= 0 AND wrong_count >= 0 "
             "AND unanswered_count >= 0 AND "
@@ -1145,6 +1159,16 @@ class QuizExam(Base, _QuizTimestampMixin):
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="in_progress", server_default="in_progress"
     )
+    review_status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="none",
+        server_default="none",
+    )
+    review_locked_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("admin_user.id", ondelete="SET NULL")
+    )
+    review_locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -1164,7 +1188,8 @@ class QuizExamQuestion(Base, _QuizTimestampMixin):
     __table_args__ = (
         CheckConstraint("position >= 1", name="ck_quiz_exam_question_position"),
         CheckConstraint(
-            "question_type IN ('single_choice', 'multiple_choice', 'judge')",
+            "question_type IN "
+            "('single_choice', 'multiple_choice', 'judge', 'fill_blank', 'essay')",
             name="ck_quiz_exam_question_type",
         ),
         UniqueConstraint("exam_id", "position", name="uq_quiz_exam_question_position"),
@@ -1195,7 +1220,7 @@ class QuizExamQuestion(Base, _QuizTimestampMixin):
     question_text: Mapped[str] = mapped_column(String(1024), nullable=False)
     options: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False)
     option_image_urls: Mapped[dict[str, str] | None] = mapped_column(JSONB)
-    correct_answer: Mapped[str | list[str]] = mapped_column(JSONB, nullable=False)
+    correct_answer: Mapped[str | list[str] | list[list[str]]] = mapped_column(JSONB, nullable=False)
     explanation: Mapped[str] = mapped_column(String(1024), nullable=False)
     image_urls: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'")
@@ -1222,7 +1247,54 @@ class QuizExamAnswer(Base, _QuizTimestampMixin):
     exam_question_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     user_answer: Mapped[str | list[str]] = mapped_column(JSONB, nullable=False)
     is_correct: Mapped[bool | None] = mapped_column(Boolean)
+    score_ratio: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
     saved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    lock_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+
+
+class QuizExamQuestionReview(Base, _QuizTimestampMixin):
+    """One manual essay verdict; recalls append newer rows instead of deleting."""
+
+    __tablename__ = "quiz_exam_question_review"
+    __table_args__ = (
+        CheckConstraint(
+            "verdict IN ('wrong', 'partial', 'correct')",
+            name="ck_quiz_exam_review_verdict",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'superseded')",
+            name="ck_quiz_exam_review_status",
+        ),
+        CheckConstraint("lock_version >= 1", name="ck_quiz_exam_review_lock_version"),
+        ForeignKeyConstraint(
+            ["exam_id", "exam_question_id"],
+            ["quiz_exam_question.exam_id", "quiz_exam_question.id"],
+            name="fk_quiz_exam_review_exam_question",
+            ondelete="CASCADE",
+        ),
+        Index("ix_quiz_exam_review_pending", "status", "updated_at", "id"),
+        Index(
+            "uq_quiz_exam_review_active_question",
+            "exam_question_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+            sqlite_where=text("status = 'active'"),
+        ),
+    )
+
+    exam_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    exam_question_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reviewer_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("admin_user.id", ondelete="SET NULL")
+    )
+    verdict: Mapped[str] = mapped_column(String(16), nullable=False)
+    comment: Mapped[str | None] = mapped_column(String(512))
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active", server_default="active"
+    )
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lock_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )
@@ -1239,9 +1311,11 @@ class QuizUserStats(Base, _QuizTimestampMixin):
             "AND checkin_days >= 0 AND consecutive_days >= 0 "
             "AND today_practice_count >= 0 AND completed_exam_count >= 0 "
             "AND timed_out_exam_count >= 0 AND exam_total_questions >= 0 "
-            "AND exam_correct >= 0 AND exam_wrong >= 0 AND exam_unanswered >= 0 "
+            "AND exam_correct >= 0 AND exam_partial >= 0 "
+            "AND exam_wrong >= 0 AND exam_unanswered >= 0 "
             "AND exam_score_sum >= 0 AND practice_first_correct <= practice_first_attempts "
-            "AND exam_correct + exam_wrong + exam_unanswered = exam_total_questions "
+            "AND exam_correct + exam_partial + exam_wrong + exam_unanswered "
+            "= exam_total_questions "
             "AND (exam_high_score IS NULL OR (exam_high_score >= 0 AND exam_high_score <= 100)) "
             "AND (exam_latest_score IS NULL OR (exam_latest_score >= 0 AND exam_latest_score <= 100))",
             name="ck_quiz_user_stats_nonnegative",
@@ -1537,6 +1611,7 @@ __all__ = [
     "QuizExam",
     "QuizExamAnswer",
     "QuizExamQuestion",
+    "QuizExamQuestionReview",
     "QuizImportJob",
     "QuizImportError",
     "QuizKnowledgePoint",
@@ -1555,3 +1630,4 @@ __all__ = [
     "QuizUserStats",
     "QuizWrongItem",
 ]
+

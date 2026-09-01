@@ -65,6 +65,9 @@ V2_MIGRATION_PATH = (
 V2_PRACTICE_MIGRATION_PATH = (
     REPO_ROOT / "alembic/versions/quiz005_add_v2_practice_revision_stats.py"
 )
+REVIEW_MIGRATION_PATH = (
+    REPO_ROOT / "alembic/versions/quiz012_add_exam_manual_review.py"
+)
 
 
 def _load_migration(path: Path = MIGRATION_PATH):
@@ -271,7 +274,7 @@ def test_submitted_answers_are_canonical_and_exact_match_only() -> None:
 
 
 def test_contract_registry_is_complete_strict_and_machine_readable() -> None:
-    assert len(QUIZ_API_CONTRACTS) == 89
+    assert len(QUIZ_API_CONTRACTS) == 95
     keys = {(entry.method, entry.path) for entry in QUIZ_API_CONTRACTS}
     assert len(keys) == len(QUIZ_API_CONTRACTS)
     assert {
@@ -307,6 +310,7 @@ def test_contract_registry_is_complete_strict_and_machine_readable() -> None:
                 "quiz:import+quiz:write",
                 "quiz_library_manage",
                 "quiz_content_edit",
+                "quiz_review",
                 "course_quiz_bind",
             }
         assert entry.example
@@ -392,6 +396,7 @@ def test_quiz_metadata_matches_the_rebuilt_domain() -> None:
         | {"quiz_import_error"}
         | set(v2_migration.V2_TABLES)
         | set(v2_practice_migration.V2_PRACTICE_TABLES)
+        | set(_load_migration(REVIEW_MIGRATION_PATH).REVIEW_TABLES)
     )
     actual = {name for name in Base.metadata.tables if name.startswith("quiz_")}
     assert actual == expected

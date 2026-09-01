@@ -104,9 +104,17 @@ from app.schemas.quiz_contract import (
     QuizWrongBookItem,
     QuizWrongBookQuery,
 )
+from app.schemas.admin_quiz_review_contract import (
+    AdminQuizReviewClaimResponse,
+    AdminQuizReviewCompleteResponse,
+    AdminQuizReviewDetail,
+    AdminQuizReviewListItem,
+    AdminQuizReviewListQuery,
+    AdminQuizReviewSubmitRequest,
+)
 
 
-QUIZ_CONTRACT_VERSION = "2026-08-30"
+QUIZ_CONTRACT_VERSION = "2026-09-01"
 
 
 class QuizErrorCode(IntEnum):
@@ -793,6 +801,38 @@ QUIZ_API_CONTRACTS: tuple[QuizEndpointContract, ...] = (
         APIResponse[PaginatedData[AdminQuizAuditLogResponse]],
         query_model=AdminQuizAuditQuery,
         permission="quiz:list",
+    ),
+    QuizEndpointContract(
+        "GET", "/admin/quiz/reviews", "admin",
+        APIResponse[PaginatedData[AdminQuizReviewListItem]],
+        query_model=AdminQuizReviewListQuery,
+        permission="quiz_review",
+    ),
+    QuizEndpointContract(
+        "GET", "/admin/quiz/reviews/{exam_id}", "admin",
+        APIResponse[AdminQuizReviewDetail], permission="quiz_review",
+        errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "POST", "/admin/quiz/reviews/{exam_id}/claim", "admin",
+        APIResponse[AdminQuizReviewClaimResponse], permission="quiz_review",
+        errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "POST", "/admin/quiz/reviews/{exam_id}/verdicts", "admin",
+        APIResponse[AdminQuizReviewClaimResponse],
+        body_model=AdminQuizReviewSubmitRequest, permission="quiz_review",
+        errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "POST", "/admin/quiz/reviews/{exam_id}/complete", "admin",
+        APIResponse[AdminQuizReviewCompleteResponse], permission="quiz_review",
+        errors=_CONFLICT_ERRORS,
+    ),
+    QuizEndpointContract(
+        "POST", "/admin/quiz/reviews/{exam_id}/recall", "admin",
+        APIResponse[AdminQuizReviewClaimResponse], permission="quiz_review",
+        errors=_CONFLICT_ERRORS,
     ),
 )
 

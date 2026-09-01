@@ -26,7 +26,7 @@ from app.domain.community.src.index import (
 from app.domain.community.src.rule.quiz import (
     QuizExamStatus,
     QuizQuestionStatus,
-    answers_match,
+    answer_score_ratio,
     normalize_submitted_answer,
 )
 from app.domain.user.src.index import User
@@ -52,6 +52,7 @@ from app.schemas.quiz_contract import (
     QuizExamListQuery,
     QuizExamQuestionResult,
     QuizExamQuestionState,
+    QuizExamReviewPendingDetail,
     QuizExamSettledDetail,
     QuizExamAnswerSave,
     QuizPublicQuestion,
@@ -65,6 +66,11 @@ _COMPLETED = QuizExamStatus.COMPLETED.value
 _TIMED_OUT = QuizExamStatus.TIMED_OUT.value
 _ABANDONED = QuizExamStatus.ABANDONED.value
 _PUBLISHED = QuizQuestionStatus.PUBLISHED.value
+_ESSAY = "essay"
+_REVIEW_PENDING_STATUSES = {"pending", "in_progress", "recalled"}
+_REVIEW_NONE = "none"
+_REVIEW_PENDING = "pending"
+_RATIO_ONE = Decimal(1)
 _DURATION_SECONDS = settings.QUIZ_EXAM_DURATION_SECONDS
 _MIN_QUESTION_COUNT = settings.QUIZ_MIN_QUESTION_COUNT
 _MAX_QUESTION_COUNT = settings.QUIZ_MAX_QUESTION_COUNT
@@ -225,10 +231,12 @@ class QuizExamService:
         cls,
         snapshot: QuizExamQuestion,
         answer: object,
-    ) -> tuple[str | list[str], bool]:
+    ) -> tuple[str | list[str], bool | None, Decimal | None]:
         normalized = cls._normalize_answer(snapshot, answer)
+        if snapshot.question_type == _ESSAY:
+            return normalized, None, None
         try:
-            correct = answers_match(
+            ratio = answer_score_ratio(
                 snapshot.question_type,
                 normalized,
                 snapshot.correct_answer,
@@ -236,7 +244,8 @@ class QuizExamService:
             )
         except ValueError as exc:
             raise ValidationException(str(exc)) from exc
-        return normalized, correct
+        assert ratio is not None
+        return normalized, ratio == _RATIO_ONE, ratio
 
     @staticmethod
     def _score(correct_count: int, question_count: int) -> Decimal:
@@ -245,6 +254,27 @@ class QuizExamService:
         return (
             Decimal(correct_count * 100) / Decimal(question_count)
         ).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+
+    @staticmethod
+    def _score_ratio(ratio_sum: Decimal, question_count: int) -> Decimal:
+        if question_count <= 0:
+            return Decimal("0.0")
+        return (
+            Decimal(ratio_sum) * Decimal(100) / Decimal(question_count)
+        ).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+
+    @staticmethod
+    def _partial_count(snapshots, answers) -> int:
+        count = 0
+        for snapshot in snapshots:
+            answer = answers.get(int(snapshot.id))
+            if (
+                answer is not None
+                and answer.score_ratio is not None
+                and Decimal(0) < Decimal(answer.score_ratio) < Decimal(1)
+            ):
+                count += 1
+        return count
 
     async def _serialize_exam(
         self,
@@ -309,6 +339,18 @@ class QuizExamService:
                 questions=questions,
             )
 
+        if exam.review_status in _REVIEW_PENDING_STATUSES:
+            return QuizExamReviewPendingDetail(
+                id=int(exam.id),
+                status=exam.status,
+                review_status=exam.review_status,
+                **self._scope_fields(exam),
+                question_count=int(exam.question_count),
+                duration_seconds=_DURATION_SECONDS,
+                started_at=exam.started_at,
+                deadline_at=exam.deadline_at,
+                finished_at=self._finished_at(exam),
+            )
         questions = []
         for snapshot in snapshots:
             answer = answers.get(int(snapshot.id))
@@ -319,7 +361,13 @@ class QuizExamService:
                 if answer.is_correct is not None:
                     is_correct = bool(answer.is_correct)
                 else:
-                    _, is_correct = self._grade_answer(snapshot, user_answer)
+                    _, graded, _ratio = self._grade_answer(snapshot, user_answer)
+                    is_correct = bool(graded)
+            score_ratio = (
+                answer.score_ratio.quantize(Decimal("0.001"))
+                if answer is not None and answer.score_ratio is not None
+                else None
+            )
             questions.append(
                 QuizExamQuestionResult(
                     **self._public_question(snapshot).model_dump(),
@@ -329,6 +377,7 @@ class QuizExamService:
                     correct_answer=snapshot.correct_answer,
                     explanation=snapshot.explanation,
                     is_correct=is_correct,
+                    score_ratio=score_ratio,
                 )
             )
         return QuizExamSettledDetail(
@@ -340,7 +389,9 @@ class QuizExamService:
             started_at=exam.started_at,
             deadline_at=exam.deadline_at,
             finished_at=self._finished_at(exam),
+            review_status=exam.review_status,
             correct_count=int(exam.correct_count or 0),
+            partial_count=self._partial_count(snapshots, answers),
             wrong_count=int(exam.wrong_count or 0),
             unanswered_count=int(exam.unanswered_count or 0),
             score=Decimal(exam.score or 0).quantize(Decimal("0.1")),
@@ -364,18 +415,34 @@ class QuizExamService:
         snapshots = await self._load_snapshots(db, exam.id, lock=True)
         answers = await self._load_answers(db, exam.id, lock=True)
         correct_count = 0
+        partial_count = 0
         wrong_count = 0
         unanswered_count = 0
+        ratio_sum = Decimal(0)
+        has_essay = False
         for snapshot in snapshots:
             answer = answers.get(int(snapshot.id))
+            if snapshot.question_type == _ESSAY:
+                has_essay = True
+                if answer is not None:
+                    normalized = self._normalize_answer(snapshot, answer.user_answer)
+                    answer.user_answer = normalized
+                    answer.is_correct = None
+                    answer.score_ratio = None
+                continue
             if answer is None:
                 unanswered_count += 1
                 continue
-            normalized, correct = self._grade_answer(snapshot, answer.user_answer)
+            normalized, correct, ratio = self._grade_answer(snapshot, answer.user_answer)
             answer.user_answer = normalized
             answer.is_correct = correct
+            answer.score_ratio = ratio
+            assert ratio is not None
+            ratio_sum += ratio
             if correct:
                 correct_count += 1
+            elif ratio > 0:
+                partial_count += 1
             else:
                 wrong_count += 1
             if snapshot.question_revision_id is not None:
@@ -403,23 +470,41 @@ class QuizExamService:
                     )
                 )
 
-        stats = await self.practice._ensure_stats(db, int(exam.user_id))
-        stats.exam_total_questions += len(snapshots)
-        stats.exam_correct += correct_count
-        stats.exam_wrong += wrong_count
-        stats.exam_unanswered += unanswered_count
-        score = self._score(correct_count, len(snapshots))
-        stats.exam_score_sum = Decimal(stats.exam_score_sum or 0) + score
-        if stats.exam_high_score is None or score > stats.exam_high_score:
-            stats.exam_high_score = score
-        stats.exam_latest_score = score
-        stats.exam_latest_at = settled_at
+        if has_essay:
+            # Essay exams release nothing until manual review completes: no
+            # aggregate stats, no exam-level counts, no score, no wrong-book
+            # entries. Objective per-question ratios are already persisted on
+            # the answer rows above for the reviewer and final settlement.
+            exam.review_status = _REVIEW_PENDING
+            exam.correct_count = None
+            exam.wrong_count = None
+            exam.unanswered_count = None
+            exam.score = None
+        else:
+            stats = await self.practice._ensure_stats(db, int(exam.user_id))
+            stats.exam_total_questions += len(snapshots)
+            stats.exam_correct += correct_count
+            stats.exam_partial += partial_count
+            stats.exam_wrong += wrong_count
+            stats.exam_unanswered += unanswered_count
+            score = self._score_ratio(ratio_sum, len(snapshots))
+            stats.exam_score_sum = Decimal(stats.exam_score_sum or 0) + score
+            if stats.exam_high_score is None or score > stats.exam_high_score:
+                stats.exam_high_score = score
+            stats.exam_latest_score = score
+            stats.exam_latest_at = settled_at
+            if status == _COMPLETED:
+                stats.completed_exam_count += 1
+            else:
+                stats.timed_out_exam_count += 1
+            exam.correct_count = correct_count
+            exam.wrong_count = wrong_count
+            exam.unanswered_count = unanswered_count
+            exam.score = score
         if status == _COMPLETED:
-            stats.completed_exam_count += 1
             exam.submitted_at = settled_at
             exam.timed_out_at = None
         else:
-            stats.timed_out_exam_count += 1
             exam.timed_out_at = settled_at
             exam.submitted_at = None
 
@@ -428,15 +513,15 @@ class QuizExamService:
         # queries and can therefore trigger autoflush; a partially updated
         # lifecycle (for example in_progress + submitted_at) is invalid.
         exam.status = status
-        exam.correct_count = correct_count
-        exam.wrong_count = wrong_count
-        exam.unanswered_count = unanswered_count
-        exam.score = score
         exam.abandoned_at = None
         exam.lock_version += 1
         for snapshot in snapshots:
             answer = answers.get(int(snapshot.id))
-            if answer is not None and answer.is_correct is False:
+            if (
+                answer is not None
+                and answer.is_correct is False
+                and snapshot.question_type != _ESSAY
+            ):
                 await self.practice.apply_settled_exam_wrong_book(
                     db,
                     user_id=int(exam.user_id),
@@ -951,6 +1036,7 @@ class QuizExamService:
                     question_count=int(exam.question_count),
                     duration_seconds=_DURATION_SECONDS,
                     status=exam.status,
+                    review_status=exam.review_status,
                     started_at=exam.started_at,
                     deadline_at=exam.deadline_at,
                     finished_at=self._finished_at(exam),

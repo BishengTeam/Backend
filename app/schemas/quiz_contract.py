@@ -26,8 +26,11 @@ from app.domain.community.src.rule.quiz import (
 )
 
 
-QuizAnswer: TypeAlias = str | list[str]
+QuizAnswer: TypeAlias = str | list[str] | list[list[str]]
 QuizPracticeScopeType: TypeAlias = Literal["library", "module", "knowledge_point"]
+QuizExamReviewStatus: TypeAlias = Literal[
+    "none", "pending", "in_progress", "completed", "recalled"
+]
 
 
 class QuizContractModel(BaseModel):
@@ -40,23 +43,38 @@ class QuizContractModel(BaseModel):
 
 def _canonical_answer_shape(value: object) -> QuizAnswer:
     if isinstance(value, str):
-        answer = value.strip().upper()
-        if answer not in {"A", "B", "C", "D"}:
-            raise ValueError("answer must be one of A, B, C, D")
-        return answer
+        if value in {"A", "B", "C", "D"}:
+            return value
+        # Essay answers are free text; option-key questions additionally
+        # constrain the value against their own option set in the domain rules.
+        if len(value) > 2000:
+            raise ValueError("essay answers cannot exceed 2000 characters")
+        return value
+    if isinstance(value, list) and not value:
+        raise ValueError("answer cannot be empty")
+    if isinstance(value, list) and value and isinstance(value[0], list):
+        # Fill-blank submissions are one string per blank; the blank count is
+        # validated against the question snapshot by the domain rules.
+        for group in value:
+            if not isinstance(group, list) or not all(
+                isinstance(item, str) and len(item) <= 200 for item in group
+            ):
+                raise ValueError("fill-blank answer groups must be string arrays")
+        return value
     if isinstance(value, list):
-        normalized: set[str] = set()
+        if all(item in {"A", "B", "C", "D"} for item in value if isinstance(item, str)) and all(
+            isinstance(item, str) for item in value
+        ):
+            return sorted({item for item in value})
         for item in value:
             if not isinstance(item, str):
-                raise ValueError("multiple-choice answers must contain strings")
-            key = item.strip().upper()
-            if key not in {"A", "B", "C", "D"}:
-                raise ValueError("answer items must be one of A, B, C, D")
-            normalized.add(key)
-        if not normalized:
-            raise ValueError("answer cannot be empty")
-        return sorted(normalized)
+                raise ValueError("answer items must be strings")
+            if len(item) > 200:
+                raise ValueError("fill-blank answers cannot exceed 200 characters")
+        return value
     raise ValueError("answer must be a string or a string array")
+
+
 
 
 class QuizCategoryNode(QuizContractModel):
@@ -556,6 +574,7 @@ class QuizExamListItem(QuizContractModel):
     question_count: int = Field(ge=10, le=100)
     duration_seconds: Literal[3600]
     status: QuizExamStatus
+    review_status: QuizExamReviewStatus = "none"
     started_at: datetime
     deadline_at: datetime
     finished_at: datetime | None = None
@@ -613,6 +632,25 @@ class QuizExamQuestionResult(QuizPublicQuestion):
     correct_answer: QuizAnswer
     explanation: str
     is_correct: bool
+    score_ratio: Decimal | None = Field(default=None, ge=0, le=1)
+    review_comment: str | None = Field(default=None, max_length=512)
+
+
+class QuizExamReviewPendingDetail(QuizContractModel):
+    """Under manual review: no scores, no per-question results."""
+
+    id: int
+    status: Literal[QuizExamStatus.COMPLETED, QuizExamStatus.TIMED_OUT]
+    review_status: Literal["pending", "in_progress", "recalled"]
+    category_id: int | None = None
+    library_id: int | None = None
+    scope_type: QuizPracticeScopeType | None = None
+    scope_id: int | None = None
+    question_count: int = Field(ge=10, le=100)
+    duration_seconds: Literal[3600]
+    started_at: datetime
+    deadline_at: datetime
+    finished_at: datetime
 
 
 class QuizExamSettledDetail(QuizContractModel):
@@ -627,17 +665,21 @@ class QuizExamSettledDetail(QuizContractModel):
     started_at: datetime
     deadline_at: datetime
     finished_at: datetime
+    review_status: QuizExamReviewStatus = "none"
     correct_count: int = Field(ge=0)
+    partial_count: int = Field(default=0, ge=0)
     wrong_count: int = Field(ge=0)
     unanswered_count: int = Field(ge=0)
     score: Decimal = Field(ge=0, le=100, decimal_places=1)
     questions: list[QuizExamQuestionResult]
 
 
-QuizExamDetailResponse = Annotated[
-    QuizExamInProgressDetail | QuizExamAbandonedDetail | QuizExamSettledDetail,
-    Field(discriminator="status"),
-]
+QuizExamDetailResponse = (
+    QuizExamInProgressDetail
+    | QuizExamAbandonedDetail
+    | QuizExamReviewPendingDetail
+    | QuizExamSettledDetail
+)
 
 
 class QuizExamAnswerSave(QuizContractModel):

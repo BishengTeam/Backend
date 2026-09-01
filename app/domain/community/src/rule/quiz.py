@@ -8,19 +8,42 @@ import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from decimal import Decimal
 from typing import TypeAlias
 
 
-QuizAnswer: TypeAlias = str | list[str]
+QuizAnswer: TypeAlias = str | list[str] | list[list[str]]
 _OPTION_KEYS = ("A", "B", "C", "D")
 _WHITESPACE_RE = re.compile(r"\s+")
+_FILL_BLANK_PLACEHOLDER_RE = re.compile(r"_{4,}")
+_FILL_BLANK_MAX = 5
+_FILL_BLANK_CANDIDATE_MAX = 5
+_FILL_BLANK_ANSWER_MAX_LENGTH = 200
+_ESSAY_REFERENCE_MAX_LENGTH = 5000
+_ESSAY_ANSWER_MAX_LENGTH = 2000
 JUDGE_OPTIONS: dict[str, str] = {"A": "正确", "B": "错误"}
+QUESTION_TYPE_IMPORT_ALIASES: dict[str, str] = {
+    "单选": "single_choice",
+    "单选题": "single_choice",
+    "多选": "multiple_choice",
+    "多选题": "multiple_choice",
+    "判断": "judge",
+    "判断题": "judge",
+    "填空": "fill_blank",
+    "填空题": "fill_blank",
+    "问答": "essay",
+    "问答题": "essay",
+    "简答": "essay",
+    "简答题": "essay",
+}
 
 
 class QuizQuestionType(StrEnum):
     SINGLE_CHOICE = "single_choice"
     MULTIPLE_CHOICE = "multiple_choice"
     JUDGE = "judge"
+    FILL_BLANK = "fill_blank"
+    ESSAY = "essay"
 
 
 class QuizCategoryStatus(StrEnum):
@@ -110,9 +133,10 @@ class QuizImportStatus(StrEnum):
 class QuizRuleViolation(ValueError):
     """A field-scoped domain validation error suitable for row-level reports."""
 
-    def __init__(self, field: str, message: str) -> None:
+    def __init__(self, field: str, message: str, code: str | None = None) -> None:
         self.field = field
         self.message = message
+        self.code = code
         super().__init__(f"{field}: {message}")
 
 
@@ -229,6 +253,11 @@ def _normalize_options(
     *,
     require_publishable: bool,
 ) -> dict[str, str] | None:
+    if question_type in {QuizQuestionType.FILL_BLANK, QuizQuestionType.ESSAY}:
+        if options is None or options == "" or options == {} or options == []:
+            return None
+        raise QuizRuleViolation("options", "填空题和问答题不支持选项")
+
     if question_type is QuizQuestionType.JUDGE:
         if options is None:
             return dict(JUDGE_OPTIONS)
@@ -318,6 +347,8 @@ def normalize_option_image_urls(
 
     if normalized and question_type is QuizQuestionType.JUDGE:
         raise QuizRuleViolation("option_image_urls", "判断题不支持选项图片")
+    if normalized and question_type in {QuizQuestionType.FILL_BLANK, QuizQuestionType.ESSAY}:
+        raise QuizRuleViolation("option_image_urls", "填空题和问答题不支持选项图片")
     if options is not None:
         unknown = sorted(set(normalized) - set(options))
         if unknown:
@@ -339,6 +370,12 @@ def _normalize_correct_answer(
 ) -> QuizAnswer | None:
     if answer is None or answer == "" or answer == []:
         if require_publishable:
+            if question_type is QuizQuestionType.ESSAY:
+                raise QuizRuleViolation(
+                    "correct_answer",
+                    "发布前必须填写参考答案",
+                    code="essay_reference_answer_required",
+                )
             raise QuizRuleViolation("correct_answer", "发布前必须填写标准答案")
         return None
 
@@ -347,6 +384,70 @@ def _normalize_correct_answer(
         if options is not None and key not in options:
             raise QuizRuleViolation("correct_answer", "标准答案不在现有选项中")
         return key
+
+    if question_type is QuizQuestionType.FILL_BLANK:
+        if isinstance(answer, (str, bytes)) or not isinstance(answer, Sequence):
+            raise QuizRuleViolation("correct_answer", "填空题标准答案必须是二维数组")
+        groups: list[list[str]] = []
+        for group_index, group in enumerate(answer):
+            group_field = f"correct_answer.{group_index}"
+            if isinstance(group, (str, bytes)) or not isinstance(group, Sequence):
+                raise QuizRuleViolation(group_field, "每空答案必须是候选字符串数组")
+            candidates: list[str] = []
+            seen: set[str] = set()
+            for candidate in group:
+                if not isinstance(candidate, str):
+                    raise QuizRuleViolation(group_field, "候选答案必须是字符串")
+                if not candidate.strip():
+                    raise QuizRuleViolation(
+                        group_field,
+                        "候选答案不能为空白",
+                        code="fill_blank_answer_group_empty",
+                    )
+                if len(candidate) > _FILL_BLANK_ANSWER_MAX_LENGTH:
+                    raise QuizRuleViolation(
+                        group_field,
+                        f"候选答案长度不能超过 {_FILL_BLANK_ANSWER_MAX_LENGTH}",
+                        code="fill_blank_candidate_too_long",
+                    )
+                if candidate not in seen:
+                    candidates.append(candidate)
+                    seen.add(candidate)
+            if not candidates:
+                raise QuizRuleViolation(
+                    group_field,
+                    "每空至少填写一个候选答案",
+                    code="fill_blank_answer_group_empty",
+                )
+            if len(candidates) > _FILL_BLANK_CANDIDATE_MAX:
+                raise QuizRuleViolation(
+                    group_field,
+                    f"每空最多 {_FILL_BLANK_CANDIDATE_MAX} 个候选答案",
+                    code="fill_blank_candidate_limit_exceeded",
+                )
+            groups.append(candidates)
+        if not 1 <= len(groups) <= _FILL_BLANK_MAX:
+            raise QuizRuleViolation(
+                "correct_answer",
+                f"填空题每题 1 至 {_FILL_BLANK_MAX} 空",
+                code="fill_blank_blank_limit_exceeded",
+            )
+        return groups
+
+    if question_type is QuizQuestionType.ESSAY:
+        if not isinstance(answer, str):
+            raise QuizRuleViolation("correct_answer", "问答题参考答案必须是字符串")
+        reference = answer.strip()
+        if len(reference) > _ESSAY_REFERENCE_MAX_LENGTH:
+            raise QuizRuleViolation(
+                "correct_answer",
+                f"参考答案长度不能超过 {_ESSAY_REFERENCE_MAX_LENGTH}",
+                code="essay_reference_answer_too_long",
+            )
+        for char in reference:
+            if unicodedata.category(char) == "Cc" and char not in {"\n", "\r", "\t"}:
+                raise QuizRuleViolation("correct_answer", "参考答案不能包含控制字符")
+        return reference
 
     if isinstance(answer, (str, bytes)) or not isinstance(answer, Sequence):
         raise QuizRuleViolation("correct_answer", "多选题标准答案必须是字符串数组")
@@ -403,6 +504,21 @@ def normalize_question_payload(
         options=normalized_options,
         require_publishable=require_publishable,
     )
+    if normalized_type is QuizQuestionType.FILL_BLANK:
+        assert isinstance(display_text, str)
+        blank_count = len(_FILL_BLANK_PLACEHOLDER_RE.findall(display_text))
+        if not 1 <= blank_count <= _FILL_BLANK_MAX:
+            raise QuizRuleViolation(
+                "question_text",
+                f"填空题题干必须包含 1 至 {_FILL_BLANK_MAX} 个空位（____）",
+                code="fill_blank_blank_limit_exceeded",
+            )
+        if normalized_answer is not None and len(normalized_answer) != blank_count:
+            raise QuizRuleViolation(
+                "correct_answer",
+                "答案空数必须与题干空位数量一致",
+                code="fill_blank_placeholder_count_mismatch",
+            )
     normalized_explanation = _clean_text(
         explanation,
         field="explanation",
@@ -432,11 +548,50 @@ def normalize_submitted_answer(
     question_type: str | QuizQuestionType,
     answer: object,
     *,
-    options: Mapping[str, str],
+    options: Mapping[str, str] | None,
+    expected_blank_count: int | None = None,
 ) -> QuizAnswer:
     normalized_type = _enum_value(question_type, QuizQuestionType, "question_type")
     assert isinstance(normalized_type, QuizQuestionType)
-    normalized_options = _normalize_options_mapping(options)
+
+    if normalized_type is QuizQuestionType.FILL_BLANK:
+        if isinstance(answer, (str, bytes)) or not isinstance(answer, Sequence):
+            raise QuizRuleViolation("user_answer", "填空题答案必须是字符串数组")
+        blanks: list[str] = []
+        for blank_index, blank in enumerate(answer):
+            blank_field = f"user_answer.{blank_index}"
+            if not isinstance(blank, str):
+                raise QuizRuleViolation(blank_field, "每空答案必须是字符串")
+            if len(blank) > _FILL_BLANK_ANSWER_MAX_LENGTH:
+                raise QuizRuleViolation(
+                    blank_field, f"每空答案长度不能超过 {_FILL_BLANK_ANSWER_MAX_LENGTH}"
+                )
+            for char in blank:
+                if unicodedata.category(char) == "Cc" and char not in {"\n", "\r", "\t"}:
+                    raise QuizRuleViolation(blank_field, "不能包含控制字符")
+            blanks.append(blank)
+        if expected_blank_count is not None and len(blanks) != expected_blank_count:
+            raise QuizRuleViolation(
+                "user_answer", f"填空题答案必须为 {expected_blank_count} 空"
+            )
+        return blanks
+
+    if normalized_type is QuizQuestionType.ESSAY:
+        if answer is None:
+            return ""
+        if not isinstance(answer, str):
+            raise QuizRuleViolation("user_answer", "问答题答案必须是字符串")
+        cleaned = answer.strip()
+        if len(cleaned) > _ESSAY_ANSWER_MAX_LENGTH:
+            raise QuizRuleViolation(
+                "user_answer", f"问答题答案长度不能超过 {_ESSAY_ANSWER_MAX_LENGTH}"
+            )
+        for char in cleaned:
+            if unicodedata.category(char) == "Cc" and char not in {"\n", "\r", "\t"}:
+                raise QuizRuleViolation("user_answer", "不能包含控制字符")
+        return cleaned
+
+    normalized_options = _normalize_options_mapping(options or {})
 
     if normalized_type in {QuizQuestionType.SINGLE_CHOICE, QuizQuestionType.JUDGE}:
         key = _normalize_option_key(answer, field="user_answer")
@@ -461,19 +616,71 @@ def answers_match(
     user_answer: object,
     correct_answer: object,
     *,
-    options: Mapping[str, str],
+    options: Mapping[str, str] | None = None,
 ) -> bool:
+    normalized_type = _enum_value(question_type, QuizQuestionType, "question_type")
+    assert isinstance(normalized_type, QuizQuestionType)
+    if normalized_type is QuizQuestionType.ESSAY:
+        raise QuizRuleViolation("question_type", "问答题不支持自动判分")
     submitted = normalize_submitted_answer(
         question_type,
         user_answer,
         options=options,
     )
-    normalized_type = _enum_value(question_type, QuizQuestionType, "question_type")
-    assert isinstance(normalized_type, QuizQuestionType)
     expected = _normalize_correct_answer(
         normalized_type,
         correct_answer,
-        options=_normalize_options_mapping(options),
+        options=_normalize_options_mapping(options or {}),
         require_publishable=True,
     )
+    if normalized_type is QuizQuestionType.FILL_BLANK:
+        if not isinstance(submitted, list) or not isinstance(expected, list):
+            return False
+        if len(submitted) != len(expected):
+            return False
+        return all(
+            any(blank == candidate for candidate in candidates)
+            for blank, candidates in zip(submitted, expected)
+        )
     return submitted == expected
+
+
+def answer_score_ratio(
+    question_type: str | QuizQuestionType,
+    user_answer: object,
+    correct_answer: object,
+    *,
+    options: Mapping[str, str] | None = None,
+) -> Decimal | None:
+    """Score ratio in [0, 1]; ``None`` means the question needs manual review."""
+
+    normalized_type = _enum_value(question_type, QuizQuestionType, "question_type")
+    assert isinstance(normalized_type, QuizQuestionType)
+    if normalized_type is QuizQuestionType.ESSAY:
+        return None
+    if normalized_type is QuizQuestionType.FILL_BLANK:
+        if not isinstance(correct_answer, Sequence) or isinstance(correct_answer, (str, bytes)):
+            return Decimal("0")
+        submitted = normalize_submitted_answer(
+            normalized_type,
+            user_answer,
+            options=options,
+            expected_blank_count=len(correct_answer),
+        )
+        matched = sum(
+            1
+            for blank, candidates in zip(
+                submitted,
+                (
+                    group
+                    for group in correct_answer
+                    if isinstance(group, Sequence) and not isinstance(group, (str, bytes))
+                ),
+            )
+            if any(blank == candidate for candidate in candidates)
+        )
+        total = len(correct_answer)
+        return Decimal(matched) / Decimal(total) if total else Decimal("0")
+    return Decimal(1) if answers_match(
+        normalized_type, user_answer, correct_answer, options=options
+    ) else Decimal(0)

@@ -3,6 +3,7 @@
 from app.domain.community.src.rule.quiz import (
     JUDGE_OPTIONS,
     NormalizedQuizQuestion,
+    QUESTION_TYPE_IMPORT_ALIASES,
     QuizCategoryStatus,
     QuizExamStatus,
     QuizImportSourceType,
@@ -14,6 +15,7 @@ from app.domain.community.src.rule.quiz import (
     QuizRuleViolation,
     QuizWrongStatus,
     answers_match,
+    answer_score_ratio,
     normalize_category_name,
     normalize_question_payload,
     normalize_question_text,
@@ -24,6 +26,7 @@ from app.domain.community.src.rule.quiz import (
 __all__ = [
     "JUDGE_OPTIONS",
     "NormalizedQuizQuestion",
+    "QUESTION_TYPE_IMPORT_ALIASES",
     "QuizCategoryStatus",
     "QuizExamStatus",
     "QuizImportSourceType",
@@ -35,6 +38,7 @@ __all__ = [
     "QuizRuleViolation",
     "QuizWrongStatus",
     "answers_match",
+    "answer_score_ratio",
     "normalize_category_name",
     "normalize_question_payload",
     "normalize_question_text",

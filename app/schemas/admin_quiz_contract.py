@@ -17,6 +17,7 @@ from app.domain.community.src.rule.quiz import (
     QuizContentStatus,
     QuizLibraryAccessMode,
     QuizLibraryStatus,
+    QUESTION_TYPE_IMPORT_ALIASES,
     normalize_category_name,
     normalize_question_payload,
 )
@@ -458,6 +459,13 @@ class AdminQuizImportQuestion(QuizContractModel):
     explanation: str | None = Field(default=None, max_length=1024)
     image_urls: object = Field(default_factory=list)
     option_image_urls: object = None
+
+    @field_validator("question_type", mode="before")
+    @classmethod
+    def normalize_type_alias(cls, value: object) -> object:
+        if isinstance(value, str):
+            return QUESTION_TYPE_IMPORT_ALIASES.get(value.strip(), value.strip())
+        return value
 
     @field_validator("category_path")
     @classmethod

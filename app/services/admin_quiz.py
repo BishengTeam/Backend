@@ -51,6 +51,7 @@ from app.domain.community.src.index import (
 )
 from app.domain.user.src.index import User, UserProfile
 from app.domain.community.src.rule.quiz import (
+    QUESTION_TYPE_IMPORT_ALIASES,
     QuizCategoryStatus,
     QuizQuestionStatus,
     QuizRuleViolation,
@@ -3487,6 +3488,9 @@ class AdminQuizService:
             else:
                 field = ".".join(location) or None
                 message = str(item.get("msg", "参数校验失败"))
+            code = "schema_validation"
+            if isinstance(context_error, QuizRuleViolation) and context_error.code:
+                code = context_error.code
             errors.append(
                 cls._import_error(
                     # Reports use a user-facing one-based row locator for both
@@ -3495,7 +3499,7 @@ class AdminQuizService:
                     row=locator,
                     question_index=locator - 1 if source_type == "csv" else locator,
                     field=field,
-                    error_code="schema_validation",
+                    error_code=code,
                     message=message,
                 )
             )
@@ -3621,7 +3625,40 @@ class AdminQuizService:
                 options_text = (raw.get("options") or "").strip()
                 options = json.loads(options_text) if options_text else None
                 answer_text = (raw.get("correct_answer") or "").strip()
-                answer: object = json.loads(answer_text) if answer_text.startswith("[") else answer_text
+                type_text = (raw.get("question_type") or "").strip()
+                normalized_type_text = QUESTION_TYPE_IMPORT_ALIASES.get(
+                    type_text, type_text
+                )
+                answer: object
+                if answer_text.startswith("["):
+                    answer = json.loads(answer_text)
+                elif normalized_type_text == "fill_blank" and answer_text:
+                    parsed_groups: list[list[str]] = []
+                    delimiter_conflict = False
+                    for group in answer_text.split("|"):
+                        candidates = group.split(";;")
+                        if any(not candidate.strip() for candidate in candidates):
+                            delimiter_conflict = True
+                            break
+                        parsed_groups.append(candidates)
+                    if delimiter_conflict:
+                        errors.append(
+                            self._import_error(
+                                row=row_no,
+                                question_index=data_row_count,
+                                field="correct_answer",
+                                error_code="answer_delimiter_conflict",
+                                message=(
+                                    "填空题答案分隔符使用无效：空与空之间用 | 分隔、"
+                                    "同一空的候选之间用 ;; 分隔且候选不能为空；"
+                                    "答案文本本身包含分隔符时请改用 JSON 导入"
+                                ),
+                            )
+                        )
+                        continue
+                    answer = parsed_groups
+                else:
+                    answer = answer_text
                 option_image_urls = {
                     letter.upper(): url.strip()
                     for letter in "abcd"
@@ -3629,7 +3666,7 @@ class AdminQuizService:
                 }
                 item = {
                     "category_path": path,
-                    "question_type": (raw.get("question_type") or "").strip(),
+                    "question_type": type_text,
                     "question_text": raw.get("question_text") or "",
                     "options": options,
                     "correct_answer": answer,
@@ -3789,7 +3826,7 @@ class AdminQuizService:
                         row=row_no,
                         question_index=question_index,
                         field=exc.field,
-                        error_code="question_validation",
+                        error_code=exc.code or "question_validation",
                         message=exc.message,
                     )
                 )
@@ -4037,7 +4074,7 @@ class AdminQuizService:
                         row=row_no,
                         question_index=question_index,
                         field=exc.field,
-                        error_code="question_validation",
+                        error_code=exc.code or "question_validation",
                         message=exc.message,
                     )
                 )
@@ -5236,10 +5273,23 @@ class AdminQuizService:
                         skipped += 1
                         continue
 
-                    if question_type not in ("single_choice", "multiple_choice", "judge"):
+                    question_type = QUESTION_TYPE_IMPORT_ALIASES.get(
+                        question_type, question_type
+                    )
+                    if question_type not in (
+                        "single_choice",
+                        "multiple_choice",
+                        "judge",
+                        "fill_blank",
+                        "essay",
+                    ):
                         errors.append({"row": row_num, "reason": f"无效题型: {question_type}"})
                         skipped += 1
                         continue
+                    if question_type == "fill_blank" and not correct_answer.startswith("["):
+                        correct_answer = [
+                            group.split(";;") for group in correct_answer.split("|")
+                        ]
 
                     # Parse options
                     options = None
@@ -5336,7 +5386,13 @@ class AdminQuizService:
 
             for idx, item in enumerate(data.questions):
                 try:
-                    if item.question_type not in ("single_choice", "multiple_choice", "judge"):
+                    if item.question_type not in (
+                        "single_choice",
+                        "multiple_choice",
+                        "judge",
+                        "fill_blank",
+                        "essay",
+                    ):
                         errors.append({"index": idx, "reason": f"无效题型: {item.question_type}"})
                         skipped += 1
                         continue

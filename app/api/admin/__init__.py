@@ -18,6 +18,7 @@ from app.api.admin.plans import router as plans_router
 from app.api.admin.reviews import router as reviews_router
 from app.api.admin.prices import router as prices_router
 from app.api.admin.quiz import router as quiz_router
+from app.api.admin.quiz_review import router as quiz_review_router
 from app.api.admin.renshe import router as renshe_router
 from app.api.admin.settings import router as settings_router
 from app.api.admin.statistics import router as statistics_router
@@ -44,6 +45,7 @@ router.include_router(plans_router, prefix="/certifications")
 router.include_router(jobs_router)
 router.include_router(prices_router)
 router.include_router(quiz_router)
+router.include_router(quiz_review_router)
 router.include_router(renshe_router)
 router.include_router(zones_router)
 router.include_router(coupons_router)
