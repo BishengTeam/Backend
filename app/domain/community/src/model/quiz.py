@@ -1003,9 +1003,6 @@ class QuizQuestionRevisionStats(Base, _QuizTimestampMixin):
     exam_correct: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0, server_default="0"
     )
-    exam_partial: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, default=0, server_default="0"
-    )
     aggregated_through: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -1363,6 +1360,9 @@ class QuizUserStats(Base, _QuizTimestampMixin):
         BigInteger, nullable=False, default=0, server_default="0"
     )
     exam_correct: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    exam_partial: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0, server_default="0"
     )
     exam_wrong: Mapped[int] = mapped_column(
