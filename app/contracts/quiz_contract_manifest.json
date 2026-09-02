@@ -1,7 +1,7 @@
 {
-  "admin_operation_count": 57,
-  "fingerprint_sha256": "1856ab1c27ad3be24d393938b43e8561c02c37dccbb34370fbd8bfc1ce2a78dd",
-  "operation_count": 89,
+  "admin_operation_count": 63,
+  "fingerprint_sha256": "a725ae2d36000ca33df492593bb0fd3f7cb5ad2559ef42048a914ca2105c1da4",
+  "operation_count": 95,
   "operations": [
     {
       "auth": "admin",
@@ -363,6 +363,48 @@
     {
       "auth": "admin",
       "method": "GET",
+      "path": "/admin/quiz/reviews",
+      "permission": "quiz_review",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "GET",
+      "path": "/admin/quiz/reviews/{exam_id}",
+      "permission": "quiz_review",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/reviews/{exam_id}/claim",
+      "permission": "quiz_review",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/reviews/{exam_id}/complete",
+      "permission": "quiz_review",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/reviews/{exam_id}/recall",
+      "permission": "quiz_review",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/reviews/{exam_id}/verdicts",
+      "permission": "quiz_review",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "GET",
       "path": "/admin/quiz/stats/daily",
       "permission": "quiz:list",
       "rate_limit_per_minute": null
@@ -627,7 +669,7 @@
       "rate_limit_per_minute": null
     }
   ],
-  "quiz_contract_version": "2026-08-30",
+  "quiz_contract_version": "2026-09-01",
   "removed_operation_count": 13,
   "removed_operations": [
     {
