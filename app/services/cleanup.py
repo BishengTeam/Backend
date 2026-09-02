@@ -11,6 +11,7 @@ from app.domain.certification.src.index import CompetitionReg, CourseEnrollment
 from app.domain.order.src.index import InventoryRecord, Order, UserCoupon
 from app.domain.renshe.src.index import RensheApplication
 from app.domain.user.src.index import DeletedOpenid, PointsHistory, User, UserProfile, UserRealname, UserStudent, UserEnterprise, UserPoints
+from app.services.classroom_attachment import cleanup_classroom_attachments
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,16 @@ async def cleanup_loop():
                     "定时清理账号失败: exception_type=%s", type(exc).__name__
                 )
             next_account_cleanup_at = now + CLEANUP_INTERVAL_SECONDS
+            try:
+                orphaned, expired = await cleanup_classroom_attachments()
+                if orphaned or expired:
+                    logger.info(
+                        "课堂附件清理: 孤儿=%d 到期=%d", orphaned, expired
+                    )
+            except Exception as exc:
+                logger.error(
+                    "清理课堂附件失败: exception_type=%s", type(exc).__name__
+                )
         try:
             await _close_expired_orders()
         except Exception as exc:

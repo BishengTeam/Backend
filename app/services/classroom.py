@@ -11,11 +11,25 @@ from app.domain.classroom.src.index import (
     ClassroomQuestion,
     ClassroomQuiz,
     ClassroomQuizSubmission,
+    ClassroomQuizAttachment,
     ClassroomVideo,
 )
 from app.domain.user.src.index import UserRealname
-from app.port.exceptions import BusinessException, ForbiddenException, NotFoundException
+from app.port.exceptions import (
+    BusinessException,
+    ForbiddenException,
+    NotFoundException,
+    ValidationException,
+)
 from app.services.classroom_admin import _grade_answer, _now
+from app.services.classroom_attachment import (
+    SHORT_ANSWER_HTML_MAX_BYTES,
+    ClassroomAttachmentService,
+    canonicalize_short_answer_html,
+    make_read_signer,
+    resign_short_answer_html,
+    sanitize_short_answer_html,
+)
 
 
 class ClassroomService:
@@ -175,7 +189,13 @@ class ClassroomService:
                 ],
             }
 
-    async def submit_quiz(self, user_id: int, quiz_id: int, answers: dict) -> None:
+    async def submit_quiz(
+        self,
+        user_id: int,
+        quiz_id: int,
+        answers: dict,
+        attachments: dict | None = None,
+    ) -> None:
         async with get_db_ctx() as db:
             quiz = await self._member_quiz(db, user_id, quiz_id)
             ends_at = quiz.started_at + timedelta(minutes=quiz.duration_minutes)
@@ -194,16 +214,59 @@ class ClassroomService:
                     ClassroomQuestion.id.in_(quiz.question_ids or [])
                 )
             )).scalars().all()
+            ordered = [
+                q for q in questions if q.id in (quiz.question_ids or [])
+            ]
+            short_map = {q.id: q for q in ordered if q.type == "short"}
+            draft_rows = (await db.execute(
+                select(ClassroomQuizAttachment).where(
+                    ClassroomQuizAttachment.quiz_id == quiz_id,
+                    ClassroomQuizAttachment.user_id == user_id,
+                    ClassroomQuizAttachment.status == "uploaded",
+                )
+            )).scalars().all()
+            allowed_keys: dict[int, set[str]] = {}
+            for row in draft_rows:
+                allowed_keys.setdefault(row.question_id, set()).add(row.object_key)
+            processed: dict[str, str] = {}
+            for key, value in answers.items():
+                question_id = int(key) if str(key).isdigit() else None
+                if question_id in short_map:
+                    sanitized = sanitize_short_answer_html(str(value))
+                    canonical = canonicalize_short_answer_html(
+                        sanitized, allowed_keys.get(question_id, set())
+                    )
+                    if len(canonical.encode("utf-8")) > SHORT_ANSWER_HTML_MAX_BYTES:
+                        raise ValidationException("问答题答案内容过大")
+                    processed[key] = canonical
+                else:
+                    processed[key] = str(value)
             auto = sum(
-                _grade_answer(q, answers.get(str(q.id)))
-                for q in questions
+                _grade_answer(q, processed.get(str(q.id)))
+                for q in ordered
             )
-            db.add(ClassroomQuizSubmission(
+            submission = ClassroomQuizSubmission(
                 quiz_id=quiz_id, user_id=user_id,
-                answers={k: str(v) for k, v in answers.items()},
+                answers=processed,
                 auto_score=auto, total_score=auto,
                 status="pending_review", submitted_at=_now(),
-            ))
+            )
+            db.add(submission)
+            await db.flush()
+            canonical_answers = {
+                question_id: processed[str(question_id)]
+                for question_id in short_map
+                if processed.get(str(question_id))
+            }
+            await ClassroomAttachmentService.bind_submitted_attachments(
+                db,
+                user_id=user_id,
+                quiz=quiz,
+                submission_id=submission.id,
+                requested=attachments or {},
+                canonical_answers=canonical_answers,
+                short_questions=short_map,
+            )
             await db.commit()
 
     async def quiz_result(self, user_id: int, quiz_id: int) -> dict:
@@ -222,6 +285,67 @@ class ClassroomService:
                 "status": sub.status,
                 "total_score": sub.total_score if sub.status == "approved" else None,
                 "submitted_at": sub.submitted_at,
+            }
+
+    async def quiz_submission_detail(self, user_id: int, quiz_id: int) -> dict:
+        """提交详情回看：批改完成前只回状态，不回发作答内容（防错峰泄题）。"""
+        async with get_db_ctx() as db:
+            quiz = await self._member_quiz(db, user_id, quiz_id)
+            sub = (await db.execute(
+                select(ClassroomQuizSubmission).where(
+                    ClassroomQuizSubmission.quiz_id == quiz_id,
+                    ClassroomQuizSubmission.user_id == user_id,
+                )
+            )).scalar_one_or_none()
+            if sub is None:
+                raise NotFoundException("答卷")
+            if sub.status != "approved":
+                return {"status": sub.status}
+            questions = (await db.execute(
+                select(ClassroomQuestion).where(
+                    ClassroomQuestion.id.in_(quiz.question_ids or [])
+                )
+            )).scalars().all()
+            qmap = {q.id: q for q in questions}
+            ordered = [qmap[qid] for qid in (quiz.question_ids or []) if qid in qmap]
+            short_ids = {q.id for q in ordered if q.type == "short"}
+            rows = (await db.execute(
+                select(ClassroomQuizAttachment).where(
+                    ClassroomQuizAttachment.submission_id == sub.id,
+                    ClassroomQuizAttachment.status == "bound",
+                ).order_by(ClassroomQuizAttachment.id)
+            )).scalars().all()
+            urls = await ClassroomAttachmentService.sign_read_urls(
+                [row.object_key for row in rows]
+            )
+            signer = make_read_signer()
+            answers = {}
+            for key, value in (sub.answers or {}).items():
+                question_id = int(key) if str(key).isdigit() else None
+                if question_id in short_ids and value:
+                    answers[key] = resign_short_answer_html(str(value), signer)
+                else:
+                    answers[key] = value
+            return {
+                "status": sub.status,
+                "total_score": sub.total_score,
+                "submitted_at": sub.submitted_at,
+                "approved_at": sub.approved_at,
+                "questions": [
+                    {"id": q.id, "type": q.type, "stem": q.stem,
+                     "options": q.options, "score": q.score}
+                    for q in ordered
+                ],
+                "answers": answers,
+                "attachments": [
+                    {
+                        "id": row.id, "question_id": row.question_id, "kind": row.kind,
+                        "filename": row.filename, "content_type": row.content_type,
+                        "size_bytes": row.size_bytes,
+                        "url": urls.get(row.object_key, ""),
+                    }
+                    for row in rows
+                ],
             }
 
     # ── helpers ─────────────────────────────────────────────

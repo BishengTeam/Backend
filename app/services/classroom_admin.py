@@ -12,6 +12,7 @@ from app.domain.classroom.src.index import (
     ClassroomMember,
     ClassroomQuestion,
     ClassroomQuiz,
+    ClassroomQuizAttachment,
     ClassroomQuizSubmission,
     ClassroomVideo,
 )
@@ -32,6 +33,11 @@ from app.schemas.classroom import (
     ClassroomVideoCreate,
 )
 from app.services.course_storage import CourseStorage, validate_upload
+from app.services.classroom_attachment import (
+    ClassroomAttachmentService,
+    make_read_signer,
+    resign_short_answer_html,
+)
 
 JOIN_CODE_TTL_MINUTES = 30
 
@@ -480,7 +486,7 @@ class ClassroomAdminService:
     async def list_submissions(
         self, classroom_id: int, quiz_id: int, teacher_admin_id: int | None
     ) -> list[dict]:
-        """批改列表：含题目答案和每份答卷明细。"""
+        """批改列表：含题目答案、每份答卷明细与附件（short 为重签 HTML）。"""
         async with get_db_ctx() as db:
             await _get_classroom(db, classroom_id, teacher_admin_id=teacher_admin_id)
             quiz = await db.get(ClassroomQuiz, quiz_id)
@@ -500,6 +506,37 @@ class ClassroomAdminService:
                     ClassroomQuizSubmission.quiz_id == quiz_id,
                 ).order_by(ClassroomQuizSubmission.id)
             )).all()
+            submission_ids = [s.id for s, _m in subs]
+            attach_rows = (await db.execute(
+                select(ClassroomQuizAttachment).where(
+                    ClassroomQuizAttachment.submission_id.in_(submission_ids),
+                    ClassroomQuizAttachment.status == "bound",
+                ).order_by(ClassroomQuizAttachment.id)
+            )).scalars().all() if submission_ids else []
+            attach_urls = await ClassroomAttachmentService.sign_read_urls(
+                [row.object_key for row in attach_rows]
+            )
+            attachments_by_submission: dict[int, list[dict]] = {}
+            for row in attach_rows:
+                attachments_by_submission.setdefault(row.submission_id, []).append({
+                    "id": row.id, "question_id": row.question_id, "kind": row.kind,
+                    "filename": row.filename, "content_type": row.content_type,
+                    "size_bytes": row.size_bytes,
+                    "url": attach_urls.get(row.object_key, ""),
+                })
+            short_ids = {q.id for q in questions if q.type == "short"}
+            signer = make_read_signer()
+
+            def _display_answers(submission: ClassroomQuizSubmission) -> dict:
+                displayed = {}
+                for key, value in (submission.answers or {}).items():
+                    question_id = int(key) if str(key).isdigit() else None
+                    if question_id in short_ids and value:
+                        displayed[key] = resign_short_answer_html(str(value), signer)
+                    else:
+                        displayed[key] = value
+                return displayed
+
             return {
                 "questions": [
                     {"id": q.id, "type": q.type, "stem": q.stem, "options": q.options,
@@ -508,10 +545,11 @@ class ClassroomAdminService:
                 ],
                 "submissions": [
                     {"id": s.id, "user_id": s.user_id, "student_name": m.real_name_snapshot,
-                     "answers": s.answers or {}, "auto_score": s.auto_score,
+                     "answers": _display_answers(s), "auto_score": s.auto_score,
                      "manual_score": s.manual_score, "total_score": s.total_score,
                      "status": s.status, "submitted_at": s.submitted_at,
-                     "manual_scores": s.manual_scores or {}}
+                     "manual_scores": s.manual_scores or {},
+                     "attachments": attachments_by_submission.get(s.id, [])}
                     for s, m in subs
                 ],
             }

@@ -151,3 +151,53 @@ class ClassroomQuizSubmission(Base, TimestampMixin):
     )
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ClassroomQuizAttachment(Base, TimestampMixin):
+    """问答题作答附件（Editor 内嵌图片与 Word/zip 文件共用）。
+
+    uploaded = 已上传待交卷绑定；bound = 已随答卷绑定（含 submission_id）。
+    object_key 归属路径自带 quiz/user/question，交卷时按归属白名单校验。
+    """
+
+    __tablename__ = "classroom_quiz_attachment"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('image', 'document', 'archive')",
+            name="ck_classroom_attachment_kind",
+        ),
+        CheckConstraint(
+            "status IN ('uploaded', 'bound')",
+            name="ck_classroom_attachment_status",
+        ),
+        CheckConstraint("size_bytes > 0", name="ck_classroom_attachment_size"),
+        UniqueConstraint("object_key", name="uq_classroom_attachment_key"),
+        Index(
+            "ix_classroom_attachment_draft",
+            "quiz_id",
+            "user_id",
+            "question_id",
+        ),
+    )
+
+    quiz_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("classroom_quiz.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("user.id"), nullable=False
+    )
+    question_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("classroom_question.id", ondelete="CASCADE"), nullable=False
+    )
+    submission_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("classroom_quiz_submission.id", ondelete="SET NULL")
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="uploaded", server_default="uploaded"
+    )
+    object_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    filename: Mapped[str] = mapped_column(String(256), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
