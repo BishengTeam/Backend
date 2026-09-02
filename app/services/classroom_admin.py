@@ -192,7 +192,7 @@ class ClassroomAdminService:
             )).scalars().all()
             return [
                 {"id": m.id, "user_id": m.user_id, "real_name": m.real_name_snapshot,
-                 "joined_at": m.joined_at or m.created_at}
+                 "joined_at": m.created_at}
                 for m in rows
             ]
 
