@@ -15,7 +15,7 @@ from app.domain.classroom.src.index import (
     ClassroomQuizSubmission,
     ClassroomVideo,
 )
-from app.domain.user.src.index import User, UserProfile
+from app.domain.user.src.index import AdminUser, User, UserProfile
 from app.port.exceptions import (
     BusinessException,
     ForbiddenException,
@@ -84,6 +84,13 @@ class ClassroomAdminService:
                 base.order_by(Classroom.id.desc())
                 .offset((page - 1) * page_size).limit(page_size)
             )).scalars().all()
+            teacher_ids = {c.teacher_admin_id for c in rows}
+            teachers = {}
+            if teacher_ids:
+                for t in (await db.execute(
+                    select(AdminUser).where(AdminUser.id.in_(teacher_ids))
+                )).scalars().all():
+                    teachers[t.id] = t.display_name or t.username
             items = []
             for c in rows:
                 student_count = (await db.execute(
@@ -106,6 +113,7 @@ class ClassroomAdminService:
                 )).scalar()
                 items.append({
                     "id": c.id, "name": c.name, "status": c.status,
+                    "teacher_name": teachers.get(c.teacher_admin_id, str(c.teacher_admin_id)),
                     "join_code": c.join_code if c.status == "active" else None,
                     "join_code_expires_at": c.join_code_expires_at,
                     "student_count": int(student_count),
