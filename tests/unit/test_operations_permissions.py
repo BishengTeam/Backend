@@ -136,3 +136,21 @@ def test_competitions_use_competition_permissions() -> None:
         and r.permission == "competition:list"
         for r in routes
     )
+
+
+def test_classrooms_use_classroom_permission() -> None:
+    routes = _parse_routes("app/api/admin/classrooms.py")
+    assert routes
+    assert all(r.permission == "classroom:manage" for r in routes)
+
+
+def test_teacher_role_is_configured() -> None:
+    from app.policy.permissions import ROLE_PERMISSIONS
+
+    assert ROLE_PERMISSIONS["teacher"] == ["classroom:manage"]
+
+
+def test_teacher_role_is_persistable() -> None:
+    from app.domain.user.src.index import ADMIN_ROLES
+
+    assert "teacher" in ADMIN_ROLES

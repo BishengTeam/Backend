@@ -9,17 +9,20 @@ SUPER_ADMIN_ROLE = "super_admin"
 QUIZ_ADMIN_ROLE = "quiz_admin"
 CERT_ADMIN_ROLE = "cert_admin"
 COURSE_ADMIN_ROLE = "course_admin"
+TEACHER_ROLE = "teacher"
 
 ADMIN_ROLES = (
     SUPER_ADMIN_ROLE,
     QUIZ_ADMIN_ROLE,
     CERT_ADMIN_ROLE,
     COURSE_ADMIN_ROLE,
+    TEACHER_ROLE,
 )
 
 __all__ = [
     "ADMIN_ROLES",
     "COURSE_ADMIN_ROLE",
+    "TEACHER_ROLE",
     "CERT_ADMIN_ROLE",
     "QUIZ_ADMIN_ROLE",
     "SUPER_ADMIN_ROLE",

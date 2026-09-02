@@ -48,6 +48,7 @@ def test_only_frozen_roles_are_persistable_and_quiz_role_is_scoped() -> None:
         "quiz_admin",
         "cert_admin",
         "course_admin",
+        "teacher",
     )
     assert set(ROLE_PERMISSIONS) == set(ADMIN_ROLES)
     assert ROLE_PERMISSIONS["super_admin"] == ["*"]

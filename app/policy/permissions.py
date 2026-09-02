@@ -23,4 +23,7 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "course:write",
         "course:publish",
     ],
+    "teacher": [
+        "classroom:manage",
+    ],
 }

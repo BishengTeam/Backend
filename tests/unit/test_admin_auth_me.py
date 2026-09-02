@@ -10,6 +10,7 @@ class TestRolePermissions:
             "quiz_admin",
             "cert_admin",
             "course_admin",
+            "teacher",
         }
 
     def test_super_admin_has_wildcard(self):
