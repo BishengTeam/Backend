@@ -122,6 +122,7 @@ def test_quiz_rebuild_upgrade_downgrade_upgrade(
         "quiz_exam",
         "quiz_exam_answer",
         "quiz_exam_question",
+        "quiz_exam_question_review",
         "quiz_import_job",
         "quiz_import_error",
         "quiz_practice_attempt",
