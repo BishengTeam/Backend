@@ -6,6 +6,7 @@ non-production defaults before collection starts.
 """
 
 import os
+import sys
 
 import pytest
 
@@ -30,6 +31,15 @@ os.environ.setdefault(
         "postgresql://test:test@127.0.0.1:5432/wemini_app_test",
     ),
 )
+
+# bootstrap/部署验收测试依赖 fcntl 等 POSIX 专属能力，仅在 Linux（部署目标环境）收集。
+if sys.platform == "win32":
+    collect_ignore = [
+        "unit/test_bootstrap_release.py",
+        "unit/test_bootstrap_state.py",
+        "unit/test_bootstrap_web.py",
+        "unit/test_deployment_acceptance.py",
+    ]
 
 
 def pytest_collection_modifyitems(config, items):

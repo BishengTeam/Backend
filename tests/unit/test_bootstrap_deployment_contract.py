@@ -6,10 +6,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="部署契约脚本内部执行 bash -n，需要 bash（部署目标为 Linux）",
+)
 def test_bootstrap_deployment_static_contract():
     subprocess.run(
         [sys.executable, "scripts/check_bootstrap_deployment.py"],

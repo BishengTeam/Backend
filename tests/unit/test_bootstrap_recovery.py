@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sys
 
 import pytest
 from Crypto.PublicKey import RSA
@@ -16,6 +17,11 @@ from bootstrap_app.recovery import (
     restore_recovery_files,
     store_local_recovery_envelope,
     upload_recovery_envelope,
+)
+
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="恢复演练依赖 POSIX 权限断言（0700/0600，部署目标为 Linux）",
 )
 
 

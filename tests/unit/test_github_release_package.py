@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -15,6 +16,13 @@ def _sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+POSIX_ONLY = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="发布包可执行位断言依赖 POSIX 权限语义（部署目标为 Linux）",
+)
+
+
+@POSIX_ONLY
 def test_package_github_release_builds_source_free_checked_bundle(
     tmp_path, monkeypatch, capsys
 ):
@@ -139,6 +147,10 @@ def test_package_rejects_asset_at_github_size_limit(tmp_path):
         package_github_release._archive(str(archive))
 
 
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="需要 bash 执行 bootstrap_server.sh 片段（部署目标为 Linux）",
+)
 def test_bootstrap_release_source_creates_and_enforces_immutable_pins(tmp_path):
     backend_commit = "a" * 40
     admin_commit = "b" * 40

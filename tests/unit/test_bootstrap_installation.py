@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 import pytest
 from Crypto.PublicKey import RSA
@@ -14,6 +15,11 @@ from bootstrap_app.installation import (
     build_installation_payload,
 )
 from bootstrap_app.models import BootstrapConfigureRequest
+
+POSIX_ONLY = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="安装目录私有性与 symlink 校验依赖 POSIX 权限语义（部署目标为 Linux）",
+)
 
 
 @pytest.fixture(scope="module")
@@ -109,6 +115,7 @@ def test_external_mode_keeps_credentials_out_of_runtime(rsa_materials, tmp_path)
     assert "db-password" not in json.dumps(runtime)
 
 
+@POSIX_ONLY
 def test_oss_can_be_omitted_without_enabling_local_fallback(
     rsa_materials,
     tmp_path,
@@ -181,6 +188,7 @@ def test_offline_validation_rejects_unsafe_payment_input(
         build_installation_payload(request, host_deploy_root=tmp_path)
 
 
+@POSIX_ONLY
 def test_installation_directory_is_atomic_private_and_verifiable(
     rsa_materials,
     tmp_path,
@@ -218,6 +226,7 @@ def test_installation_directory_is_atomic_private_and_verifiable(
         )
 
 
+@POSIX_ONLY
 def test_installation_tamper_and_symlink_are_rejected(rsa_materials, tmp_path):
     os.chmod(tmp_path, 0o700)
     request = BootstrapConfigureRequest.model_validate(configure_payload(rsa_materials))

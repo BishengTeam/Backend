@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import os
+import sys
 
 import pytest
 
 from bootstrap_app.infrastructure import (
     InfrastructureCheckError,
     assert_empty_infrastructure,
+)
+
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="基础设施校验依赖 POSIX 目录/文件权限语义（部署目标为 Linux）",
 )
 
 

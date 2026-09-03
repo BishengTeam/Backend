@@ -26,7 +26,7 @@ class RouteInfo(NamedTuple):
 
 
 def _parse_routes(module_path: str) -> list[RouteInfo]:
-    source = (REPO_ROOT / module_path).read_text()
+    source = (REPO_ROOT / module_path).read_text(encoding="utf-8")
     tree = ast.parse(source)
     routes: list[RouteInfo] = []
     prefix = ""
@@ -114,13 +114,13 @@ def test_cert_products_keep_content_permissions() -> None:
 
 
 def test_user_job_apply_endpoint_is_removed() -> None:
-    source = (REPO_ROOT / "app/api/job.py").read_text()
+    source = (REPO_ROOT / "app/api/job.py").read_text(encoding="utf-8")
     assert "apply" not in source
     assert "get_current_user" not in source
 
 
 def test_job_service_apply_is_deprecated() -> None:
-    source = (REPO_ROOT / "app/services/job.py").read_text()
+    source = (REPO_ROOT / "app/services/job.py").read_text(encoding="utf-8")
     assert "已弃用" in source and "async def apply" in source
 
 

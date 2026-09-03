@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import subprocess
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="bash 语法检查需要 bash（部署目标为 Linux）",
+)
 def test_online_updater_shell_contract():
     script = ROOT / "scripts/upgrade_release.sh"
     source = script.read_text(encoding="utf-8")
