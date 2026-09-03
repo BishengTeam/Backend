@@ -73,6 +73,11 @@ def extract_quiz_image_key(value: str) -> str | None:
     return None
 
 
+def _normalized_content_type(content_type: str) -> str:
+    """OSS V1 签名默认覆盖 content-type：空值兜底为 octet-stream，保证可回传可复现。"""
+    return (content_type or "").split(";", 1)[0].strip().lower() or "application/octet-stream"
+
+
 def sign_quiz_media_urls(values: list[str]) -> list[str]:
     """Return display URLs, re-signing quiz OSS links like course covers."""
 
@@ -131,7 +136,10 @@ class QuizImageUploadService:
 
         def _sign() -> str:
             return CourseStorage._bucket().sign_url(
-                "PUT", object_key, QUIZ_IMAGE_SIGN_TTL_SECONDS
+                "PUT",
+                object_key,
+                QUIZ_IMAGE_SIGN_TTL_SECONDS,
+                headers={"Content-Type": _normalized_content_type(data.content_type)},
             )
 
         upload_url = await asyncio.to_thread(_sign)
@@ -141,5 +149,6 @@ class QuizImageUploadService:
             object_key=object_key,
             upload_url=upload_url,
             public_url=public_url,
+            content_type=_normalized_content_type(data.content_type),
             expires_at=now + timedelta(seconds=QUIZ_IMAGE_SIGN_TTL_SECONDS),
         )

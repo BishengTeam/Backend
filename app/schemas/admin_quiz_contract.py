@@ -442,6 +442,7 @@ class AdminQuizImageUploadResponse(QuizContractModel):
     object_key: str
     upload_url: str
     public_url: str
+    content_type: str
     expires_at: datetime
 
 

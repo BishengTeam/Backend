@@ -580,6 +580,25 @@ def test_quiz_image_upload_rules_are_strict() -> None:
         )
 
 
+def test_quiz_image_upload_put_signature_covers_content_type() -> None:
+    """OSS V1 签名默认包含 content-type：直传地址必须带上签名并回传给前端使用。"""
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[2] / "app" / "services" / "quiz_image_upload.py"
+    ).read_text(encoding="utf-8")
+    contract = (
+        Path(__file__).resolve().parents[2]
+        / "app"
+        / "schemas"
+        / "admin_quiz_contract.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'headers={"Content-Type": _normalized_content_type(data.content_type)}' in source
+    assert "content_type=_normalized_content_type(data.content_type)" in source
+    assert "content_type: str" in contract
+
+
 def test_quiz_media_signing_extracts_keys_and_passes_external_through(monkeypatch) -> None:
     from app.services.quiz_image_upload import (
         extract_quiz_image_key,
