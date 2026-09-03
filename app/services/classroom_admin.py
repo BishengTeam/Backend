@@ -146,13 +146,23 @@ class ClassroomAdminService:
             await db.commit()
 
     async def stop(self, classroom_id: int, teacher_admin_id: int | None) -> None:
-        """停课：立即冻结学生访问。"""
+        """停课：课堂冻结为只读，进行中的测验立即结束。"""
         async with get_db_ctx() as db:
             classroom = await _get_classroom(db, classroom_id, teacher_admin_id=teacher_admin_id)
             classroom.status = "stopped"
             classroom.stopped_at = _now()
             classroom.join_code = None
             classroom.join_code_expires_at = None
+            now = _now()
+            ongoing = (await db.execute(
+                select(ClassroomQuiz).where(
+                    ClassroomQuiz.classroom_id == classroom_id,
+                    ClassroomQuiz.status == "ongoing",
+                )
+            )).scalars().all()
+            for quiz in ongoing:
+                quiz.status = "ended"
+                quiz.ended_at = now
             await db.commit()
 
     async def refresh_join_code(self, classroom_id: int, teacher_admin_id: int | None) -> dict:

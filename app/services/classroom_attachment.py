@@ -290,6 +290,9 @@ class ClassroomAttachmentService:
         )).scalar_one_or_none()
         if member is None:
             raise BusinessException("未加入该课堂")
+        classroom = await db.get(Classroom, quiz.classroom_id)
+        if classroom is None or classroom.status != "active":
+            raise BusinessException("课堂不存在或已停课")
         if quiz.status != "ongoing":
             raise BusinessException("测验已结束，无法上传附件")
         if quiz.started_at + timedelta(minutes=quiz.duration_minutes) <= _now():
@@ -383,6 +386,9 @@ class ClassroomAttachmentService:
         )).scalar_one_or_none()
         if member is None:
             raise BusinessException("未加入该课堂")
+        classroom = await db.get(Classroom, quiz.classroom_id)
+        if classroom is None or classroom.status != "active":
+            raise BusinessException("课堂不存在或已停课")
         return quiz
 
     @classmethod

@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 
 from app.adapter.database import get_db_ctx
 from app.domain.classroom.src.index import (
@@ -73,15 +73,17 @@ class ClassroomService:
             return {"classroom_id": classroom.id, "name": classroom.name}
 
     async def my_classrooms(self, user_id: int) -> list[dict]:
-        """我的课堂列表：仅 active 课堂（停课即冻结不可见）。"""
+        """我的课堂列表：active 在前、stopped 在后；停课课堂只读可见。"""
         async with get_db_ctx() as db:
             rows = (await db.execute(
                 select(Classroom, ClassroomMember)
                 .join(ClassroomMember, ClassroomMember.classroom_id == Classroom.id)
                 .where(
                     ClassroomMember.user_id == user_id,
-                    Classroom.status == "active",
-                ).order_by(ClassroomMember.id.desc())
+                ).order_by(
+                    case((Classroom.status == "active", 0), else_=1),
+                    ClassroomMember.id.desc(),
+                )
             )).all()
             result = []
             for classroom, member in rows:
@@ -99,13 +101,15 @@ class ClassroomService:
                     "id": classroom.id, "name": classroom.name, "status": classroom.status,
                     "video_count": video_count,
                     "ongoing_quiz_id": ongoing.id if ongoing else None,
-                    "joined_at": member.joined_at or member.created_at,
+                    "joined_at": member.created_at,
                 })
             return result
 
     async def detail(self, user_id: int, classroom_id: int) -> dict:
         async with get_db_ctx() as db:
-            classroom, member = await self._member_classroom(db, user_id, classroom_id)
+            classroom, member = await self._member_classroom(
+                db, user_id, classroom_id, allow_stopped=True
+            )
             videos = (await db.execute(
                 select(ClassroomVideo).where(ClassroomVideo.classroom_id == classroom_id)
                 .order_by(ClassroomVideo.sort_order, ClassroomVideo.id)
@@ -121,16 +125,18 @@ class ClassroomService:
                     q.status = "ended"
                     q.ended_at = ends_at
                     await db.commit()
-                submitted = (await db.execute(
-                    select(ClassroomQuizSubmission.id).where(
+                submission_status = (await db.execute(
+                    select(ClassroomQuizSubmission.status).where(
                         ClassroomQuizSubmission.quiz_id == q.id,
                         ClassroomQuizSubmission.user_id == user_id,
                     )
-                )).scalar() is not None
+                )).scalar_one_or_none()
+                submitted = submission_status is not None
                 quiz_items.append({
                     "id": q.id, "title": q.title, "duration_minutes": q.duration_minutes,
                     "status": q.status, "started_at": q.started_at, "ends_at": ends_at,
                     "submitted": submitted,
+                    "submission_status": submission_status,
                 })
             return {
                 "id": classroom.id, "name": classroom.name, "status": classroom.status,
@@ -150,7 +156,9 @@ class ClassroomService:
             video = await db.get(ClassroomVideo, video_id)
             if video is None:
                 raise NotFoundException("课堂视频")
-            await self._member_classroom(db, user_id, video.classroom_id)
+            await self._member_classroom(
+                db, user_id, video.classroom_id, allow_stopped=True
+            )
             return await CourseStorage.signed_url(video.storage_key)
 
     async def quiz_paper(self, user_id: int, quiz_id: int) -> dict:
@@ -272,7 +280,7 @@ class ClassroomService:
     async def quiz_result(self, user_id: int, quiz_id: int) -> dict:
         """审批通过后才返回分数。"""
         async with get_db_ctx() as db:
-            await self._member_quiz(db, user_id, quiz_id)
+            await self._member_quiz(db, user_id, quiz_id, allow_stopped=True)
             sub = (await db.execute(
                 select(ClassroomQuizSubmission).where(
                     ClassroomQuizSubmission.quiz_id == quiz_id,
@@ -290,7 +298,7 @@ class ClassroomService:
     async def quiz_submission_detail(self, user_id: int, quiz_id: int) -> dict:
         """提交详情回看：批改完成前只回状态，不回发作答内容（防错峰泄题）。"""
         async with get_db_ctx() as db:
-            quiz = await self._member_quiz(db, user_id, quiz_id)
+            quiz = await self._member_quiz(db, user_id, quiz_id, allow_stopped=True)
             sub = (await db.execute(
                 select(ClassroomQuizSubmission).where(
                     ClassroomQuizSubmission.quiz_id == quiz_id,
@@ -351,9 +359,12 @@ class ClassroomService:
     # ── helpers ─────────────────────────────────────────────
 
     @staticmethod
-    async def _member_classroom(db, user_id: int, classroom_id: int):
+    async def _member_classroom(
+        db, user_id: int, classroom_id: int, *, allow_stopped: bool = False
+    ):
         classroom = await db.get(Classroom, classroom_id)
-        if classroom is None or classroom.status != "active":
+        allowed = {"active", "stopped"} if allow_stopped else {"active"}
+        if classroom is None or classroom.status not in allowed:
             raise NotFoundException("课堂不存在或已停课")
         member = (await db.execute(
             select(ClassroomMember).where(
@@ -365,9 +376,13 @@ class ClassroomService:
             raise ForbiddenException("未加入该课堂")
         return classroom, member
 
-    async def _member_quiz(self, db, user_id: int, quiz_id: int) -> ClassroomQuiz:
+    async def _member_quiz(
+        self, db, user_id: int, quiz_id: int, *, allow_stopped: bool = False
+    ) -> ClassroomQuiz:
         quiz = await db.get(ClassroomQuiz, quiz_id)
         if quiz is None:
             raise NotFoundException("测验")
-        await self._member_classroom(db, user_id, quiz.classroom_id)
+        await self._member_classroom(
+            db, user_id, quiz.classroom_id, allow_stopped=allow_stopped
+        )
         return quiz
