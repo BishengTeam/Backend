@@ -315,14 +315,16 @@ class QuizPracticeSessionResponse(QuizContractModel):
     def validate_result_visibility(self) -> "QuizPracticeSessionResponse":
         settled = self.status == QuizPracticeSessionStatus.COMPLETED
         for question in self.questions:
-            if not settled and any(
-                value is not None
-                for value in (
-                    question.correct_answer,
-                    question.explanation,
-                    question.is_correct,
-                )
-            ):
+            # Essay questions are view-only in recite mode: the reference
+            # answer and explanation are published on purpose so learners can
+            # self-review before the session is completed.  Scoring stays
+            # hidden until final submission for every question type.
+            view_only = question.question_type == QuizQuestionType.ESSAY
+            leaks_answer = not view_only and (
+                question.correct_answer is not None
+                or question.explanation is not None
+            )
+            if not settled and (leaks_answer or question.is_correct is not None):
                 raise ValueError(
                     "practice results are visible only after final submission"
                 )

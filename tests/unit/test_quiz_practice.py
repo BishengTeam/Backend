@@ -12,6 +12,7 @@ from app.schemas.quiz_contract import (
     QuizPracticeAttemptCreate,
     QuizPracticeQuestionState,
     QuizPracticeSessionCreate,
+    QuizPracticeSessionResponse,
     QuizPublicQuestion,
     QuizWrongBookItem,
 )
@@ -150,6 +151,61 @@ def test_pending_practice_question_omits_answer_key_fields_from_wire_payload() -
     assert settled_payload["correct_answer"] == "A"
     assert settled_payload["explanation"] == "Because A is correct."
     assert settled_payload["is_correct"] is True
+
+
+def test_in_progress_practice_allows_essay_reference_answer_but_hides_scoring() -> None:
+    """Essay questions are view-only: their reference answer ships during
+    practice (frontend "查看参考答案"), while scoring must stay hidden until
+    final submission for every question type."""
+
+    def build_question(question_type: str, **overrides) -> QuizPracticeQuestionState:
+        data = dict(
+            id=9,
+            category_id=1,
+            question_type=question_type,
+            question_text="题干",
+            options={},
+            session_question_id=19,
+            position=1,
+            category_path=[],
+            answered=True,
+            attempt_count=0,
+        )
+        data.update(overrides)
+        return QuizPracticeQuestionState(**data)
+
+    def build_session(questions: list[QuizPracticeQuestionState]) -> QuizPracticeSessionResponse:
+        return QuizPracticeSessionResponse(
+            id=1,
+            mode="full",
+            scope_type="library",
+            scope_id=4,
+            requested_count=len(questions),
+            actual_count=len(questions),
+            status="in_progress",
+            started_at=datetime.now(timezone.utc),
+            lock_version=1,
+            questions=questions,
+        )
+
+    essay_session = build_session([
+        build_question(
+            "essay",
+            correct_answer="参考答案：SYN、SYN+ACK、ACK",
+            explanation="关键词：同步序列号",
+        )
+    ])
+    assert essay_session.questions[0].correct_answer == "参考答案：SYN、SYN+ACK、ACK"
+    assert essay_session.questions[0].explanation == "关键词：同步序列号"
+
+    with pytest.raises(ValidationError):
+        build_session([build_question("single_choice", correct_answer="A")])
+    with pytest.raises(ValidationError):
+        build_session([build_question("fill_blank", explanation="解析不能提前下发")])
+    with pytest.raises(ValidationError):
+        build_session([
+            build_question("essay", correct_answer="参考答案", is_correct=True)
+        ])
 
 
 def test_practice_request_rules_and_answer_canonicalization() -> None:
