@@ -303,7 +303,7 @@ def test_http_preflight_requires_frozen_contract_accounts_private_oss_and_worker
     )
 
     assert report["ready"] is True
-    assert report["quiz_operation_count"] == 95
+    assert report["quiz_operation_count"] == 96
     assert report["removed_operation_count"] == 13
     assert report["quiz_oss"] == "private_aliyun_oss"
     assert report["worker_metrics_source"] == "redis"

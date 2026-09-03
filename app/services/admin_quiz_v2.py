@@ -27,6 +27,7 @@ from app.domain.community.src.index import (
     QuizQuestionRevision,
 )
 from app.domain.community.src.rule.quiz import (
+    QuizLibraryAccessMode,
     QuizRuleViolation,
     normalize_category_name,
     normalize_question_payload,
@@ -46,6 +47,8 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizKnowledgePointCreate,
     AdminQuizKnowledgePointResponse,
     AdminQuizKnowledgePointUpdate,
+    AdminQuizLibraryAccessModeConvert,
+    AdminQuizLibraryAccessModeConvertResponse,
     AdminQuizCourseBindingCreate,
     AdminQuizCourseOptionResponse,
     AdminQuizCourseBindingResponse,
@@ -75,6 +78,14 @@ from app.utils.audit import sanitize_audit_value
 
 
 _RESTORE_WINDOW = timedelta(days=7)
+_ACCESS_MODE_TRANSITIONS = {
+    QuizLibraryAccessMode.PENDING: {
+        QuizLibraryAccessMode.FREE,
+        QuizLibraryAccessMode.COURSE_ENTITLEMENT,
+    },
+    QuizLibraryAccessMode.FREE: {QuizLibraryAccessMode.COURSE_ENTITLEMENT},
+    QuizLibraryAccessMode.COURSE_ENTITLEMENT: {QuizLibraryAccessMode.FREE},
+}
 
 
 class AdminQuizV2Service:
@@ -549,33 +560,13 @@ class AdminQuizV2Service:
             if "v2_enabled" in fields and data.v2_enabled is not None:
                 library.v2_enabled = data.v2_enabled
             if library.v2_enabled and ({"access_mode", "v2_enabled"} & fields):
-                if library.status != "published":
-                    raise BusinessException("只有已发布题库可以启用 V2 用户入口")
-                blockers = await self._publication_blockers(db, library)
-                if blockers:
-                    raise BusinessException("；".join(blockers))
-                if library.access_mode == "course_entitlement":
-                    active_binding_count = int(
-                        (
-                            await db.execute(
-                                select(func.count()).where(
-                                    QuizCourseLibraryBinding.library_id == library.id,
-                                    QuizCourseLibraryBinding.status == "active",
-                                )
-                            )
-                        ).scalar()
-                        or 0
-                    )
-                    if active_binding_count == 0:
-                        raise BusinessException("课程权益题库至少需要一个有效课程绑定")
+                await self._validate_enabled_library_access(db, library)
             access_changed = (
                 before["access_mode"] != library.access_mode
                 or before["v2_enabled"] != library.v2_enabled
             )
             if access_changed:
-                await QuizV2Service.sync_sessions_for_library(
-                    db, library_id, now=self._now()
-                )
+                await self._sync_library_sessions(db, library_id)
             library.updated_by = admin_id
             library.lock_version += 1
             self._audit(
@@ -596,6 +587,77 @@ class AdminQuizV2Service:
             await db.refresh(library)
             counts = await self._library_counts(db, [library_id])
             return self._library_response(library, counts[library_id])
+
+    async def convert_library_access_mode(
+        self,
+        library_id: int,
+        data: AdminQuizLibraryAccessModeConvert,
+        *,
+        admin_id: int,
+    ) -> AdminQuizLibraryAccessModeConvertResponse:
+        async with get_db_ctx() as db:
+            library = await self._locked(db, QuizLibrary, library_id)
+            if library is None:
+                raise NotFoundException("题库")
+            self._check_version(library, data.lock_version)
+            if library.status in {"archived", "deleted"}:
+                raise BusinessException("已归档或删除题库不可转换访问模式")
+
+            current_mode = QuizLibraryAccessMode(library.access_mode)
+            target_mode = QuizLibraryAccessMode(data.target_mode)
+            if target_mode not in _ACCESS_MODE_TRANSITIONS[current_mode]:
+                raise ValidationException("当前访问模式不能转换为目标访问模式")
+
+            before = self._library_fields(library)
+            library.access_mode = str(target_mode)
+            if library.v2_enabled:
+                await self._validate_enabled_library_access(db, library)
+            sessions_affected = await self._sync_library_sessions(db, library_id)
+            library.updated_by = admin_id
+            library.lock_version += 1
+            self._audit(
+                db,
+                admin_id=admin_id,
+                action="library.convert_access_mode",
+                object_type="library",
+                object_id=library_id,
+                before=before,
+                after=self._library_fields(library),
+                permission="quiz_library_manage",
+            )
+            await db.commit()
+            await db.refresh(library)
+            counts = await self._library_counts(db, [library_id])
+            return AdminQuizLibraryAccessModeConvertResponse(
+                library=self._library_response(library, counts[library_id]),
+                sessions_affected=sessions_affected,
+            )
+
+    async def _validate_enabled_library_access(self, db, library: QuizLibrary) -> None:
+        if library.status != "published":
+            raise BusinessException("只有已发布题库可以启用 V2 用户入口")
+        blockers = await self._publication_blockers(db, library)
+        if blockers:
+            raise BusinessException("；".join(blockers))
+        if library.access_mode == "course_entitlement":
+            active_binding_count = int(
+                (
+                    await db.execute(
+                        select(func.count()).where(
+                            QuizCourseLibraryBinding.library_id == library.id,
+                            QuizCourseLibraryBinding.status == "active",
+                        )
+                    )
+                ).scalar()
+                or 0
+            )
+            if active_binding_count == 0:
+                raise BusinessException("课程权益题库至少需要一个有效课程绑定")
+
+    async def _sync_library_sessions(self, db, library_id: int) -> int:
+        return await QuizV2Service.sync_sessions_for_library(
+            db, library_id, now=self._now()
+        )
 
     async def _publication_blockers(self, db, library: QuizLibrary) -> list[str]:
         blockers: list[str] = []

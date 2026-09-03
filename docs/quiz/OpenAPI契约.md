@@ -176,6 +176,7 @@ POST /api/quiz/exams/{exam_id}/abandon
 | GET | `/admin/quiz/libraries/{library_id}` | `quiz:list` | 无 | `AdminQuizLibraryResponse` |
 | PUT | `/admin/quiz/libraries/{library_id}` | `quiz_library_manage` | `AdminQuizLibraryUpdate` | `AdminQuizLibraryResponse` |
 | POST | `/admin/quiz/libraries/{library_id}/lifecycle` | `quiz_library_manage` | `AdminQuizLibraryStatusUpdate` | `AdminQuizLibraryResponse` |
+| POST | `/admin/quiz/libraries/{library_id}/convert-access-mode` | 超级管理员再认证 | `AdminQuizLibraryAccessModeConvert` | `AdminQuizLibraryAccessModeConvertResponse` |
 | GET | `/admin/quiz/libraries/{library_id}/course-bindings` | `quiz:list` | 无 | `list[AdminQuizCourseBindingResponse]` |
 | POST | `/admin/quiz/libraries/{library_id}/course-bindings` | `course_quiz_bind` | `AdminQuizCourseBindingCreate` | `AdminQuizCourseBindingResponse` |
 | POST | `/admin/quiz/course-bindings/{binding_id}/status` | `course_quiz_bind` | `AdminQuizCourseBindingStatusUpdate` | `AdminQuizCourseBindingResponse` |
