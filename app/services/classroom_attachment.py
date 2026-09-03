@@ -342,7 +342,13 @@ class ClassroomAttachmentService:
 
             def _sign_put() -> str:
                 return CourseStorage._bucket().sign_url(
-                    "PUT", object_key, ATTACHMENT_UPLOAD_SIGN_TTL_SECONDS, slash_safe=True
+                    "PUT",
+                    object_key,
+                    ATTACHMENT_UPLOAD_SIGN_TTL_SECONDS,
+                    # OSS V1 签名默认覆盖 content-type：签名与直传请求头必须逐字节一致，
+                    # 因此把规范化后的类型签进去并回传给客户端使用。
+                    headers={"Content-Type": normalized_type},
+                    slash_safe=True,
                 )
 
             try:
@@ -369,6 +375,7 @@ class ClassroomAttachmentService:
                 "attachment_id": row.id,
                 "object_key": object_key,
                 "upload_url": upload_url,
+                "content_type": normalized_type,
                 "expires_at": datetime.now(timezone.utc)
                 + timedelta(seconds=ATTACHMENT_UPLOAD_SIGN_TTL_SECONDS),
             }

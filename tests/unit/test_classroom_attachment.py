@@ -152,3 +152,13 @@ def test_attachment_flow_wiring_present() -> None:
     assert "cleanup_classroom_attachments" in cleanup
     assert migration.exists()
     assert "ck_classroom_attachment_kind" in migration.read_text(encoding="utf-8")
+
+
+def test_upload_put_signature_covers_content_type() -> None:
+    """OSS V1 签名默认包含 content-type：签名必须带上并回传给客户端原样使用。"""
+    service = (
+        BACKEND_ROOT / "app" / "services" / "classroom_attachment.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'headers={"Content-Type": normalized_type}' in service
+    assert '"content_type": normalized_type' in service
