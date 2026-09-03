@@ -150,10 +150,10 @@ class ClassroomAdminService:
         async with get_db_ctx() as db:
             classroom = await _get_classroom(db, classroom_id, teacher_admin_id=teacher_admin_id)
             classroom.status = "stopped"
-            classroom.stopped_at = _now()
+            now = _now()
+            classroom.stopped_at = now
             classroom.join_code = None
             classroom.join_code_expires_at = None
-            now = _now()
             ongoing = (await db.execute(
                 select(ClassroomQuiz).where(
                     ClassroomQuiz.classroom_id == classroom_id,
