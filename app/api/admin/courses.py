@@ -286,10 +286,11 @@ async def replace_chapter_video(
 async def delete_chapter(
     course_id: int = Path(..., ge=1),
     chapter_id: int = Path(..., ge=1),
+    force: bool = Query(False, description="确认删除有学习进度的章节"),
     admin=Depends(require_permission("course:write")),
 ):
     await AdminCourseService().delete_chapter_completely(
-        course_id, chapter_id, admin_id=admin.id
+        course_id, chapter_id, admin_id=admin.id, force=force
     )
     return success(message="章节已删除")
 

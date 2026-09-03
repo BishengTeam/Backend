@@ -664,7 +664,7 @@ class AdminCourseService:
         return AdminChapterResponse.model_validate(row)
 
     async def delete_chapter_completely(
-        self, course_id: int, chapter_id: int, *, admin_id: int
+        self, course_id: int, chapter_id: int, *, admin_id: int, force: bool = False
     ) -> None:
         from app.domain.certification.src.index import UserChapterProgress
 
@@ -681,8 +681,14 @@ class AdminCourseService:
                     )
                     or 0
                 )
+                if progress_count and not force:
+                    raise BusinessException("已有学习进度的章节不能删除，确认删除请传 force=true")
                 if progress_count:
-                    raise BusinessException("已有学习进度的章节不能删除")
+                    await db.execute(
+                        delete(UserChapterProgress).where(
+                            UserChapterProgress.chapter_id == chapter_id
+                        )
+                    )
                 object_key = row.video_storage_key
                 self._audit(
                     db,
