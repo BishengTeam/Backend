@@ -266,6 +266,19 @@ class ClassroomAdminService:
                 for v in rows
             ]
 
+    async def video_play_url(
+        self, classroom_id: int, video_id: int, teacher_admin_id: int | None
+    ) -> str:
+        """管理端视频预览：签名播放地址。"""
+        from app.services.course_storage import CourseStorage
+
+        async with get_db_ctx() as db:
+            await _get_classroom(db, classroom_id, teacher_admin_id=teacher_admin_id)
+            video = await db.get(ClassroomVideo, video_id)
+            if video is None or video.classroom_id != classroom_id:
+                raise NotFoundException("课堂视频")
+            return await CourseStorage.signed_url(video.storage_key)
+
     async def delete_video(self, classroom_id: int, video_id: int, teacher_admin_id: int | None) -> None:
         async with get_db_ctx() as db:
             await _get_classroom(db, classroom_id, teacher_admin_id=teacher_admin_id)

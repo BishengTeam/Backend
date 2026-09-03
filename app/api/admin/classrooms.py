@@ -126,6 +126,14 @@ async def list_videos(
     return success(data=await ClassroomAdminService().list_videos(classroom_id, _teacher_scope(admin)))
 
 
+@router.get("/{classroom_id}/videos/{video_id}/play-url", response_model=APIResponse, summary="视频预览地址（管理端）")
+async def video_play_url(
+    classroom_id: int = Path(..., ge=1), video_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("classroom:manage")),
+):
+    url = await ClassroomAdminService().video_play_url(classroom_id, video_id, _teacher_scope(admin))
+    return success(data={"url": url})
+
 @router.delete("/{classroom_id}/videos/{video_id}", response_model=APIResponse, summary="删除视频")
 async def delete_video(
     classroom_id: int = Path(..., ge=1), video_id: int = Path(..., ge=1),
