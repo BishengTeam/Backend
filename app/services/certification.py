@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from app.adapter.database import get_db_ctx
 from app.domain.certification.src.index import Certification
+from app.models.cert_product import CertProduct
 from app.port.exceptions import NotFoundException
 
 from app.schemas.certification import (
@@ -19,16 +20,54 @@ from app.schemas.certification import (
 class CertificationService:
 
     async def list_certifications(self, filters: CertificationFilter | None = None) -> list[CertificationResponse]:
+        """优先返回新 cert_product（活跃），兼容旧 certification 补充"""
         async with get_db_ctx() as db:
-            stmt = select(Certification).where(Certification.is_active == True)
+            seen_codes: set[str] = set()
+            result_items: list[CertificationResponse] = []
+            # 新表（按 type 筛选映射 vendor）
+            vendor_map = {"h3c": "H3C", "renshe": "人社", "sangfor": "深信服", "nisp": "NISP"}
+            new_stmt = select(CertProduct).where(CertProduct.is_active == True)
             if filters and filters.vendor:
-                stmt = stmt.where(Certification.vendor == filters.vendor)
-            result = await db.execute(stmt.order_by(Certification.id))
-            certs = result.scalars().all()
-            return [CertificationResponse.model_validate(c) for c in certs]
+                type_filter = {v: k for k, v in vendor_map.items()}.get(filters.vendor)
+                if type_filter:
+                    new_stmt = new_stmt.where(CertProduct.type == type_filter)
+            new_certs = (await db.execute(new_stmt.order_by(CertProduct.type, CertProduct.id))).scalars().all()
+            for cp in new_certs:
+                seen_codes.add(cp.code)
+                # 构造与旧 CertificationResponse 兼容的 shape
+                result_items.append(CertificationResponse(
+                    id=cp.id,
+                    name=cp.name,
+                    chinese_name=cp.chinese_name,
+                    code=cp.code,
+                    vendor=vendor_map.get(cp.type, cp.type),
+                    requires_xuexin=False,
+                    pay_first=True,
+                ))
+            # 旧表补充（新表未覆盖的 code）
+            old_stmt = select(Certification).where(
+                Certification.is_active == True,
+                ~Certification.code.in_(seen_codes) if seen_codes else True,
+            )
+            if filters and filters.vendor:
+                old_stmt = old_stmt.where(Certification.vendor == filters.vendor)
+            old_certs = (await db.execute(old_stmt.order_by(Certification.id))).scalars().all()
+            for c in old_certs:
+                result_items.append(CertificationResponse.model_validate(c))
+            return result_items
 
     async def get_detail(self, cert_id: int) -> CertificationDetailResponse:
         async with get_db_ctx() as db:
+            # 优先新表
+            cp = await db.get(CertProduct, cert_id)
+            if cp is not None:
+                vendor_map = {"h3c": "H3C", "renshe": "人社", "sangfor": "深信服", "nisp": "NISP"}
+                return CertificationDetailResponse(
+                    id=cp.id, name=cp.name, chinese_name=cp.chinese_name,
+                    code=cp.code, vendor=vendor_map.get(cp.type, cp.type),
+                    requires_xuexin=False, pay_first=True,
+                    description=cp.description, price_normal=None, price_student=None,
+                )
             cert = await db.get(Certification, cert_id)
             if cert is None:
                 raise NotFoundException("认证项目")

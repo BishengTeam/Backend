@@ -14,6 +14,7 @@ from app.domain.order.src.index import (
     validate_extra_data,
 )
 from app.domain.certification.src.index import Certification
+from app.models.cert_product import CertProduct
 from app.domain.user.src.index import UserRealname
 from app.schemas.common import PaginatedData
 from app.schemas.order import OrderCreate, OrderDetailResponse, OrderFilter, OrderResponse
@@ -47,16 +48,25 @@ class OrderService:
                     if identity is None:
                         raise BusinessException("请先完成实名认证")
 
-                # 查询商品
+                # 查询商品：优先新 cert_product，兼容旧 certification
                 if data.order_kind == "certification":
                     cert = (
                         await db.execute(
-                            select(Certification).where(
-                                Certification.code == data.product_type,
-                                Certification.is_active.is_(True),
+                            select(CertProduct).where(
+                                CertProduct.code == data.product_type,
+                                CertProduct.is_active.is_(True),
                             )
                         )
                     ).scalar_one_or_none()
+                    if cert is None:
+                        cert = (
+                            await db.execute(
+                                select(Certification).where(
+                                    Certification.code == data.product_type,
+                                    Certification.is_active.is_(True),
+                                )
+                            )
+                        ).scalar_one_or_none()
                     if cert is None:
                         raise BusinessException("认证类型不存在或已下架")
 
