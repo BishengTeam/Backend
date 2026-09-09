@@ -16,6 +16,8 @@ class AgreementTemplatePublic(BaseModel):
     content: str
     version: int
 
+    model_config = {"from_attributes": True}
+
 
 class AgreementAcceptItem(BaseModel):
     type: AgreementTypeLiteral

@@ -60,6 +60,17 @@ class TestAgreementTemplateModels:
         assert AGREEMENT_TEMPLATE_TYPES == ("user_terms", "privacy", "identity_auth")
 
 
+def test_public_template_validates_orm_object() -> None:
+    """Regression (CI 2026.09.09.20): model_validate on an ORM row needs
+    from_attributes; construct a detached ORM instance and validate."""
+    template = AgreementTemplate(
+        type="identity_auth", title="实名授权", content="正文", version=1
+    )
+    item = AgreementTemplatePublic.model_validate(template)
+    assert item.type == "identity_auth"
+    assert item.version == 1
+
+
 class TestAgreementTemplateSchemas:
     def test_public_template_accepts_known_types_only(self):
         item = AgreementTemplatePublic(

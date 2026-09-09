@@ -61,7 +61,7 @@ async def _create_user(factory, prefix: str) -> int:
     from app.domain.user.src.index import User
 
     async with factory() as db:
-        user = User(openid=f"{prefix}_openid", nickname=f"{prefix}_nick")
+        user = User(openid=f"{prefix}_openid")
         db.add(user)
         await db.commit()
         return user.id
