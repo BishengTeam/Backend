@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.admin.activities import router as activities_router
 from app.api.admin.agreements import router as agreements_router
+from app.api.admin.agreement_templates import router as agreement_templates_router
 from app.api.admin.auth import router as auth_router
 from app.api.admin.banners import router as banners_router
 from app.api.admin.cert_products import router as cert_products_router
@@ -53,6 +54,7 @@ router.include_router(zones_router)
 router.include_router(coupons_router)
 router.include_router(deployment_acceptance_router)
 router.include_router(agreements_router)
+router.include_router(agreement_templates_router)
 router.include_router(tickets_router)
 router.include_router(statistics_router)
 router.include_router(system_updates_router)

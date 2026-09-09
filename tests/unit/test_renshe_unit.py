@@ -1067,10 +1067,11 @@ async def test_rejected_identity_is_excluded_from_duplicate_reservation_query(mo
         level2_edit_reset_at=None,
     )
     db = _FakeDb(
+        # agreement gate template lookup (None -> no template, gate open),
         # user lock, duplicate lookup (no active occupant), then no existing
         # profile.  The rejected account is represented by the status filter
         # in the duplicate lookup itself and therefore must not be returned.
-        scalars=(user, None),
+        scalars=(None, user, None),
         rows=([], None),
     )
     monkeypatch.setattr("app.services.user.get_db_ctx", _db_context(db))
@@ -1088,9 +1089,9 @@ async def test_rejected_identity_is_excluded_from_duplicate_reservation_query(mo
     response = await UserService().submit_realname(22, payload)
 
     assert response.status == "pending"
-    duplicate_sql = str(db.executed[2])
+    duplicate_sql = str(db.executed[3])
     assert "user_realname.status IN" in duplicate_sql
-    duplicate_params = db.executed[2].compile().params
+    duplicate_params = db.executed[3].compile().params
     status_values = next(
         value
         for key, value in duplicate_params.items()

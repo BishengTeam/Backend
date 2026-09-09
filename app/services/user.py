@@ -37,6 +37,7 @@ from app.domain.review.src.index import Review
 from app.utils.validators import validate_id_card
 from app.utils.census import resolve_census
 from app.utils.pii import identity_hash
+from app.services.agreement_template import ensure_accepted
 from app.services.renshe_source import (
     delete_unreferenced_source_keys,
     profile_source_keys,
@@ -344,6 +345,15 @@ class UserService:
 
         replaced_source_keys: set[str] = set()
         async with get_db_ctx() as db:
+            # P0 电子协议：实名认证提交前必须已签署最新版《实名信息处理授权协议》。
+            # 与写入同事务执行；未配置生效模板时不拦截（数据驱动灰度）。
+            await ensure_accepted(
+                db,
+                user_id,
+                "identity_auth",
+                message="请先阅读并同意实名信息处理授权协议",
+            )
+
             user = await db.scalar(
                 select(User)
                 .where(User.id == user_id, User.is_active.is_(True))
