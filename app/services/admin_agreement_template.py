@@ -1,6 +1,8 @@
 """Admin agreement template service (P0 e-agreement)."""
 
-from sqlalchemy import func, select
+import logging
+
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db_ctx
@@ -12,6 +14,11 @@ from app.schemas.admin_agreement_template import (
     AdminAgreementTemplateUpdate,
 )
 from app.schemas.common import PaginatedData
+from app.services.agreement_template_cover import AgreementCoverService
+from app.services.upload import UploadService
+
+
+logger = logging.getLogger(__name__)
 
 
 class AdminAgreementTemplateService:
@@ -56,6 +63,16 @@ class AdminAgreementTemplateService:
             )
             await db.commit()
             await db.refresh(template)
+            template_id = template.id
+
+        await self._attach_cover(template_id)
+        return await self._get_item(template_id)
+
+    async def _get_item(self, template_id: int) -> AdminAgreementTemplateItem:
+        async with get_db_ctx() as db:
+            template = await db.get(AgreementTemplate, template_id)
+            if template is None:
+                raise NotFoundException("协议模板")
             return AdminAgreementTemplateItem.model_validate(template)
 
     async def update(
@@ -75,7 +92,10 @@ class AdminAgreementTemplateService:
             )
             await db.commit()
             await db.refresh(template)
-            return AdminAgreementTemplateItem.model_validate(template)
+            template_id = template.id
+
+        await self._attach_cover(template_id)
+        return await self._get_item(template_id)
 
     async def archive(self, template_id: int) -> AdminAgreementTemplateItem:
         async with get_db_ctx() as db:
@@ -88,6 +108,38 @@ class AdminAgreementTemplateService:
             await db.commit()
             await db.refresh(template)
             return AdminAgreementTemplateItem.model_validate(template)
+
+    @staticmethod
+    async def _attach_cover(template_id: int) -> None:
+        """Best-effort cover generation after the legal template row commits."""
+
+        async with get_db_ctx() as db:
+            template = await db.get(AgreementTemplate, template_id)
+            if template is None or template.cover_url is not None:
+                return
+            title, content = template.title, template.content
+
+        try:
+            cover_url = await AgreementCoverService().generate(title, content)
+            async with get_db_ctx() as db:
+                result = await db.execute(
+                    update(AgreementTemplate)
+                    .where(
+                        AgreementTemplate.id == template_id,
+                        AgreementTemplate.cover_url.is_(None),
+                    )
+                    .values(cover_url=cover_url)
+                )
+                if result.rowcount == 0:
+                    UploadService.delete_file_by_url(cover_url)
+                    return
+                await db.commit()
+        except Exception:
+            # A thumbnail is presentation-only. Browser, font, filesystem, or
+            # cover-update failures must not invalidate a committed agreement.
+            logger.exception(
+                "agreement_cover_generation_failed template_id=%s", template_id
+            )
 
     @staticmethod
     async def _new_version(

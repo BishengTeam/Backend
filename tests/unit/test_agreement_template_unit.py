@@ -15,6 +15,7 @@ from app.schemas.agreement_template import (
     AgreementTemplatePublic,
 )
 from app.schemas.admin_agreement_template import (
+    AdminAgreementTemplateItem,
     AdminAgreementTemplateCreate,
     AdminAgreementTemplateUpdate,
 )
@@ -50,6 +51,8 @@ class TestAgreementTemplateModels:
         names = {c.name for c in AgreementTemplate.__table__.constraints}
         assert "ck_agreement_template_type" in names
         assert "ck_agreement_template_status" in names
+        columns = {c.name for c in AgreementTemplate.__table__.columns}
+        assert "cover_url" in columns
 
     def test_acceptance_table_and_unique_constraint(self):
         assert AgreementAcceptance.__tablename__ == "agreement_acceptance"
@@ -110,6 +113,23 @@ class TestAgreementTemplateSchemas:
             AdminAgreementTemplateUpdate(title="", content="c")
         with pytest.raises(ValidationError):
             AdminAgreementTemplateUpdate(title="t", content="")
+
+    def test_admin_item_exposes_optional_cover_url(self):
+        item = AdminAgreementTemplateItem(
+            id=1,
+            type="privacy",
+            title="隐私政策",
+            content="正文",
+            version=2,
+            status="active",
+            cover_url="/api/media/cover.jpg",
+            created_at="2026-09-11T10:00:00",
+            updated_at="2026-09-11T10:00:00",
+        )
+        assert item.cover_url == "/api/media/cover.jpg"
+
+        missing = item.model_copy(update={"cover_url": None})
+        assert missing.cover_url is None
 
 
 class TestAgreementTemplateRoutes:
