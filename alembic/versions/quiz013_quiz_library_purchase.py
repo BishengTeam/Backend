@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 revision: str = 'quiz013_quiz_purchase'
-down_revision: str | Sequence[str] = 'agr001'
+down_revision: str | Sequence[str] = 'agr002'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
