@@ -113,7 +113,7 @@ class QuizLibraryCatalogItem(QuizContractModel):
     name: str
     description: str
     cover_url: str
-    access_mode: Literal["free", "course_entitlement"]
+    access_mode: Literal["free", "course_entitlement", "paid"]
     question_count: int = Field(ge=1)
     module_count: int = Field(ge=1)
 

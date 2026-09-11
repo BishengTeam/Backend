@@ -114,7 +114,7 @@ class QuizLibrary(Base, _QuizTimestampMixin):
             name="ck_quiz_library_status",
         ),
         CheckConstraint(
-            "access_mode IN ('access_mode_pending', 'free', 'course_entitlement')",
+            "access_mode IN ('access_mode_pending', 'free', 'course_entitlement', 'paid')",
             name="ck_quiz_library_access_mode",
         ),
         CheckConstraint(
@@ -559,11 +559,11 @@ class QuizLibraryEntitlement(Base, _QuizTimestampMixin):
             name="ck_quiz_library_entitlement_status",
         ),
         CheckConstraint(
-            "source_type IN ('course_order', 'course_enrollment')",
+            "source_type IN ('course_order', 'course_enrollment', 'quiz_order')",
             name="ck_quiz_library_entitlement_source_type",
         ),
         CheckConstraint(
-            "((source_type = 'course_order' AND order_id IS NOT NULL) OR "
+            "((source_type IN ('course_order', 'quiz_order') AND order_id IS NOT NULL) OR "
             "(source_type = 'course_enrollment' AND enrollment_id IS NOT NULL))",
             name="ck_quiz_library_entitlement_source_ref",
         ),

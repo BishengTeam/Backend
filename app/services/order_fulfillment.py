@@ -164,6 +164,13 @@ class OrderFulfillmentService:
             application.status = "pending_initial_review"
             return True
 
+        # 题库单独购买：支付成功直接发放授权
+        if order.order_kind == "quiz_order":
+            from app.services.quiz_purchase import QuizPurchaseService
+
+            await QuizPurchaseService.fulfill(db, order)
+            return True
+
         enrollment = await self._lock_course_enrollment(db, order)
         if order.order_kind != "course":
             return h3c_processed

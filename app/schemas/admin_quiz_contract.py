@@ -761,6 +761,7 @@ class AdminQuizLibraryResponse(QuizContractModel):
     cover_url: str | None = None
     details: str | None = None
     access_mode: QuizLibraryAccessMode
+    price_cents: int = Field(default=0, ge=0)
     system_kind: Literal["none", "migration_quarantine"]
     migration_state: Literal["pending_review", "needs_organization", "ready"]
     status: QuizLibraryStatus

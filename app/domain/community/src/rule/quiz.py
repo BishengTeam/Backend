@@ -70,6 +70,7 @@ class QuizLibraryAccessMode(StrEnum):
     PENDING = "access_mode_pending"
     FREE = "free"
     COURSE_ENTITLEMENT = "course_entitlement"
+    PAID = "paid"
 
 
 class QuizContentStatus(StrEnum):
