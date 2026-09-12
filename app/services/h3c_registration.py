@@ -45,6 +45,7 @@ from app.schemas.h3c_registration import (
     H3cReviewResponse,
     H3cUserExamBatchResponse,
 )
+from app.services.agreement_template import ensure_accepted
 from app.services.plan_enrollment import PlanEnrollmentService
 from app.services.user import UserService
 from app.utils.payment import generate_out_trade_no
@@ -208,6 +209,12 @@ class H3cRegistrationService:
                 )
                 if identity is None:
                     raise BusinessException("请先完成实名认证")
+                await ensure_accepted(
+                    db,
+                    user_id,
+                    "cert_registration",
+                    message="请先阅读并同意认证报名信息处理授权协议",
+                )
 
                 batch = await self._get_batch_for_update(db, data.batch_id)
                 active_registration_id = await db.scalar(

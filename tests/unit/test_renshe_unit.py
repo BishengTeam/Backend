@@ -1110,6 +1110,12 @@ def test_cleanup_worker_removes_objects_and_sensitive_snapshots_but_keeps_audit(
     assert "RensheAuditLog" in source
 
 
+def test_application_submit_requires_cert_registration_agreement():
+    source = (ROOT / "app/services/renshe_application.py").read_text(encoding="utf-8")
+    assert '"cert_registration"' in source
+    assert "请先阅读并同意认证报名信息处理授权协议" in source
+
+
 def test_cleanup_retry_requires_super_admin():
     dependency_names = {
         getattr(dependency.call, "__name__", "")

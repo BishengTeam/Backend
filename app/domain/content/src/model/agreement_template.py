@@ -17,7 +17,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.adapter.database import Base, TimestampMixin
 
 
-AGREEMENT_TEMPLATE_TYPES: tuple[str, ...] = ("user_terms", "privacy", "identity_auth")
+AGREEMENT_TEMPLATE_TYPES: tuple[str, ...] = (
+    "user_terms",
+    "privacy",
+    "identity_auth",
+    "cert_registration",
+)
 
 
 class AgreementTemplate(Base, TimestampMixin):
@@ -32,7 +37,7 @@ class AgreementTemplate(Base, TimestampMixin):
     __tablename__ = "agreement_template"
     __table_args__ = (
         CheckConstraint(
-            "type IN ('user_terms', 'privacy', 'identity_auth')",
+            "type IN ('user_terms', 'privacy', 'identity_auth', 'cert_registration')",
             name="ck_agreement_template_type",
         ),
         CheckConstraint("version > 0", name="ck_agreement_template_version"),

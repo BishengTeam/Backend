@@ -36,6 +36,7 @@ from app.schemas.renshe import (
     RensheDraftUpsert,
     RensheVersionSummary,
 )
+from app.services.agreement_template import ensure_accepted
 from app.services.plan_enrollment import CAPACITY_OCCUPYING_ORDER_STATUSES, PlanEnrollmentService
 from app.utils.payment import generate_out_trade_no
 from app.utils.pii import identity_hash
@@ -117,6 +118,12 @@ class RensheApplicationService:
                     raise ConflictException("退款处理中，报名已冻结")
                 if not application.draft_data:
                     raise BusinessException("请先保存完整报名草稿")
+                await ensure_accepted(
+                    db,
+                    user_id,
+                    "cert_registration",
+                    message="请先阅读并同意认证报名信息处理授权协议",
+                )
 
                 PlanEnrollmentService.validate_application_window(plan)
                 realname, student = await self._verified_profiles(db, user_id)

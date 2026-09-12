@@ -176,6 +176,34 @@ async def test_identity_auth_gate_requires_acceptance(context):
     async with context.db_ctx() as db:
         await ensure_accepted(db, user_id, "identity_auth", message="blocked")
 
+
+async def test_cert_registration_type_supports_gate(context):
+    from app.port.exceptions import BusinessException
+    from app.schemas.admin_agreement_template import AdminAgreementTemplateCreate
+    from app.services.admin_agreement_template import AdminAgreementTemplateService
+    from app.services.agreement_template import ensure_accepted
+
+    admin = AdminAgreementTemplateService()
+    user_id = await _create_user(context.factory, context.prefix)
+    async with context.db_ctx() as db:
+        await ensure_accepted(db, user_id, "cert_registration", message="blocked")
+
+    await admin.create(
+        AdminAgreementTemplateCreate(
+            type="cert_registration",
+            title=f"{context.prefix} 认证报名授权",
+            content=f"{context.prefix} 报名授权正文",
+        )
+    )
+    with pytest.raises(BusinessException):
+        async with context.db_ctx() as db:
+            await ensure_accepted(
+                db,
+                user_id,
+                "cert_registration",
+                message="请先阅读并同意认证报名信息处理授权协议",
+            )
+
     await admin.create(
         AdminAgreementTemplateCreate(
             type="identity_auth", title=title, content=f"{context.prefix} 授权正文"

@@ -5,7 +5,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-AdminAgreementTypeLiteral = Literal["user_terms", "privacy", "identity_auth"]
+AdminAgreementTypeLiteral = Literal[
+    "user_terms", "privacy", "identity_auth", "cert_registration"
+]
 
 
 class AdminAgreementTemplateCreate(BaseModel):

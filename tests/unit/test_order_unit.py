@@ -198,6 +198,11 @@ class OrderSystemTests(unittest.TestCase):
         self.assertIn("action=INVENTORY_LOCK_ACTION", create_order_source)
         self.assertNotIn("await db.commit()", create_order_source)
 
+    def test_certification_order_requires_cert_registration_agreement(self):
+        source = (REPO_ROOT / "app/services/order.py").read_text("utf-8")
+        self.assertIn('"cert_registration"', source)
+        self.assertIn("请先阅读并同意认证报名信息处理授权协议", source)
+
     def test_order_model_declares_inventory_and_close_fields(self):
         source = (REPO_ROOT / "app/domain/order/src/model/order.py").read_text(encoding="utf-8")
 

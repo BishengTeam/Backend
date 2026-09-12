@@ -60,7 +60,12 @@ class TestAgreementTemplateModels:
         assert "uq_agreement_acceptance_user_template" in names
 
     def test_template_types_constant(self):
-        assert AGREEMENT_TEMPLATE_TYPES == ("user_terms", "privacy", "identity_auth")
+        assert AGREEMENT_TEMPLATE_TYPES == (
+            "user_terms",
+            "privacy",
+            "identity_auth",
+            "cert_registration",
+        )
 
 
 def test_public_template_validates_orm_object() -> None:
@@ -84,6 +89,10 @@ class TestAgreementTemplateSchemas:
             AgreementTemplatePublic(
                 type="training", title="培训协议", content="正文", version=1
             )
+        certification = AgreementTemplatePublic(
+            type="cert_registration", title="认证报名授权", content="正文", version=1
+        )
+        assert certification.type == "cert_registration"
 
     def test_accept_request_validates_items(self):
         req = AgreementAcceptRequest(

@@ -18,6 +18,7 @@ from app.models.cert_product import CertProduct
 from app.domain.user.src.index import UserRealname
 from app.schemas.common import PaginatedData
 from app.schemas.order import OrderCreate, OrderDetailResponse, OrderFilter, OrderResponse
+from app.services.agreement_template import ensure_accepted
 from app.utils.payment import generate_out_trade_no
 
 PRICE_TIER_NORMAL = "normal"
@@ -47,6 +48,12 @@ class OrderService:
                     ).scalar_one_or_none()
                     if identity is None:
                         raise BusinessException("请先完成实名认证")
+                    await ensure_accepted(
+                        db,
+                        user_id,
+                        "cert_registration",
+                        message="请先阅读并同意认证报名信息处理授权协议",
+                    )
 
                 # 查询商品：优先新 cert_product，兼容旧 certification
                 if data.order_kind == "certification":
