@@ -176,6 +176,29 @@ async def test_identity_auth_gate_requires_acceptance(context):
     async with context.db_ctx() as db:
         await ensure_accepted(db, user_id, "identity_auth", message="blocked")
 
+    await admin.create(
+        AdminAgreementTemplateCreate(
+            type="identity_auth", title=title, content=f"{context.prefix} 授权正文"
+        )
+    )
+
+    # Template active but not accepted -> blocked
+    with pytest.raises(BusinessException):
+        async with context.db_ctx() as db:
+            await ensure_accepted(
+                db, user_id, "identity_auth", message="请先阅读并同意实名信息处理授权协议"
+            )
+
+    # Accept -> gate passes
+    await user_service.accept(
+        user_id,
+        AgreementAcceptRequest(
+            items=[AgreementAcceptItem(type="identity_auth", version=1)]
+        ),
+    )
+    async with context.db_ctx() as db:
+        await ensure_accepted(db, user_id, "identity_auth", message="blocked")
+
 
 async def test_cert_registration_type_supports_gate(context):
     from app.port.exceptions import BusinessException
@@ -203,26 +226,3 @@ async def test_cert_registration_type_supports_gate(context):
                 "cert_registration",
                 message="请先阅读并同意认证报名信息处理授权协议",
             )
-
-    await admin.create(
-        AdminAgreementTemplateCreate(
-            type="identity_auth", title=title, content=f"{context.prefix} 授权正文"
-        )
-    )
-
-    # Template active but not accepted -> blocked
-    with pytest.raises(BusinessException):
-        async with context.db_ctx() as db:
-            await ensure_accepted(
-                db, user_id, "identity_auth", message="请先阅读并同意实名信息处理授权协议"
-            )
-
-    # Accept -> gate passes
-    await user_service.accept(
-        user_id,
-        AgreementAcceptRequest(
-            items=[AgreementAcceptItem(type="identity_auth", version=1)]
-        ),
-    )
-    async with context.db_ctx() as db:
-        await ensure_accepted(db, user_id, "identity_auth", message="blocked")
