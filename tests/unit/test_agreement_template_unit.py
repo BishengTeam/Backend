@@ -52,7 +52,7 @@ class TestAgreementTemplateModels:
         assert "ck_agreement_template_type" in names
         assert "ck_agreement_template_status" in names
         columns = {c.name for c in AgreementTemplate.__table__.columns}
-        assert "cover_url" in columns
+        assert "cover_url" not in columns
 
     def test_acceptance_table_and_unique_constraint(self):
         assert AgreementAcceptance.__tablename__ == "agreement_acceptance"
@@ -123,22 +123,9 @@ class TestAgreementTemplateSchemas:
         with pytest.raises(ValidationError):
             AdminAgreementTemplateUpdate(title="t", content="")
 
-    def test_admin_item_exposes_optional_cover_url(self):
-        item = AdminAgreementTemplateItem(
-            id=1,
-            type="privacy",
-            title="隐私政策",
-            content="正文",
-            version=2,
-            status="active",
-            cover_url="/api/media/cover.jpg",
-            created_at="2026-09-11T10:00:00",
-            updated_at="2026-09-11T10:00:00",
-        )
-        assert item.cover_url == "/api/media/cover.jpg"
-
-        missing = item.model_copy(update={"cover_url": None})
-        assert missing.cover_url is None
+    def test_admin_item_no_longer_exposes_cover_url(self):
+        """Covers are now pure CSS in Admin; the field is gone for good."""
+        assert "cover_url" not in AdminAgreementTemplateItem.model_fields
 
 
 class TestAgreementTemplateRoutes:

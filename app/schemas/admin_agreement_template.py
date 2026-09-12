@@ -28,7 +28,6 @@ class AdminAgreementTemplateItem(BaseModel):
     content: str
     version: int
     status: str
-    cover_url: str | None = None
     created_at: datetime
     updated_at: datetime
 

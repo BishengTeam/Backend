@@ -58,7 +58,6 @@ class AgreementTemplate(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="active", server_default="active"
     )
-    cover_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
 
 class AgreementAcceptance(Base):
