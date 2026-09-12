@@ -106,7 +106,7 @@ class CourseEntitlementService:
                 .where(
                     QuizCourseLibraryBinding.course_id == enrollment.course_id,
                     QuizCourseLibraryBinding.status == "active",
-                    QuizLibrary.access_mode == "course_entitlement",
+                    QuizLibrary.access_mode.in_(("course_entitlement", "paid")),
                     QuizLibrary.status.in_(("draft", "published", "suspended")),
                 )
                 .order_by(QuizCourseLibraryBinding.id.asc())
