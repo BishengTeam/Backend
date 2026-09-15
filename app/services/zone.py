@@ -9,7 +9,6 @@ from app.models.cert_product import CertProduct
 from app.domain.content.src.model.banner import Banner
 from app.schemas.activity import ActivityResponse
 from app.schemas.admin_training import AdminTrainingListItem
-from app.schemas.admin_cert_product import CertProductResponse
 from app.schemas.competition import CompetitionListItem
 from app.schemas.job import JobResponse
 from app.schemas.zone import (
@@ -19,6 +18,7 @@ from app.schemas.zone import (
     ZoneBrief,
     ZoneSectionData,
 )
+from app.services.certification import cert_product_response
 from app.services.course import CourseService
 
 # Maximum items per zone_type in home aggregation
@@ -29,7 +29,6 @@ ALL_ZONE_TYPES = ("cert", "study", "competition", "activity", "employment", "tra
 # Entity query config: (model_class, response_schema, has_is_active_filter)
 _ENTITY_QUERIES: dict[str, tuple] = {
     "activities":      (Activity,       ActivityResponse,          True),
-    "certifications":  (CertProduct,    CertProductResponse,         True),
     "trainings":       (Training,       AdminTrainingListItem,          True),
     "competitions":    (Competition,      CompetitionListItem,           True),
     "jobs":            (Job,            JobResponse,               True),
@@ -96,6 +95,19 @@ class ZoneService:
             entity_data["courses"] = [
                 await self._course_service.course_list_response(row)
                 for row in course_rows
+            ]
+
+            # CertProduct is the source of truth, while /api/zones keeps the
+            # frozen public CertificationResponse contract used by Platform.
+            cert_stmt = (
+                select(CertProduct)
+                .where(CertProduct.is_active == True)
+                .order_by(CertProduct.id.desc())
+                .limit(HOME_ZONE_LIMIT)
+            )
+            cert_rows = (await db.execute(cert_stmt)).scalars().all()
+            entity_data["certifications"] = [
+                cert_product_response(row) for row in cert_rows
             ]
 
             for field_name, (model_cls, schema_cls, active_filter) in _ENTITY_QUERIES.items():

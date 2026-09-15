@@ -18,6 +18,8 @@ import app.services.zone as zone_module
 from app.domain.certification.src.index import Course
 from app.domain.content.src.index import Zone
 from app.domain.content.src.model.banner import Banner
+from app.models.cert_product import CertProduct
+from app.schemas.certification import CertificationResponse
 from app.schemas.course import CourseListResponse
 from app.services.course import CourseService
 from app.services.zone import ZoneService
@@ -119,6 +121,37 @@ def test_courses_are_excluded_from_generic_entity_validation() -> None:
     """CourseListResponse must never be fed ORM rows via model_validate."""
 
     assert "courses" not in zone_module._ENTITY_QUERIES
+
+
+@pytest.mark.asyncio
+async def test_active_cert_product_keeps_public_zone_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CertProduct rows must map to CertificationResponse, not cause a 500."""
+
+    cert_product = SimpleNamespace(
+        id=10,
+        type="h3c",
+        code="H3CNE",
+        name="H3CNE",
+        chinese_name="H3C网络工程师",
+    )
+    session = _FakeSession({CertProduct: [cert_product]})
+    _patch_db(monkeypatch, session)
+
+    result = await ZoneService().get_home_aggregation()
+
+    assert result.zones["cert"].certifications == [
+        CertificationResponse(
+            id=10,
+            name="H3CNE",
+            chinese_name="H3C网络工程师",
+            code="H3CNE",
+            vendor="H3C",
+            requires_xuexin=False,
+            pay_first=True,
+        )
+    ]
 
 
 def test_entity_schemas_support_from_attributes() -> None:
