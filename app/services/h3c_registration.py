@@ -94,10 +94,10 @@ class H3cRegistrationService:
         return H3cProfileDefaults(
             candidate_name=profile.real_name,
             gender=profile.gender,
-            candidate_idcard=profile.id_card,
+            candidate_idcard=profile.id_card_raw,
             school=profile.school,
             address=f"{profile.province or ''}{profile.city or ''}{profile.address or ''}".strip() or None,
-            phone=profile.phone,
+            phone=profile.phone_raw,
             email=profile.email,
             education=profile.education,
             first_name_en=profile.first_name_en,

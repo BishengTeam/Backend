@@ -245,6 +245,7 @@ class UserService:
                 nickname=profile.nickname if profile else None,
                 email=profile.email if profile else None,
                 phone=phone if is_admin else _mask_phone(phone),
+                phone_raw=phone if phone and (is_admin or (realname and realname.status == 'verified')) else None,
                 province=profile.province if profile else None,
                 city=profile.city if profile else None,
                 address=profile.address if profile else None,

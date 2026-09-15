@@ -162,6 +162,7 @@ class UserProfileDetail(BaseModel):
     nickname: str | None = None
     email: str | None = None
     phone: str | None = None  # 小程序端脱敏，管理端明文
+    phone_raw: str | None = None  # 已实名本人/管理端明文，其余场景为 null
     province: str | None = None
     city: str | None = None
     address: str | None = None
