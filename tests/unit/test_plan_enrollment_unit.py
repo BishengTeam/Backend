@@ -17,7 +17,7 @@ def _open_plan(**overrides):
     now = datetime(2026, 7, 14, tzinfo=timezone.utc)
     values = {
         "id": 7,
-        "product_type": "H3C-NE",
+        "product_type": "GB0-192",
         "name": "2026 第一批",
         "status": "published",
         "apply_start": now - timedelta(days=1),
@@ -84,10 +84,14 @@ class PlanEnrollmentWindowTests(unittest.TestCase):
 
 
 class PlanEnrollmentDatabaseTests(unittest.IsolatedAsyncioTestCase):
+    def _product(self, **overrides):
+        values = {"type": "h3c", "is_active": True}
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
     async def test_finite_capacity_counts_all_occupying_statuses(self):
         plan = _open_plan(capacity=1)
-        certification = SimpleNamespace(vendor="H3C", is_active=True)
-        db = _FakeDb(plan, certification, None, 1)
+        db = _FakeDb(plan, self._product(), None, 1)
 
         with self.assertRaises(BusinessException) as raised:
             await PlanEnrollmentService().lock_enrollable_plan(
@@ -107,8 +111,7 @@ class PlanEnrollmentDatabaseTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unlimited_capacity_skips_capacity_query(self):
         plan = _open_plan(capacity=0)
-        certification = SimpleNamespace(vendor="H3C", is_active=True)
-        db = _FakeDb(plan, certification, None)
+        db = _FakeDb(plan, self._product(), None)
 
         result = await PlanEnrollmentService().lock_enrollable_plan(
             db,
@@ -121,10 +124,9 @@ class PlanEnrollmentDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(result, plan)
         self.assertEqual(len(db.statements), 3)
 
-    async def test_wrong_vendor_is_rejected_before_capacity_check(self):
+    async def test_wrong_product_type_is_rejected_before_capacity_check(self):
         plan = _open_plan(capacity=1)
-        certification = SimpleNamespace(vendor="NISP", is_active=True)
-        db = _FakeDb(plan, certification)
+        db = _FakeDb(plan, self._product(type="nisp"))
 
         with self.assertRaises(BusinessException) as raised:
             await PlanEnrollmentService().lock_enrollable_plan(
@@ -138,10 +140,25 @@ class PlanEnrollmentDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.message, "该批次不属于H3C认证")
         self.assertEqual(len(db.statements), 2)
 
+    async def test_inactive_cert_product_is_rejected(self):
+        plan = _open_plan(capacity=1)
+        db = _FakeDb(plan, self._product(is_active=False))
+
+        with self.assertRaises(BusinessException) as raised:
+            await PlanEnrollmentService().lock_enrollable_plan(
+                db,
+                plan_id=plan.id,
+                user_id=100,
+                expected_vendor="H3C",
+                now=datetime(2026, 7, 14, tzinfo=timezone.utc),
+            )
+
+        self.assertEqual(raised.exception.message, "该认证类型已下架")
+        self.assertEqual(len(db.statements), 2)
+
     async def test_existing_active_order_is_rejected(self):
         plan = _open_plan(capacity=10)
-        certification = SimpleNamespace(vendor="H3C", is_active=True)
-        db = _FakeDb(plan, certification, 99)
+        db = _FakeDb(plan, self._product(), 99)
 
         with self.assertRaises(ConflictException) as raised:
             await PlanEnrollmentService().lock_enrollable_plan(
@@ -154,6 +171,38 @@ class PlanEnrollmentDatabaseTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(raised.exception.message, "您已报名该批次，请勿重复提交")
         self.assertEqual(raised.exception.http_status_code, 409)
+
+    async def test_legacy_certification_batch_falls_back_to_old_table(self):
+        plan = _open_plan(product_type="H3C-NE", capacity=0)
+        certification = SimpleNamespace(vendor="H3C", is_active=True)
+        db = _FakeDb(plan, None, certification, None)
+
+        result = await PlanEnrollmentService().lock_enrollable_plan(
+            db,
+            plan_id=plan.id,
+            user_id=100,
+            expected_vendor="H3C",
+            now=datetime(2026, 7, 14, tzinfo=timezone.utc),
+        )
+
+        self.assertIs(result, plan)
+        self.assertEqual(len(db.statements), 4)
+
+    async def test_unknown_product_code_is_rejected(self):
+        plan = _open_plan(capacity=1)
+        db = _FakeDb(plan, None, None)
+
+        with self.assertRaises(BusinessException) as raised:
+            await PlanEnrollmentService().lock_enrollable_plan(
+                db,
+                plan_id=plan.id,
+                user_id=100,
+                expected_vendor="H3C",
+                now=datetime(2026, 7, 14, tzinfo=timezone.utc),
+            )
+
+        self.assertEqual(raised.exception.message, "批次关联的认证类型不存在")
+        self.assertEqual(len(db.statements), 3)
 
 
 class PlanOrderAssociationStructureTests(unittest.TestCase):

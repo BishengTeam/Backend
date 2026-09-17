@@ -41,6 +41,7 @@ async def context(monkeypatch):
     from app.domain.plan.src.index import Plan
     from app.domain.user.src.index import AdminUser, User, UserRealname
     from app.domain.certification.src.index import Certification
+    from app.models.cert_product import CertProduct
 
     async with factory() as db:
         batch_ids = select(H3cExamBatch.id).where(
@@ -91,6 +92,7 @@ async def context(monkeypatch):
         await db.execute(
             delete(Certification).where(Certification.code.like(f"{prefix}%"))
         )
+        await db.execute(delete(CertProduct).where(CertProduct.code.like(f"{prefix}%")))
         await db.execute(delete(UserRealname).where(UserRealname.user_id.in_(user_ids)))
         await db.execute(
             delete(AdminUser).where(AdminUser.username.like(f"{prefix}%"))
@@ -100,7 +102,7 @@ async def context(monkeypatch):
     await engine.dispose()
 
 
-async def _seed(context):
+async def _seed(context, *, product_source="certification"):
     from app.domain.certification.src.index import Certification
     from app.domain.h3c.src.index import H3cExamBatch, H3cMaterialUpload
     from app.domain.order.src.index import Inventory, InventoryRecord
@@ -130,15 +132,28 @@ async def _seed(context):
                 status="verified",
             )
         )
-        db.add(
-            Certification(
-                name=code,
-                chinese_name=code,
-                code=code,
-                vendor="H3C",
-                is_active=True,
+        if product_source == "certification":
+            db.add(
+                Certification(
+                    name=code,
+                    chinese_name=code,
+                    code=code,
+                    vendor="H3C",
+                    is_active=True,
+                )
             )
-        )
+        else:
+            from app.models.cert_product import CertProduct
+
+            db.add(
+                CertProduct(
+                    type="h3c",
+                    code=code,
+                    name=code,
+                    chinese_name=code,
+                    is_active=True,
+                )
+            )
         plan = Plan(
             product_type=code,
             name=f"{context.prefix} batch",
@@ -352,5 +367,19 @@ async def test_h3c_zero_price_review_and_resubmission_refund_flow(context):
             )
         )
         assert refund is not None
-        assert refund.request_kind == "review_failed"
-        assert refund.amount_cents == 0
+    assert refund.request_kind == "review_failed"
+    assert refund.amount_cents == 0
+
+
+async def test_h3c_order_accepts_cert_product_only_batch(context):
+    """批次编码仅存在于认证产品（cert_product）时，报名不再被旧表校验拦截。"""
+    from app.services.h3c_registration import H3cRegistrationService
+
+    seed = await _seed(context, product_source="cert_product")
+    created = await H3cRegistrationService().create_order(
+        seed.user_id,
+        _request(context, seed),
+    )
+
+    assert created.status == "pending_review"
+    assert created.order_status == "completed"
