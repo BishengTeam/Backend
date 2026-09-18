@@ -247,6 +247,7 @@ class Settings(BaseSettings):
         return v
 
     WECHAT_APPID: str = ""
+    WECHAT_SUBSCRIBE_APPROVED_TEMPLATE_ID: str = ""
     WECHAT_SECRET: str = ""
 
     # All payment traffic uses WeChat Pay API V3.  Production explicitly

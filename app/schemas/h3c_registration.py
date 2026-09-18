@@ -255,6 +255,8 @@ class H3cRegistrationResponse(BaseModel):
     resubmission_due_at: datetime | None
     last_reviewed_at: datetime | None
     approved_at: datetime | None
+    exam_date: datetime | None = None
+    exam_location: str | None = None
     materials: list[H3cMaterialResponse]
     latest_review: H3cReviewResponse | None = None
     created_at: datetime
@@ -302,6 +304,8 @@ class H3cRefundResponse(BaseModel):
     status: str
     approved_by_admin_id: int | None
     approved_at: datetime | None
+    exam_date: datetime | None = None
+    exam_location: str | None = None
     out_refund_no: str | None
     processing_at: datetime | None
     succeeded_at: datetime | None

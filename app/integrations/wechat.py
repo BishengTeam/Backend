@@ -91,3 +91,37 @@ class WechatClient:
         decrypted = decrypted[:-pad]
         data = json.loads(decrypted)
         return data.get("phoneNumber", "")
+
+    async def send_subscribe_message(
+        self,
+        *,
+        openid: str,
+        template_id: str,
+        data: dict[str, dict[str, str]],
+        page: str | None = None,
+    ) -> bool:
+        """Send a WeChat mini-program subscribe message. Returns True on success."""
+        token = await self.get_access_token()
+        url = "https://api.weixin.qq.com/cgi-bin/message/subscribe/send"
+        payload: dict = {
+            "touser": openid,
+            "template_id": template_id,
+            "data": data,
+        }
+        if page:
+            payload["page"] = page
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=5.0),
+        ) as client:
+            resp = await client.post(url, params={"access_token": token}, json=payload)
+            resp.raise_for_status()
+            result = resp.json()
+            errcode = result.get("errcode", 0)
+            if errcode != 0:
+                # 43101 = user has not subscribed; that is a normal case.
+                if errcode == 43101:
+                    return False
+                raise ThirdPartyException(
+                    f"微信订阅消息发送失败: errcode={errcode}, errmsg={result.get('errmsg', 'unknown')}"
+                )
+            return True

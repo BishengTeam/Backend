@@ -31,6 +31,8 @@ from app.domain.order.src.index import (
 )
 from app.domain.plan.src.index import Plan
 from app.domain.user.src.index import User, UserRealname
+from app.integrations.wechat import WechatClient
+from app.port.config import settings
 from app.integrations.h3c_storage import H3cObjectStorage, assert_owned_source_key
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException, ValidationException
 from app.schemas.common import PaginatedData
@@ -634,6 +636,12 @@ class H3cRegistrationService:
                             reason_detail=decision_data.reason_detail,
                             admin_id=None,
                         )
+            # Best-effort subscribe message notification on approval.
+            if decision_data.decision == "approved":
+                try:
+                    await self._send_approved_notification(registration_id)
+                except Exception:
+                    pass  # Notification failure must not block review approval.
             return await self._admin_registration(registration_id)
 
     async def close_registration(
@@ -680,6 +688,34 @@ class H3cRegistrationService:
                 registration.closed_at = now
                 registration.close_reason = "admin_closed"
             return await self._admin_registration(registration_id)
+
+    async def _send_approved_notification(self, registration_id: int) -> None:
+        """Best-effort WeChat subscribe message for approved H3C registrations."""
+        template_id = settings.WECHAT_SUBSCRIBE_APPROVED_TEMPLATE_ID
+        if not template_id:
+            return
+        async with get_db_ctx() as db:
+            registration = await db.get(H3cRegistration, registration_id)
+            if registration is None or registration.status != "approved":
+                return
+            user = await db.get(User, registration.user_id)
+            plan = await db.get(Plan, registration.plan_id)
+            if user is None:
+                return
+            exam_date_str = plan.exam_date.strftime("%Y年%m月%d日 %H:%M") if plan and plan.exam_date else "待通知"
+            exam_location = (plan.exam_location or "待通知") if plan else "待通知"
+            data = {
+                "thing1": {"value": "H3C认证报名审核通过"},
+                "thing2": {"value": exam_location[:20]},
+                "time3": {"value": exam_date_str},
+                "thing4": {"value": registration.registration_no},
+            }
+            await WechatClient().send_subscribe_message(
+                openid=user.openid,
+                template_id=template_id,
+                data=data,
+                page=f"pages/mine/registrations",
+            )
 
     async def _admin_registration(self, registration_id: int) -> H3cRegistrationResponse:
         async with get_db_ctx() as db:
@@ -773,6 +809,7 @@ class H3cRegistrationService:
         if existing_id is not None:
             return await db.get(H3cRefundRequest, existing_id)
         order = await db.get(Order, registration.order_id)
+        plan = await db.get(Plan, registration.plan_id)
         if order is None:
             raise ConflictException("H3C 报名缺少订单")
         refund = H3cRefundRequest(
@@ -819,6 +856,7 @@ class H3cRegistrationService:
         registration: H3cRegistration,
     ) -> H3cRegistrationResponse:
         order = await db.get(Order, registration.order_id)
+        plan = await db.get(Plan, registration.plan_id)
         materials = (
             await db.execute(
                 select(H3cMaterial)
@@ -874,6 +912,8 @@ class H3cRegistrationService:
             resubmission_due_at=registration.resubmission_due_at,
             last_reviewed_at=registration.last_reviewed_at,
             approved_at=registration.approved_at,
+            exam_date=plan.exam_date if plan else None,
+            exam_location=plan.exam_location if plan else None,
             materials=material_responses,
             latest_review=(
                 H3cReviewResponse.model_validate(latest_review)
