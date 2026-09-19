@@ -335,7 +335,7 @@ class H3cAdminBatchService:
             if status:
                 stmt = stmt.where(Plan.status == status)
             if certification_code:
-                stmt = stmt.where(H3cExamBatch.certification_code == certification_code)
+                stmt = stmt.where(Plan.product_type == certification_code)
             total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
             rows = (
                 await db.execute(
