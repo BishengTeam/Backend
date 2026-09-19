@@ -326,6 +326,7 @@ class H3cAdminBatchService:
         self,
         *,
         status: str | None = None,
+        certification_code: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> PaginatedData[H3cExamBatchResponse]:
@@ -333,6 +334,8 @@ class H3cAdminBatchService:
             stmt = select(H3cExamBatch).join(Plan, Plan.id == H3cExamBatch.plan_id)
             if status:
                 stmt = stmt.where(Plan.status == status)
+            if certification_code:
+                stmt = stmt.where(H3cExamBatch.certification_code == certification_code)
             total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
             rows = (
                 await db.execute(

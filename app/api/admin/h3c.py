@@ -53,6 +53,7 @@ async def create_batch(
 )
 async def list_batches(
     status: str | None = Query(None),
+    certification_code: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     _admin=Depends(require_permission("h3c:batch_manage")),
@@ -60,6 +61,7 @@ async def list_batches(
     return success(
         data=await H3cAdminBatchService().list_batches(
             status=status,
+            certification_code=certification_code,
             page=page,
             page_size=page_size,
         )
