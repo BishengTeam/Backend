@@ -10,8 +10,10 @@ import shutil
 import tempfile
 import uuid
 import zipfile
+import unicodedata
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from copy import copy
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -46,6 +48,17 @@ H3C_TEMPLATE_SHA256 = {
 MATERIAL_SLUGS = {
     "coupon_proof": "coupon-proof",
     "student_proof": "student-proof",
+}
+H3C_EXPORT_TZ = timezone(timedelta(hours=8), name="Asia/Shanghai")
+H3C_DATE_COLUMNS = {
+    "coupon": {14, 23, 24},
+    "full": {12, 20, 21},
+    "student": {14, 21, 22},
+}
+H3C_DATETIME_COLUMNS = {
+    "coupon": {18},
+    "full": {16},
+    "student": {17},
 }
 
 
@@ -278,6 +291,7 @@ class H3cExportService:
         try:
             from openpyxl import load_workbook
             from openpyxl.drawing.image import Image as XlsxImage
+            from openpyxl.utils import get_column_letter
             from PIL import Image as PillowImage
         except ImportError as exc:
             raise ThirdPartyException("H3C Excel 导出依赖未安装") from exc
@@ -288,11 +302,19 @@ class H3cExportService:
         output = destination / f"h3c-{registration_type}-{uuid.uuid4().hex}.xlsx"
         workbook = load_workbook(template)
         worksheet = workbook["模板"]
+        sample_row_styles = [copy(cell._style) for cell in worksheet[3]]
         if worksheet.max_row >= 3:
             worksheet.delete_rows(3, worksheet.max_row - 2)
+        # openpyxl's delete_rows removes cell values, but does not remove
+        # drawings anchored to those rows. The official templates ship with
+        # sample material images, so clear them before adding real images.
+        worksheet._images = []
 
         material_dir = destination / "materials"
         material_dir.mkdir(parents=True)
+        date_columns = H3C_DATE_COLUMNS[registration_type]
+        datetime_columns = H3C_DATETIME_COLUMNS[registration_type]
+        content_widths: dict[int, float] = {}
         for index, row in enumerate(rows):
             excel_row = index + 3
             values = self._workbook_row(
@@ -301,7 +323,22 @@ class H3cExportService:
                 registration_type=registration_type,
             )
             for column, value in enumerate(values, 1):
+                if column in date_columns:
+                    value = self._excel_date(value)
+                elif column in datetime_columns:
+                    value = self._excel_datetime(value)
                 worksheet.cell(row=excel_row, column=column, value=value)
+                cell = worksheet.cell(row=excel_row, column=column)
+                if column <= len(sample_row_styles):
+                    cell._style = copy(sample_row_styles[column - 1])
+                if column in date_columns:
+                    cell.number_format = "yyyy/m/d"
+                elif column in datetime_columns:
+                    cell.number_format = "yyyy/m/d h:mm"
+                content_widths[column] = max(
+                    content_widths.get(column, 0),
+                    self._excel_value_width(cell.value) + 2,
+                )
             worksheet.row_dimensions[excel_row].height = 80
             if registration_type in {"coupon", "student"}:
                 material = next(
@@ -323,8 +360,83 @@ class H3cExportService:
                     picture.width = int(width * scale)
                     picture.height = int(height * scale)
                     worksheet.add_image(picture, f"L{excel_row}")
+        for column, content_width in content_widths.items():
+            letter = get_column_letter(column)
+            template_width = worksheet.column_dimensions[letter].width or 8.43
+            worksheet.column_dimensions[letter].width = min(
+                255,
+                max(template_width, content_width),
+            )
         workbook.save(output)
         return output
+
+    @staticmethod
+    def _excel_datetime(value: object | None) -> object | None:
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, date):
+            parsed = datetime.combine(value, datetime.min.time())
+        elif isinstance(value, str):
+            text = value.strip()
+            try:
+                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                parsed = None
+                for date_format in (
+                    "%Y/%m/%d %H:%M:%S",
+                    "%Y/%m/%d %H:%M",
+                    "%Y-%m-%d %H:%M:%S",
+                    "%Y-%m-%d %H:%M",
+                ):
+                    try:
+                        parsed = datetime.strptime(text, date_format)
+                        break
+                    except ValueError:
+                        continue
+            if parsed is None:
+                return value
+        else:
+            return value
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(H3C_EXPORT_TZ).replace(tzinfo=None)
+        return parsed
+
+    @staticmethod
+    def _excel_date(value: object | None) -> object | None:
+        if isinstance(value, datetime):
+            if value.tzinfo is not None:
+                value = value.astimezone(H3C_EXPORT_TZ)
+            return value.date()
+        if isinstance(value, date):
+            return value
+        if isinstance(value, str):
+            text = value.strip()
+            try:
+                return date.fromisoformat(text[:10].replace("/", "-"))
+            except ValueError:
+                return value
+        return value
+
+    @staticmethod
+    def _excel_value_width(value: object | None) -> float:
+        if value is None:
+            return 0
+        if isinstance(value, datetime):
+            return 16
+        if isinstance(value, date):
+            return 10
+        return max(
+            (
+                sum(
+                    2
+                    if unicodedata.east_asian_width(character) in {"W", "F"}
+                    else 1
+                    for character in line
+                )
+                for line in str(value).splitlines()
+            ),
+            default=0,
+        )
 
     @staticmethod
     def _workbook_row(
