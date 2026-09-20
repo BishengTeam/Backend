@@ -291,6 +291,7 @@ class H3cExportService:
         try:
             from openpyxl import load_workbook
             from openpyxl.drawing.image import Image as XlsxImage
+            from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
             from openpyxl.utils import get_column_letter
             from PIL import Image as PillowImage
         except ImportError as exc:
@@ -355,11 +356,21 @@ class H3cExportService:
                     await self.storage.download_file(material.storage_key, material_path)
                     with PillowImage.open(material_path) as image:
                         width, height = image.size
-                    scale = min(70 / width, 70 / height)
                     picture = XlsxImage(str(material_path))
-                    picture.width = int(width * scale)
-                    picture.height = int(height * scale)
-                    worksheet.add_image(picture, f"L{excel_row}")
+                    material_column_width = worksheet.column_dimensions["L"].width or 8.43
+                    material_cell_width_px = self._excel_column_width_pixels(
+                        material_column_width
+                    )
+                    worksheet.row_dimensions[excel_row].height = self._material_row_height(
+                        image_width=width,
+                        image_height=height,
+                        cell_width_px=material_cell_width_px,
+                    )
+                    picture.anchor = TwoCellAnchor(
+                        _from=AnchorMarker(col=11, row=excel_row - 1),
+                        to=AnchorMarker(col=12, row=excel_row),
+                    )
+                    worksheet.add_image(picture)
         for column, content_width in content_widths.items():
             letter = get_column_letter(column)
             template_width = worksheet.column_dimensions[letter].width or 8.43
@@ -437,6 +448,24 @@ class H3cExportService:
             ),
             default=0,
         )
+
+    @staticmethod
+    def _excel_column_width_pixels(width: float) -> int:
+        # ECMA-376 conversion with Calibri 11's 7-pixel maximum digit width.
+        return int(((256 * width + 128 // 7) / 256) * 7)
+
+    @staticmethod
+    def _material_row_height(
+        *,
+        image_width: int,
+        image_height: int,
+        cell_width_px: int,
+    ) -> float:
+        if image_width <= 0 or image_height <= 0 or cell_width_px <= 0:
+            return 80
+        required_px = cell_width_px * image_height / image_width
+        required_points = required_px * 72 / 96
+        return min(409.5, max(80, required_points))
 
     @staticmethod
     def _workbook_row(

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from datetime import datetime, timezone
 
 from openpyxl import load_workbook
+from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor
 from PIL import Image as PillowImage
 
 
@@ -134,7 +135,12 @@ def test_h3c_workbook_replaces_samples_with_formatted_export_rows(tmp_path):
     worksheet = load_workbook(output)["模板"]
 
     assert len(worksheet._images) == 1
+    assert isinstance(worksheet._images[0].anchor, TwoCellAnchor)
+    assert worksheet._images[0].anchor._from.col == 11
     assert worksheet._images[0].anchor._from.row == 2
+    assert worksheet._images[0].anchor.to.col == 12
+    assert worksheet._images[0].anchor.to.row == 3
+    assert 160 < worksheet.row_dimensions[3].height < 167
     assert worksheet["A3"].value == "GB0-192"
     assert worksheet["B3"].value == "王小龙"
     assert worksheet["S3"].value == "智天远教育科技有限公司"
