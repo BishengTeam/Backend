@@ -18,6 +18,7 @@ from app.api.orders import router as orders_router
 from app.api.plans import router as plans_router
 from app.api.payment import router as payment_router
 from app.api.points import router as points_router
+from app.api.points_mall import router as points_mall_router
 from app.api.price_config import router as prices_router
 from app.api.quiz import router as quiz_router
 from app.api.renshe import router as renshe_router
@@ -44,6 +45,7 @@ router.include_router(plans_router)
 router.include_router(orders_router)
 router.include_router(payment_router)
 router.include_router(points_router)
+router.include_router(points_mall_router)
 router.include_router(prices_router)
 router.include_router(quiz_router)
 router.include_router(renshe_router)
