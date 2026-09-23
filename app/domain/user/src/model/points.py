@@ -10,7 +10,7 @@ class UserPoints(Base, TimestampMixin):
         CheckConstraint("balance >= 0", name="ck_user_points_balance_non_negative"),
     )
 
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("user.id"), nullable=False, unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
     balance: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
 
@@ -24,7 +24,7 @@ class PointsHistory(Base, TimestampMixin):
         ),
     )
 
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("user.id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True)
     action_type: Mapped[str] = mapped_column(String(32), nullable=False)
     amount: Mapped[int] = mapped_column(Integer, nullable=False)
     balance_after: Mapped[int] = mapped_column(Integer, nullable=False)
