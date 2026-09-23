@@ -6,7 +6,9 @@ from app.port.exceptions import UnauthorizedException
 from app.adapter.redis import redis_client, redis_get_safe, redis_setex_safe, redis_getdel_safe
 from app.adapter.security import create_access_token, create_refresh_token, decode_access_token
 from app.integrations.wechat import WechatClient
-from app.domain.user.src.index import DeletedOpenid, User, UserProfile as DomainUserProfile
+from app.domain.user.src.index import DeletedOpenid, User
+from app.domain.user.src.index import UserProfile as DomainUserProfile
+from app.services.points import PointsService
 from app.schemas.user import LoginResponse, RefreshResponse, UserProfile
 from app.services.renshe_audit import record_best_effort_audit
 
@@ -53,6 +55,19 @@ class AuthService:
                 db.add(user)
                 await db.flush()
                 db.add(DomainUserProfile(user_id=user.id))
+                # New user bonus points (idempotent per user).
+                try:
+                    await PointsService()._grant_points_in_session(
+                        db,
+                        user_id=user.id,
+                        amount=20,
+                        action_type="claim_new_user",
+                        description="新用户注册 +20积分",
+                        source_type="points_claim",
+                        source_id=f"new_user:{user.id}",
+                    )
+                except Exception:
+                    pass  # Points failure must not block registration.
             elif not user.is_active:
                 raise UnauthorizedException("账号已注销，如需恢复请联系客服")
             else:

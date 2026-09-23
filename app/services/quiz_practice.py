@@ -48,6 +48,7 @@ from app.domain.community.src.rule.quiz import (
 )
 from app.domain.user.src.index import User
 from app.port.config import settings
+from app.services.points import PointsService
 from app.port.exceptions import (
     BusinessException,
     ConflictException,
@@ -1156,6 +1157,22 @@ class QuizPracticeService:
             if answered:
                 session.last_answered_at = now
             session.lock_version += 1
+
+            # Award practice completion points if the user answered at least once.
+            if answered:
+                try:
+                    await PointsService()._grant_points_in_session(
+                        db,
+                        user_id=user_id,
+                        amount=10,
+                        action_type="claim_quiz_task",
+                        description=f"完成练习 +10积分",
+                        source_type="points_claim",
+                        source_id=f"quiz_task:{session_id}",
+                    )
+                except Exception:
+                    pass  # Points failure must not block session completion.
+
             await db.commit()
             return await self._serialize_session(db, session)
 
@@ -1276,6 +1293,20 @@ class QuizPracticeService:
         )
         stats.checkin_days += 1
         stats.consecutive_days = consecutive
+
+        # Award daily check-in points (idempotent per user per day).
+        try:
+            await PointsService()._grant_points_in_session(
+                db,
+                user_id=user_id,
+                amount=5,
+                action_type="claim_daily_checkin",
+                description=f"每日答题打卡 +5积分",
+                source_type="points_claim",
+                source_id=f"daily_checkin:{user_id}:{local_day.isoformat()}",
+            )
+        except Exception:
+            pass  # Points failure must not block the practice submission.
 
     async def _apply_wrong_book(
         self,
