@@ -17,6 +17,7 @@ class OrderCreate(BaseModel):
     candidate_idcard: str | None = Field(None, max_length=20, description="考生身份证号")
     extra_data: dict | None = Field(None, description="差异化报名数据，键名取决于 product_type")
     attachments: list[str] | None = Field(None, description="上传材料 URL 列表")
+    coupon_code: str | None = Field(None, max_length=64, description="积分商城优惠券码")
 
     @field_validator("candidate_phone")
     @classmethod
@@ -64,6 +65,7 @@ class OrderResponse(BaseModel):
     created_at: datetime
     extra_data: dict | None = Field(None, description="差异化报名数据")
     attachments: list[str] | None = Field(None, description="上传材料 URL 列表")
+    coupon_code: str | None = Field(None, max_length=64, description="积分商城优惠券码")
 
     model_config = {"from_attributes": True}
 
@@ -90,6 +92,7 @@ class OrderDetailResponse(BaseModel):
     updated_at: datetime
     extra_data: dict | None = Field(None, description="差异化报名数据")
     attachments: list[str] | None = Field(None, description="上传材料 URL 列表")
+    coupon_code: str | None = Field(None, max_length=64, description="积分商城优惠券码")
 
     model_config = {"from_attributes": True}
 
@@ -98,3 +101,15 @@ class OrderFilter(BaseModel):
     status: OrderStatus | None = Field(None, description="按状态筛选：pending / paid / completed / refunded / closed")
     product_type: str | None = Field(None, description="按商品类型筛选")
     phone: str | None = Field(None, description="按考生手机号筛选")
+
+
+class OrderApplyCouponRequest(BaseModel):
+    coupon_code: str = Field(..., min_length=1, max_length=64, description="积分商城券码；传空字符串移除优惠券")
+
+
+class OrderCouponAppliedResponse(BaseModel):
+    order_id: int
+    original_price: int
+    discount_amount: int
+    final_price: int
+    coupon_code: str | None

@@ -4,6 +4,8 @@ from app.middleware.auth import get_current_user
 from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.order import (
+    OrderApplyCouponRequest,
+    OrderCouponAppliedResponse,
     OrderCreate,
     OrderDetailResponse,
     OrderFilter,
@@ -93,4 +95,31 @@ async def get_order(
 ) -> APIResponse[OrderDetailResponse]:
     """订单详情"""
     result = await OrderService().get_order(current_user.id, order_id)
+    return success(data=result)
+
+@router.post(
+    "/{order_id}/apply-coupon",
+    summary="订单应用优惠券",
+    description="""
+在支付前为订单应用积分商城优惠券。
+
+**使用场景**: 确认/支付页面，用户选择优惠券后调用
+
+**请求体**: `{"coupon_code": "PM-XXXXXX"}`
+
+**响应**: 更新后的订单信息（含折后价格）
+
+**认证**: 需登录
+    """,
+)
+async def apply_coupon(
+    order_id: int,
+    body: OrderApplyCouponRequest,
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[OrderCouponAppliedResponse]:
+    result = await OrderService().apply_coupon_to_order(
+        user_id=current_user.id,
+        order_id=order_id,
+        coupon_code=body.coupon_code,
+    )
     return success(data=result)
