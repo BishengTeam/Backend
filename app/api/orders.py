@@ -99,6 +99,7 @@ async def get_order(
 
 @router.post(
     "/{order_id}/apply-coupon",
+    response_model=APIResponse[OrderCouponAppliedResponse],
     summary="订单应用优惠券",
     description="""
 在支付前为订单应用积分商城优惠券。
