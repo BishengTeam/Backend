@@ -5,7 +5,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from app.schemas.order import OrderCreate, OrderFilter
-from app.services.order import resolve_price_tier
+from app.services.order_utils import resolve_price_tier
 from app.schemas.payment import PaymentPrepayResponse, PaymentSyncResponse
 
 
@@ -184,13 +184,12 @@ class OrderSystemTests(unittest.TestCase):
         ]
 
         self.assertIn("async with db.begin():", create_order_source)
-        self.assertIn("price_tier = resolve_price_tier(identity.user_type)", create_order_source)
-        self.assertIn("PriceConfig.user_type == price_tier", create_order_source)
-        self.assertLess(
-            create_order_source.index("inventory_change = await lock_certification_inventory"),
-            create_order_source.index("order = Order("),
+        self.assertIn("handler = order_handler_registry.get(data.order_kind)", create_order_source)
+        self.assertIn("price = await handler.validate(db, user_id=user_id, data=data)", create_order_source)
+        self.assertIn(
+            "inventory_id, inventory_change = await handler.lock_inventory",
+            create_order_source,
         )
-        self.assertIn("inventory_id = inventory_change.inventory_id", create_order_source)
         self.assertIn("inventory_id=inventory_id", create_order_source)
         self.assertIn("expires_at=expires_at", create_order_source)
         self.assertIn('status="pending"', create_order_source)
@@ -199,7 +198,7 @@ class OrderSystemTests(unittest.TestCase):
         self.assertNotIn("await db.commit()", create_order_source)
 
     def test_certification_order_requires_cert_registration_agreement(self):
-        source = (REPO_ROOT / "app/services/order.py").read_text("utf-8")
+        source = (REPO_ROOT / "app/services/order_handlers/certification.py").read_text("utf-8")
         self.assertIn('"cert_registration"', source)
         self.assertIn("请先阅读并同意认证报名信息处理授权协议", source)
 
