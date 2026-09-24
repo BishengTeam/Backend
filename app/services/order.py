@@ -13,13 +13,12 @@ from app.domain.order.src.index import (
     lock_certification_inventory,
     validate_extra_data,
 )
-from app.domain.certification.src.index import Certification
-from app.models.cert_product import CertProduct
 from app.domain.user.src.index import UserRealname
 from app.schemas.common import PaginatedData
 from app.schemas.order import OrderCreate, OrderDetailResponse, OrderFilter, OrderResponse
 from app.services.agreement_template import ensure_accepted
 from app.utils.payment import generate_out_trade_no
+from app.services.order_handlers import order_handler_registry
 
 PRICE_TIER_NORMAL = "normal"
 PRICE_TIER_STUDENT = "student"
@@ -55,52 +54,12 @@ class OrderService:
                         message="请先阅读并同意认证报名信息处理授权协议",
                     )
 
-                # 查询商品：优先新 cert_product，兼容旧 certification
-                if data.order_kind == "certification":
-                    cert = (
-                        await db.execute(
-                            select(CertProduct).where(
-                                CertProduct.code == data.product_type,
-                                CertProduct.is_active.is_(True),
-                            )
-                        )
-                    ).scalar_one_or_none()
-                    if cert is None:
-                        cert = (
-                            await db.execute(
-                                select(Certification).where(
-                                    Certification.code == data.product_type,
-                                    Certification.is_active.is_(True),
-                                )
-                            )
-                        ).scalar_one_or_none()
-                    if cert is None:
-                        raise BusinessException("认证类型不存在或已下架")
-
-                    price_tier = resolve_price_tier(identity.user_type)
-                    price_rows = (
-                        await db.execute(
-                            select(PriceConfig).where(
-                                PriceConfig.product_type == data.product_type,
-                                PriceConfig.user_type == price_tier,
-                                PriceConfig.is_active.is_(True),
-                            ).limit(2)
-                        )
-                    ).scalars().all()
-                    if not price_rows:
-                        raise BusinessException("该认证类型暂未配置价格")
-                    if len(price_rows) > 1:
-                        raise ConflictException("该认证类型价格配置重复，请联系管理员")
-                    price = price_rows[0].price
-
-                    validate_extra_data(data.product_type, data.extra_data)
-
-                    inventory_change = await lock_certification_inventory(db, data.product_type)
-                    inventory_id = inventory_change.inventory_id
-                elif data.order_kind == "course":
-                    raise BusinessException("课程订单请使用课程购买接口创建")
-                else:
-                    raise BusinessException(f"不支持的订单类型: {data.order_kind}")
+                # Use the order handler registry (OCP)
+                handler = order_handler_registry.get(data.order_kind)
+                price = await handler.validate(db, user_id=user_id, data=data)
+                inventory_id, inventory_change = await handler.lock_inventory(
+                    db, product_type=data.product_type
+                )
 
                 expires_at = datetime.now(timezone.utc) + timedelta(
                     minutes=ORDER_PAYMENT_EXPIRE_MINUTES

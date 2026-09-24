@@ -12,6 +12,7 @@ from app.services.agreement_template import ensure_accepted
 from app.domain.order.src.transition.inventory_transitions import lock_certification_inventory
 from app.services.order_handlers.registry import order_handler_registry
 from app.services.order_utils import resolve_price_tier
+from app.domain.order.src.rule.order_rules import validate_extra_data
 
 
 @order_handler_registry.register("certification")
@@ -86,6 +87,9 @@ class CertificationOrderHandler:
         if len(price_rows) > 1:
             from app.port.exceptions import ConflictException
             raise ConflictException("该认证类型价格配置重复，请联系管理员")
+
+        # Validate product-specific registration fields
+        validate_extra_data(data.product_type, data.extra_data)
 
         return price_rows[0].price
 

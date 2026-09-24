@@ -184,13 +184,12 @@ class OrderSystemTests(unittest.TestCase):
         ]
 
         self.assertIn("async with db.begin():", create_order_source)
-        self.assertIn("price_tier = resolve_price_tier(identity.user_type)", create_order_source)
-        self.assertIn("PriceConfig.user_type == price_tier", create_order_source)
-        self.assertLess(
-            create_order_source.index("inventory_change = await lock_certification_inventory"),
-            create_order_source.index("order = Order("),
+        self.assertIn("handler = order_handler_registry.get(data.order_kind)", create_order_source)
+        self.assertIn("price = await handler.validate(db, user_id=user_id, data=data)", create_order_source)
+        self.assertIn(
+            "inventory_id, inventory_change = await handler.lock_inventory",
+            create_order_source,
         )
-        self.assertIn("inventory_id = inventory_change.inventory_id", create_order_source)
         self.assertIn("inventory_id=inventory_id", create_order_source)
         self.assertIn("expires_at=expires_at", create_order_source)
         self.assertIn('status="pending"', create_order_source)
