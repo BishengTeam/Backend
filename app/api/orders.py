@@ -13,6 +13,7 @@ from app.schemas.order import (
     OrderStatus,
 )
 from app.services.order import OrderService
+from app.services.points_mall_services.checkout_service import CouponCheckoutService
 
 router = APIRouter(prefix="/orders", tags=["订单"])
 
@@ -118,7 +119,7 @@ async def apply_coupon(
     body: OrderApplyCouponRequest,
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[OrderCouponAppliedResponse]:
-    result = await OrderService().apply_coupon_to_order(
+    result = await CouponCheckoutService().apply(
         user_id=current_user.id,
         order_id=order_id,
         coupon_code=body.coupon_code,
