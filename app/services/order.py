@@ -13,19 +13,10 @@ from app.domain.order.src.index import (
     lock_certification_inventory,
     validate_extra_data,
 )
-from app.domain.user.src.index import UserRealname
 from app.schemas.common import PaginatedData
 from app.schemas.order import OrderCreate, OrderDetailResponse, OrderFilter, OrderResponse
-from app.services.agreement_template import ensure_accepted
 from app.utils.payment import generate_out_trade_no
 from app.services.order_handlers import order_handler_registry
-
-PRICE_TIER_NORMAL = "normal"
-PRICE_TIER_STUDENT = "student"
-
-
-def resolve_price_tier(user_type: str | None) -> str:
-    return PRICE_TIER_STUDENT if user_type == PRICE_TIER_STUDENT else PRICE_TIER_NORMAL
 
 
 class OrderService:
@@ -35,25 +26,6 @@ class OrderService:
             raise BusinessException("人社订单只能通过人社报名提交接口创建")
         async with get_db_ctx() as db:
             async with db.begin():
-                # 认证报名需要实名验证
-                if data.order_kind == "certification":
-                    identity = (
-                        await db.execute(
-                            select(UserRealname).where(
-                                UserRealname.user_id == user_id,
-                                UserRealname.status == "verified",
-                            )
-                        )
-                    ).scalar_one_or_none()
-                    if identity is None:
-                        raise BusinessException("请先完成实名认证")
-                    await ensure_accepted(
-                        db,
-                        user_id,
-                        "cert_registration",
-                        message="请先阅读并同意认证报名信息处理授权协议",
-                    )
-
                 # Use the order handler registry (OCP)
                 handler = order_handler_registry.get(data.order_kind)
                 price = await handler.validate(db, user_id=user_id, data=data)

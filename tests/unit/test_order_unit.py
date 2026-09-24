@@ -5,7 +5,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from app.schemas.order import OrderCreate, OrderFilter
-from app.services.order import resolve_price_tier
+from app.services.order_utils import resolve_price_tier
 from app.schemas.payment import PaymentPrepayResponse, PaymentSyncResponse
 
 
@@ -198,7 +198,7 @@ class OrderSystemTests(unittest.TestCase):
         self.assertNotIn("await db.commit()", create_order_source)
 
     def test_certification_order_requires_cert_registration_agreement(self):
-        source = (REPO_ROOT / "app/services/order.py").read_text("utf-8")
+        source = (REPO_ROOT / "app/services/order_handlers/certification.py").read_text("utf-8")
         self.assertIn('"cert_registration"', source)
         self.assertIn("请先阅读并同意认证报名信息处理授权协议", source)
 

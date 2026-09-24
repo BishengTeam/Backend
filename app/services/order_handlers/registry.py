@@ -16,6 +16,13 @@ class OrderHandlerRegistry:
                     f"Duplicate order handler registration for '{order_kind}': "
                     f"{cls._handlers[order_kind].__name__} and {handler_class.__name__}"
                 )
+            # Validate order_kind consistency at registration time
+            instance = handler_class()
+            if instance.order_kind != order_kind:
+                raise ValueError(
+                    f"Handler order_kind mismatch: registered as '{order_kind}' "
+                    f"but handler declares '{instance.order_kind}'"
+                )
             cls._handlers[order_kind] = handler_class
             return handler_class
         return decorator
@@ -26,13 +33,7 @@ class OrderHandlerRegistry:
         if handler_class is None:
             from app.port.exceptions import BusinessException
             raise BusinessException(f"不支持的订单类型: {order_kind}")
-        handler = handler_class()
-        if handler.order_kind != order_kind:
-            raise ValueError(
-                f"Handler order_kind mismatch: registered as '{order_kind}' "
-                f"but handler declares '{handler.order_kind}'"
-            )
-        return handler
+        return handler_class()
 
     @classmethod
     def supported_kinds(cls) -> list[str]:
