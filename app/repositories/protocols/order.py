@@ -1,6 +1,5 @@
 """Repository interface for order domain (ISP + DIP)."""
 
-from datetime import datetime
 from typing import Protocol
 
 from app.domain.order.src.index import Order

@@ -1,4 +1,4 @@
-"""SQLAlchemy implementation of PointsMallRepository."""
+"""SQLAlchemy implementations for points-mall repositories."""
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,13 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.points_mall.src import PointsMallItem, PointsMallRedemption
 
 
-class SqlAlchemyPointsMallRepository:
-    """Concrete repository using SQLAlchemy async session."""
+class SqlAlchemyPointsMallItemRepository:
+    """Concrete repository for coupon templates."""
 
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
-
-    # Templates
 
     async def get_item(self, item_id: int) -> PointsMallItem | None:
         return await self._db.get(PointsMallItem, item_id)
@@ -65,9 +63,14 @@ class SqlAlchemyPointsMallRepository:
         await self._db.refresh(item)
         return item
 
-    # Redemptions
 
-    async def get_redemption_by_code(
+class SqlAlchemyPointsMallRedemptionRepository:
+    """Concrete repository for user coupon redemptions."""
+
+    def __init__(self, db: AsyncSession) -> None:
+        self._db = db
+
+    async def get_by_code(
         self, coupon_code: str, user_id: int
     ) -> PointsMallRedemption | None:
         return (
@@ -79,7 +82,7 @@ class SqlAlchemyPointsMallRepository:
             )
         ).scalar_one_or_none()
 
-    async def get_redemption_for_update(
+    async def get_for_update(
         self, coupon_code: str, user_id: int
     ) -> PointsMallRedemption | None:
         return (
@@ -93,7 +96,7 @@ class SqlAlchemyPointsMallRepository:
             )
         ).scalar_one_or_none()
 
-    async def list_user_redemptions(self, user_id: int) -> list[PointsMallRedemption]:
+    async def list_by_user(self, user_id: int) -> list[PointsMallRedemption]:
         return list(
             (
                 await self._db.execute(
@@ -104,7 +107,7 @@ class SqlAlchemyPointsMallRepository:
             ).scalars().all()
         )
 
-    async def count_user_redemptions(self, user_id: int, item_id: int) -> int:
+    async def count_by_user_and_item(self, user_id: int, item_id: int) -> int:
         return (
             await self._db.scalar(
                 select(func.count())
@@ -116,9 +119,7 @@ class SqlAlchemyPointsMallRepository:
             )
         ) or 0
 
-    async def save_redemption(
-        self, redemption: PointsMallRedemption
-    ) -> PointsMallRedemption:
+    async def save(self, redemption: PointsMallRedemption) -> PointsMallRedemption:
         self._db.add(redemption)
         await self._db.flush()
         await self._db.refresh(redemption)
