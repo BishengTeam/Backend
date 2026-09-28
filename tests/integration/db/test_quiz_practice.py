@@ -770,6 +770,70 @@ async def test_shanghai_checkin_boundary_consecutive_days_and_immediate_stats(
         assert len(checkins) == 2
 
 
+async def test_checkin_points_failure_does_not_block_practice_submission(
+    quiz_practice_env,
+    monkeypatch,
+) -> None:
+    from sqlalchemy import text as sql_text
+
+    from app.services.points import PointsService
+
+    env = quiz_practice_env
+    category = await _create_category(env, "ptsfail")
+    await _create_questions(env, category, 1, suffix="ptsfail")
+
+    async def failing_grant(self, db, **kwargs):
+        # 在保存点内触发真实数据库错误（Postgres 会把事务置为 aborted），
+        # 验证积分失败不会连带练习提交失败。
+        await db.execute(sql_text("SELECT 1/0"))
+
+    monkeypatch.setattr(PointsService, "_grant_points_in_session", failing_grant)
+
+    session = await env.service.create_session(env.user.id, _normal_session(category.id, 1))
+    result = await env.service.submit_attempt(
+        env.user.id,
+        session.id,
+        _attempt(session.questions[0].session_question_id, "ptsfail-0001"),
+    )
+    assert result is not None
+
+    async with env.factory() as db:
+        checkin = (
+            await db.execute(
+                select(QuizCheckin).where(QuizCheckin.user_id == env.user.id)
+            )
+        ).scalar_one()
+        assert checkin.questions_completed == 1
+
+
+async def test_practice_flow_no_longer_grants_per_session_quiz_task_points(
+    quiz_practice_env,
+) -> None:
+    from app.domain.user.src.index import PointsHistory
+
+    env = quiz_practice_env
+    category = await _create_category(env, "notask")
+    await _create_questions(env, category, 1, suffix="notask")
+
+    session = await env.service.create_session(env.user.id, _normal_session(category.id, 1))
+    await env.service.submit_attempt(
+        env.user.id,
+        session.id,
+        _attempt(session.questions[0].session_question_id, "notask-0001"),
+    )
+    completed = await env.service.submit_session(env.user.id, session.id)
+    assert completed.status == "completed"
+
+    async with env.factory() as db:
+        actions = (
+            await db.execute(
+                select(PointsHistory.action_type).where(PointsHistory.user_id == env.user.id)
+            )
+        ).scalars().all()
+    assert "claim_quiz_task" not in actions
+    assert "claim_daily_checkin" in actions
+
+
 async def test_http_auth_validation_ownership_and_answer_visibility(
     quiz_practice_env,
     monkeypatch,

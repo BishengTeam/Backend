@@ -6,6 +6,7 @@ effects in the same transaction as the immutable attempt.
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
@@ -84,6 +85,8 @@ from app.schemas.quiz_contract import (
     QuizWrongBookItem,
     QuizWrongBookQuery,
 )
+
+logger = logging.getLogger(__name__)
 
 
 _ACTIVE = QuizCategoryStatus.ACTIVE.value
@@ -1158,21 +1161,6 @@ class QuizPracticeService:
                 session.last_answered_at = now
             session.lock_version += 1
 
-            # Award practice completion points if the user answered at least once.
-            if answered:
-                try:
-                    await PointsService()._grant_points_in_session(
-                        db,
-                        user_id=user_id,
-                        amount=10,
-                        action_type="claim_quiz_task",
-                        description=f"完成练习 +10积分",
-                        source_type="points_claim",
-                        source_id=f"quiz_task:{session_id}",
-                    )
-                except Exception:
-                    pass  # Points failure must not block session completion.
-
             await db.commit()
             return await self._serialize_session(db, session)
 
@@ -1295,18 +1283,26 @@ class QuizPracticeService:
         stats.consecutive_days = consecutive
 
         # Award daily check-in points (idempotent per user per day).
+        # SAVEPOINT 隔离积分发放：失败只回滚发放本身，不污染练习提交事务；
+        # 失败必须留下日志，便于事后审计漏发（quiz_checkin 与 points_history 对账）。
         try:
-            await PointsService()._grant_points_in_session(
-                db,
-                user_id=user_id,
-                amount=5,
-                action_type="claim_daily_checkin",
-                description=f"每日答题打卡 +5积分",
-                source_type="points_claim",
-                source_id=f"daily_checkin:{user_id}:{local_day.isoformat()}",
-            )
+            async with db.begin_nested():
+                await PointsService()._grant_points_in_session(
+                    db,
+                    user_id=user_id,
+                    amount=5,
+                    action_type="claim_daily_checkin",
+                    description=f"每日答题打卡 +5积分",
+                    source_type="points_claim",
+                    source_id=f"daily_checkin:{user_id}:{local_day.isoformat()}",
+                )
         except Exception:
-            pass  # Points failure must not block the practice submission.
+            logger.warning(
+                "daily checkin points grant failed: user_id=%s checkin_date=%s",
+                user_id,
+                local_day.isoformat(),
+                exc_info=True,
+            )
 
     async def _apply_wrong_book(
         self,

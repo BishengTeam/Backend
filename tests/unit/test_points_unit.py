@@ -20,7 +20,7 @@ EXPECTED_POINTS_ENDPOINTS = (
     ("POST", "/api/points/redeem"),
 )
 
-CLAIM_SCENES = ("daily_checkin", "quiz_task", "new_user", "activity")
+CLAIM_SCENES = ("daily_checkin", "new_user", "activity")
 REDEEM_TYPES = ("exam_discount", "course")
 ROUTE_METHODS = {"api_route", "delete", "get", "head", "options", "patch", "post", "put"}
 FORBIDDEN_HTTP_TYPES = {
@@ -178,6 +178,9 @@ class PointsSystemTests(unittest.TestCase):
                 self.assertEqual(claim.scene, scene)
         with self.assertRaises(ValidationError):
             claim_model(scene="unknown")
+        # quiz_task 已按产品决策移除：练习奖励只保留每日打卡 +5
+        with self.assertRaises(ValidationError):
+            claim_model(scene="quiz_task")
 
         activity = claim_model(scene="activity", source_id="activity-2026")
         self.assertEqual(activity.source_id, "activity-2026")
@@ -304,6 +307,21 @@ class PointsSystemTests(unittest.TestCase):
         self.assertIn("if account.balance < data.amount:", source)
         self.assertIn('raise BusinessException("积分余额不足")', source)
         self.assertIn("amount=-data.amount", source)
+
+    def test_daily_checkin_claim_key_matches_auto_grant_and_uses_business_timezone(self):
+        points_source = _read_text(_path("app/services/points.py"))
+        practice_source = _read_text(_path("app/services/quiz_practice.py"))
+
+        # 手动领取不得使用服务器本地时区 date.today()（P1）
+        self.assertNotIn("date.today()", points_source)
+        self.assertIn("from app.utils.quiz_helpers import today", points_source)
+
+        # 手动领取与自动打卡的幂等 source_id 必须同格式（P0）
+        self.assertIn('f"{scene}:{user_id}:{today().isoformat()}"', points_source)
+        self.assertIn(
+            'source_id=f"daily_checkin:{user_id}:{local_day.isoformat()}"',
+            practice_source,
+        )
 
     def test_points_model_and_migration_define_constraints(self):
         model_source = _read_text(_path("app/domain/user/src/model/points.py"))

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from datetime import date
-
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import BusinessException, NotFoundException
+from app.utils.quiz_helpers import today
 from app.domain.user.src.index import PointsHistory, User, UserPoints
 from app.schemas.common import PaginatedData
 from app.schemas.points import (
@@ -21,7 +20,6 @@ from app.schemas.points import (
 
 CLAIM_SCENE_POINTS: dict[str, int] = {
     "daily_checkin": 5,
-    "quiz_task": 10,
     "new_user": 20,
     "activity": 10,
 }
@@ -95,7 +93,7 @@ class PointsService:
         data: PointsClaimRequest,
     ) -> PointsClaimResponse:
         amount = CLAIM_SCENE_POINTS[data.scene]
-        source_id = self._claim_source_id(data.scene, data.source_id)
+        source_id = self._claim_source_id(data.scene, data.source_id, user_id=user_id)
         action_type = f"claim_{data.scene}"
         description = data.description or f"{data.scene} points claim"
 
@@ -245,9 +243,11 @@ class PointsService:
         return user
 
     @staticmethod
-    def _claim_source_id(scene: str, source_id: str | None) -> str:
-        if scene in {"daily_checkin", "quiz_task"}:
-            return f"{scene}:{date.today().isoformat()}"
+    def _claim_source_id(scene: str, source_id: str | None, *, user_id: int) -> str:
+        if scene == "daily_checkin":
+            # 必须与 quiz_practice 自动打卡发分的 source_id 格式完全一致（按用户 + 业务时区自然日），
+            # 否则同一天自动打卡与手动领取会绕过幂等检查重复发放积分。
+            return f"{scene}:{user_id}:{today().isoformat()}"
         if scene == "new_user":
             return "new_user:once"
         if scene == "activity":

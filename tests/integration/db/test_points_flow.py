@@ -178,6 +178,44 @@ async def test_concurrent_claim_points_only_grants_once(session_factory, app_con
     assert history_count == 1
 
 
+async def test_daily_checkin_claim_does_not_duplicate_auto_checkin_grant(
+    session_factory,
+    app_context,
+    test_prefix,
+):
+    from sqlalchemy import func, select
+
+    from app.domain.user.src.index import PointsHistory, UserPoints
+    from app.schemas.points import PointsClaimRequest
+    from app.utils.quiz_helpers import today
+
+    user_id = await _seed_user(session_factory, test_prefix)
+    service = app_context.points_module.PointsService()
+
+    # 模拟 quiz_practice 自动打卡发分：source_id 格式必须与 _upsert_checkin 完全一致
+    await service.grant_points(
+        user_id,
+        amount=5,
+        action_type="claim_daily_checkin",
+        description="每日答题打卡 +5积分",
+        source_type="points_claim",
+        source_id=f"daily_checkin:{user_id}:{today().isoformat()}",
+    )
+
+    claim = await service.claim_points(user_id, PointsClaimRequest(scene="daily_checkin"))
+
+    async with session_factory() as db:
+        account = (await db.execute(select(UserPoints).where(UserPoints.user_id == user_id))).scalar_one()
+        history_count = await db.scalar(
+            select(func.count()).select_from(PointsHistory).where(PointsHistory.user_id == user_id)
+        )
+
+    assert claim.claimed is False
+    assert claim.amount == 5
+    assert account.balance == 5
+    assert history_count == 1
+
+
 async def test_redeem_points_debits_balance_and_writes_history(
     session_factory,
     app_context,
