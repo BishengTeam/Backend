@@ -789,7 +789,7 @@ async def test_checkin_points_failure_does_not_block_practice_submission(
 
     monkeypatch.setattr(PointsService, "_grant_points_in_session", failing_grant)
 
-    session = await env.service.create_session(env.user.id, _normal_session(category.id, 1))
+    session = await env.service.create_session(env.user.id, _normal_session(category.id))
     result = await env.service.submit_attempt(
         env.user.id,
         session.id,
@@ -815,7 +815,7 @@ async def test_practice_flow_no_longer_grants_per_session_quiz_task_points(
     category = await _create_category(env, "notask")
     await _create_questions(env, category, 1, suffix="notask")
 
-    session = await env.service.create_session(env.user.id, _normal_session(category.id, 1))
+    session = await env.service.create_session(env.user.id, _normal_session(category.id))
     await env.service.submit_attempt(
         env.user.id,
         session.id,
