@@ -68,6 +68,10 @@ x-backend-environment: &backend_environment
   QUIZ_WORKER_MAX_RETRIES: ${QUIZ_WORKER_MAX_RETRIES:-5}
   QUIZ_METRICS_ENABLED: "true"
   QUIZ_METRICS_BEARER_TOKEN_FILE: /run/secrets/quiz_metrics_bearer_token
+  # AI chat backend (Dify); values come from runtime.env.
+  CHAT_BACKEND: ${CHAT_BACKEND:-disabled}
+  DIFY_API_BASE: ${DIFY_API_BASE:-}
+  DIFY_API_KEY: ${DIFY_API_KEY:-}
 
 x-backend-secrets: &backend_secrets
   - postgres_password
