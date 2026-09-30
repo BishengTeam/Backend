@@ -1,0 +1,215 @@
+"""NISP certification domain models.
+
+Mirrors the H3C domain pattern for offline computer-based exams.
+Batch configuration attaches to a generic Plan; registrations snapshot
+the candidate data required by the NISP Excel export template.
+"""
+
+from datetime import datetime
+
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.adapter.database import Base, TimestampMixin
+
+
+NISP_LEVELS = ("1", "2")
+
+NISP_MATERIAL_TYPES = (
+    "id_card_both_sides",   # 身份证双面 (all levels)
+    "portrait_photo",       # 寸照 (all levels)
+    "xuexin_report",        # 学籍报告 (level 2 only)
+    "application_form",     # NISP二级申请表模板 (level 2 only)
+)
+
+NISP_REGISTRATION_STATUSES = (
+    "pending_payment",
+    "pending_review",
+    "rejected_awaiting_resubmission",
+    "approved",
+    "cancelled",
+)
+
+NISP_REJECTION_REASONS = (
+    "image_unclear",
+    "image_incomplete",
+    "material_type_mismatch",
+    "id_number_mismatch",
+    "suspected_forged_material",
+    "application_form_incomplete",
+)
+
+
+class NispExamBatch(Base, TimestampMixin):
+    """NISP-specific configuration attached to a generic Plan (offline exam)."""
+
+    __tablename__ = "nisp_exam_batch"
+    __table_args__ = (
+        CheckConstraint(
+            "level IN ('1', '2')",
+            name="ck_nisp_batch_level",
+        ),
+        CheckConstraint(
+            "level1_price_cents >= 0 AND level2_price_cents >= 0",
+            name="ck_nisp_batch_prices_nonnegative",
+        ),
+        CheckConstraint(
+            "payment_timeout_minutes BETWEEN 1 AND 1440",
+            name="ck_nisp_payment_timeout",
+        ),
+        CheckConstraint(
+            "resubmission_window_hours BETWEEN 1 AND 720",
+            name="ck_nisp_resubmission_window",
+        ),
+        CheckConstraint(
+            "max_resubmissions BETWEEN 0 AND 10",
+            name="ck_nisp_max_resubmissions",
+        ),
+        CheckConstraint(
+            "max_material_bytes BETWEEN 1 AND 20971520",
+            name="ck_nisp_max_material_size",
+        ),
+        UniqueConstraint("plan_id", name="uq_nisp_batch_plan"),
+    )
+
+    plan_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("plan.id", ondelete="RESTRICT"), nullable=False
+    )
+    level: Mapped[str] = mapped_column(String(4), nullable=False, default="1")
+    training_org: Mapped[str | None] = mapped_column(String(128))
+    training_teacher: Mapped[str | None] = mapped_column(String(64))
+    training_address: Mapped[str | None] = mapped_column(String(256))
+    training_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    training_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    level1_price_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    level2_price_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    payment_timeout_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=30
+    )
+    resubmission_window_hours: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=72
+    )
+    max_resubmissions: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=2
+    )
+    max_material_bytes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=10 * 1024 * 1024
+    )
+
+
+class NispRegistration(Base, TimestampMixin):
+    """A user's NISP registration for a specific batch and level."""
+
+    __tablename__ = "nisp_registration"
+    __table_args__ = (
+        CheckConstraint(
+            "level IN ('1', '2')",
+            name="ck_nisp_registration_level",
+        ),
+        CheckConstraint(
+            "status IN ('pending_payment', 'pending_review', "
+            "'rejected_awaiting_resubmission', 'approved', 'cancelled')",
+            name="ck_nisp_registration_status",
+        ),
+        CheckConstraint("resubmission_count >= 0", name="ck_nisp_resub_count"),
+        CheckConstraint("rejection_count >= 0", name="ck_nisp_rejection_count"),
+        UniqueConstraint("registration_no", name="uq_nisp_registration_no"),
+        UniqueConstraint("order_id", name="uq_nisp_registration_order"),
+        Index(
+            "uq_nisp_registration_active_batch_idcard",
+            "batch_id",
+            "candidate_idcard",
+            unique=True,
+            postgresql_where=text(
+                "status IN ('pending_payment', 'pending_review', "
+                "'rejected_awaiting_resubmission', 'approved')"
+            ),
+        ),
+        Index("ix_nisp_registration_batch_status", "batch_id", "status"),
+        Index(
+            "ix_nisp_registration_resubmission_due",
+            "status",
+            "resubmission_due_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    batch_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("nisp_exam_batch.id", ondelete="RESTRICT"), nullable=False
+    )
+    plan_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("plan.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("user.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    order_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("order.id", ondelete="RESTRICT"), nullable=False
+    )
+    registration_no: Mapped[str] = mapped_column(String(40), nullable=False)
+    level: Mapped[str] = mapped_column(String(4), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+
+    # Snapshot matching NISP Excel export columns
+    candidate_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    candidate_idcard: Mapped[str] = mapped_column(
+        String(20), nullable=False, index=True
+    )
+
+    # Attached material storage keys (JSON list)
+    material_keys: Mapped[dict | None] = mapped_column(JSONB)
+
+    resubmission_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    rejection_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    resubmission_due_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    last_reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    close_reason: Mapped[str | None] = mapped_column(String(128))
+
+
+class NispReview(Base, TimestampMixin):
+    """Immutable review decision for a NISP registration."""
+
+    __tablename__ = "nisp_review"
+    __table_args__ = (
+        CheckConstraint(
+            "decision IN ('approved', 'rejected')",
+            name="ck_nisp_review_decision",
+        ),
+        Index("ix_nisp_review_registration", "registration_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    registration_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("nisp_registration.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(String(64))
+    reason_detail: Mapped[str | None] = mapped_column(Text)
+    rejected_material_types: Mapped[list | None] = mapped_column(JSONB)
+    material_version_ids: Mapped[list | None] = mapped_column(JSONB)
+    reviewer_admin_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("admin_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -16,6 +16,7 @@ from app.api.admin.classrooms import router as classrooms_router
 from app.api.admin.course_uploads import router as course_uploads_router
 from app.api.admin.orders import router as orders_router
 from app.api.admin.points_mall import router as points_mall_router
+from app.api.admin.nisp import router as nisp_router
 from app.api.admin.plans import router as plans_router
 from app.api.admin.reviews import router as reviews_router
 from app.api.admin.prices import router as prices_router
@@ -40,6 +41,7 @@ router.include_router(cert_products_router)
 router.include_router(users_router)
 router.include_router(orders_router)
 router.include_router(points_mall_router)
+router.include_router(nisp_router)
 router.include_router(reviews_router)
 router.include_router(courses_router)
 router.include_router(classrooms_router)
