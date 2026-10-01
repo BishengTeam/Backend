@@ -38,7 +38,10 @@ NISP_REGISTRATION_STATUSES = (
     "pending_payment",
     "pending_review",
     "rejected_awaiting_resubmission",
+    "pending_refund_confirmation",
+    "refund_processing",
     "approved",
+    "refunded_closed",
     "cancelled",
 )
 
@@ -120,7 +123,8 @@ class NispRegistration(Base, TimestampMixin):
         ),
         CheckConstraint(
             "status IN ('pending_payment', 'pending_review', "
-            "'rejected_awaiting_resubmission', 'approved', 'cancelled')",
+            "'rejected_awaiting_resubmission', 'pending_refund_confirmation', "
+            "'refund_processing', 'approved', 'refunded_closed', 'cancelled')",
             name="ck_nisp_registration_status",
         ),
         CheckConstraint("resubmission_count >= 0", name="ck_nisp_resub_count"),
@@ -134,7 +138,8 @@ class NispRegistration(Base, TimestampMixin):
             unique=True,
             postgresql_where=text(
                 "status IN ('pending_payment', 'pending_review', "
-                "'rejected_awaiting_resubmission', 'approved')"
+                "'rejected_awaiting_resubmission', 'pending_refund_confirmation', "
+                "'refund_processing', 'approved')"
             ),
         ),
         Index("ix_nisp_registration_batch_status", "batch_id", "status"),
@@ -213,3 +218,63 @@ class NispReview(Base, TimestampMixin):
         Integer, ForeignKey("admin_user.id", ondelete="RESTRICT"), nullable=False
     )
     reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class NispRefundRequest(Base, TimestampMixin):
+    """Refund request for a NISP registration."""
+
+    __tablename__ = "nisp_refund_request"
+    __table_args__ = (
+        CheckConstraint(
+            "request_kind IN ('review_failed', 'batch_cancelled', 'exception_close')",
+            name="ck_nisp_refund_kind",
+        ),
+        CheckConstraint(
+            "status IN ('requested', 'approved', 'processing', 'succeeded', 'failed')",
+            name="ck_nisp_refund_status",
+        ),
+        CheckConstraint(
+            "amount_cents >= 0", name="ck_nisp_refund_amount_nonnegative"
+        ),
+        Index("ix_nisp_refund_status", "status", "id"),
+        Index(
+            "uq_nisp_refund_active_order",
+            "order_id",
+            unique=True,
+            postgresql_where=text(
+                "status IN ('requested', 'approved', 'processing', 'failed')"
+            ),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    registration_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("nisp_registration.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    order_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("order.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("user.id", ondelete="RESTRICT"), nullable=False
+    )
+    request_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason_detail: Mapped[str | None] = mapped_column(Text)
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="requested")
+    requested_by_admin_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("admin_user.id")
+    )
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    approved_by_admin_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("admin_user.id")
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    out_refund_no: Mapped[str | None] = mapped_column(String(64), unique=True)
+    wechat_refund_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+    processing_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    succeeded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

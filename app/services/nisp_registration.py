@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
-from app.domain.nisp.src import NispExamBatch, NispRegistration, NispReview
+from app.domain.nisp.src import NispExamBatch, NispRegistration, NispReview, NispRefundRequest
 from app.domain.plan.src.index import Plan
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.nisp import (
@@ -321,10 +321,24 @@ class NispRegistrationService:
                         hours=batch.resubmission_window_hours if batch else 72
                     )
                 else:
-                    # Max resubmissions reached — treat as final rejection
-                    reg.status = "cancelled"
+                    # Max resubmissions reached — transition to refund flow
+                    from app.domain.order.src.index import Order
+                    order = await db.get(Order, reg.order_id)
+                    reg.status = "pending_refund_confirmation"
                     reg.closed_at = now
                     reg.close_reason = "review_failed_max_resubmissions"
+                    if order is not None:
+                        db.add(NispRefundRequest(
+                            registration_id=reg.id,
+                            order_id=reg.order_id,
+                            user_id=reg.user_id,
+                            request_kind="review_failed",
+                            reason_code=data.reason_code or "review_rejected",
+                            reason_detail=data.reason_detail,
+                            amount_cents=order.price,
+                            status="requested",
+                            requested_at=now,
+                        ))
 
             await db.commit()
             await db.refresh(reg)

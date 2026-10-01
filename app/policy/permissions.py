@@ -20,6 +20,7 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "nisp:batch_manage",
         "nisp:review",
         "nisp:export",
+        "nisp:refund",
     ],
     "course_admin": [
         "course:read",

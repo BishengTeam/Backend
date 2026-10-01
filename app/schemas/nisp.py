@@ -209,3 +209,29 @@ class NispExportJobResponse(BaseModel):
 class NispSignedUrlResponse(BaseModel):
     url: str
     expires_at: datetime
+
+
+class NispRefundResponse(BaseModel):
+    id: int
+    registration_id: int
+    order_id: int
+    request_kind: str
+    reason_code: str
+    reason_detail: str | None
+    amount_cents: int
+    status: str
+    requested_by_admin_id: int | None
+    requested_at: datetime
+    approved_by_admin_id: int | None
+    approved_at: datetime | None
+    out_refund_no: str | None
+    processing_at: datetime | None
+    succeeded_at: datetime | None
+    last_error: str | None
+    retry_count: int
+
+    model_config = {"from_attributes": True}
+
+
+class NispRefundConfirmRequest(BaseModel):
+    refund_id: int
