@@ -75,4 +75,5 @@ class TestRolePermissions:
             "nisp:batch_manage",
             "nisp:review",
             "nisp:export",
+            "nisp:refund",
         }
