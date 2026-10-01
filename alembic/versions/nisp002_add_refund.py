@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 
 revision: str = 'nisp002'
-down_revision: Union[str, Sequence[str], None] = 'quiz014_manual_checkin'
+down_revision: Union[str, Sequence[str], None] = 'quiz015_vendor_tag'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
