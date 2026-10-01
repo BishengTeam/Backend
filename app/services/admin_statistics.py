@@ -172,6 +172,96 @@ class AdminStatisticsService:
             )
         ).scalar() or 0
 
+        # ── 30-day trends ──
+        # Daily revenue
+        revenue_rows = (
+            await db.execute(
+                select(
+                    func.date_trunc("day", Order.created_at).label("day"),
+                    func.coalesce(func.sum(Order.price), 0).label("revenue"),
+                )
+                .where(
+                    Order.status.in_(["paid", "completed"]),
+                    Order.created_at >= thirty_days_ago,
+                )
+                .group_by("day")
+                .order_by("day")
+            )
+        ).all()
+        revenue_by_day = {str(r.day.date()): int(r.revenue) for r in revenue_rows}
+
+        # Daily new users
+        user_rows = (
+            await db.execute(
+                select(
+                    func.date_trunc("day", User.created_at).label("day"),
+                    func.count().label("count"),
+                )
+                .where(User.created_at >= thirty_days_ago)
+                .group_by("day")
+                .order_by("day")
+            )
+        ).all()
+        users_by_day = {str(r.day.date()): int(r.count) for r in user_rows}
+
+        # Daily quiz attempts
+        quiz_rows = (
+            await db.execute(
+                select(
+                    func.date_trunc("day", QuizPracticeAttempt.submitted_at).label("day"),
+                    func.count().label("count"),
+                )
+                .where(QuizPracticeAttempt.submitted_at >= thirty_days_ago)
+                .group_by("day")
+                .order_by("day")
+            )
+        ).all()
+        quiz_by_day = {str(r.day.date()): int(r.count) for r in quiz_rows}
+
+        # Build continuous 30-day series
+        from datetime import date as date_type
+        trend_dates = []
+        for i in range(30):
+            d = (now - timedelta(days=29 - i)).date()
+            trend_dates.append(d.isoformat())
+
+        revenue_trend = [
+            {"date": d, "value": revenue_by_day.get(d, 0)} for d in trend_dates
+        ]
+        user_trend = [
+            {"date": d, "value": users_by_day.get(d, 0)} for d in trend_dates
+        ]
+        quiz_trend = [
+            {"date": d, "value": quiz_by_day.get(d, 0)} for d in trend_dates
+        ]
+
+        # ── Order type distribution (pie chart) ──
+        order_type_rows = (
+            await db.execute(
+                select(
+                    Order.product_type,
+                    func.count().label("count"),
+                )
+                .where(Order.status.in_(["paid", "completed"]))
+                .group_by(Order.product_type)
+            )
+        ).all()
+        order_type_distribution = [
+            {"name": r.product_type, "value": int(r.count)} for r in order_type_rows
+        ]
+
+        # ── Certification status breakdown ──
+        cert_status = {
+            "h3c": {
+                "pending_review": h3c_pending_review,
+                "approved": h3c_approved,
+            },
+            "nisp": {
+                "pending_review": nisp_pending_review,
+                "approved": nisp_approved,
+            },
+        }
+
         return {
             "total_users": total_users,
             "total_orders": total_orders,
@@ -197,4 +287,10 @@ class AdminStatisticsService:
             "competition_registrations": competition_registrations,
             # Classroom
             "classrooms_active": classrooms_active,
+            # Trends
+            "revenue_trend": revenue_trend,
+            "user_trend": user_trend,
+            "quiz_trend": quiz_trend,
+            "order_type_distribution": order_type_distribution,
+            "cert_status": cert_status,
         }
