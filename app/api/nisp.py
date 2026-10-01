@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 
 from sqlalchemy import func, select
 
 from app.middleware.auth import get_current_user
 from app.domain.user.src.index import User
+from app.port.exceptions import BusinessException
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.nisp import (
     NispBatchListItem,
@@ -58,6 +59,41 @@ async def list_batches() -> APIResponse[list[NispBatchListItem]]:
                 max_material_bytes=batch.max_material_bytes,
             ))
         return success(data=items)
+
+
+@router.post("/materials/upload")
+async def upload_material(
+    material_type: str = Form(...),
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Upload a NISP registration material to OSS and return the storage key."""
+    from app.integrations.nisp_storage import NispObjectStorage
+
+    data = await file.read()
+    if not data:
+        raise BusinessException("文件不能为空")
+
+    # Validate type
+    allowed_types = ("id_card_both_sides", "portrait_photo", "xuexin_report", "application_form")
+    if material_type not in allowed_types:
+        raise BusinessException(f"不支持的材料类型: {material_type}")
+
+    # Upload to storage via NispObjectStorage
+    storage = NispObjectStorage()
+    storage_key, size_bytes, sha256 = await storage.save_source(
+        user_id=current_user.id,
+        filename=file.filename or "material",
+        content_type=file.content_type,
+        data=data,
+    )
+
+    return {
+        "material_type": material_type,
+        "storage_key": storage_key,
+        "size_bytes": size_bytes,
+        "sha256": sha256,
+    }
 
 
 @router.post("/orders", response_model=APIResponse[NispRegistrationResponse])
