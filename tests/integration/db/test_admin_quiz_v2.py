@@ -329,7 +329,15 @@ async def test_fixed_hierarchy_uniqueness_versions_and_bottom_up_delete(quiz_v2_
     assert library.library_code.startswith("QL")
     assert library.status == "draft"
     assert library.access_mode == "access_mode_pending"
+    assert library.vendor_tag == "none"
     assert library.v2_enabled is False
+
+    library = await env.service.update_library(
+        library.id,
+        AdminQuizLibraryUpdate(lock_version=library.lock_version, vendor_tag="h3c"),
+        admin_id=env.admin_id,
+    )
+    assert library.vendor_tag == "h3c"
 
     module = await env.service.create_module(
         AdminQuizModuleCreate(library_id=library.id, name="基础模块"),

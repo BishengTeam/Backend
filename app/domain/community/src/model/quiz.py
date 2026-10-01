@@ -118,6 +118,10 @@ class QuizLibrary(Base, _QuizTimestampMixin):
             name="ck_quiz_library_access_mode",
         ),
         CheckConstraint(
+            "vendor_tag IN ('h3c', 'nisp', 'sangfor', 'none')",
+            name="ck_quiz_library_vendor_tag",
+        ),
+        CheckConstraint(
             "system_kind IN ('none', 'migration_quarantine')",
             name="ck_quiz_library_system_kind",
         ),
@@ -158,6 +162,9 @@ class QuizLibrary(Base, _QuizTimestampMixin):
     details: Mapped[str | None] = mapped_column(Text)
     access_mode: Mapped[str] = mapped_column(
         String(32), nullable=False, default="access_mode_pending", server_default="access_mode_pending"
+    )
+    vendor_tag: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="none", server_default="none"
     )
     system_kind: Mapped[str] = mapped_column(
         String(32), nullable=False, default="none", server_default="none"

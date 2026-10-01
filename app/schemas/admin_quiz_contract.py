@@ -670,6 +670,7 @@ class AdminQuizLibraryCreate(QuizContractModel):
     cover_url: str | None = Field(default=None, max_length=512)
     details: str | None = Field(default=None, max_length=10000)
     access_mode: QuizLibraryAccessMode = QuizLibraryAccessMode.PENDING
+    vendor_tag: Literal["h3c", "nisp", "sangfor", "none"] = "none"
     sort_order: int = 0
 
     @field_validator("name")
@@ -685,6 +686,7 @@ class AdminQuizLibraryUpdate(QuizContractModel):
     cover_url: str | None = Field(default=None, max_length=512)
     details: str | None = Field(default=None, max_length=10000)
     access_mode: QuizLibraryAccessMode | None = None
+    vendor_tag: Literal["h3c", "nisp", "sangfor", "none"] | None = None
     v2_enabled: bool | None = None
     sort_order: int | None = None
 
@@ -761,6 +763,7 @@ class AdminQuizLibraryResponse(QuizContractModel):
     cover_url: str | None = None
     details: str | None = None
     access_mode: QuizLibraryAccessMode
+    vendor_tag: Literal["h3c", "nisp", "sangfor", "none"]
     price_cents: int = Field(default=0, ge=0)
     system_kind: Literal["none", "migration_quarantine"]
     migration_state: Literal["pending_review", "needs_organization", "ready"]

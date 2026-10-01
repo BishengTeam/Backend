@@ -271,6 +271,7 @@ class QuizV2Service:
             description=library.description or "",
             cover_url=library.cover_url or "",
             access_mode=library.access_mode,
+            vendor_tag=library.vendor_tag,
             question_count=question_count,
             module_count=module_count,
         )

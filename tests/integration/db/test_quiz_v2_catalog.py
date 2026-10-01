@@ -360,6 +360,7 @@ async def test_catalog_hides_unentitled_course_library(quiz_v2_catalog_env) -> N
     await _grant_entitlement(env)
     visible = await env.user_service.list_libraries(env.user_id)
     assert [item.id for item in visible] == [env.library.id]
+    assert all(item.vendor_tag in {"h3c", "nisp", "sangfor", "none"} for item in visible)
     detail = await env.user_service.get_library(env.user_id, env.library.id)
     assert detail.modules[0].knowledge_points[0].id == env.point.id
 

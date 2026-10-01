@@ -114,6 +114,7 @@ class QuizLibraryCatalogItem(QuizContractModel):
     description: str
     cover_url: str
     access_mode: Literal["free", "course_entitlement", "paid"]
+    vendor_tag: Literal["h3c", "nisp", "sangfor", "none"]
     question_count: int = Field(ge=1)
     module_count: int = Field(ge=1)
 

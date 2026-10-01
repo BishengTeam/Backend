@@ -162,6 +162,7 @@ class AdminQuizV2Service:
             "cover_url": library.cover_url,
             "details": library.details,
             "access_mode": library.access_mode,
+            "vendor_tag": library.vendor_tag,
             "status": library.status,
             "v2_enabled": library.v2_enabled,
             "sort_order": library.sort_order,
@@ -436,6 +437,7 @@ class AdminQuizV2Service:
             cover_url=library.cover_url,
             details=library.details,
             access_mode=library.access_mode,
+            vendor_tag=library.vendor_tag,
             system_kind=library.system_kind,
             migration_state=library.migration_state,
             status=library.status,
@@ -500,6 +502,7 @@ class AdminQuizV2Service:
             cover_url=data.cover_url,
             details=data.details,
             access_mode=str(data.access_mode),
+            vendor_tag=str(data.vendor_tag),
             system_kind="none",
             migration_state="ready",
             status="draft",
@@ -557,6 +560,8 @@ class AdminQuizV2Service:
                 library.normalized_name = library.name
             if "access_mode" in fields and data.access_mode is not None:
                 library.access_mode = str(data.access_mode)
+            if "vendor_tag" in fields and data.vendor_tag is not None:
+                library.vendor_tag = str(data.vendor_tag)
             if "v2_enabled" in fields and data.v2_enabled is not None:
                 library.v2_enabled = data.v2_enabled
             if library.v2_enabled and ({"access_mode", "v2_enabled"} & fields):
