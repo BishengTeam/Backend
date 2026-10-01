@@ -72,4 +72,7 @@ class TestRolePermissions:
             "h3c:export",
             "h3c:refund",
             "h3c:order_close",
+            "nisp:batch_manage",
+            "nisp:review",
+            "nisp:export",
         }
