@@ -6,6 +6,8 @@ from sqlalchemy import select
 from app.middleware.auth import require_permission
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.nisp import (
+    NispExportCreate,
+    NispExportJobResponse,
     NispRefundResponse,
     NispExamBatchCreate,
     NispExamBatchResponse,
@@ -108,50 +110,42 @@ async def review_registration(
     return success(data=await _service.review(admin_id=_admin.id, registration_id=registration_id, data=body))
 
 
-@router.get("/export")
-async def export_registrations(
-    batch_id: int = Query(...),
-    level: str = Query(...),
-    status: str = Query("approved"),
+@router.post("/export", response_model=APIResponse[NispExportJobResponse])
+async def create_export_job(
+    body: NispExportCreate,
     _admin=Depends(require_permission("nisp:export")),
 ):
-    """Export NISP registrations as Excel matching the official template."""
-    import hashlib
-    from fastapi.responses import StreamingResponse
-    import io
-
-    from app.adapter.database import get_db_ctx
-    from app.domain.nisp.src import NispRegistration
-
-    async with get_db_ctx() as db:
-        registrations = (
-            await db.execute(
-                select(NispRegistration)
-                .where(
-                    NispRegistration.batch_id == batch_id,
-                    NispRegistration.level == level,
-                    NispRegistration.status == status,
-                )
-                .order_by(NispRegistration.id.asc())
-            )
-        ).scalars().all()
-
-    if not registrations:
-        from app.port.exceptions import BusinessException
-        raise BusinessException("没有符合条件的报名记录")
-
-    excel_bytes = NispExportService().build_excel(
-        list(registrations), level=level
+    """Create an async NISP export job."""
+    result = await NispExportService().create_job(
+        admin_id=_admin.id,
+        batch_id=body.batch_id,
+        level=body.level,
+        include_statuses=body.include_statuses,
     )
+    return success(data=result)
 
-    level_label = "一级" if level == "1" else "二级"
-    filename = f"NISP{level_label}报名表-{datetime.now().strftime('%Y%m%d')}.xlsx"
 
-    return StreamingResponse(
-        io.BytesIO(excel_bytes),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+@router.get("/export/jobs", response_model=APIResponse)
+async def list_export_jobs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    _admin=Depends(require_permission("nisp:export")),
+):
+    """List NISP export jobs."""
+    from app.schemas.common import PaginatedData
+    items, total = await NispExportService().list_jobs(page=page, page_size=page_size)
+    return success(data=PaginatedData(items=items, total=total, page=page, page_size=page_size))
+
+
+@router.get("/export/jobs/{job_id}/signed-url", response_model=APIResponse)
+async def get_export_signed_url(
+    job_id: int,
+    _admin=Depends(require_permission("nisp:export")),
+):
+    """Get a signed download URL for a completed export."""
+    from app.schemas.nisp import NispSignedUrlResponse
+    url = await NispExportService().signed_url(job_id)
+    return success(data=NispSignedUrlResponse(url=url, expires_at=_now() + timedelta(hours=1)))
 
 
 @router.get("/refunds", response_model=APIResponse)
