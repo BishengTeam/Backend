@@ -3,7 +3,9 @@ from app.domain.nisp.src.model import (
     NispRegistration,
     NispReview,
     NispRefundRequest,
+    NispExportJob,
 )
 
 __all__ = ["NispExamBatch", "NispRegistration", "NispReview",
-    "NispRefundRequest"]
+    "NispRefundRequest",
+    "NispExportJob"]

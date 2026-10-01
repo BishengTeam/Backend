@@ -278,3 +278,49 @@ class NispRefundRequest(Base, TimestampMixin):
     succeeded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class NispExportJob(Base, TimestampMixin):
+    """Async export job for NISP registration Excel."""
+
+    __tablename__ = "nisp_export_job"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'failed')",
+            name="ck_nisp_export_job_status",
+        ),
+        CheckConstraint(
+            "level IN ('1', '2')",
+            name="ck_nisp_export_level",
+        ),
+        CheckConstraint(
+            "registration_count >= 0",
+            name="ck_nisp_export_count_nonnegative",
+        ),
+        Index("ix_nisp_export_status", "status", "id"),
+        Index("ix_nisp_export_expires", "status", "expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    batch_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("nisp_exam_batch.id", ondelete="RESTRICT"), nullable=False
+    )
+    level: Mapped[str] = mapped_column(String(4), nullable=False)
+    requested_by_admin_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("admin_user.id", ondelete="RESTRICT"), nullable=False
+    )
+    include_statuses: Mapped[list] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="queued"
+    )
+    registration_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    storage_key: Mapped[str | None] = mapped_column(String(512))
+    artifact_sha256: Mapped[str | None] = mapped_column(String(64))
+    artifact_bytes: Mapped[int | None] = mapped_column(Integer)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)

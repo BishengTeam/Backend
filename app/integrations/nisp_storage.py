@@ -97,3 +97,20 @@ class NispObjectStorage:
             connect_timeout=5,
         )
         await asyncio.to_thread(bucket.put_object, key, data, headers={"Content-Type": content_type})
+
+    async def save_export(self, *, storage_key: str, data: bytes) -> None:
+        await self._put(storage_key, data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    async def delete_object(self, storage_key: str) -> None:
+        if self.storage_type == "local":
+            from pathlib import Path
+            target = Path(settings.RENSHE_STORAGE_LOCAL_ROOT) / storage_key
+            target.unlink(missing_ok=True)
+            return
+        if self.storage_type != "aliyun_oss":
+            raise ThirdPartyException("NISP OSS 未配置")
+        import asyncio
+        import oss2
+        auth = oss2.Auth(settings.OSS_ACCESS_KEY_ID, settings.OSS_ACCESS_KEY_SECRET)
+        bucket = oss2.Bucket(auth, settings.OSS_ENDPOINT, settings.OSS_BUCKET_NAME, connect_timeout=5)
+        await asyncio.to_thread(bucket.delete_object, storage_key)
