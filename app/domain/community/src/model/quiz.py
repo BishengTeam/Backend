@@ -1034,7 +1034,7 @@ class QuizCheckin(Base, _QuizTimestampMixin):
     __tablename__ = "quiz_checkin"
     __table_args__ = (
         CheckConstraint(
-            "questions_completed >= 1", name="ck_quiz_checkin_questions_completed"
+            "questions_completed >= 0", name="ck_quiz_checkin_questions_completed"
         ),
         CheckConstraint("consecutive_days >= 1", name="ck_quiz_checkin_consecutive_days"),
         UniqueConstraint("user_id", "checkin_date", name="uq_quiz_checkin_user_date"),
@@ -1047,10 +1047,10 @@ class QuizCheckin(Base, _QuizTimestampMixin):
     checkin_date: Mapped[date] = mapped_column(Date, nullable=False)
     questions_completed: Mapped[int] = mapped_column(Integer, nullable=False)
     consecutive_days: Mapped[int] = mapped_column(Integer, nullable=False)
-    first_attempt_id: Mapped[int] = mapped_column(
+    first_attempt_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("quiz_practice_attempt.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
 
 

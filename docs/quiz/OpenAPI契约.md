@@ -108,6 +108,7 @@
 | POST | `/api/quiz/collections` | `QuizCollectionCreate` | `QuizCollectionMutationResponse` |
 | DELETE | `/api/quiz/collections/{question_id}` | 无 | `QuizCollectionMutationResponse` |
 | GET | `/api/quiz/checkin` | 无 | `QuizCheckinStatusResponse` |
+| POST | `/api/quiz/checkin` | 无 | `QuizCheckinStatusResponse` |
 | GET | `/api/quiz/checkin/calendar` | `QuizCheckinCalendarQuery` | `list[QuizCheckinDay]` |
 | GET | `/api/quiz/stats` | 无 | `QuizStatsResponse` |
 | POST | `/api/quiz/exams` | `QuizExamCreate` | `QuizExamDetailResponse` |
@@ -141,6 +142,7 @@ GET /api/quiz/collections
 POST /api/quiz/collections
 DELETE /api/quiz/collections/{question_id}
 GET /api/quiz/checkin
+POST /api/quiz/checkin
 GET /api/quiz/checkin/calendar
 GET /api/quiz/stats
 POST /api/quiz/exams
@@ -324,7 +326,6 @@ POST /admin/quiz/imports/88/retry
 - `POST /api/quiz/submit`
 - `POST /api/quiz/wrong-book`
 - `DELETE /api/quiz/wrong-book/{id}`
-- `POST /api/quiz/checkin`
 - 旧 `/api/quiz/exam/*`
 - `GET /api/quiz/progress`
 - `GET /api/quiz/recent`

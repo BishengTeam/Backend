@@ -35,6 +35,7 @@ EXPECTED_QUIZ_ENDPOINTS = (
     ("POST", "/api/quiz/collections"),
     ("DELETE", "/api/quiz/collections/{question_id}"),
     ("GET", "/api/quiz/checkin"),
+    ("POST", "/api/quiz/checkin"),
     ("GET", "/api/quiz/checkin/calendar"),
     ("GET", "/api/quiz/stats"),
     ("POST", "/api/quiz/exams"),
@@ -50,7 +51,6 @@ REMOVED_PRACTICE_ENDPOINTS = (
     ("POST", "/api/quiz/submit"),
     ("POST", "/api/quiz/wrong-book"),
     ("DELETE", "/api/quiz/wrong-book/{id}"),
-    ("POST", "/api/quiz/checkin"),
 )
 
 ROUTE_METHODS = {"api_route", "delete", "get", "head", "options", "patch", "post", "put"}

@@ -1848,6 +1848,94 @@ class QuizPracticeService:
                 for row in rows
             ]
 
+    async def manual_checkin(self, user_id: int) -> QuizCheckinStatusResponse:
+        """手动打卡：无需练习作答即可创建当天打卡记录。
+
+        与练习自动打卡共用同一套约束和积分幂等键
+        （``daily_checkin:{user_id}:{业务时区自然日}``），
+        因此手动与自动在同一天互相幂等，合计只发一次 5 积分。
+        """
+        now = self._now()
+        local_day = self._local_date(now)
+        async with get_db_ctx() as db:
+            await self._lock_user(db, user_id)
+            stats = await self._ensure_stats(db, user_id)
+            checkin = (
+                await db.execute(
+                    select(QuizCheckin)
+                    .where(
+                        QuizCheckin.user_id == user_id,
+                        QuizCheckin.checkin_date == local_day,
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if checkin is not None:
+                # 当天已打卡（手动或练习自动）时幂等返回，不重复发分。
+                return QuizCheckinStatusResponse(
+                    checkin_date=local_day,
+                    checked_in=True,
+                    questions_completed=int(checkin.questions_completed),
+                    consecutive_days=int(checkin.consecutive_days),
+                )
+
+            previous = (
+                await db.execute(
+                    select(QuizCheckin)
+                    .where(
+                        QuizCheckin.user_id == user_id,
+                        QuizCheckin.checkin_date < local_day,
+                    )
+                    .order_by(QuizCheckin.checkin_date.desc(), QuizCheckin.id.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            consecutive = (
+                int(previous.consecutive_days) + 1
+                if previous is not None
+                and previous.checkin_date == local_day - timedelta(days=1)
+                else 1
+            )
+            db.add(
+                QuizCheckin(
+                    user_id=user_id,
+                    checkin_date=local_day,
+                    questions_completed=0,
+                    consecutive_days=consecutive,
+                    first_attempt_id=None,
+                )
+            )
+            stats.checkin_days += 1
+            stats.consecutive_days = consecutive
+
+            # 与 _upsert_checkin 保持一致：SAVEPOINT 隔离积分发放，
+            # 失败只回滚发放本身，不阻断手动打卡；日志用于事后对账补发。
+            try:
+                async with db.begin_nested():
+                    await PointsService()._grant_points_in_session(
+                        db,
+                        user_id=user_id,
+                        amount=5,
+                        action_type="claim_daily_checkin",
+                        description=f"每日答题打卡 +5积分",
+                        source_type="points_claim",
+                        source_id=f"daily_checkin:{user_id}:{local_day.isoformat()}",
+                    )
+            except Exception:
+                logger.warning(
+                    "manual checkin points grant failed: user_id=%s checkin_date=%s",
+                    user_id,
+                    local_day.isoformat(),
+                    exc_info=True,
+                )
+            await db.commit()
+            return QuizCheckinStatusResponse(
+                checkin_date=local_day,
+                checked_in=True,
+                questions_completed=0,
+                consecutive_days=consecutive,
+            )
+
     async def _latest_attempt_accuracy(
         self,
         db,

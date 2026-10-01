@@ -625,6 +625,26 @@ async def get_checkin_status(
     return success(data=result)
 
 
+@router.post("/checkin",
+    response_model=APIResponse[QuizCheckinStatusResponse],
+    summary="手动打卡",
+    description="""
+小程序 **打卡日历** 页面使用。
+
+**使用场景**: 无需练习作答，手动完成当日打卡；当天已打卡（手动或练习自动）时幂等返回当前状态
+
+**响应**: 打卡状态，含今日是否已打卡、连续打卡天数
+
+**认证**: 需登录
+    """,
+)
+async def manual_checkin(
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[QuizCheckinStatusResponse]:
+    result = await QuizPracticeService().manual_checkin(current_user.id)
+    return success(data=result)
+
+
 @router.get("/checkin/calendar",
     response_model=APIResponse[list[QuizCheckinDay]],
     summary="签到日历",

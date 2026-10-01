@@ -329,6 +329,12 @@ QUIZ_API_CONTRACTS: tuple[QuizEndpointContract, ...] = (
         APIResponse[QuizCheckinStatusResponse],
     ),
     QuizEndpointContract(
+        "POST",
+        "/api/quiz/checkin",
+        "user",
+        APIResponse[QuizCheckinStatusResponse],
+    ),
+    QuizEndpointContract(
         "GET",
         "/api/quiz/checkin/calendar",
         "user",
@@ -848,7 +854,6 @@ QUIZ_API_CONTRACTS: tuple[QuizEndpointContract, ...] = (
 DELETED_QUIZ_ENDPOINTS: tuple[tuple[str, str], ...] = (
     ("POST", "/api/quiz/submit"),
     ("POST", "/api/quiz/wrong-book"),
-    ("POST", "/api/quiz/checkin"),
     ("POST", "/api/quiz/exam/start"),
     ("POST", "/api/quiz/exam/submit"),
     ("GET", "/api/quiz/exam/history"),

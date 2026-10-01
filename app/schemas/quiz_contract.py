@@ -474,7 +474,7 @@ class QuizCheckinCalendarQuery(QuizContractModel):
 
 class QuizCheckinDay(QuizContractModel):
     checkin_date: date
-    questions_completed: int = Field(ge=1)
+    questions_completed: int = Field(ge=0)
     consecutive_days: int = Field(ge=1)
 
 
