@@ -31,6 +31,7 @@ class CompetitionListItem(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+    custom_fields: list[dict] | None = None
 
 
 class CompetitionSignupRequest(BaseModel):
@@ -38,6 +39,7 @@ class CompetitionSignupRequest(BaseModel):
     school: str = Field(..., min_length=1, max_length=128, description="学校")
     real_name: str = Field(..., min_length=1, max_length=64, description="真实姓名")
     phone: str = Field(..., min_length=1, max_length=20, description="联系电话")
+    custom_field_values: dict | None = Field(None, description="自定义字段值")
 
 
 class CompetitionRegResponse(BaseModel):
@@ -47,6 +49,7 @@ class CompetitionRegResponse(BaseModel):
     track: str | None = None
     real_name: str | None = None
     phone: str | None = None
+    custom_field_values: dict | None = None
     created_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)

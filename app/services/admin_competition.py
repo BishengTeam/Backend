@@ -18,6 +18,7 @@ from app.schemas.admin_competition import (
 )
 from app.schemas.common import PaginatedData
 from app.services.competition import _track_briefs
+from app.schemas.competition_form import validate_custom_fields
 
 
 class AdminCompetitionService:
@@ -94,6 +95,9 @@ class AdminCompetitionService:
                     end_time=data.end_time,
                     registration_deadline=data.registration_deadline,
                     is_active=data.is_active,
+                    custom_fields=validate_custom_fields(
+                        data.custom_fields if hasattr(data, "custom_fields") else None
+                    ),
                 )
                 db.add(competition)
                 await db.flush()
@@ -113,7 +117,7 @@ class AdminCompetitionService:
                     k: getattr(competition, k)
                     for k in (
                         "id", "name", "description", "cover_url", "start_time",
-                        "end_time", "registration_deadline", "is_active",
+                        "end_time", "registration_deadline", "is_active", "custom_fields", "custom_fields",
                         "created_at",
                     )
                 },
@@ -131,6 +135,9 @@ class AdminCompetitionService:
                     raise NotFoundException("赛事")
                 update_data = data.model_dump(exclude_unset=True)
                 tracks_input = update_data.pop("tracks", None)
+                custom_fields_input = update_data.pop("custom_fields", None)
+                if custom_fields_input is not None:
+                    competition.custom_fields = validate_custom_fields(custom_fields_input)
                 for key, value in update_data.items():
                     setattr(competition, key, value)
                 if tracks_input is not None:
@@ -161,7 +168,7 @@ class AdminCompetitionService:
                     k: getattr(competition, k)
                     for k in (
                         "id", "name", "description", "cover_url", "start_time",
-                        "end_time", "registration_deadline", "is_active",
+                        "end_time", "registration_deadline", "is_active", "custom_fields", "custom_fields",
                         "created_at",
                     )
                 },
