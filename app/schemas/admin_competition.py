@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.schemas.competition import CompetitionTrackBrief
+from app.schemas.competition_form import FormFieldConfig
 
 
 class AdminCompetitionTrackInput(BaseModel):
@@ -20,6 +21,7 @@ class AdminCompetitionCreate(BaseModel):
     registration_deadline: datetime | None = None
     is_active: bool = True
     tracks: list[AdminCompetitionTrackInput] = Field(default_factory=list)
+    custom_fields: list[FormFieldConfig] | None = None
 
 
 class AdminCompetitionUpdate(BaseModel):
@@ -28,6 +30,7 @@ class AdminCompetitionUpdate(BaseModel):
     cover_url: str | None = Field(None, max_length=512)
     start_time: datetime | None = None
     end_time: datetime | None = None
+    custom_fields: list[FormFieldConfig] | None = None
     registration_deadline: datetime | None = None
     is_active: bool | None = None
     tracks: list[AdminCompetitionTrackInput] | None = None
@@ -45,6 +48,7 @@ class AdminCompetitionListItem(BaseModel):
     tracks: list[CompetitionTrackBrief] = Field(default_factory=list)
     total_enrolled: int = 0
     created_at: datetime
+    custom_fields: list[dict] | None = None
 
 
 class AdminCompetitionRegistrationItem(BaseModel):

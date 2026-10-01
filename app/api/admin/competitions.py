@@ -94,3 +94,15 @@ async def list_registrations(
         competition_id, track_id, page, page_size
     )
     return success(data=result)
+
+
+@router.get("/form-field-presets",
+    response_model=APIResponse,
+    summary="获取预设表单字段",
+    description="获取可快速添加的预设竞赛报名表单字段列表",
+)
+async def get_form_field_presets(
+    _admin=Depends(require_permission("competition:list")),
+):
+    from app.schemas.competition_form import PRESET_FIELDS
+    return success(data=PRESET_FIELDS)

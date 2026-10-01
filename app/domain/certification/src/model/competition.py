@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.adapter.database import Base, TimestampMixin
@@ -18,6 +19,7 @@ class Competition(Base, TimestampMixin):
     end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     registration_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    custom_fields: Mapped[list | None] = mapped_column(JSONB, nullable=True, default=list, server_default="[]")
 
 
 class CompetitionTrack(Base, TimestampMixin):
@@ -46,3 +48,4 @@ class CompetitionReg(Base, TimestampMixin):
     )
     real_name: Mapped[str | None] = mapped_column(String(64))
     phone: Mapped[str | None] = mapped_column(String(20))
+    custom_field_values: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=dict, server_default="{}")

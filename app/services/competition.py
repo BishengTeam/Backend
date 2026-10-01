@@ -11,6 +11,7 @@ from app.domain.certification.src.index import (
     CompetitionTrack,
 )
 from app.port.exceptions import BusinessException, NotFoundException
+from app.schemas.competition_form import validate_field_values
 from app.schemas.competition import (
     CompetitionListItem,
     CompetitionSignupRequest,
@@ -122,7 +123,14 @@ class CompetitionService:
             if existing is not None:
                 raise BusinessException("已报名过该赛道")
 
+                        # Validate custom field values
+            validated_custom = validate_field_values(
+                competition.custom_fields,
+                data.custom_field_values if hasattr(data, "custom_field_values") else None,
+            )
+
             reg = CompetitionReg(
+                custom_field_values=validated_custom,
                 user_id=user_id,
                 competition_name=competition.name,
                 school=data.school,
