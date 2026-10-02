@@ -7,6 +7,9 @@ from app.schemas.competition_form import FormFieldConfig
 
 
 class AdminCompetitionTrackInput(BaseModel):
+    """赛道输入；更新时携带 id 表示沿用原赛道（保留报名关联）。"""
+
+    id: int | None = Field(None, ge=1)
     name: str = Field(..., min_length=1, max_length=64)
     max_participants: int = Field(0, ge=0)
     sort_order: int = Field(0, ge=0)

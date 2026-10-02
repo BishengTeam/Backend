@@ -64,22 +64,23 @@ class AdminCompetitionService:
                     .limit(page_size)
                 )
             ).scalars().all()
-            items = [
-                AdminCompetitionListItem(
-                    id=c.id,
-                    name=c.name,
-                    description=c.description,
-                    cover_url=c.cover_url,
-                    start_time=c.start_time,
-                    end_time=c.end_time,
-                    registration_deadline=c.registration_deadline,
-                    is_active=c.is_active,
-                    tracks=await _track_briefs(db, c.id),
-                    total_enrolled=sum(t.enrolled for t in await _track_briefs(db, c.id)),
-                    created_at=c.created_at,
+            items: list[AdminCompetitionListItem] = []
+            for c in rows:
+                tracks = await _track_briefs(db, c.id)
+                items.append(
+                    AdminCompetitionListItem(
+                        **{
+                            k: getattr(c, k)
+                            for k in (
+                                "id", "name", "description", "cover_url", "start_time",
+                                "end_time", "registration_deadline", "is_active",
+                                "custom_fields", "created_at",
+                            )
+                        },
+                        tracks=tracks,
+                        total_enrolled=sum(t.enrolled for t in tracks),
+                    )
                 )
-                for c in rows
-            ]
             return PaginatedData(
                 items=items, total=total, page=page, page_size=page_size
             )
@@ -117,7 +118,7 @@ class AdminCompetitionService:
                     k: getattr(competition, k)
                     for k in (
                         "id", "name", "description", "cover_url", "start_time",
-                        "end_time", "registration_deadline", "is_active", "custom_fields", "custom_fields",
+                        "end_time", "registration_deadline", "is_active", "custom_fields",
                         "created_at",
                     )
                 },
@@ -141,7 +142,8 @@ class AdminCompetitionService:
                 for key, value in update_data.items():
                     setattr(competition, key, value)
                 if tracks_input is not None:
-                    # 赛道全量替换
+                    # 赛道差量同步：按 id 更新原赛道（保留 competition_reg.track_id
+                    # 关联与报名去重），仅删除真正被移除的赛道，新增无 id 的赛道。
                     existing = (
                         await db.execute(
                             select(CompetitionTrack).where(
@@ -149,18 +151,29 @@ class AdminCompetitionService:
                             )
                         )
                     ).scalars().all()
-                    for t in existing:
-                        await db.delete(t)
-                    await db.flush()
+                    existing_by_id = {t.id: t for t in existing}
+                    kept_ids: set[int] = set()
                     for t in tracks_input:
-                        db.add(
-                            CompetitionTrack(
-                                competition_id=competition_id,
-                                name=t["name"],
-                                max_participants=t["max_participants"],
-                                sort_order=t["sort_order"],
+                        track_id = t.get("id")
+                        track_obj = existing_by_id.get(track_id) if track_id is not None else None
+                        if track_obj is not None:
+                            track_obj.name = t["name"]
+                            track_obj.max_participants = t["max_participants"]
+                            track_obj.sort_order = t["sort_order"]
+                            kept_ids.add(track_obj.id)
+                        else:
+                            db.add(
+                                CompetitionTrack(
+                                    competition_id=competition_id,
+                                    name=t["name"],
+                                    max_participants=t["max_participants"],
+                                    sort_order=t["sort_order"],
+                                )
                             )
-                        )
+                    for track_obj in existing:
+                        if track_obj.id not in kept_ids:
+                            await db.delete(track_obj)
+                    await db.flush()
                 await db.refresh(competition)
             tracks = await _track_briefs(db, competition.id)
             return AdminCompetitionListItem(
@@ -168,7 +181,7 @@ class AdminCompetitionService:
                     k: getattr(competition, k)
                     for k in (
                         "id", "name", "description", "cover_url", "start_time",
-                        "end_time", "registration_deadline", "is_active", "custom_fields", "custom_fields",
+                        "end_time", "registration_deadline", "is_active", "custom_fields",
                         "created_at",
                     )
                 },

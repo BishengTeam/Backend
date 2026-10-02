@@ -49,6 +49,15 @@ async def _track_briefs(db, competition_id: int) -> list[CompetitionTrackBrief]:
     ]
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    """归一化为带时区的 UTC 时间，避免 naive/aware 比较异常。"""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 class CompetitionService:
     """用户端赛事服务：列表 + 报名"""
 
@@ -70,6 +79,7 @@ class CompetitionService:
                     end_time=c.end_time,
                     registration_deadline=c.registration_deadline,
                     is_active=c.is_active,
+                    custom_fields=c.custom_fields,
                     tracks=await _track_briefs(db, c.id),
                     created_at=c.created_at,
                 )
@@ -93,12 +103,11 @@ class CompetitionService:
                 raise BusinessException("赛事未发布，无法报名")
 
             now = datetime.now(timezone.utc)
-            if competition.end_time is not None and competition.end_time <= now:
+            end_time = _as_utc(competition.end_time)
+            deadline = _as_utc(competition.registration_deadline)
+            if end_time is not None and end_time <= now:
                 raise BusinessException("赛事已结束，无法报名")
-            if (
-                competition.registration_deadline is not None
-                and competition.registration_deadline <= now
-            ):
+            if deadline is not None and deadline <= now:
                 raise BusinessException("报名已截止")
 
             if track_obj.max_participants > 0:
