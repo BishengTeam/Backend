@@ -5,6 +5,8 @@ from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, success
 from app.schemas.competition import (
     CompetitionListItem,
+    CompetitionMyRegistrationItem,
+    CompetitionRegistrationUpdateRequest,
     CompetitionRegResponse,
     CompetitionSignupRequest,
 )
@@ -52,4 +54,48 @@ async def signup_competition(
 ) -> APIResponse[CompetitionRegResponse]:
     """竞赛报名"""
     result = await CompetitionService().signup(current_user.id, body)
+    return success(data=CompetitionRegResponse.model_validate(result))
+
+
+@router.get("/my-registrations",
+    response_model=APIResponse[list[CompetitionMyRegistrationItem]],
+    summary="我的竞赛报名",
+    description="""
+小程序 **我的报名** 页面使用。
+
+**使用场景**: 查看当前用户全部竞赛报名（含赛事表单配置与 editable 标记）
+
+**截止规则**: 报名截止前 editable=true（可修改）；截止后仅可查看
+
+**认证**: 需登录
+    """,
+)
+async def my_registrations(
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[list[CompetitionMyRegistrationItem]]:
+    result = await CompetitionService().my_registrations(current_user.id)
+    return success(data=result)
+
+
+@router.put("/registrations/{registration_id}",
+    response_model=APIResponse[CompetitionRegResponse],
+    summary="修改我的竞赛报名",
+    description="""
+小程序 **我的报名** 页面使用。
+
+**使用场景**: 报名截止前修改自己填写的报名信息（学校/姓名/手机/自定义字段）
+
+**限制**: 仅本人报名可改；报名截止或赛事结束后不可改；赛道不可更换
+
+**认证**: 需登录
+    """,
+)
+async def update_my_registration(
+    registration_id: int,
+    body: CompetitionRegistrationUpdateRequest,
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[CompetitionRegResponse]:
+    result = await CompetitionService().update_registration(
+        current_user.id, registration_id, body
+    )
     return success(data=CompetitionRegResponse.model_validate(result))

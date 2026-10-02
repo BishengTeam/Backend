@@ -13,8 +13,10 @@ from app.domain.certification.src.index import (
 from app.port.exceptions import BusinessException, NotFoundException
 from app.schemas.competition_form import validate_field_values
 from app.schemas.competition import (
+    CompetitionMyRegistrationItem,
     CompetitionListItem,
     CompetitionSignupRequest,
+    CompetitionRegistrationUpdateRequest,
     CompetitionTrackBrief,
 )
 
@@ -149,6 +151,98 @@ class CompetitionService:
                 phone=data.phone,
             )
             db.add(reg)
+            await db.commit()
+            await db.refresh(reg)
+            return reg
+
+    async def my_registrations(self, user_id: int) -> list[CompetitionMyRegistrationItem]:
+        """当前用户的全部竞赛报名（含赛事截止配置，供前端判断可否修改）"""
+        async with get_db_ctx() as db:
+            rows = (
+                await db.execute(
+                    select(CompetitionReg, CompetitionTrack, Competition)
+                    .outerjoin(
+                        CompetitionTrack,
+                        CompetitionReg.track_id == CompetitionTrack.id,
+                    )
+                    .outerjoin(
+                        Competition, Competition.id == CompetitionTrack.competition_id
+                    )
+                    .where(CompetitionReg.user_id == user_id)
+                    .order_by(CompetitionReg.id.desc())
+                )
+            ).all()
+            now = datetime.now(timezone.utc)
+            items: list[CompetitionMyRegistrationItem] = []
+            for reg, _track, competition in rows:
+                deadline = _as_utc(competition.registration_deadline) if competition else None
+                end_time = _as_utc(competition.end_time) if competition else None
+                editable = not (
+                    (deadline is not None and deadline <= now)
+                    or (end_time is not None and end_time <= now)
+                )
+                items.append(
+                    CompetitionMyRegistrationItem(
+                        id=reg.id,
+                        competition_id=competition.id if competition else None,
+                        competition_name=reg.competition_name,
+                        track_id=reg.track_id,
+                        track=reg.track,
+                        school=reg.school,
+                        real_name=reg.real_name,
+                        phone=reg.phone,
+                        custom_field_values=reg.custom_field_values,
+                        registration_deadline=competition.registration_deadline if competition else None,
+                        end_time=competition.end_time if competition else None,
+                        custom_fields=competition.custom_fields if competition else None,
+                        editable=editable,
+                        created_at=reg.created_at,
+                    )
+                )
+            return items
+
+    async def update_registration(
+        self,
+        user_id: int,
+        registration_id: int,
+        data: CompetitionRegistrationUpdateRequest,
+    ) -> CompetitionReg:
+        """用户修改自己的报名信息（仅报名截止前；赛道不可更换）"""
+        async with get_db_ctx() as db:
+            row = (
+                await db.execute(
+                    select(CompetitionReg, CompetitionTrack, Competition)
+                    .outerjoin(
+                        CompetitionTrack,
+                        CompetitionReg.track_id == CompetitionTrack.id,
+                    )
+                    .outerjoin(
+                        Competition, Competition.id == CompetitionTrack.competition_id
+                    )
+                    .where(CompetitionReg.id == registration_id)
+                )
+            ).first()
+            # 不区分“不存在”与“非本人”，避免探测他人报名 ID
+            if row is None or row[0].user_id != user_id:
+                raise NotFoundException("报名记录")
+            reg, _track, competition = row
+            if competition is None:
+                raise BusinessException("赛事信息缺失，无法修改")
+
+            now = datetime.now(timezone.utc)
+            end_time = _as_utc(competition.end_time)
+            deadline = _as_utc(competition.registration_deadline)
+            if end_time is not None and end_time <= now:
+                raise BusinessException("赛事已结束，无法修改")
+            if deadline is not None and deadline <= now:
+                raise BusinessException("报名已截止，无法修改")
+
+            reg.school = data.school
+            reg.real_name = data.real_name
+            reg.phone = data.phone
+            reg.custom_field_values = validate_field_values(
+                competition.custom_fields, data.custom_field_values
+            )
             await db.commit()
             await db.refresh(reg)
             return reg

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Path, Query
+from fastapi.responses import PlainTextResponse
 
 from app.middleware.auth import require_permission
 from app.schemas.admin_competition import (
@@ -94,6 +95,38 @@ async def list_registrations(
         competition_id, track_id, page, page_size
     )
     return success(data=result)
+
+
+@router.get("/{competition_id}/registrations/export",
+    response_class=PlainTextResponse,
+    summary="导出赛事报名 CSV",
+    description="""
+管理后台 **竞赛管理 → 报名名单** 页面使用。
+
+**使用场景**: 按赛事导出报名名单，自定义字段按赛事配置动态成列；传 track_id 只导该赛道
+
+**响应**: CSV 文件下载（带 BOM，Excel 可直接打开）
+
+**权限**: competition:list
+    """,
+)
+async def export_registrations(
+    competition_id: int = Path(..., ge=1, description="赛事 ID"),
+    track_id: int | None = Query(None, ge=1, description="赛道 ID 筛选"),
+    _admin=Depends(require_permission("competition:list")),
+) -> PlainTextResponse:
+    csv_content = await AdminCompetitionService().export_registrations_csv(
+        competition_id, track_id
+    )
+    return PlainTextResponse(
+        content=csv_content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=competition_{competition_id}_registrations.csv"
+            )
+        },
+    )
 
 
 @router.get("/form-field-presets",

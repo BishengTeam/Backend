@@ -14,6 +14,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import csv
+import io
 
 import app.services.admin_competition as admin_competition_module
 import app.services.competition as competition_module
@@ -27,9 +29,13 @@ from app.schemas.admin_competition import (
     AdminCompetitionTrackInput,
     AdminCompetitionUpdate,
 )
-from app.schemas.competition import CompetitionSignupRequest
+from app.schemas.competition import (
+    CompetitionRegistrationUpdateRequest,
+    CompetitionSignupRequest,
+)
 from app.services.admin_competition import AdminCompetitionService
 from app.services.competition import CompetitionService
+from app.port.exceptions import NotFoundException
 
 
 UTC = timezone.utc
@@ -61,12 +67,14 @@ class _FakeSession:
     def __init__(
         self,
         track_join_rows: list[Any] | None = None,
+        reg_join_rows: list[Any] | None = None,
         regs: list[Any] | None = None,
         competitions: list[Any] | None = None,
         tracks: list[Any] | None = None,
         track_count_rows: list[Any] | None = None,
     ) -> None:
         self.track_join_rows = track_join_rows or []
+        self.reg_join_rows = reg_join_rows or []
         self.regs = regs or []
         self.competitions = competitions or []
         self.tracks = tracks or []
@@ -85,6 +93,9 @@ class _FakeSession:
 
     async def execute(self, stmt: Any) -> _FakeResult:
         entities = [d.get("entity") for d in stmt.column_descriptions]
+        if CompetitionReg in entities and CompetitionTrack in entities:
+            # (报名, 赛道, 赛事) 三表联查
+            return _FakeResult(self.reg_join_rows)
         if Competition in entities and CompetitionTrack in entities:
             return _FakeResult(self.track_join_rows)
         if len(entities) > 1 and entities[0] is CompetitionTrack:
@@ -152,6 +163,23 @@ def _make_track(**overrides: Any) -> SimpleNamespace:
         name="网络赛道",
         max_participants=0,
         sort_order=0,
+    )
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+def _make_reg(**overrides: Any) -> SimpleNamespace:
+    defaults = dict(
+        id=10,
+        user_id=1,
+        competition_name="测试比赛",
+        school="旧学校",
+        track="网络赛道",
+        track_id=4,
+        real_name="旧姓名",
+        phone="13800000000",
+        custom_field_values={"student_id": "OLD001"},
+        created_at=datetime.now(UTC) - timedelta(days=1),
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -326,3 +354,148 @@ async def test_signup_tolerates_naive_datetimes(monkeypatch: pytest.MonkeyPatch)
                 track_id=4, school="测试学校", real_name="张三", phone="13800138000",
             ),
         )
+
+
+@pytest.mark.asyncio
+async def test_my_registrations_marks_editable_by_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """报名截止前 editable=True，截止后 False。"""
+
+    comp_open = _make_competition()
+    comp_closed = _make_competition(
+        registration_deadline=datetime.now(UTC) - timedelta(hours=1),
+    )
+    session = _FakeSession(
+        reg_join_rows=[
+            (_make_reg(id=10), _make_track(), comp_open),
+            (_make_reg(id=11), _make_track(), comp_closed),
+        ]
+    )
+    _patch_db(monkeypatch, competition_module, session)
+
+    result = await CompetitionService().my_registrations(1)
+
+    assert [r.id for r in result] == [10, 11]
+    assert result[0].editable is True
+    assert result[1].editable is False
+    assert result[0].competition_id == 1
+    assert result[0].custom_fields == comp_open.custom_fields
+
+
+@pytest.mark.asyncio
+async def test_update_registration_rejects_other_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """他人报名 ID 不可修改，且不能据此探测记录是否存在。"""
+
+    session = _FakeSession(
+        reg_join_rows=[(_make_reg(user_id=2), _make_track(), _make_competition())]
+    )
+    _patch_db(monkeypatch, competition_module, session)
+
+    with pytest.raises(NotFoundException):
+        await CompetitionService().update_registration(
+            1,
+            10,
+            CompetitionRegistrationUpdateRequest(
+                school="新学校", real_name="张三", phone="13800138000",
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_registration_rejects_after_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """报名截止后不可修改。"""
+
+    competition = _make_competition(
+        registration_deadline=datetime.now(UTC) - timedelta(hours=1),
+    )
+    session = _FakeSession(
+        reg_join_rows=[(_make_reg(), _make_track(), competition)]
+    )
+    _patch_db(monkeypatch, competition_module, session)
+
+    with pytest.raises(BusinessException, match="报名已截止，无法修改"):
+        await CompetitionService().update_registration(
+            1,
+            10,
+            CompetitionRegistrationUpdateRequest(
+                school="新学校", real_name="张三", phone="13800138000",
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_registration_updates_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """截止前本人可改学校/姓名/手机/自定义字段，赛道不变。"""
+
+    reg = _make_reg()
+    track = _make_track()
+    session = _FakeSession(reg_join_rows=[(reg, track, _make_competition())])
+    _patch_db(monkeypatch, competition_module, session)
+
+    result = await CompetitionService().update_registration(
+        1,
+        10,
+        CompetitionRegistrationUpdateRequest(
+            school="新学校",
+            real_name="新姓名",
+            phone="13900139000",
+            custom_field_values={"student_id": "20260002"},
+        ),
+    )
+
+    assert result.school == "新学校"
+    assert result.real_name == "新姓名"
+    assert result.phone == "13900139000"
+    assert result.custom_field_values == {"student_id": "20260002"}
+    assert result.track_id == 4  # 赛道不可更换
+    assert session.committed is True
+
+
+@pytest.mark.asyncio
+async def test_admin_export_csv_dynamic_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """导出列 = 基础列 + 赛事自定义字段动态列。"""
+
+    competition = _make_competition(
+        custom_fields=[
+            {"key": "student_id", "label": "学号", "type": "text",
+             "required": True, "max_length": 20, "sort_order": 0},
+            {"key": "skills", "label": "技能标签", "type": "checkbox",
+             "required": False, "options": ["前端", "安全"], "sort_order": 1},
+        ],
+    )
+    regs = [
+        _make_reg(
+            id=10, school="学校A", real_name="张三", phone="13800138000",
+            custom_field_values={"student_id": "20260001", "skills": ["前端", "安全"]},
+        ),
+        _make_reg(
+            id=11, school="学校B", real_name="李四", phone="13900139000",
+            custom_field_values={"student_id": "20260002"},
+        ),
+    ]
+    session = _FakeSession(competitions=[competition], regs=regs)
+    _patch_db(monkeypatch, admin_competition_module, session)
+
+    content = await AdminCompetitionService().export_registrations_csv(1, None)
+    # BOM 是给 Excel 的，测试解析时剥掉
+    rows = list(
+        csv.reader(io.StringIO(content.lstrip("\ufeff"), newline=""), skipinitialspace=True)
+    )
+
+    assert rows[0][:5] == ["报名ID", "姓名", "学校", "手机号", "赛道"]
+    assert rows[0][5:8] == ["学号", "技能标签", "报名时间"]
+    assert rows[1] == [
+        "10", "张三", "学校A", "13800138000", "网络赛道",
+        "20260001", "前端,安全", regs[0].created_at.strftime("%Y-%m-%d %H:%M:%S"),
+    ]
+    assert rows[2][5] == "20260002"
+    assert rows[2][6] == ""  # 技能标签未填

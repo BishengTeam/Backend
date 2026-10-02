@@ -42,6 +42,34 @@ class CompetitionSignupRequest(BaseModel):
     custom_field_values: dict | None = Field(None, description="自定义字段值")
 
 
+class CompetitionRegistrationUpdateRequest(BaseModel):
+    """用户修改自己的竞赛报名（报名截止前）"""
+
+    school: str = Field(..., min_length=1, max_length=128, description="学校")
+    real_name: str = Field(..., min_length=1, max_length=64, description="真实姓名")
+    phone: str = Field(..., min_length=1, max_length=20, description="联系电话")
+    custom_field_values: dict | None = Field(None, description="自定义字段值")
+
+
+class CompetitionMyRegistrationItem(BaseModel):
+    """我的竞赛报名（含赛事表单配置与可编辑状态）"""
+
+    id: int
+    competition_id: int | None = None
+    competition_name: str
+    track_id: int | None = None
+    track: str | None = None
+    school: str
+    real_name: str | None = None
+    phone: str | None = None
+    custom_field_values: dict | None = None
+    registration_deadline: datetime | None = None
+    end_time: datetime | None = None
+    custom_fields: list[dict] | None = None
+    editable: bool = False
+    created_at: datetime | None = None
+
+
 class CompetitionRegResponse(BaseModel):
     id: int
     competition_name: str

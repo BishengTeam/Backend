@@ -19,6 +19,7 @@ from app.schemas.admin_competition import (
 from app.schemas.common import PaginatedData
 from app.services.competition import _track_briefs
 from app.schemas.competition_form import validate_custom_fields
+from app.utils.excel import export_csv
 
 
 class AdminCompetitionService:
@@ -44,6 +45,63 @@ class AdminCompetitionService:
                     reg.created_at.isoformat() if reg.created_at else "",
                 ])
             return output.getvalue()
+
+    async def export_registrations_csv(
+        self, competition_id: int, track_id: int | None
+    ) -> str:
+        """按赛事（可按赛道）导出报名 CSV；自定义字段按赛事配置动态成列。"""
+        async with get_db_ctx() as db:
+            competition = await db.get(Competition, competition_id)
+            if competition is None:
+                raise NotFoundException("赛事")
+            fields = sorted(
+                competition.custom_fields or [],
+                key=lambda f: f.get("sort_order", 0),
+            )
+            headers = (
+                ["报名ID", "姓名", "学校", "手机号", "赛道"]
+                + [f["label"] for f in fields]
+                + ["报名时间"]
+            )
+            base = (
+                select(CompetitionReg)
+                .join(
+                    CompetitionTrack,
+                    CompetitionReg.track_id == CompetitionTrack.id,
+                )
+                .where(CompetitionTrack.competition_id == competition_id)
+            )
+            if track_id is not None:
+                base = base.where(CompetitionReg.track_id == track_id)
+            regs = (
+                await db.execute(base.order_by(CompetitionReg.id))
+            ).scalars().all()
+            rows: list[list] = []
+            for reg in regs:
+                values = reg.custom_field_values or {}
+                custom_cells = []
+                for field in fields:
+                    value = values.get(field["key"])
+                    if isinstance(value, list):
+                        custom_cells.append(",".join(str(v) for v in value))
+                    elif value is None:
+                        custom_cells.append("")
+                    else:
+                        custom_cells.append(str(value))
+                rows.append(
+                    [
+                        reg.id,
+                        reg.real_name or "",
+                        reg.school,
+                        reg.phone or "",
+                        reg.track or "",
+                        *custom_cells,
+                        reg.created_at.strftime("%Y-%m-%d %H:%M:%S")
+                        if reg.created_at
+                        else "",
+                    ]
+                )
+            return export_csv(headers, rows).getvalue()
 
     async def list_competitions(
         self, keyword: str | None, page: int, page_size: int
