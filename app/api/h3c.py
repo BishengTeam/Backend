@@ -36,7 +36,7 @@ async def get_h3c_profile_defaults(
 @router.get(
     "/exam-batches",
     response_model=APIResponse[list[H3cUserExamBatchResponse]],
-    summary="获取可报名 H3C 考试批次",
+    summary="获取 H3C 考试批次卡片",
 )
 async def list_exam_batches(
     current_user: User = Depends(get_current_user),

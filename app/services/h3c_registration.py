@@ -62,6 +62,14 @@ H3C_ACTIVE_STATUSES = (
     "approved",
 )
 
+# H3C batch cards remain visible after enrollment closes or the exam finishes.
+# Drafts, cancelled batches, and archived batches are not public catalog content.
+H3C_VISIBLE_PLAN_STATUSES = (
+    "published",
+    "registration_closed",
+    "finalized",
+)
+
 
 def _utc(value: datetime | None) -> datetime | None:
     if value is None:
@@ -114,7 +122,7 @@ class H3cRegistrationService:
                     .join(Plan, Plan.id == H3cExamBatch.plan_id)
                     .join(CertProduct, CertProduct.code == Plan.product_type)
                     .where(
-                        Plan.status == "published",
+                        Plan.status.in_(H3C_VISIBLE_PLAN_STATUSES),
                         CertProduct.type == "h3c",
                     )
                     .order_by(Plan.sort_order.desc(), Plan.id.desc())

@@ -159,6 +159,25 @@ async def finalize_batch(
 
 
 @router.post(
+    "/batches/{batch_id}/archive",
+    response_model=APIResponse[H3cExamBatchResponse],
+    summary="归档 H3C 考试批次",
+    **admin_error_contract("40100", "40101", "40200", "40201", "40300", "50000"),
+)
+async def archive_batch(
+    batch_id: int = Path(..., gt=0),
+    admin=Depends(require_permission("h3c:batch_manage")),
+) -> APIResponse[H3cExamBatchResponse]:
+    return success(
+        data=await H3cAdminBatchService().archive_batch(
+            admin_id=admin.id,
+            batch_id=batch_id,
+        ),
+        message="H3C 考试批次已归档",
+    )
+
+
+@router.post(
     "/batches/{batch_id}/cancel",
     response_model=APIResponse[H3cExamBatchResponse],
     summary="取消 H3C 考试批次",
