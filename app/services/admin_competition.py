@@ -232,7 +232,10 @@ class AdminCompetitionService:
                         if track_obj.id not in kept_ids:
                             await db.delete(track_obj)
                     await db.flush()
-                await db.refresh(competition)
+                # Use flush instead of refresh — refresh re-reads from the DB
+                # and can silently discard uncommitted in-memory changes in
+                # certain async session configurations.
+                await db.flush()
             tracks = await _track_briefs(db, competition.id)
             return AdminCompetitionListItem(
                 **{
