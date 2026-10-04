@@ -251,12 +251,36 @@ class AdminCompetitionService:
             )
 
     async def delete(self, competition_id: int) -> None:
+        """Delete a competition, its tracks, and all associated registrations."""
         async with get_db_ctx() as db:
-            competition = await db.get(Competition, competition_id)
-            if competition is None:
-                raise NotFoundException("赛事")
-            await db.delete(competition)
-            await db.commit()
+            async with db.begin():
+                competition = await db.get(Competition, competition_id)
+                if competition is None:
+                    raise NotFoundException("赛事")
+
+                # Get all track IDs for this competition
+                track_ids = (
+                    await db.execute(
+                        select(CompetitionTrack.id).where(
+                            CompetitionTrack.competition_id == competition_id
+                        )
+                    )
+                ).scalars().all()
+
+                # Delete registrations pointing to those tracks
+                if track_ids:
+                    regs = (
+                        await db.execute(
+                            select(CompetitionReg).where(
+                                CompetitionReg.track_id.in_(track_ids)
+                            )
+                        )
+                    ).scalars().all()
+                    for reg in regs:
+                        await db.delete(reg)
+
+                # Delete the competition (tracks cascade via FK)
+                await db.delete(competition)
 
     async def list_registrations(
         self,
