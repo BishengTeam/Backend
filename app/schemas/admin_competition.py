@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -63,6 +64,7 @@ class AdminCompetitionRegistrationItem(BaseModel):
     school: str
     real_name: str | None = None
     phone: str | None = None
+    custom_field_values: dict[str, Any] | None = None
     created_at: datetime | None = None
 
     model_config = {"from_attributes": True}
