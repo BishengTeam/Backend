@@ -49,7 +49,8 @@ class NispRegistrationService:
         self, user_id: int, data: NispOrderCreate
     ) -> NispRegistrationResponse:
         """Create a NISP registration + order in one transaction."""
-        from app.domain.order.src.index import Order, apply_order_status_transition, generate_out_trade_no
+        from app.domain.order.src.index import Order, apply_order_status_transition
+        from app.utils.payment import generate_out_trade_no
         from app.services.agreement_template import ensure_accepted
 
         async with get_db_ctx() as db:
