@@ -72,13 +72,13 @@ class NispObjectStorage:
     async def _sign(self, key: str) -> str:
         import oss2
 
-        if not settings.OSS_ACCESS_KEY_ID or not settings.OSS_ACCESS_KEY_SECRET:
+        if not settings.ALIYUN_OSS_ACCESS_KEY_ID or not settings.ALIYUN_OSS_ACCESS_KEY_SECRET:
             raise ThirdPartyException("NISP OSS 未配置")
-        auth = oss2.Auth(settings.OSS_ACCESS_KEY_ID, settings.OSS_ACCESS_KEY_SECRET)
+        auth = oss2.Auth(settings.ALIYUN_OSS_ACCESS_KEY_ID, settings.ALIYUN_OSS_ACCESS_KEY_SECRET)
         bucket = oss2.Bucket(
             auth,
-            settings.OSS_ENDPOINT,
-            settings.OSS_BUCKET_NAME,
+            settings.ALIYUN_OSS_ENDPOINT,
+            settings.ALIYUN_OSS_BUCKET,
             connect_timeout=5,
         )
         return bucket.sign_url("GET", key, 3600)
@@ -87,13 +87,13 @@ class NispObjectStorage:
         import asyncio
         import oss2
 
-        if not settings.OSS_ACCESS_KEY_ID or not settings.OSS_ACCESS_KEY_SECRET:
+        if not settings.ALIYUN_OSS_ACCESS_KEY_ID or not settings.ALIYUN_OSS_ACCESS_KEY_SECRET:
             raise ThirdPartyException("NISP OSS 未配置")
-        auth = oss2.Auth(settings.OSS_ACCESS_KEY_ID, settings.OSS_ACCESS_KEY_SECRET)
+        auth = oss2.Auth(settings.ALIYUN_OSS_ACCESS_KEY_ID, settings.ALIYUN_OSS_ACCESS_KEY_SECRET)
         bucket = oss2.Bucket(
             auth,
-            settings.OSS_ENDPOINT,
-            settings.OSS_BUCKET_NAME,
+            settings.ALIYUN_OSS_ENDPOINT,
+            settings.ALIYUN_OSS_BUCKET,
             connect_timeout=5,
         )
         await asyncio.to_thread(bucket.put_object, key, data, headers={"Content-Type": content_type})
@@ -111,6 +111,6 @@ class NispObjectStorage:
             raise ThirdPartyException("NISP OSS 未配置")
         import asyncio
         import oss2
-        auth = oss2.Auth(settings.OSS_ACCESS_KEY_ID, settings.OSS_ACCESS_KEY_SECRET)
-        bucket = oss2.Bucket(auth, settings.OSS_ENDPOINT, settings.OSS_BUCKET_NAME, connect_timeout=5)
+        auth = oss2.Auth(settings.ALIYUN_OSS_ACCESS_KEY_ID, settings.ALIYUN_OSS_ACCESS_KEY_SECRET)
+        bucket = oss2.Bucket(auth, settings.ALIYUN_OSS_ENDPOINT, settings.ALIYUN_OSS_BUCKET, connect_timeout=5)
         await asyncio.to_thread(bucket.delete_object, storage_key)
