@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
@@ -145,7 +145,8 @@ async def get_export_signed_url(
     """Get a signed download URL for a completed export."""
     from app.schemas.nisp import NispSignedUrlResponse
     url = await NispExportService().signed_url(job_id)
-    return success(data=NispSignedUrlResponse(url=url, expires_at=_now() + timedelta(hours=1)))
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    return success(data=NispSignedUrlResponse(url=url, expires_at=expires_at))
 
 
 @router.get("/refunds", response_model=APIResponse)

@@ -1,9 +1,12 @@
 import ast
+from datetime import datetime, timezone
 import unittest
 from pathlib import Path
 from typing import get_args
 
 from app.schemas.nisp import NispRegistrationStatus
+from app.api.admin.nisp import get_export_signed_url
+from app.services.nisp_export import NispExportService
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -58,6 +61,24 @@ class NispOperationsTests(unittest.TestCase):
         )
         self.assertIn("nisp_export_task.cancel()", source)
         self.assertIn("await nisp_export_task", source)
+
+
+class NispSignedUrlRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_signed_url_route_builds_expiry_without_undefined_helper(self):
+        original = NispExportService.signed_url
+
+        async def fake_signed_url(self, job_id: int) -> str:
+            return "https://example.test/nisp-export.xlsx?signature=test"
+
+        NispExportService.signed_url = fake_signed_url
+        try:
+            response = await get_export_signed_url(job_id=2, _admin=object())
+        finally:
+            NispExportService.signed_url = original
+
+        self.assertEqual(response.code, 0)
+        self.assertEqual(response.data.url, "https://example.test/nisp-export.xlsx?signature=test")
+        self.assertGreater(response.data.expires_at, datetime.now(timezone.utc))
 
 
 if __name__ == "__main__":
