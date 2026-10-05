@@ -10,15 +10,19 @@ from app.domain.order.src.index import (
     Order,
     PriceConfig,
     add_inventory_record,
+    apply_order_status_transition,
     lock_certification_inventory,
+    release_inventory_lock,
     validate_extra_data,
 )
 from app.domain.certification.src.index import Certification
+from app.domain.points_mall.src import PointsMallRedemption
 from app.models.cert_product import CertProduct
 from app.domain.user.src.index import UserRealname
 from app.schemas.common import PaginatedData
 from app.schemas.order import OrderCouponAppliedResponse, OrderCreate, OrderDetailResponse, OrderFilter, OrderResponse
 from app.services.agreement_template import ensure_accepted
+from app.services.order_fulfillment import OrderFulfillmentService
 from app.utils.payment import generate_out_trade_no
 
 PRICE_TIER_NORMAL = "normal"
@@ -30,6 +34,8 @@ def resolve_price_tier(user_type: str | None) -> str:
 
 
 class OrderService:
+    def __init__(self) -> None:
+        self.fulfillment = OrderFulfillmentService()
 
     async def create_order(self, user_id: int, data: OrderCreate) -> OrderResponse:
         if data.product_type == "RS-ZY":
@@ -159,6 +165,53 @@ class OrderService:
             if order is None or order.user_id != user_id:
                 raise NotFoundException("订单")
             return OrderDetailResponse.model_validate(order)
+
+    async def cancel_pending_order(self, user_id: int, order_id: int) -> OrderResponse:
+        """Close a pending order and release reserved inventory/coupon/fulfillment resources."""
+        async with get_db_ctx() as db:
+            async with db.begin():
+                order = (
+                    await db.execute(
+                        select(Order)
+                        .where(Order.id == order_id, Order.user_id == user_id)
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if order is None:
+                    raise NotFoundException("订单")
+                if order.status != "pending":
+                    raise ConflictException("仅待支付订单可以取消")
+
+                now = datetime.now(timezone.utc)
+                apply_order_status_transition(order, "closed")
+                order.closed_at = now
+                order.close_reason = "user_cancelled"
+                await release_inventory_lock(db, order, reason="user_cancelled")
+                await self._release_coupon(db, order)
+                await self.fulfillment.on_closed(db, order)
+
+                return OrderResponse.model_validate(order)
+
+    @staticmethod
+    async def _release_coupon(db, order: Order) -> None:
+        """Return a coupon reserved by this order so it can be reused."""
+        if not order.coupon_code:
+            return
+        redemption = (
+            await db.execute(
+                select(PointsMallRedemption)
+                .where(
+                    PointsMallRedemption.coupon_code == order.coupon_code,
+                    PointsMallRedemption.user_id == order.user_id,
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if redemption is None or redemption.order_id != order.id:
+            return
+        redemption.status = "unused"
+        redemption.used_at = None
+        redemption.order_id = None
 
     async def apply_coupon_to_order(
         self,

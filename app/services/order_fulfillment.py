@@ -11,6 +11,7 @@ from app.domain.community.src.index import (
     QuizLibrary,
     QuizLibraryEntitlement,
 )
+from app.domain.nisp.src.index import NispRegistration
 from app.domain.renshe.src.index import RensheApplication, RensheApplicationVersion
 from app.port.exceptions import ConflictException
 from app.services.quiz_v2 import QuizV2Service
@@ -226,6 +227,18 @@ class OrderFulfillmentService:
         from app.services.h3c_registration import H3cRegistrationService
 
         h3c_processed = await H3cRegistrationService().on_order_closed(db, order)
+        nisp_registration = (
+            await db.execute(
+                select(NispRegistration)
+                .where(NispRegistration.order_id == order.id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if nisp_registration is not None and nisp_registration.status == "pending_payment":
+            nisp_registration.status = "cancelled"
+            nisp_registration.closed_at = order.closed_at or self._now()
+            nisp_registration.close_reason = order.close_reason or "order_closed"
+            return True
         application = await self._lock_renshe_application(db, order)
         if order.application_id is not None:
             if application is None:

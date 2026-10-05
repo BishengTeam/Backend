@@ -97,6 +97,30 @@ async def get_order(
     result = await OrderService().get_order(current_user.id, order_id)
     return success(data=result)
 
+
+@router.post(
+    "/{order_id}/cancel",
+    response_model=APIResponse[OrderResponse],
+    summary="取消待支付订单",
+    description="""
+小程序 **订单详情** 页面使用。
+
+**使用场景**: 取消待支付订单。接口面向所有交易类型（认证、课程、题库等），统一释放库存、优惠券和各业务的待支付记录。
+
+**路径参数**:
+- `order_id`: 订单 ID
+
+**认证**: 需登录
+    """,
+)
+async def cancel_order(
+    order_id: int = Path(..., description="订单 ID"),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[OrderResponse]:
+    """取消当前用户的待支付订单"""
+    result = await OrderService().cancel_pending_order(current_user.id, order_id)
+    return success(data=result)
+
 @router.post(
     "/{order_id}/apply-coupon",
     response_model=APIResponse[OrderCouponAppliedResponse],

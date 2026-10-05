@@ -129,6 +129,23 @@ class OrderSystemTests(unittest.TestCase):
             "OrderService must query UserIdentity by user_id column, not db.get(UserIdentity, user_id)",
         )
 
+    def test_user_cancel_order_is_transaction_agnostic_and_releases_resources(self):
+        service_source = (REPO_ROOT / "app/services/order.py").read_text(encoding="utf-8")
+        api_source = (REPO_ROOT / "app/api/orders.py").read_text(encoding="utf-8")
+        fulfillment_source = (
+            REPO_ROOT / "app/services/order_fulfillment.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('"/{order_id}/cancel"', api_source)
+        self.assertIn("cancel_pending_order", service_source)
+        self.assertIn('order.status != "pending"', service_source)
+        self.assertIn('order.close_reason = "user_cancelled"', service_source)
+        self.assertIn("release_inventory_lock", service_source)
+        self.assertIn("_release_coupon", service_source)
+        self.assertIn("self.fulfillment.on_closed", service_source)
+        self.assertIn("NispRegistration", fulfillment_source)
+        self.assertIn("H3cRegistrationService().on_order_closed", fulfillment_source)
+
     def test_payment_api_routes_declare_explicit_response_model(self):
         tree = _load_ast("app/api/payment.py")
         missing = []
