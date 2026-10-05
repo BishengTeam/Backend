@@ -223,12 +223,18 @@ class NispRefundService:
                 raise NotFoundException("NISP 退款任务")
             if refund.status != "processing" or not refund.out_refund_no:
                 return self._response(refund)
+            order = await db.get(Order, refund.order_id)
+            expected_out_trade_no = order.out_trade_no if order else None
+            expected_amount_total = order.price if order else None
+            expected_amount_refund = refund.amount_cents
 
         raw = await self.wechat_pay.query_refund(out_refund_no=refund.out_refund_no)
         result = WechatPayRefund.from_payload(raw)
         if (
-            result.out_trade_no != refund.out_trade_no
+            result.out_trade_no != expected_out_trade_no
             or result.out_refund_no != refund.out_refund_no
+            or result.amount_total != expected_amount_total
+            or result.amount_refund != expected_amount_refund
         ):
             raise ConflictException("微信退款查询结果与 NISP 退款单不一致")
         return await self._apply_provider_result(

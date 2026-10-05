@@ -34,6 +34,8 @@ class NispOperationsTests(unittest.TestCase):
         source = _source("app/services/nisp_refund.py")
 
         self.assertNotIn("parse_refund_result", source)
+        self.assertNotIn("result.out_trade_no != refund.out_trade_no", source)
+        self.assertIn("expected_out_trade_no = order.out_trade_no if order else None", source)
         self.assertEqual(source.count("WechatPayRefund.from_payload(raw)"), 2)
         self.assertIn("async def handle_callback_raw", source)
         self.assertIn("parse_refund_notification", source)
