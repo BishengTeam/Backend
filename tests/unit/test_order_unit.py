@@ -146,6 +146,21 @@ class OrderSystemTests(unittest.TestCase):
         self.assertIn("NispRegistration", fulfillment_source)
         self.assertIn("H3cRegistrationService().on_order_closed", fulfillment_source)
 
+    def test_paid_order_fulfillment_dispatches_nisp_registration_callbacks(self):
+        source = (
+            REPO_ROOT / "app/services/order_fulfillment.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "from app.services.nisp_registration import NispRegistrationService",
+            source,
+        )
+        self.assertIn(
+            "nisp_processed = await NispRegistrationService().on_order_paid(db, order)",
+            source,
+        )
+        self.assertIn("return h3c_processed or nisp_processed", source)
+
     def test_payment_api_routes_declare_explicit_response_model(self):
         tree = _load_ast("app/api/payment.py")
         missing = []

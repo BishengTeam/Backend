@@ -152,8 +152,10 @@ class OrderFulfillmentService:
 
     async def on_paid(self, db: AsyncSession, order: Order) -> bool:
         from app.services.h3c_registration import H3cRegistrationService
+        from app.services.nisp_registration import NispRegistrationService
 
         h3c_processed = await H3cRegistrationService().on_order_paid(db, order)
+        nisp_processed = await NispRegistrationService().on_order_paid(db, order)
         application = await self._lock_renshe_application(db, order)
         if order.application_id is not None:
             if application is None:
@@ -174,7 +176,7 @@ class OrderFulfillmentService:
 
         enrollment = await self._lock_course_enrollment(db, order)
         if order.order_kind != "course":
-            return h3c_processed
+            return h3c_processed or nisp_processed
         if enrollment is None:
             raise ConflictException("课程订单缺少报名记录，无法开通学习权限")
         course = await db.get(Course, enrollment.course_id)
