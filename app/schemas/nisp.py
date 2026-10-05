@@ -10,7 +10,10 @@ NispRegistrationStatus = Literal[
     "pending_payment",
     "pending_review",
     "rejected_awaiting_resubmission",
+    "pending_refund_confirmation",
+    "refund_processing",
     "approved",
+    "refunded_closed",
     "cancelled",
 ]
 NispReviewDecision = Literal["approved", "rejected"]

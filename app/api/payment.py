@@ -133,6 +133,7 @@ async def payment_callback(request: Request) -> JSONResponse:
 async def refund_callback(request: Request) -> JSONResponse:
     from app.services.renshe_refund import RensheRefundService
     from app.services.h3c_refund import H3cRefundService
+    from app.services.nisp_refund import NispRefundService
 
     raw_body = await request.body()
     try:
@@ -143,6 +144,16 @@ async def refund_callback(request: Request) -> JSONResponse:
                 headers=headers,
             )
             logger.info("wechat H3C refund notification acknowledged: refund_id=%s", result.id)
+            return JSONResponse(status_code=200, content={"code": "SUCCESS", "message": "成功"})
+        except AppException:
+            pass
+
+        try:
+            result = await NispRefundService().handle_callback_raw(
+                raw_body=raw_body,
+                headers=headers,
+            )
+            logger.info("wechat NISP refund notification acknowledged: refund_id=%s", result.id)
             return JSONResponse(status_code=200, content={"code": "SUCCESS", "message": "成功"})
         except AppException:
             result = await RensheRefundService().handle_callback_raw(

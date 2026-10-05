@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.adapter.database import get_db_ctx
 from app.domain.nisp.src import NispRefundRequest, NispRegistration
 from app.domain.order.src.index import Order, apply_order_status_transition
-from app.integrations.wechat_pay import WechatPayClient
+from app.integrations.wechat_pay import WechatPayClient, WechatPayRefund
 from app.port.exceptions import ConflictException, NotFoundException
 from app.schemas.nisp import NispRefundResponse
 from app.port.config import settings
@@ -198,7 +198,14 @@ class NispRefundService:
                     await db.commit()
             raise ConflictException(f"微信退款提交失败: {exc}") from exc
 
-        result = self.wechat_pay.parse_refund_result(raw)
+        result = WechatPayRefund.from_payload(raw)
+        if (
+            result.out_trade_no != prepared.out_trade_no
+            or result.out_refund_no != prepared.out_refund_no
+            or result.amount_total != prepared.amount_total
+            or result.amount_refund != prepared.amount_cents
+        ):
+            raise ConflictException("微信退款提交结果与 NISP 退款单不一致")
         return await self._apply_provider_result(
             refund_id=prepared.refund_id,
             status=result.status,
@@ -218,11 +225,42 @@ class NispRefundService:
                 return self._response(refund)
 
         raw = await self.wechat_pay.query_refund(out_refund_no=refund.out_refund_no)
-        result = self.wechat_pay.parse_refund_result(raw)
+        result = WechatPayRefund.from_payload(raw)
+        if (
+            result.out_trade_no != refund.out_trade_no
+            or result.out_refund_no != refund.out_refund_no
+        ):
+            raise ConflictException("微信退款查询结果与 NISP 退款单不一致")
         return await self._apply_provider_result(
             refund_id=refund.id,
             status=result.status,
             refund_id_wechat=result.refund_id,
+        )
+
+    async def handle_callback_raw(
+        self,
+        *,
+        raw_body: bytes,
+        headers: dict[str, str],
+    ) -> NispRefundResponse:
+        provider_refund = self.wechat_pay.parse_refund_notification(
+            headers=headers,
+            raw_body=raw_body,
+        )
+        async with get_db_ctx() as db:
+            refund = await db.scalar(
+                select(NispRefundRequest)
+                .where(NispRefundRequest.out_refund_no == provider_refund.out_refund_no)
+                .with_for_update()
+            )
+            if refund is None:
+                raise NotFoundException("NISP 退款任务")
+            refund_id = refund.id
+
+        return await self._apply_provider_result(
+            refund_id=refund_id,
+            status=provider_refund.status,
+            refund_id_wechat=provider_refund.refund_id,
         )
 
     async def _apply_provider_result(

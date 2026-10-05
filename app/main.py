@@ -28,6 +28,7 @@ from app.services.renshe_cleanup import renshe_cleanup_worker_loop
 from app.services.h3c_export import h3c_export_worker_loop
 from app.services.h3c_refund import h3c_refund_reconciliation_worker_loop
 from app.services.h3c_registration import h3c_registration_worker_loop
+from app.services.nisp_export import nisp_export_worker_loop
 from app.services.payment_reconciliation import (
     payment_reconciliation_metrics,
     payment_reconciliation_worker_loop,
@@ -70,6 +71,7 @@ async def lifespan(app: FastAPI):
     renshe_cleanup_task = asyncio.create_task(renshe_cleanup_worker_loop())
     h3c_export_task = asyncio.create_task(h3c_export_worker_loop())
     h3c_registration_task = asyncio.create_task(h3c_registration_worker_loop())
+    nisp_export_task = asyncio.create_task(nisp_export_worker_loop())
     quiz_task = asyncio.create_task(quiz_worker_loop()) if quiz_embedded_enabled else None
     payment_reconciliation_task = (
         asyncio.create_task(payment_reconciliation_worker_loop())
@@ -94,6 +96,7 @@ async def lifespan(app: FastAPI):
     renshe_cleanup_task.cancel()
     h3c_export_task.cancel()
     h3c_registration_task.cancel()
+    nisp_export_task.cancel()
     if quiz_task is not None:
         quiz_task.cancel()
     if payment_reconciliation_task is not None:
@@ -120,6 +123,10 @@ async def lifespan(app: FastAPI):
         pass
     try:
         await h3c_registration_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await nisp_export_task
     except asyncio.CancelledError:
         pass
     if quiz_task is not None:
