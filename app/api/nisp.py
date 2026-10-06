@@ -7,6 +7,7 @@ from app.domain.user.src.index import User
 from app.port.exceptions import BusinessException
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.nisp import (
+    NispMaterialUploadResponse,
     NispBatchListItem,
     NispOrderCreate,
     NispRegistrationResponse,
@@ -66,7 +67,7 @@ async def upload_material(
     material_type: str = Form(...),
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
-) -> dict:
+) -> APIResponse[NispMaterialUploadResponse]:
     """Upload a NISP registration material to OSS and return the storage key."""
     from app.integrations.nisp_storage import NispObjectStorage
 
@@ -88,12 +89,16 @@ async def upload_material(
         data=data,
     )
 
-    return {
-        "material_type": material_type,
-        "storage_key": storage_key,
-        "size_bytes": size_bytes,
-        "sha256": sha256,
-    }
+    # 必须包 APIResponse 信封：前端按 {code: 0, data} 判定成功，
+    # 裸 dict 的 code 是 undefined 会被当作业务错误（“材料上传失败”）。
+    return success(
+        data=NispMaterialUploadResponse(
+            material_type=material_type,
+            storage_key=storage_key,
+            size_bytes=size_bytes,
+            sha256=sha256,
+        )
+    )
 
 
 @router.post("/orders", response_model=APIResponse[NispRegistrationResponse])

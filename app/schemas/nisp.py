@@ -161,6 +161,15 @@ class NispReviewResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class NispMaterialUploadResponse(BaseModel):
+    """NISP 材料上传结果（统一 APIResponse 信封内）"""
+
+    material_type: str
+    storage_key: str
+    size_bytes: int
+    sha256: str
+
+
 # ── Admin: review ──
 
 class NispReviewDecisionRequest(BaseModel):
