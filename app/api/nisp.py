@@ -84,6 +84,7 @@ async def upload_material(
     storage = NispObjectStorage()
     storage_key, size_bytes, sha256 = await storage.save_source(
         user_id=current_user.id,
+        material_type=material_type,
         filename=file.filename or "material",
         content_type=file.content_type,
         data=data,
@@ -154,4 +155,3 @@ async def resubmit_materials(
     return success(
         data=await _service.resubmit_materials(current_user.id, registration_id, body)
     )
-

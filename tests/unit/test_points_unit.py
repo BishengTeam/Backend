@@ -10,6 +10,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
+from app.schemas.order import OrderApplyCouponRequest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -337,6 +339,23 @@ class PointsSystemTests(unittest.TestCase):
                 self.assertIn("source_type", source)
                 self.assertIn("source_id", source)
                 self.assertIn("uq_points_history_user_source_action", source)
+
+    def test_coupon_removal_accepts_empty_coupon_code(self):
+        body = OrderApplyCouponRequest(coupon_code="")
+
+        self.assertEqual(body.coupon_code, "")
+        with self.assertRaises(ValidationError):
+            OrderApplyCouponRequest(coupon_code="a" * 65)
+
+    def test_points_mall_redemption_records_points_history(self):
+        source = _read_text(_path("app/services/points_mall.py"))
+
+        self.assertIn("PointsHistory(", source)
+        self.assertIn('action_type="redeem_points_mall"', source)
+        self.assertIn("amount=-item.points_cost", source)
+        self.assertIn("balance_after=points.balance", source)
+        self.assertIn('source_type="points_mall_redemption"', source)
+        self.assertIn("source_id=coupon_code", source)
 
     def test_points_interface_list_documents_claim_endpoint(self):
         docs = _read_text(_path("docs/接口列表.md"))

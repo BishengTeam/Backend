@@ -108,7 +108,7 @@ class OrderFilter(BaseModel):
 
 
 class OrderApplyCouponRequest(BaseModel):
-    coupon_code: str = Field(..., min_length=1, max_length=64, description="积分商城券码；传空字符串移除优惠券")
+    coupon_code: str = Field(..., max_length=64, description="积分商城券码；传空字符串移除优惠券")
 
 
 class OrderCouponAppliedResponse(BaseModel):

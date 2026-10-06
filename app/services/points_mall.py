@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
 from app.domain.points_mall.src import PointsMallItem, PointsMallRedemption
-from app.domain.user.src.index import UserPoints
+from app.domain.user.src.index import PointsHistory, UserPoints
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.points_mall import (
     MyCouponResponse,
@@ -257,11 +257,12 @@ class PointsMallService:
             else:
                 expires_at = _now() + timedelta(days=365)  # fallback
 
+            coupon_code = _generate_coupon_code()
             redemption = PointsMallRedemption(
                 user_id=user_id,
                 item_id=item.id,
                 points_spent=item.points_cost,
-                coupon_code=_generate_coupon_code(),
+                coupon_code=coupon_code,
                 name_snapshot=item.name,
                 discount_type=item.discount_type,
                 discount_value=item.discount_value,
@@ -271,6 +272,17 @@ class PointsMallService:
                 expires_at=expires_at,
             )
             db.add(redemption)
+            db.add(
+                PointsHistory(
+                    user_id=user_id,
+                    action_type="redeem_points_mall",
+                    amount=-item.points_cost,
+                    balance_after=points.balance,
+                    description=f"积分兑换优惠券：{item.name}",
+                    source_type="points_mall_redemption",
+                    source_id=coupon_code,
+                )
+            )
             await db.commit()
             await db.refresh(redemption)
             return self._coupon_response(redemption)

@@ -1,4 +1,5 @@
 import ast
+import asyncio
 from datetime import datetime, timezone
 import unittest
 from pathlib import Path
@@ -6,7 +7,9 @@ from typing import get_args
 
 from app.schemas.nisp import NispRegistrationStatus
 from app.api.admin.nisp import get_export_signed_url
+from app.integrations.nisp_storage import NispObjectStorage
 from app.services.nisp_export import NispExportService
+from app.port.exceptions import ValidationException
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -61,6 +64,52 @@ class NispOperationsTests(unittest.TestCase):
         )
         self.assertIn("nisp_export_task.cancel()", source)
         self.assertIn("await nisp_export_task", source)
+
+    def test_nisp_material_storage_enforces_material_specific_formats(self):
+        async def test_storage(**kwargs):
+            return await NispObjectStorage().save_source(**kwargs)
+
+        async def fake_put(self, key, data, content_type):
+            return None
+
+        original_put = NispObjectStorage._put
+        NispObjectStorage._put = fake_put
+        try:
+            valid_cases = [
+                dict(material_type="id_card_both_sides", filename="id.pdf",
+                     content_type="application/pdf"),
+                dict(material_type="portrait_photo", filename="photo.jpg",
+                     content_type="image/jpeg"),
+                dict(material_type="xuexin_report", filename="report.pdf",
+                     content_type=None),
+                dict(material_type="application_form", filename="form.pdf",
+                     content_type="application/octet-stream"),
+            ]
+            for kwargs in valid_cases:
+                result = asyncio.run(test_storage(
+                    user_id=2,
+                    data=b"x",
+                    **kwargs,
+                ))
+                self.assertEqual(len(result), 3)
+
+            invalid_cases = [
+                dict(material_type="portrait_photo", filename="photo.pdf",
+                     content_type="application/pdf"),
+                dict(material_type="xuexin_report", filename="report.docx",
+                     content_type="application/octet-stream"),
+                dict(material_type="application_form", filename="form.jpg",
+                     content_type="image/jpeg"),
+            ]
+            for kwargs in invalid_cases:
+                with self.assertRaises(ValidationException):
+                    asyncio.run(test_storage(
+                        user_id=2,
+                        data=b"x",
+                        **kwargs,
+                    ))
+        finally:
+            NispObjectStorage._put = original_put
 
 
 class NispSignedUrlRouteTests(unittest.IsolatedAsyncioTestCase):

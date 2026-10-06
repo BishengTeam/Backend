@@ -14,6 +14,12 @@ NISP_PREFIX = "nisp"
 NISP_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".pdf"}
 NISP_ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/jpg", "application/pdf"}
 NISP_MAX_BYTES = 10 * 1024 * 1024
+NISP_MATERIAL_RULES = {
+    "id_card_both_sides": (".pdf", "application/pdf", "PDF"),
+    "portrait_photo": (".jpg", "image/jpeg", "JPG"),
+    "xuexin_report": (".pdf", "application/pdf", "PDF"),
+    "application_form": (".pdf", "application/pdf", "PDF"),
+}
 
 
 def source_prefix(user_id: int) -> str:
@@ -36,6 +42,7 @@ class NispObjectStorage:
         self,
         *,
         user_id: int,
+        material_type: str,
         filename: str,
         content_type: str | None,
         data: bytes,
@@ -43,8 +50,20 @@ class NispObjectStorage:
     ) -> tuple[str, int, str]:
         normalized_type = (content_type or "").split(";", 1)[0].strip().lower()
         extension = Path(filename).suffix.lower()
-        if extension not in NISP_ALLOWED_EXTENSIONS:
-            raise ValidationException("NISP 材料仅支持 JPG 或 PDF 格式")
+        rule = NISP_MATERIAL_RULES.get(material_type)
+        if rule is None:
+            raise ValidationException(f"不支持的材料类型: {material_type}")
+        expected_extension, expected_content_type, display_name = rule
+        extension_allowed = extension in (
+            {".jpg", ".jpeg"} if expected_extension == ".jpg" else {expected_extension}
+        )
+        content_type_allowed = normalized_type in (
+            {"image/jpeg", "image/jpg"}
+            if expected_content_type == "image/jpeg"
+            else {expected_content_type}
+        )
+        if not extension_allowed and not content_type_allowed:
+            raise ValidationException(f"{material_type} 材料仅支持 {display_name} 格式")
         if len(data) > max_bytes:
             raise ValidationException(f"材料超过大小限制 ({max_bytes // 1024 // 1024}MB)")
 
