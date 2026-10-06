@@ -16,7 +16,6 @@ from app.domain.order.src.index import (
     validate_extra_data,
 )
 from app.domain.certification.src.index import Certification
-from app.domain.points_mall.src import PointsMallRedemption
 from app.models.cert_product import CertProduct
 from app.domain.user.src.index import UserRealname
 from app.schemas.common import PaginatedData
@@ -195,23 +194,14 @@ class OrderService:
     @staticmethod
     async def _release_coupon(db, order: Order) -> None:
         """Return a coupon reserved by this order so it can be reused."""
-        if not order.coupon_code:
-            return
-        redemption = (
-            await db.execute(
-                select(PointsMallRedemption)
-                .where(
-                    PointsMallRedemption.coupon_code == order.coupon_code,
-                    PointsMallRedemption.user_id == order.user_id,
-                )
-                .with_for_update()
-            )
-        ).scalar_one_or_none()
-        if redemption is None or redemption.order_id != order.id:
-            return
-        redemption.status = "unused"
-        redemption.used_at = None
-        redemption.order_id = None
+        from app.services.points_mall import release_order_coupon
+
+        await release_order_coupon(
+            db,
+            order_id=order.id,
+            user_id=order.user_id,
+            coupon_code=order.coupon_code,
+        )
 
     async def apply_coupon_to_order(
         self,

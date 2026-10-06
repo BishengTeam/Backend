@@ -16,6 +16,7 @@ from app.schemas.nisp import (
     NispReviewDecisionRequest,
     NispResubmitRequest,
 )
+from app.services.points_mall import release_order_coupon
 
 
 def _now() -> datetime:
@@ -223,6 +224,17 @@ class NispRegistrationService:
                 )
             ).scalar_one_or_none()
             if order is not None and order.status == "pending":
+                coupon_released = await release_order_coupon(
+                    db,
+                    order_id=order.id,
+                    user_id=order.user_id,
+                    coupon_code=order.coupon_code,
+                )
+                if coupon_released:
+                    order.price = order.original_price or order.price
+                    order.original_price = None
+                    order.discount_amount = None
+                    order.coupon_code = None
                 apply_order_status_transition(order, "closed")
                 order.closed_at = _now()
                 order.close_reason = "user_cancelled"

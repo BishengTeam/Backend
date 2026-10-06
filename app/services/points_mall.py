@@ -88,6 +88,34 @@ def check_coupon_scope(
     return False
 
 
+async def release_order_coupon(
+    db,
+    *,
+    order_id: int,
+    user_id: int,
+    coupon_code: str | None,
+) -> bool:
+    """Return a coupon reserved by a pending order before that order closes."""
+    if not coupon_code:
+        return False
+    redemption = (
+        await db.execute(
+            select(PointsMallRedemption)
+            .where(
+                PointsMallRedemption.coupon_code == coupon_code,
+                PointsMallRedemption.user_id == user_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if redemption is None or redemption.order_id != order_id:
+        return False
+    redemption.status = "unused"
+    redemption.used_at = None
+    redemption.order_id = None
+    return True
+
+
 class PointsMallService:
 
     # ── Admin ──

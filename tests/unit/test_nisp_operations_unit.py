@@ -23,7 +23,7 @@ def _functions(source: str) -> dict[str, ast.AsyncFunctionDef | ast.FunctionDef]
     tree = ast.parse(source)
     return {
         node.name: node
-        for node in tree.body
+        for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
 
@@ -110,6 +110,26 @@ class NispOperationsTests(unittest.TestCase):
                     ))
         finally:
             NispObjectStorage._put = original_put
+
+    def test_nisp_cancel_pending_payment_releases_reserved_coupon(self):
+        source = _source("app/services/nisp_registration.py")
+        cancel_body = ast.unparse(_functions(source)["cancel_pending_payment"])
+
+        self.assertIn("release_order_coupon(", cancel_body)
+        self.assertIn("coupon_code=order.coupon_code", cancel_body)
+        self.assertIn("order.price = order.original_price or order.price", cancel_body)
+        self.assertIn("order.original_price = None", cancel_body)
+        self.assertIn("order.discount_amount = None", cancel_body)
+        self.assertIn("order.coupon_code = None", cancel_body)
+
+    def test_coupon_release_is_guarded_by_order_binding(self):
+        source = _source("app/services/points_mall.py")
+
+        self.assertIn("async def release_order_coupon", source)
+        self.assertIn("redemption.order_id != order_id", source)
+        self.assertIn('redemption.status = "unused"', source)
+        self.assertIn("redemption.used_at = None", source)
+        self.assertIn("redemption.order_id = None", source)
 
 
 class NispSignedUrlRouteTests(unittest.IsolatedAsyncioTestCase):
