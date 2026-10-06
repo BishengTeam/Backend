@@ -19,12 +19,9 @@ class ActivityService:
         page: int = 1,
         page_size: int = 20,
     ) -> PaginatedData[ActivityResponse]:
-        now = datetime.now(timezone.utc)
         stmt = select(Activity).where(
             Activity.is_active == True,
         )
-
-        stmt = stmt.where((Activity.end_time == None) | (Activity.end_time > now))
         async with get_db_ctx() as db:
             total = (
                 await db.execute(

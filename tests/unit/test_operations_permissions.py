@@ -106,6 +106,19 @@ def test_activities_use_activity_permissions_and_expose_registrations() -> None:
     )
 
 
+def test_public_activity_list_keeps_ended_items_for_frontend_grouping() -> None:
+    source = (REPO_ROOT / "app/services/activity.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    function = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "list_activities"
+    )
+    list_source = ast.unparse(function)
+
+    assert "Activity.is_active == True" in list_source
+    assert "Activity.end_time" not in list_source
+
+
 def test_cert_products_keep_content_permissions() -> None:
     routes = _parse_routes("app/api/admin/cert_products.py")
     assert routes and all(
