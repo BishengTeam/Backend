@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-CertType = Literal["h3c", "renshe"]
+CertType = Literal["h3c", "renshe", "nisp", "sangfor"]
 PriceUserType = Literal["student", "normal"]
 
 
@@ -48,7 +48,7 @@ class CertProductCatalogResponse(BaseModel):
 
 
 class CertProductCreate(BaseModel):
-    type: CertType = Field(..., description="认证类型：h3c / renshe")
+    type: CertType = Field(..., description="认证类型：h3c / renshe / nisp / sangfor")
     catalog_id: int | None = Field(None, description="目录项 ID，从目录创建时传入")
     code: str = Field(..., min_length=1, max_length=32, description="产品编码，如 H3CNE")
     name: str = Field(..., min_length=1, max_length=64, description="英文名")

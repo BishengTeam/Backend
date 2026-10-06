@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Path, Query
 
 from app.middleware.auth import require_permission
 from app.schemas.admin_cert_product import (
+    CertType,
     CertProductCreate,
     CertProductCatalogResponse,
     CertProductResponse,
@@ -24,13 +25,15 @@ router = APIRouter(prefix="/cert-products", tags=["管理后台-认证产品"])
 **使用场景**: 新增认证产品时，从厂商价格表导入的受控目录中选取编码；
 认证管理员只能从目录选择，超级管理员可解锁自由输入。
 
-**查询参数**: `type` 按认证类型过滤（h3c / renshe）
+**查询参数**: `type` 按认证类型过滤（h3c / renshe / nisp / sangfor）
 
 **响应**: 目录列表，`instantiated` 标记是否已创建为产品
     """,
 )
 async def list_catalog(
-    type: str | None = Query(None, description="认证类型筛选：h3c / renshe"),
+    type: CertType | None = Query(
+        None, description="认证类型筛选：h3c / renshe / nisp / sangfor"
+    ),
     _admin=Depends(require_permission("content:read")),
 ) -> APIResponse[list[CertProductCatalogResponse]]:
     """获取认证产品目录"""
@@ -45,7 +48,7 @@ async def list_catalog(
     description="""
 管理后台 **认证产品** 页面使用。
 
-**使用场景**: 页面顶部统计卡片，按认证类型（h3c/renshe）分组展示产品数、活跃批次数、报名总数。
+**使用场景**: 页面顶部统计卡片，按认证类型（h3c/renshe/nisp/sangfor）分组展示产品数、活跃批次数、报名总数。
 
 **响应**: 按 type 分组的统计列表
     """,
@@ -68,7 +71,7 @@ async def get_stats(
 **使用场景**: 页面加载时获取认证产品列表，支持按类型筛选和关键词搜索。
 
 **查询参数**:
-- `type`: 认证类型筛选（h3c / renshe）
+- `type`: 认证类型筛选（h3c / renshe / nisp / sangfor）
 - `keyword`: 按产品编码、英文名或中文名模糊搜索
 - `page`: 页码，从 1 开始
 - `page_size`: 每页条数，默认 20，最大 100
@@ -77,7 +80,9 @@ async def get_stats(
     """,
 )
 async def list_products(
-    type: str | None = Query(None, description="认证类型筛选：h3c / renshe"),
+    type: CertType | None = Query(
+        None, description="认证类型筛选：h3c / renshe / nisp / sangfor"
+    ),
     keyword: str | None = Query(None, description="按编码/名称关键词模糊搜索"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),

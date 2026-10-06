@@ -19,6 +19,8 @@ from app.schemas.common import PaginatedData
 TYPE_LABELS: dict[str, str] = {
     "h3c": "H3C 认证",
     "renshe": "人社认证",
+    "nisp": "NISP 认证",
+    "sangfor": "深信服认证",
 }
 
 PRICE_USER_TYPES = ("student", "normal")
