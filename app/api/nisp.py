@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 
 from sqlalchemy import func, select
@@ -20,7 +22,12 @@ _service = NispRegistrationService()
 
 
 @router.get("/batches", response_model=APIResponse[list[NispBatchListItem]])
-async def list_batches() -> APIResponse[list[NispBatchListItem]]:
+async def list_batches(
+    level: Literal["1", "2"] | None = Query(
+        None,
+        description="NISP 级别：1=一级，2=二级；不传返回全部级别",
+    ),
+) -> APIResponse[list[NispBatchListItem]]:
     """List published NISP exam batches."""
     from app.adapter.database import get_db_ctx
     from app.domain.nisp.src import NispExamBatch
@@ -34,6 +41,8 @@ async def list_batches() -> APIResponse[list[NispBatchListItem]]:
             .where(Plan.status == "published")
             .order_by(Plan.sort_order.desc(), NispExamBatch.id.desc())
         )
+        if level is not None:
+            stmt = stmt.where(NispExamBatch.level == level)
         rows = (await db.execute(stmt)).all()
         items = []
         for batch, plan in rows:

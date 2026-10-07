@@ -36,6 +36,15 @@ class NispOperationsTests(unittest.TestCase):
         self.assertIn("refund_processing", statuses)
         self.assertIn("refunded_closed", statuses)
 
+    def test_public_batch_list_supports_level_isolation(self):
+        source = _source("app/api/nisp.py")
+        function = _functions(source)["list_batches"]
+        body = ast.unparse(function)
+
+        self.assertIn("level: Literal['1', '2'] | None=Query(", body)
+        self.assertIn("if level is not None:", body)
+        self.assertIn("stmt = stmt.where(NispExamBatch.level == level)", body)
+
     def test_refund_provider_payloads_are_parsed_with_wechat_pay_refund(self):
         source = _source("app/services/nisp_refund.py")
 
