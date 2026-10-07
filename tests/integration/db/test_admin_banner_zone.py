@@ -145,7 +145,7 @@ async def test_toggle_zone_status(test_context):
     svc = AdminZoneService()
     created = await svc.create(
         AdminZoneCreate(
-            zone_type="test",
+            zone_type="study",
             title=f"{prefix}_z",
             cover_url=f"{prefix}_cover",
         )
@@ -209,7 +209,7 @@ async def test_batch_delete_zones(test_context):
     for i in range(3):
         z = await svc.create(
             AdminZoneCreate(
-                zone_type="test",
+                zone_type="study",
                 title=f"{prefix}_bz_{i}",
                 cover_url=f"{prefix}_cover_{i}",
             )
@@ -222,7 +222,7 @@ async def test_batch_delete_zones(test_context):
     )
 
     result = await svc.list_zones(
-        keyword=None, zone_type="test", page=1, page_size=100
+        keyword=None, zone_type="study", page=1, page_size=100
     )
     zone_map = {z.id: z for z in result.items}
     for cid in created_ids:
@@ -242,7 +242,7 @@ async def test_update_zones_sort(test_context):
     svc = AdminZoneService()
     z1 = await svc.create(
         AdminZoneCreate(
-            zone_type="test",
+            zone_type="study",
             title=f"{prefix}_sort_1",
             cover_url=f"{prefix}_cover_1",
             sort_order=0,
@@ -250,7 +250,7 @@ async def test_update_zones_sort(test_context):
     )
     z2 = await svc.create(
         AdminZoneCreate(
-            zone_type="test",
+            zone_type="study",
             title=f"{prefix}_sort_2",
             cover_url=f"{prefix}_cover_2",
             sort_order=0,
@@ -267,7 +267,7 @@ async def test_update_zones_sort(test_context):
     )
 
     result = await svc.list_zones(
-        keyword=None, zone_type="test", page=1, page_size=100
+        keyword=None, zone_type="study", page=1, page_size=100
     )
     zone_map = {z.id: z for z in result.items}
     assert zone_map[z1.id].sort_order == 10, (
