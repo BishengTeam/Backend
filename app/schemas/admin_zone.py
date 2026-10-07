@@ -1,10 +1,11 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
 class AdminZoneCreate(BaseModel):
-    zone_type: str = Field(..., min_length=1, max_length=32)
+    zone_type: Literal["cert", "study", "activity", "employment", "training"]
     title: str = Field(..., min_length=1, max_length=256)
     cover_url: str | None = Field(None, max_length=512)
     description: str | None = None
@@ -13,7 +14,7 @@ class AdminZoneCreate(BaseModel):
 
 
 class AdminZoneUpdate(BaseModel):
-    zone_type: str | None = Field(None, min_length=1, max_length=32)
+    zone_type: Literal["cert", "study", "activity", "employment", "training"] | None = None
     title: str | None = Field(None, min_length=1, max_length=256)
     cover_url: str | None = Field(None, max_length=512)
     description: str | None = None

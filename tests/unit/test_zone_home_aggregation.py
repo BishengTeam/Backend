@@ -39,7 +39,7 @@ class _FakeResult:
 class _FakeSession:
     """Minimal async session dispatching rows by the queried ORM entity.
 
-    The zone-card loop issues one Zone query per zone_type in declaration
+        The zone-card loop issues one Zone query per content zone_type in declaration
     order, so those queries are matched by their deterministic position.
     """
 
@@ -50,7 +50,7 @@ class _FakeSession:
     async def execute(self, stmt: Any) -> _FakeResult:
         entity = stmt.column_descriptions[0]["entity"]
         if entity is Zone:
-            ztype = zone_module.ALL_ZONE_TYPES[self._zone_query_index]
+            ztype = zone_module.HOME_ZONE_CONTENT_TYPES[self._zone_query_index]
             self._zone_query_index += 1
             rows = [
                 row
@@ -121,6 +121,13 @@ def test_courses_are_excluded_from_generic_entity_validation() -> None:
     """CourseListResponse must never be fed ORM rows via model_validate."""
 
     assert "courses" not in zone_module._ENTITY_QUERIES
+
+
+def test_competition_zone_banner_rows_are_not_consumed() -> None:
+    """Competition sections use competition entities, not legacy zone banners."""
+
+    assert "competition" in zone_module.ALL_ZONE_TYPES
+    assert "competition" not in zone_module.HOME_ZONE_CONTENT_TYPES
 
 
 @pytest.mark.asyncio

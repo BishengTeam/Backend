@@ -25,6 +25,11 @@ from app.services.course import CourseService
 HOME_ZONE_LIMIT = 10
 
 ALL_ZONE_TYPES = ("cert", "study", "competition", "activity", "employment", "training")
+# Zone content rows are legacy per-zone banners/cards. Competition is driven by
+# real competition entities and must never consume a separately configured banner.
+HOME_ZONE_CONTENT_TYPES = (
+    "cert", "study", "activity", "employment", "training"
+)
 
 # Entity query config: (model_class, response_schema, has_is_active_filter)
 _ENTITY_QUERIES: dict[str, tuple] = {
@@ -62,7 +67,7 @@ class ZoneService:
 
             # ── Zone cards ───────────────────────────────────────
             zones: dict[str, list[ZoneBrief]] = {}
-            for ztype in ALL_ZONE_TYPES:
+            for ztype in HOME_ZONE_CONTENT_TYPES:
                 zone_stmt = (
                     select(Zone)
                     .where(Zone.zone_type == ztype, Zone.is_active == True)
