@@ -9,6 +9,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -191,6 +192,59 @@ class NispRegistration(Base, TimestampMixin):
     close_reason: Mapped[str | None] = mapped_column(String(128))
 
 
+class NispMaterialFile(Base, TimestampMixin):
+    """A private OSS object and its stable material metadata.
+
+    A row is created immediately after upload and bound to one registration when
+    the candidate submits the order. Rejected candidates can replace a current
+    material; the previous row remains addressable for audit purposes.
+    """
+
+    __tablename__ = "nisp_material_file"
+    __table_args__ = (
+        CheckConstraint(
+            "material_type IN ('id_card_both_sides', 'portrait_photo', "
+            "'xuexin_report', 'application_form')",
+            name="ck_nisp_material_file_type",
+        ),
+        CheckConstraint("length(storage_key) > 0", name="ck_nisp_material_key_nonempty"),
+        CheckConstraint(
+            "registration_id IS NULL OR is_current = false OR bound_at IS NOT NULL",
+            name="ck_nisp_material_bound_current",
+        ),
+        Index(
+            "uq_nisp_material_current_registration_type",
+            "registration_id",
+            "material_type",
+            unique=True,
+            postgresql_where=text("is_current AND registration_id IS NOT NULL"),
+            sqlite_where=text("is_current AND registration_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    registration_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("nisp_registration.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("user.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    material_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    storage_key: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    original_filename: Mapped[str | None] = mapped_column(String(256))
+    version_no: Mapped[int | None] = mapped_column(Integer)
+    content_type: Mapped[str | None] = mapped_column(String(64))
+    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    sha256: Mapped[str | None] = mapped_column(String(64))
+    is_current: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class NispReview(Base, TimestampMixin):
     """Immutable review decision for a NISP registration."""
 
@@ -281,7 +335,7 @@ class NispRefundRequest(Base, TimestampMixin):
 
 
 class NispExportJob(Base, TimestampMixin):
-    """Async export job for NISP registration Excel."""
+    """Async export job for a NISP registration data package."""
 
     __tablename__ = "nisp_export_job"
     __table_args__ = (
@@ -313,6 +367,9 @@ class NispExportJob(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="queued"
     )
+    artifact_type: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="full_package", server_default="full_package"
+    )
     registration_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0
     )
@@ -324,3 +381,4 @@ class NispExportJob(Base, TimestampMixin):
     artifact_bytes: Mapped[int | None] = mapped_column(Integer)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
+    result_summary: Mapped[dict | None] = mapped_column(JSONB)

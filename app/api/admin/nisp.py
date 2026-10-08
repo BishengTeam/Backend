@@ -18,6 +18,7 @@ from app.schemas.nisp import (
 from app.services.nisp_admin import NispAdminService
 from app.services.nisp_export import NispExportService
 from app.services.nisp_refund import NispRefundService
+from app.services.nisp_registration import NispRegistrationService
 
 router = APIRouter(prefix="/nisp", tags=["管理后台-NISP认证"])
 _service = NispAdminService()
@@ -99,6 +100,20 @@ async def list_registrations(
         page_size=page_size,
     )
     return success(data=PaginatedData(items=items, total=total, page=page, page_size=page_size))
+
+
+@router.get(
+    "/registrations/{registration_id}",
+    response_model=APIResponse[NispRegistrationResponse],
+)
+async def get_registration(
+    registration_id: int,
+    _admin=Depends(require_permission("nisp:review")),
+) -> APIResponse[NispRegistrationResponse]:
+    """Get one registration with current and historical review materials."""
+    return success(
+        data=await NispRegistrationService().get_admin_registration(registration_id)
+    )
 
 
 @router.post("/registrations/{registration_id}/review", response_model=APIResponse[NispRegistrationResponse])

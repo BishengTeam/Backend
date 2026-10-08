@@ -6,7 +6,14 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
-from app.domain.nisp.src import NispExamBatch, NispRegistration, NispReview, NispRefundRequest
+from app.domain.nisp.src import (
+    NispExamBatch,
+    NispMaterialFile,
+    NispRegistration,
+    NispReview,
+    NispRefundRequest,
+)
+from app.integrations.nisp_storage import NispObjectStorage
 from app.domain.plan.src.index import Plan
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.nisp import (
@@ -15,6 +22,7 @@ from app.schemas.nisp import (
     NispReviewResponse,
     NispReviewDecisionRequest,
     NispResubmitRequest,
+    NispMaterialResponse,
 )
 from app.services.points_mall import release_order_coupon
 
@@ -45,6 +53,9 @@ def _registration_no(level: str, seq: int) -> str:
 
 
 class NispRegistrationService:
+    def __init__(self, storage: NispObjectStorage | None = None) -> None:
+        self.storage = storage or NispObjectStorage()
+
 
     async def create_order(
         self, user_id: int, data: NispOrderCreate
@@ -158,6 +169,36 @@ class NispRegistrationService:
                 material_keys=material_keys,
             )
             db.add(registration)
+            await db.flush()
+            await self._bind_material(
+                db,
+                user_id=user_id,
+                registration_id=registration.id,
+                material_type="id_card_both_sides",
+                storage_key=data.id_card_both_sides_key,
+            )
+            await self._bind_material(
+                db,
+                user_id=user_id,
+                registration_id=registration.id,
+                material_type="portrait_photo",
+                storage_key=data.portrait_photo_key,
+            )
+            if data.level == "2":
+                await self._bind_material(
+                    db,
+                    user_id=user_id,
+                    registration_id=registration.id,
+                    material_type="xuexin_report",
+                    storage_key=data.xuexin_report_key,
+                )
+                await self._bind_material(
+                    db,
+                    user_id=user_id,
+                    registration_id=registration.id,
+                    material_type="application_form",
+                    storage_key=data.application_form_key,
+                )
             await db.commit()
             await db.refresh(registration)
             return await self._response(db, registration)
@@ -279,6 +320,14 @@ class NispRegistrationService:
             }
             for k, v in updates.items():
                 if v:
+                    await self._bind_material(
+                        db,
+                        user_id=user_id,
+                        registration_id=reg.id,
+                        material_type=k,
+                        storage_key=v,
+                        replace_current=True,
+                    )
                     keys[k] = v
             reg.material_keys = keys
             reg.resubmission_count += 1
@@ -400,6 +449,59 @@ class NispRegistrationService:
             })
         return snapshot
 
+    async def _bind_material(
+        self,
+        db,
+        *,
+        user_id: int,
+        registration_id: int,
+        material_type: str,
+        storage_key: str | None,
+        replace_current: bool = False,
+    ) -> NispMaterialFile:
+        if not storage_key:
+            raise BusinessException("报名材料不能为空")
+        material = await db.scalar(
+            select(NispMaterialFile)
+            .where(NispMaterialFile.storage_key == storage_key)
+            .with_for_update()
+        )
+        if material is None:
+            raise BusinessException("报名材料不存在或未完成上传")
+        if material.user_id != user_id:
+            raise BusinessException("报名材料不属于当前用户")
+        if material.material_type != material_type:
+            raise BusinessException("材料类型与报名材料不匹配")
+        if material.registration_id is not None:
+            raise BusinessException("报名材料已绑定其他报名记录")
+
+        if replace_current:
+            current_rows = (
+                await db.execute(
+                    select(NispMaterialFile)
+                    .where(
+                        NispMaterialFile.registration_id == registration_id,
+                        NispMaterialFile.material_type == material_type,
+                        NispMaterialFile.is_current.is_(True),
+                    )
+                    .with_for_update()
+                )
+            ).scalars().all()
+            for current in current_rows:
+                current.is_current = False
+
+        max_version = await db.scalar(
+            select(func.max(NispMaterialFile.version_no)).where(
+                NispMaterialFile.registration_id == registration_id,
+                NispMaterialFile.material_type == material_type,
+            )
+        )
+        material.registration_id = registration_id
+        material.version_no = (max_version or 0) + 1
+        material.is_current = True
+        material.bound_at = _now()
+        return material
+
     async def _response(
         self, db, registration: NispRegistration
     ) -> NispRegistrationResponse:
@@ -412,6 +514,7 @@ class NispRegistrationService:
             .order_by(NispReview.id.desc())
             .limit(1)
         )
+        materials = []
         return NispRegistrationResponse(
             id=registration.id,
             registration_no=registration.registration_no,
@@ -435,6 +538,52 @@ class NispRegistrationService:
                 if latest_review is not None
                 else None
             ),
+            materials=materials,
             created_at=registration.created_at,
             updated_at=registration.updated_at,
         )
+
+    async def _admin_response(
+        self, db, registration: NispRegistration
+    ) -> NispRegistrationResponse:
+        response = await self._response(db, registration)
+        rows = (
+            await db.execute(
+                select(NispMaterialFile)
+                .where(NispMaterialFile.registration_id == registration.id)
+                .order_by(NispMaterialFile.material_type, NispMaterialFile.version_no)
+            )
+        ).scalars().all()
+        material_responses: list[NispMaterialResponse] = []
+        for material in rows:
+            preview_url = None
+            if material.is_current:
+                try:
+                    preview_url = await self.storage.signed_get_url(material.storage_key)
+                except Exception:
+                    preview_url = None
+            item = NispMaterialResponse(
+                id=material.id,
+                material_type=material.material_type,
+                version_no=material.version_no,
+                storage_key=material.storage_key,
+                original_filename=material.original_filename,
+                content_type=material.content_type,
+                size_bytes=material.size_bytes,
+                sha256=material.sha256,
+                is_current=material.is_current,
+                uploaded_at=material.created_at,
+            )
+            item.preview_url = preview_url
+            material_responses.append(item)
+        response.materials = material_responses
+        return response
+
+    async def get_admin_registration(
+        self, registration_id: int
+    ) -> NispRegistrationResponse:
+        async with get_db_ctx() as db:
+            registration = await db.get(NispRegistration, registration_id)
+            if registration is None:
+                raise NotFoundException("NISP 报名记录")
+            return await self._admin_response(db, registration)

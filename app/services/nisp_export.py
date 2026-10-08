@@ -1,13 +1,17 @@
 """NISP async export service with job queue, OSS storage, and signed URLs."""
 
+import re
+import tempfile
+import zipfile
 import hashlib
 import uuid
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
-from app.domain.nisp.src import NispExportJob, NispRegistration
+from app.domain.nisp.src import NispExportJob, NispMaterialFile, NispRegistration
 from app.integrations.nisp_storage import NispObjectStorage
 from app.port.exceptions import BusinessException, NotFoundException
 from app.schemas.nisp import NispExportJobResponse
@@ -41,10 +45,35 @@ CENTER_ALIGN = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
 EXPORT_TTL_HOURS = 72
 WORKER_POLL_SECONDS = 5
+REQUIRED_MATERIALS = {
+    "1": ("id_card_both_sides", "portrait_photo"),
+    "2": (
+        "id_card_both_sides",
+        "portrait_photo",
+        "xuexin_report",
+        "application_form",
+    ),
+}
+MATERIAL_EXPORT_NAMES = {
+    "id_card_both_sides": "身份证双面",
+    "portrait_photo": "寸照",
+    "xuexin_report": "学籍报告",
+    "application_form": "NISP二级考试报名申请表",
+}
+MANIFEST_HEADERS = [
+    "报名编号", "姓名", "身份证号", "个人压缩包", "身份证双面", "寸照",
+    "学籍报告", "NISP二级考试报名申请表",
+]
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class NispExportIncompleteMaterials(Exception):
+    def __init__(self, missing: list[dict]):
+        self.missing = missing
+        super().__init__("部分审核通过报名的材料不完整")
 
 
 class NispExportService:
@@ -78,6 +107,7 @@ class NispExportService:
                 requested_by_admin_id=admin_id,
                 include_statuses=include_statuses,
                 status="queued",
+                artifact_type="full_package",
                 registration_count=count,
             )
             db.add(job)
@@ -142,6 +172,18 @@ class NispExportService:
 
             try:
                 await self._run_job(job.id)
+            except NispExportIncompleteMaterials as exc:
+                async with get_db_ctx() as db2:
+                    failed = await db2.get(NispExportJob, job.id)
+                    if failed is not None:
+                        failed.status = "failed"
+                        failed.last_error = str(exc)
+                        failed.finished_at = _now()
+                        failed.result_summary = {
+                            "missing_materials": exc.missing,
+                            "missing_count": len(exc.missing),
+                        }
+                        await db2.commit()
             except Exception as exc:
                 async with get_db_ctx() as db2:
                     failed = await db2.get(NispExportJob, job.id)
@@ -169,22 +211,89 @@ class NispExportService:
                 )
             ).scalars().all()
 
-            # Build Excel
-            excel_bytes = self._build_excel(list(registrations), level=job.level)
+            material_rows = (
+                await db.execute(
+                    select(NispMaterialFile)
+                    .where(
+                        NispMaterialFile.registration_id.in_(
+                            [item.id for item in registrations]
+                        ),
+                        NispMaterialFile.is_current.is_(True),
+                    )
+                    .order_by(NispMaterialFile.registration_id, NispMaterialFile.id)
+                )
+            ).scalars().all()
+            materials_by_registration: dict[int, dict[str, NispMaterialFile]] = {}
+            for material in material_rows:
+                materials_by_registration.setdefault(material.registration_id, {})[
+                    material.material_type
+                ] = material
 
-            # Upload to storage
-            storage_key = f"nisp/exports/{job.id}/{uuid.uuid4().hex}.xlsx"
-            await self.storage.save_export(
-                storage_key=storage_key,
-                data=excel_bytes,
+            missing = []
+            required = REQUIRED_MATERIALS[job.level]
+            for reg in registrations:
+                current = materials_by_registration.get(reg.id, {})
+                missing_types = [item for item in required if item not in current]
+                if missing_types:
+                    missing.append(
+                        {
+                            "registration_id": reg.id,
+                            "registration_no": reg.registration_no,
+                            "name": reg.candidate_snapshot.get("name", ""),
+                            "missing_materials": missing_types,
+                        }
+                    )
+            if missing:
+                raise NispExportIncompleteMaterials(missing)
+
+            manifests = self._manifests(
+                list(registrations), materials_by_registration
             )
+            excel_bytes = self._build_excel(
+                list(registrations),
+                level=job.level,
+                manifests=manifests,
+            )
+            storage_key = f"nisp/exports/{job.id}/{uuid.uuid4().hex}.zip"
+            with tempfile.TemporaryDirectory(
+                prefix=f"nisp-export-upload-{job.id}-"
+            ) as upload_raw:
+                package_path = await self._build_full_package(
+                    job_id=job.id,
+                    level=job.level,
+                    excel_bytes=excel_bytes,
+                    registrations=list(registrations),
+                    materials_by_registration=materials_by_registration,
+                    manifests=manifests,
+                    destination=Path(upload_raw) / "full-package.zip",
+                )
+                await self.storage.upload_export_file(
+                    storage_key, package_path, "application/zip"
+                )
+                artifact_bytes, artifact_sha256 = self._file_size_and_sha256(
+                    package_path
+                )
 
             job.status = "succeeded"
             job.finished_at = _now()
             job.storage_key = storage_key
-            job.artifact_sha256 = hashlib.sha256(excel_bytes).hexdigest()
-            job.artifact_bytes = len(excel_bytes)
+            job.artifact_type = "full_package"
+            job.artifact_sha256 = artifact_sha256
+            job.artifact_bytes = artifact_bytes
             job.expires_at = _now() + timedelta(hours=EXPORT_TTL_HOURS)
+            job.result_summary = {
+                "registration_count": len(registrations),
+                "package_count": len(registrations),
+                "artifact_type": "full_package",
+                "packages": [
+                    {
+                        "registration_no": reg.registration_no,
+                        "name": reg.candidate_snapshot.get("name", ""),
+                        "filename": manifests[reg.id]["package"],
+                    }
+                    for reg in registrations
+                ],
+            }
             await db.commit()
 
     async def expire_artifacts(self) -> int:
@@ -217,6 +326,7 @@ class NispExportService:
         registrations: list[NispRegistration],
         *,
         level: str,
+        manifests: dict[int, dict[str, str]] | None = None,
     ) -> bytes:
         import io
 
@@ -230,6 +340,10 @@ class NispExportService:
             ws.title = "NISP二级报名表"
             self._write_level2(ws, registrations)
 
+        if manifests is not None:
+            manifest_ws = wb.create_sheet("资料清单")
+            self._write_manifest(manifest_ws, registrations, manifests)
+
         headers = NISP_LEVEL1_HEADERS if level == "1" else NISP_LEVEL2_HEADERS
         for col_idx in range(1, len(headers) + 1):
             ws.column_dimensions[get_column_letter(col_idx)].width = 16
@@ -238,6 +352,151 @@ class NispExportService:
         wb.save(buf)
         buf.seek(0)
         return buf.read()
+
+    def _manifests(
+        self,
+        registrations: list[NispRegistration],
+        materials_by_registration: dict[int, dict[str, NispMaterialFile]],
+    ) -> dict[int, dict[str, str]]:
+        name_counts: dict[str, int] = {}
+        for reg in registrations:
+            name = self._safe_filename(str(reg.candidate_snapshot.get("name", "")))
+            if not name:
+                name = f"报名{reg.registration_no}"
+            name_counts[name] = name_counts.get(name, 0) + 1
+
+        seen_names: dict[str, int] = {}
+        result: dict[int, dict[str, str]] = {}
+        for reg in registrations:
+            name = self._safe_filename(str(reg.candidate_snapshot.get("name", "")))
+            if not name:
+                name = f"报名{reg.registration_no}"
+            seen_names[name] = seen_names.get(name, 0) + 1
+            package_name = (
+                f"{name}-{reg.registration_no}.zip"
+                if seen_names[name] > 1
+                else f"{name}.zip"
+            )
+            materials = materials_by_registration[reg.id]
+            id_card_name = f"{name}.pdf"
+            portrait_name = f"{name}-{reg.candidate_idcard}.jpg"
+            xuexin_name = f"{name}-学籍报告.pdf"
+            application = materials.get("application_form")
+            application_name = self._safe_filename(
+                application.original_filename
+                or MATERIAL_EXPORT_NAMES["application_form"]
+            )
+            if not application_name.lower().endswith(".pdf"):
+                application_name += ".pdf"
+            inner_names = {id_card_name, portrait_name, xuexin_name}
+            if application_name in inner_names:
+                stem = application_name[:-4]
+                candidate = f"{stem}-NISP二级考试报名申请表.pdf"
+                serial = 2
+                while candidate in inner_names:
+                    candidate = (
+                        f"{stem}-NISP二级考试报名申请表-{serial}.pdf"
+                    )
+                    serial += 1
+                application_name = candidate
+            result[reg.id] = {
+                "name": name,
+                "package": package_name,
+                "id_card_both_sides": id_card_name,
+                "portrait_photo": portrait_name,
+                "xuexin_report": xuexin_name,
+                "application_form": application_name,
+            }
+        return result
+
+    async def _build_full_package(
+        self,
+        *,
+        job_id: int,
+        level: str,
+        excel_bytes: bytes,
+        registrations: list[NispRegistration],
+        materials_by_registration: dict[int, dict[str, NispMaterialFile]],
+        manifests: dict[int, dict[str, str]],
+        destination: Path,
+    ) -> Path:
+        with tempfile.TemporaryDirectory(prefix=f"nisp-export-{job_id}-") as raw:
+            root = Path(raw)
+            staging = root / "materials"
+            staging.mkdir()
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            excel_name = (
+                "NISP一级报名汇总表.xlsx" if level == "1" else "NISP二级报名汇总表.xlsx"
+            )
+            with zipfile.ZipFile(
+                destination, mode="w", compression=zipfile.ZIP_DEFLATED, allowZip64=True
+            ) as outer:
+                outer.writestr(excel_name, excel_bytes)
+                for reg in registrations:
+                    manifest = manifests[reg.id]
+                    person_path = root / "packages" / manifest["package"]
+                    person_path.parent.mkdir(parents=True, exist_ok=True)
+                    with zipfile.ZipFile(
+                        person_path,
+                        mode="w",
+                        compression=zipfile.ZIP_DEFLATED,
+                        allowZip64=True,
+                    ) as person:
+                        for material_type in REQUIRED_MATERIALS[level]:
+                            material = materials_by_registration[reg.id][material_type]
+                            material_path = staging / f"{material.id}-{uuid.uuid4().hex}"
+                            await self.storage.download_file(
+                                material.storage_key, material_path
+                            )
+                            person.write(
+                                material_path,
+                                arcname=manifest[material_type],
+                            )
+                            material_path.unlink(missing_ok=True)
+                    outer.write(person_path, arcname=manifest["package"])
+                    person_path.unlink(missing_ok=True)
+            return destination
+
+    def _write_manifest(
+        self,
+        ws,
+        registrations: list[NispRegistration],
+        manifests: dict[int, dict[str, str]],
+    ) -> None:
+        ws.append(MANIFEST_HEADERS)
+        self._style_header(ws, len(MANIFEST_HEADERS))
+        for reg in registrations:
+            manifest = manifests[reg.id]
+            ws.append(
+                [
+                    reg.registration_no,
+                    manifest["name"],
+                    reg.candidate_idcard,
+                    manifest["package"],
+                    manifest["id_card_both_sides"],
+                    manifest["portrait_photo"],
+                    manifest.get("xuexin_report", "-"),
+                    manifest.get("application_form", "-"),
+                ]
+            )
+            self._style_row(ws, ws.max_row, len(MANIFEST_HEADERS))
+        for col_idx in range(1, len(MANIFEST_HEADERS) + 1):
+            ws.column_dimensions[get_column_letter(col_idx)].width = 22
+
+    @staticmethod
+    def _safe_filename(value: str) -> str:
+        normalized = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "", value).strip().strip(".")
+        return normalized[:180]
+
+    @staticmethod
+    def _file_size_and_sha256(path: Path) -> tuple[int, str]:
+        digest = hashlib.sha256()
+        size = 0
+        with path.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                size += len(chunk)
+                digest.update(chunk)
+        return size, digest.hexdigest()
 
     def _write_level1(self, ws, registrations: list[NispRegistration]) -> None:
         ws.append(NISP_LEVEL1_HEADERS)

@@ -3,6 +3,9 @@ import asyncio
 from datetime import datetime, timezone
 import unittest
 from pathlib import Path
+import tempfile
+import zipfile
+from types import SimpleNamespace
 from typing import get_args
 
 from app.schemas.nisp import NispRegistrationStatus
@@ -13,6 +16,11 @@ from app.port.exceptions import ValidationException
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+class _FakeExportStorage:
+    async def download_file(self, key: str, path: Path) -> None:
+        path.write_bytes(f"data:{key}".encode())
 
 
 def _source(relative_path: str) -> str:
@@ -130,6 +138,98 @@ class NispOperationsTests(unittest.TestCase):
         self.assertIn("order.original_price = None", cancel_body)
         self.assertIn("order.discount_amount = None", cancel_body)
         self.assertIn("order.coupon_code = None", cancel_body)
+
+    def test_material_upload_receipts_are_validated_before_binding(self):
+        source = _source("app/services/nisp_registration.py")
+
+        self.assertIn('material.user_id != user_id', source)
+        self.assertIn('material.material_type != material_type', source)
+        self.assertIn('material.registration_id is not None', source)
+        self.assertIn('replace_current=True', source)
+        self.assertIn('current.is_current = False', source)
+
+    def test_admin_registration_detail_exposes_review_materials(self):
+        api = _source("app/api/admin/nisp.py")
+        service = _source("app/services/nisp_registration.py")
+
+        self.assertIn('"/registrations/{registration_id}"', api)
+        self.assertIn("get_admin_registration", api)
+        self.assertIn("NispMaterialResponse(", service)
+        self.assertIn("signed_get_url(material.storage_key)", service)
+
+    def test_full_export_builds_outer_zip_and_named_person_packages(self):
+        service = NispExportService(storage=_FakeExportStorage())
+        registrations = [
+            SimpleNamespace(
+                id=1,
+                registration_no="NISP20001",
+                candidate_idcard="110101200001011234",
+                candidate_snapshot={"name": "张三"},
+            ),
+            SimpleNamespace(
+                id=2,
+                registration_no="NISP20002",
+                candidate_idcard="110101200001015678",
+                candidate_snapshot={"name": "张三"},
+            ),
+        ]
+        materials = {}
+        for reg in registrations:
+            materials[reg.id] = {
+                material_type: SimpleNamespace(
+                    id=f"{reg.id}-{index}",
+                    registration_id=reg.id,
+                    material_type=material_type,
+                    storage_key=f"nisp/materials/{reg.id}/{material_type}",
+                    original_filename=(
+                        f"{reg.candidate_snapshot['name']}-申请表.pdf"
+                        if material_type == "application_form"
+                        else None
+                    ),
+                )
+                for index, material_type in enumerate(
+                    (
+                        "id_card_both_sides",
+                        "portrait_photo",
+                        "xuexin_report",
+                        "application_form",
+                    )
+                )
+            }
+        manifests = service._manifests(registrations, materials)
+        with tempfile.TemporaryDirectory() as raw:
+            package_path = Path(raw) / "package.zip"
+            asyncio.run(
+                service._build_full_package(
+                    job_id=1,
+                    level="2",
+                    excel_bytes=b"summary-excel",
+                    registrations=registrations,
+                    materials_by_registration=materials,
+                    manifests=manifests,
+                    destination=package_path,
+                )
+            )
+            outer_path = Path(raw) / "package.zip"
+            self.assertEqual(outer_path, package_path)
+            with zipfile.ZipFile(outer_path) as outer:
+                names = outer.namelist()
+                self.assertIn("NISP二级报名汇总表.xlsx", names)
+                self.assertIn("张三.zip", names)
+                self.assertIn("张三-NISP20002.zip", names)
+                with outer.open("张三.zip") as person_file:
+                    person_path = Path(raw) / "person.zip"
+                    person_path.write_bytes(person_file.read())
+                    with zipfile.ZipFile(person_path) as person:
+                        self.assertEqual(
+                            set(person.namelist()),
+                            {
+                                "张三.pdf",
+                                "张三-110101200001011234.jpg",
+                                "张三-学籍报告.pdf",
+                                "张三-申请表.pdf",
+                            },
+                        )
 
     def test_coupon_release_is_guarded_by_order_binding(self):
         source = _source("app/services/points_mall.py")

@@ -1,3 +1,4 @@
+import re
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
@@ -74,10 +75,13 @@ async def list_batches(
 @router.post("/materials/upload")
 async def upload_material(
     material_type: str = Form(...),
+    original_filename: str | None = Form(None, max_length=256),
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[NispMaterialUploadResponse]:
     """Upload a NISP registration material to OSS and return the storage key."""
+    from app.adapter.database import get_db_ctx
+    from app.domain.nisp.src import NispMaterialFile
     from app.integrations.nisp_storage import NispObjectStorage
 
     data = await file.read()
@@ -89,7 +93,6 @@ async def upload_material(
     if material_type not in allowed_types:
         raise BusinessException(f"不支持的材料类型: {material_type}")
 
-    # Upload to storage via NispObjectStorage
     storage = NispObjectStorage()
     storage_key, size_bytes, sha256 = await storage.save_source(
         user_id=current_user.id,
@@ -98,13 +101,42 @@ async def upload_material(
         content_type=file.content_type,
         data=data,
     )
+    supplied_filename = (
+        original_filename
+        if isinstance(original_filename, str) and original_filename
+        else (file.filename or "")
+    )
+    original_filename = re.sub(
+        r'[\\/:*?"<>|\x00-\x1f]+',
+        "",
+        supplied_filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1],
+    ).strip() or None
+    normalized_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+
+    async with get_db_ctx() as db:
+        material = NispMaterialFile(
+            user_id=current_user.id,
+            material_type=material_type,
+            storage_key=storage_key,
+            original_filename=original_filename,
+            content_type=normalized_type or None,
+            size_bytes=size_bytes,
+            sha256=sha256,
+            is_current=False,
+        )
+        db.add(material)
+        await db.commit()
+        await db.refresh(material)
 
     # 必须包 APIResponse 信封：前端按 {code: 0, data} 判定成功，
     # 裸 dict 的 code 是 undefined 会被当作业务错误（“材料上传失败”）。
     return success(
         data=NispMaterialUploadResponse(
             material_type=material_type,
+            material_id=material.id,
             storage_key=storage_key,
+            original_filename=material.original_filename,
+            content_type=material.content_type,
             size_bytes=size_bytes,
             sha256=sha256,
         )

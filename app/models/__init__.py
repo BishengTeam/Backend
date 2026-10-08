@@ -77,6 +77,14 @@ from app.domain.h3c.src.index import (
     H3cRegistration,
     H3cReview,
 )
+from app.domain.nisp.src.index import (
+    NispExamBatch,
+    NispExportJob,
+    NispMaterialFile,
+    NispRefundRequest,
+    NispRegistration,
+    NispReview,
+)
 from app.models.deployment_acceptance import (
     DeploymentAcceptance,
     DeploymentAcceptanceEvent,
@@ -174,4 +182,10 @@ __all__ = [
     "H3cRefundRequest",
     "H3cRegistration",
     "H3cReview",
+    "NispExamBatch",
+    "NispExportJob",
+    "NispMaterialFile",
+    "NispRefundRequest",
+    "NispRegistration",
+    "NispReview",
 ]

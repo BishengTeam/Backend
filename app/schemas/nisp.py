@@ -146,6 +146,7 @@ class NispRegistrationResponse(BaseModel):
     last_reviewed_at: datetime | None
     approved_at: datetime | None
     latest_review: "NispReviewResponse | None" = None
+    materials: list["NispMaterialResponse"] = []
     created_at: datetime
     updated_at: datetime
 
@@ -165,9 +166,28 @@ class NispMaterialUploadResponse(BaseModel):
     """NISP 材料上传结果（统一 APIResponse 信封内）"""
 
     material_type: str
+    material_id: int
     storage_key: str
+    original_filename: str | None
+    content_type: str | None
     size_bytes: int
     sha256: str
+
+
+class NispMaterialResponse(BaseModel):
+    id: int
+    material_type: str
+    version_no: int | None
+    storage_key: str
+    original_filename: str | None
+    content_type: str | None
+    size_bytes: int | None
+    sha256: str | None
+    is_current: bool
+    preview_url: str | None = None
+    uploaded_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
 
 
 # ── Admin: review ──
@@ -204,6 +224,7 @@ class NispExportJobResponse(BaseModel):
     level: NispLevel
     include_statuses: list[str]
     status: str
+    artifact_type: str
     registration_count: int
     started_at: datetime | None
     finished_at: datetime | None
@@ -212,6 +233,7 @@ class NispExportJobResponse(BaseModel):
     artifact_bytes: int | None
     expires_at: datetime | None
     last_error: str | None
+    result_summary: dict | None
     created_at: datetime
     updated_at: datetime
 

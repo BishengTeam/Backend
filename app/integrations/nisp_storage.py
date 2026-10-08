@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 import uuid
+import asyncio
 from pathlib import Path
 
 from app.port.config import settings
@@ -88,6 +90,35 @@ class NispObjectStorage:
             raise ThirdPartyException("NISP OSS 未配置")
         await self._oss_put(key, data, content_type)
 
+    async def download_file(self, storage_key: str, destination: Path) -> None:
+        """Download a private NISP object to a local export staging file."""
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if self.storage_type == "local":
+            source = self._local_path(storage_key)
+            if not source.is_file():
+                raise ValidationException("NISP 材料不存在")
+            await asyncio.to_thread(shutil.copyfile, source, destination)
+            return
+        if self.storage_type != "aliyun_oss":
+            raise ThirdPartyException("NISP OSS 未配置")
+
+        def _download() -> None:
+            import oss2
+
+            auth = oss2.Auth(
+                settings.ALIYUN_OSS_ACCESS_KEY_ID,
+                settings.ALIYUN_OSS_ACCESS_KEY_SECRET,
+            )
+            bucket = oss2.Bucket(
+                auth,
+                settings.ALIYUN_OSS_ENDPOINT,
+                settings.ALIYUN_OSS_BUCKET,
+                connect_timeout=5,
+            )
+            bucket.get_object_to_file(storage_key, str(destination))
+
+        await asyncio.to_thread(_download)
+
     async def _sign(self, key: str) -> str:
         import oss2
 
@@ -117,8 +148,50 @@ class NispObjectStorage:
         )
         await asyncio.to_thread(bucket.put_object, key, data, headers={"Content-Type": content_type})
 
-    async def save_export(self, *, storage_key: str, data: bytes) -> None:
-        await self._put(storage_key, data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    async def save_export(
+        self,
+        *,
+        storage_key: str,
+        data: bytes,
+        content_type: str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ) -> None:
+        await self._put(storage_key, data, content_type)
+
+    async def upload_export_file(
+        self, storage_key: str, source: Path, content_type: str
+    ) -> None:
+        """Upload a generated export without holding the whole archive in memory."""
+        if self.storage_type == "local":
+            target = self._local_path(storage_key)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(shutil.copyfile, source, target)
+            return
+        if self.storage_type != "aliyun_oss":
+            raise ThirdPartyException("NISP OSS 未配置")
+
+        def _upload() -> None:
+            import oss2
+
+            auth = oss2.Auth(
+                settings.ALIYUN_OSS_ACCESS_KEY_ID,
+                settings.ALIYUN_OSS_ACCESS_KEY_SECRET,
+            )
+            bucket = oss2.Bucket(
+                auth,
+                settings.ALIYUN_OSS_ENDPOINT,
+                settings.ALIYUN_OSS_BUCKET,
+                connect_timeout=5,
+            )
+            oss2.resumable_upload(
+                bucket,
+                storage_key,
+                str(source),
+                multipart_threshold=20 * 1024 * 1024,
+                part_size=8 * 1024 * 1024,
+                headers={"Content-Type": content_type},
+            )
+
+        await asyncio.to_thread(_upload)
 
     async def delete_object(self, storage_key: str) -> None:
         if self.storage_type == "local":
@@ -133,3 +206,11 @@ class NispObjectStorage:
         auth = oss2.Auth(settings.ALIYUN_OSS_ACCESS_KEY_ID, settings.ALIYUN_OSS_ACCESS_KEY_SECRET)
         bucket = oss2.Bucket(auth, settings.ALIYUN_OSS_ENDPOINT, settings.ALIYUN_OSS_BUCKET, connect_timeout=5)
         await asyncio.to_thread(bucket.delete_object, storage_key)
+
+    @staticmethod
+    def _local_path(storage_key: str) -> Path:
+        root = Path(settings.RENSHE_STORAGE_LOCAL_ROOT).resolve()
+        target = (root / storage_key).resolve()
+        if root != target and root not in target.parents:
+            raise ValidationException("NISP 材料对象键无效")
+        return target
