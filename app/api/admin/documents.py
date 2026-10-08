@@ -17,6 +17,7 @@ router = APIRouter(prefix="/documents", tags=["管理后台-文档管理"])
 async def list_documents(
     keyword: str | None = Query(None, max_length=128),
     document_key: str | None = Query(None, max_length=128),
+    scene: str | None = Query(None, max_length=64),
     is_active: bool | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -26,6 +27,7 @@ async def list_documents(
         data=await DocumentResourceService().list_documents(
             keyword=keyword,
             document_key=document_key,
+            scene=scene,
             is_active=is_active,
             page=page,
             page_size=page_size,
@@ -44,7 +46,9 @@ async def get_document(
 @router.post("", response_model=APIResponse[AdminDocumentItem])
 async def create_document(
     document_key: str = Form(..., max_length=128),
+    scene: str | None = Form(None, max_length=64),
     title: str = Form(..., min_length=1, max_length=128),
+    entry_text: str | None = Form(None, max_length=64),
     description: str | None = Form(None, max_length=512),
     is_active: bool = Form(True),
     file: UploadFile = File(...),
@@ -52,7 +56,9 @@ async def create_document(
 ):
     body = AdminDocumentCreate(
         document_key=document_key,
+        scene=scene,  # type: ignore[arg-type]
         title=title,
+        entry_text=entry_text,
         description=description,
         is_active=is_active,
     )

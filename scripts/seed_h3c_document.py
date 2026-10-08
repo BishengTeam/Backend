@@ -37,7 +37,10 @@ async def seed(pdf_path: Path) -> str:
             db.add(
                 DocumentResource(
                     document_key=DOCUMENT_KEY,
+                    scene="h3c_student_xuexin_guide",
                     title="如何查询学籍在线验证码",
+                    entry_text="查看《如何查询学籍在线验证码》PDF",
+                    entry_mode="required",
                     description="学信网在线验证码获取教程",
                     storage_key=storage_key,
                     original_filename=pdf_path.name,
@@ -54,11 +57,15 @@ async def seed(pdf_path: Path) -> str:
             document.sha256 == sha256
             and document.storage_key == storage_key
             and document.title == "如何查询学籍在线验证码"
+            and document.scene == "h3c_student_xuexin_guide"
             and document.is_active
         )
         if unchanged:
             return "unchanged"
         document.title = "如何查询学籍在线验证码"
+        document.scene = "h3c_student_xuexin_guide"
+        document.entry_text = document.entry_text or "查看《如何查询学籍在线验证码》PDF"
+        document.entry_mode = "required"
         document.description = document.description or "学信网在线验证码获取教程"
         document.storage_key = storage_key
         document.original_filename = pdf_path.name

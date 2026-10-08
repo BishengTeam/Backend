@@ -28,6 +28,9 @@ from app.schemas.document_resource import (
     AdminDocumentItem,
     AdminDocumentUpdate,
     UserDocumentItem,
+    UserDocumentSceneItem,
+    UserDocumentSummary,
+    DOCUMENT_SCENE_CONFIG,
 )
 
 
@@ -47,6 +50,7 @@ class DocumentResourceService:
         *,
         keyword: str | None = None,
         document_key: str | None = None,
+        scene: str | None = None,
         is_active: bool | None = None,
         page: int = 1,
         page_size: int = 20,
@@ -64,6 +68,8 @@ class DocumentResourceService:
                 )
             if document_key:
                 stmt = stmt.where(DocumentResource.document_key == document_key.strip())
+            if scene:
+                stmt = stmt.where(DocumentResource.scene == scene.strip())
             if is_active is not None:
                 stmt = stmt.where(DocumentResource.is_active == is_active)
 
@@ -109,7 +115,14 @@ class DocumentResourceService:
         async with get_db_ctx() as db:
             document = DocumentResource(
                 document_key=data.document_key,
+                scene=data.scene,
                 title=data.title,
+                entry_text=data.entry_text,
+                entry_mode=(
+                    DOCUMENT_SCENE_CONFIG[data.scene]["entry_mode"]
+                    if data.scene
+                    else None
+                ),
                 description=data.description,
                 storage_key=storage_key,
                 original_filename=file_meta.filename,
@@ -126,7 +139,7 @@ class DocumentResourceService:
                 await db.commit()
             except IntegrityError as exc:
                 await db.rollback()
-                raise ConflictException("文档键名已存在") from exc
+                raise ConflictException("文档键名或展示位置已存在") from exc
             await db.refresh(document)
             item = AdminDocumentItem.model_validate(document)
             item.download_url = await self._signed_url(document)
@@ -142,6 +155,12 @@ class DocumentResourceService:
             document = await self._get_document(db, document_id)
             for field, value in update_data.items():
                 setattr(document, field, value)
+            if "scene" in update_data:
+                document.entry_mode = (
+                    DOCUMENT_SCENE_CONFIG[document.scene]["entry_mode"]
+                    if document.scene
+                    else None
+                )
             document.updated_by = admin_id
             await db.commit()
             await db.refresh(document)
@@ -197,6 +216,33 @@ class DocumentResourceService:
                 seconds=settings.ALIYUN_OSS_SIGNED_URL_TTL_SECONDS
             )
             return UserDocumentItem.from_document(document, url, expires_at)
+
+    async def get_user_scene(self, scene: str) -> UserDocumentSceneItem:
+        config = DOCUMENT_SCENE_CONFIG.get(scene)
+        if config is None:
+            raise NotFoundException("文档展示位置")
+        async with get_db_ctx() as db:
+            document = await db.scalar(
+                select(DocumentResource).where(DocumentResource.scene == scene)
+            )
+            if document is None or not document.is_active:
+                return UserDocumentSceneItem(
+                    scene=scene,  # type: ignore[arg-type]
+                    entry_text=config["default_entry_text"],
+                    entry_mode=config["entry_mode"],  # type: ignore[arg-type]
+                    document=None,
+                )
+            return UserDocumentSceneItem(
+                scene=scene,  # type: ignore[arg-type]
+                entry_text=document.entry_text or config["default_entry_text"],
+                entry_mode=config["entry_mode"],  # type: ignore[arg-type]
+                document=UserDocumentSummary(
+                    document_key=document.document_key,
+                    title=document.title,
+                    version_no=document.version_no,
+                    size_bytes=document.size_bytes,
+                ),
+            )
 
     async def _document_key(self, document_id: int) -> str:
         async with get_db_ctx() as db:

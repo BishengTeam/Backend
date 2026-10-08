@@ -137,6 +137,54 @@ def test_user_document_requires_configuration_and_active_status(monkeypatch):
         raise AssertionError("inactive document should fail")
 
 
+def test_fixed_scene_stays_visible_without_an_active_document(monkeypatch):
+    service = DocumentResourceService()
+    active_document = SimpleNamespace(
+        document_key="h3c.xuexin_verification_guide",
+        title="如何查询学籍在线验证码",
+        entry_text="查看学信网教程PDF",
+        is_active=True,
+        version_no=2,
+        size_bytes=652910,
+    )
+    inactive_document = SimpleNamespace(is_active=False)
+
+    @asynccontextmanager
+    async def active_ctx():
+        async def scalar(_stmt):
+            return active_document
+        yield SimpleNamespace(scalar=scalar)
+
+    @asynccontextmanager
+    async def missing_ctx():
+        async def scalar(_stmt):
+            return None
+        yield SimpleNamespace(scalar=scalar)
+
+    @asynccontextmanager
+    async def inactive_ctx():
+        async def scalar(_stmt):
+            return inactive_document
+        yield SimpleNamespace(scalar=scalar)
+
+    monkeypatch.setattr("app.services.document_resource.get_db_ctx", active_ctx)
+    configured = asyncio.run(service.get_user_scene("h3c_student_xuexin_guide"))
+    assert configured.entry_text == "查看学信网教程PDF"
+    assert configured.entry_mode == "required"
+    assert configured.document is not None
+    assert configured.document.version_no == 2
+
+    monkeypatch.setattr("app.services.document_resource.get_db_ctx", missing_ctx)
+    missing = asyncio.run(service.get_user_scene("h3c_student_xuexin_guide"))
+    assert missing.entry_mode == "required"
+    assert missing.document is None
+    assert missing.entry_text == "查看《如何查询学籍在线验证码》PDF"
+
+    monkeypatch.setattr("app.services.document_resource.get_db_ctx", inactive_ctx)
+    disabled = asyncio.run(service.get_user_scene("h3c_student_xuexin_guide"))
+    assert disabled.document is None
+
+
 def test_initial_h3c_document_is_seeded_from_the_repository_pdf():
     source = (REPO_ROOT / "scripts/seed_h3c_document.py").read_text(encoding="utf-8")
     pdf = REPO_ROOT / "docs/h3c/如何查询学籍在线验证码.pdf"
@@ -158,6 +206,14 @@ def test_document_api_requires_login_and_admin_permissions():
     assert 'require_permission("document:write")' in admin_api
     assert '"document:read"' in permissions
     assert '"document:write"' in permissions
+
+
+def test_document_scene_api_is_explicit_and_authenticated():
+    source = (REPO_ROOT / "app/api/documents.py").read_text(encoding="utf-8")
+
+    assert '"/scenes/{scene}"' in source
+    assert "get_document_scene" in source
+    assert "Depends(get_current_user)" in source
 
 
 def test_replacement_upload_takes_effect_immediately():

@@ -25,7 +25,10 @@ class DocumentResource(Base, TimestampMixin):
     )
 
     document_key: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    scene: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
     title: Mapped[str] = mapped_column(String(128), nullable=False)
+    entry_text: Mapped[str | None] = mapped_column(String(64))
+    entry_mode: Mapped[str | None] = mapped_column(String(16))
     description: Mapped[str | None] = mapped_column(String(512))
     storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(256), nullable=False)
