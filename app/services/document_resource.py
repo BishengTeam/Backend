@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
 
 from fastapi import UploadFile
 from sqlalchemy import func, or_, select
@@ -28,6 +29,13 @@ from app.schemas.document_resource import (
     AdminDocumentUpdate,
     UserDocumentItem,
 )
+
+
+@dataclass(frozen=True)
+class DocumentUploadMeta:
+    filename: str
+    content_type: str | None
+    data: bytes
 
 
 class DocumentResourceService:
@@ -208,9 +216,13 @@ class DocumentResourceService:
         )
 
     @staticmethod
-    async def _read_upload(file: UploadFile):
+    async def _read_upload(file: UploadFile) -> DocumentUploadMeta:
         filename = (file.filename or "").strip()
         if not filename or len(filename) > 256:
             raise ValidationException("PDF 文件名无效")
         data = await file.read()
-        return filename, file.content_type, data
+        return DocumentUploadMeta(
+            filename=filename,
+            content_type=file.content_type,
+            data=data,
+        )

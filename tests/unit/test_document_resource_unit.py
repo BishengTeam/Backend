@@ -8,7 +8,7 @@ from app.integrations.document_storage import (
     validate_document_key,
 )
 from app.port.exceptions import BusinessException, ValidationException
-from app.schemas.document_resource import AdminDocumentUpdate
+from app.schemas.document_resource import AdminDocumentCreate, AdminDocumentUpdate
 from app.services.document_resource import DocumentResourceService
 
 
@@ -78,7 +78,7 @@ def test_document_update_contract_keeps_document_key_immutable():
 
 
 def test_user_document_requires_configuration_and_active_status(monkeypatch):
-    service = DocumentResourceService(storage=SimpleNamespace())
+    service = DocumentResourceService()
     async def signed_get_url(*_args, **_kwargs):
         return "https://oss/pdf"
     service.storage.signed_get_url = signed_get_url
@@ -167,3 +167,29 @@ def test_replacement_upload_takes_effect_immediately():
 
     assert "document.version_no += 1" in service
     assert "document.is_active = True" in service
+
+
+def test_admin_document_upload_rejects_invalid_files_before_database_write():
+    class InvalidPdfUpload:
+        filename = "guide.pdf"
+        content_type = "application/pdf"
+
+        async def read(self) -> bytes:
+            return b"not a pdf"
+
+    service = DocumentResourceService()
+
+    try:
+        asyncio.run(
+            service.create(
+                AdminDocumentCreate(
+                    document_key="h3c.xuexin_verification_guide",
+                    title="如何查询学籍在线验证码",
+                ),
+                file=InvalidPdfUpload(),
+                admin_id=1,
+            )
+        )
+    except ValidationException:
+        return
+    raise AssertionError("invalid PDF content should be rejected")
