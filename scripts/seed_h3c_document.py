@@ -8,6 +8,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
+import app.models  # noqa: F401  # Register every ORM table referenced by FKs.
 from app.adapter.database import async_session_factory
 from app.domain.content.src.index import DocumentResource
 from app.integrations.document_storage import DocumentObjectStorage

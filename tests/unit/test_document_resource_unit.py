@@ -142,6 +142,7 @@ def test_initial_h3c_document_is_seeded_from_the_repository_pdf():
     pdf = REPO_ROOT / "docs/h3c/如何查询学籍在线验证码.pdf"
 
     assert 'DOCUMENT_KEY = "h3c.xuexin_verification_guide"' in source
+    assert "import app.models" in source
     assert "如何查询学籍在线验证码" in source
     assert pdf.is_file()
     assert pdf.stat().st_size > 100000
