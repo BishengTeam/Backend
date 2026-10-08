@@ -115,7 +115,7 @@ class NispRegistrationService:
                     if not getattr(data, field):
                         raise BusinessException(f"NISP二级必须填写 {field}")
                 if not data.xuexin_report_key:
-                    raise BusinessException("NISP二级必须上传学籍报告")
+                        raise BusinessException("NISP二级必须上传学籍验证报告")
                 if not data.application_form_key:
                     raise BusinessException("NISP二级必须上传申请表模板")
 

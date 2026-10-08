@@ -185,6 +185,18 @@ def test_fixed_scene_stays_visible_without_an_active_document(monkeypatch):
     assert disabled.document is None
 
 
+def test_nisp_document_scenes_cover_report_guide_and_application_template():
+    from app.schemas.document_resource import DOCUMENT_SCENE_CONFIG
+
+    scenes = set(DOCUMENT_SCENE_CONFIG)
+    assert {
+        "nisp_education_report_guide",
+        "nisp_level2_application_form",
+    }.issubset(scenes)
+    assert DOCUMENT_SCENE_CONFIG["nisp_education_report_guide"]["entry_mode"] == "required"
+    assert DOCUMENT_SCENE_CONFIG["nisp_level2_application_form"]["entry_mode"] == "required"
+
+
 def test_initial_h3c_document_is_seeded_from_the_repository_pdf():
     source = (REPO_ROOT / "scripts/seed_h3c_document.py").read_text(encoding="utf-8")
     pdf = REPO_ROOT / "docs/h3c/如何查询学籍在线验证码.pdf"
@@ -194,6 +206,27 @@ def test_initial_h3c_document_is_seeded_from_the_repository_pdf():
     assert "如何查询学籍在线验证码" in source
     assert pdf.is_file()
     assert pdf.stat().st_size > 100000
+
+
+def test_initial_nisp_documents_are_seeded_from_repository_pdfs():
+    source = (REPO_ROOT / "scripts/seed_nisp_documents.py").read_text(encoding="utf-8")
+    guide = REPO_ROOT / "docs/nisp/《学历证书电子注册备案表》查询步骤.pdf"
+    application = REPO_ROOT / "docs/nisp/NISP二级考试报名申请表.pdf"
+
+    assert 'nisp.education_report_guide' in source
+    assert 'nisp.level2_application_form' in source
+    assert "nisp_education_report_guide" in source
+    assert "nisp_level2_application_form" in source
+    assert guide.is_file() and guide.stat().st_size > 100000
+    assert application.is_file() and application.stat().st_size > 100000
+
+
+def test_document_template_pdfs_are_included_in_runtime_image():
+    dockerignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8")
+
+    assert "!docs/h3c/如何查询学籍在线验证码.pdf" in dockerignore
+    assert "!docs/nisp/《学历证书电子注册备案表》查询步骤.pdf" in dockerignore
+    assert "!docs/nisp/NISP二级考试报名申请表.pdf" in dockerignore
 
 
 def test_document_api_requires_login_and_admin_permissions():

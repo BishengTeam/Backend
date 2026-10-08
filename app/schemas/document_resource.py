@@ -8,7 +8,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from app.integrations.document_storage import validate_document_key
 
 
-DocumentScene = Literal["h3c_student_xuexin_guide"]
+DocumentScene = Literal[
+    "h3c_student_xuexin_guide",
+    "nisp_education_report_guide",
+    "nisp_level2_application_form",
+]
 DocumentEntryMode = Literal["required", "optional"]
 
 DOCUMENT_SCENE_CONFIG: dict[str, dict[str, str]] = {
@@ -16,6 +20,16 @@ DOCUMENT_SCENE_CONFIG: dict[str, dict[str, str]] = {
         "default_entry_text": "查看《如何查询学籍在线验证码》PDF",
         "entry_mode": "required",
         "location": "H3C报名表单 / 学生材料",
+    },
+    "nisp_education_report_guide": {
+        "default_entry_text": "查看《学历证书电子注册备案表》查询步骤PDF",
+        "entry_mode": "required",
+        "location": "NISP报名表单 / 二级学籍报告",
+    },
+    "nisp_level2_application_form": {
+        "default_entry_text": "下载《NISP二级考试报名申请表》PDF",
+        "entry_mode": "required",
+        "location": "NISP报名表单 / 二级申请表",
     },
 }
 
