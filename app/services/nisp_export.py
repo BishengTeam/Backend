@@ -382,14 +382,16 @@ class NispExportService:
             portrait_name = f"{name}-{reg.candidate_idcard}.jpg"
             xuexin_name = f"{name}-学籍报告.pdf"
             application = materials.get("application_form")
-            application_name = self._safe_filename(
-                application.original_filename
-                or MATERIAL_EXPORT_NAMES["application_form"]
-            )
-            if not application_name.lower().endswith(".pdf"):
-                application_name += ".pdf"
+            application_name = ""
+            if application is not None:
+                application_name = self._safe_filename(
+                    application.original_filename
+                    or MATERIAL_EXPORT_NAMES["application_form"]
+                )
+                if not application_name.lower().endswith(".pdf"):
+                    application_name += ".pdf"
             inner_names = {id_card_name, portrait_name, xuexin_name}
-            if application_name in inner_names:
+            if application_name and application_name in inner_names:
                 stem = application_name[:-4]
                 candidate = f"{stem}-NISP二级考试报名申请表.pdf"
                 serial = 2

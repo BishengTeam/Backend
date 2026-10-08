@@ -197,6 +197,14 @@ class NispOperationsTests(unittest.TestCase):
                 )
             }
         manifests = service._manifests(registrations, materials)
+        level_one_materials = {
+            key: value for key, value in materials[1].items()
+            if key != "application_form"
+        }
+        level_one_manifests = service._manifests(
+            [registrations[0]], {registrations[0].id: level_one_materials}
+        )
+        self.assertEqual(level_one_manifests[1]["application_form"], "")
         with tempfile.TemporaryDirectory() as raw:
             package_path = Path(raw) / "package.zip"
             asyncio.run(
