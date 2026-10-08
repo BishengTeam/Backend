@@ -8,6 +8,7 @@ from app.domain.content.src.model.agreement_template import (
     AgreementTemplate,
 )
 from app.domain.content.src.model.banner import Banner
+from app.domain.content.src.model.document_resource import DocumentResource
 from app.domain.content.src.model.ticket import Ticket
 from app.domain.content.src.model.training import Training
 from app.domain.content.src.model.zone import Zone
@@ -21,6 +22,7 @@ __all__ = [
     "AgreementAcceptance",
     "AgreementTemplate",
     "Banner",
+    "DocumentResource",
     "Ticket",
     "Training",
     "Zone",

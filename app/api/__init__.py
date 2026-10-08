@@ -9,6 +9,7 @@ from app.api.chat import quick_router, router as chat_router
 from app.api.collection import router as collection_router
 from app.api.competition import router as competition_router
 from app.api.coupon import router as coupon_router
+from app.api.documents import router as documents_router
 from app.api.courses import router as courses_router
 from app.api.classroom import router as classroom_router
 from app.api.h3c import order_router as h3c_order_router
@@ -59,6 +60,7 @@ router.include_router(collection_router)
 router.include_router(activity_router)
 router.include_router(coupon_router)
 router.include_router(competition_router)
+router.include_router(documents_router)
 router.include_router(job_router)
 router.include_router(share_router)
 router.include_router(training_router)

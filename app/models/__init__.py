@@ -1,6 +1,7 @@
 from app.domain.content.src.index import (
     Activity, ActivityRegistration, ActivityReminder,
     Agreement, Ticket, Zone,
+    DocumentResource,
 )
 from app.domain.certification.src.index import (
     Certification,
@@ -105,6 +106,7 @@ __all__ = [
     "CourseEntitlementJob",
     "CourseEntitlementJobItem",
     "DeletedOpenid",
+    "DocumentResource",
     "DeletedIdentityHash",
     "DeploymentAcceptance",
     "DeploymentAcceptanceEvent",

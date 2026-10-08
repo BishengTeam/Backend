@@ -9,6 +9,8 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "content:read",
         "content:list",
         "content:write",
+        "document:read",
+        "document:write",
         "user:list",
         "user:write",
         "order:list",

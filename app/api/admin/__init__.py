@@ -14,6 +14,7 @@ from app.api.admin.jobs import router as jobs_router
 from app.api.admin.courses import router as courses_router
 from app.api.admin.classrooms import router as classrooms_router
 from app.api.admin.course_uploads import router as course_uploads_router
+from app.api.admin.documents import router as documents_router
 from app.api.admin.orders import router as orders_router
 from app.api.admin.points_mall import router as points_mall_router
 from app.api.admin.nisp import router as nisp_router
@@ -46,6 +47,7 @@ router.include_router(reviews_router)
 router.include_router(courses_router)
 router.include_router(classrooms_router)
 router.include_router(course_uploads_router)
+router.include_router(documents_router)
 router.include_router(plans_router, prefix="/certifications")
 router.include_router(jobs_router)
 router.include_router(prices_router)
