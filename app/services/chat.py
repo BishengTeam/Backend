@@ -34,13 +34,15 @@ class ChatService:
             session_id = str(uuid.uuid4())
         context = await self._get_context(session_id)
         context.append({"role": "user", "content": message})
-        reply = await self.backend.send_message(user_id, message, context)
-        context.append({"role": "assistant", "content": reply})
+        conversation_id = await self._get_dify_conversation(user_id)
+        reply = await self.backend.send_message(user_id, message, context, conversation_id=conversation_id)
+        await self._save_dify_conversation(user_id, reply.conversation_id)
+        context.append({"role": "assistant", "content": reply.answer})
         if len(context) > CONTEXT_MAX_MESSAGES:
             context = context[-CONTEXT_MAX_MESSAGES:]
         await self._save_context(session_id, context)
         await self._save_conversation(user_id, session_id, context, self.backend.type)
-        return ChatResponse(session_id=session_id, reply=reply, backend_type=self.backend.type)
+        return ChatResponse(session_id=session_id, reply=reply.answer, backend_type=self.backend.type)
 
     async def stream_message(
         self, user_id: int, message: str, session_id: str | None
@@ -49,11 +51,12 @@ class ChatService:
             session_id = str(uuid.uuid4())
         context = await self._get_context(session_id)
         context.append({"role": "user", "content": message})
+        conversation_id = await self._get_dify_conversation(user_id)
         backend_type = "unavailable"
         full_reply = ""
         try:
             backend_type = self.backend.type
-            async for chunk in self.backend.stream_message(user_id, message, context):
+            async for chunk in self.backend.stream_message(user_id, message, context, conversation_id=conversation_id):
                 full_reply += chunk
                 yield f"data: {json.dumps({'chunk': chunk, 'session_id': session_id}, ensure_ascii=False)}\n\n"
             context.append({"role": "assistant", "content": full_reply})
@@ -132,3 +135,17 @@ class ChatService:
     async def _save_context(self, session_id: str, context: list[dict]) -> None:
         key = f"chat:session:{session_id}"
         await redis_setex_safe(key, SESSION_TTL, json.dumps(context, ensure_ascii=False))
+
+    # Multi-turn continuity: Dify owns the context, so map app user -> Dify
+    # conversation and carry it on every request. Same mapping for all devices
+    # of one user is accepted for this customer-service scenario.
+    def _dify_conversation_key(self, user_id: int) -> str:
+        return f"chat:difyconv:user:{user_id}"
+
+    async def _get_dify_conversation(self, user_id: int) -> str | None:
+        return await redis_get_safe(self._dify_conversation_key(user_id))
+
+    async def _save_dify_conversation(self, user_id: int, conversation_id: str | None) -> None:
+        if not conversation_id:
+            return
+        await redis_setex_safe(self._dify_conversation_key(user_id), SESSION_TTL, conversation_id)

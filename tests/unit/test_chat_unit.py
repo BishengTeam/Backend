@@ -208,6 +208,103 @@ class ChatSystemTests(unittest.TestCase):
         self.assertNotIn("if debug:", source.lower().replace("__debug__", ""))
         self.assertNotIn("fallback", source.lower())
 
+    def test_dify_backend_timeout_allows_long_reasoning_runs(self):
+        from app.integrations.chat_backend import DifyChatBackend
+        self.assertGreaterEqual(DifyChatBackend._TIMEOUT.read, 60.0)
+
+    def test_strip_think_blocks_removes_reasoning_segment(self):
+        from app.integrations.chat_backend import strip_think_blocks
+        raw = "<think>\n内部推理，不应展示\n</think>\n\n【澄清】你好，想了解哪个认证？"
+        self.assertEqual(strip_think_blocks(raw), "【澄清】你好，想了解哪个认证？")
+        self.assertEqual(strip_think_blocks("普通回答"), "普通回答")
+        self.assertEqual(strip_think_blocks("<think>a</think><think>b</think>结论"), "结论")
+        self.assertEqual(strip_think_blocks(""), "")
+
+    def test_think_stripper_handles_tags_split_across_chunks(self):
+        from app.integrations.chat_backend import _ThinkStripper
+        s = _ThinkStripper()
+        out = (
+            s.feed("<th")
+            + s.feed("ink>推理过程")
+            + s.feed("结束</thi")
+            + s.feed("nk>【答")
+            + s.feed("案】")
+            + s.finish()
+        )
+        self.assertEqual(out, "【答案】")
+
+    def test_think_stripper_passes_plain_text_through(self):
+        from app.integrations.chat_backend import _ThinkStripper
+        s = _ThinkStripper()
+        out = s.feed("你好") + s.feed("，世界")
+        self.assertEqual(out + s.finish(), "你好，世界")
+
+    def test_think_stripper_drops_unclosed_think_tail(self):
+        from app.integrations.chat_backend import _ThinkStripper
+        s = _ThinkStripper()
+        out = s.feed("开头<think>后半段没了")
+        self.assertEqual(out, "开头")
+        self.assertEqual(s.finish(), "")
+
+    def test_dify_backend_payload_includes_conversation_id_only_when_present(self):
+        from app.integrations.chat_backend import DifyChatBackend
+        payload = DifyChatBackend._payload(
+            user_id=1, message="hi", response_mode="blocking", conversation_id="conv-1",
+        )
+        self.assertEqual(payload["conversation_id"], "conv-1")
+        payload_without = DifyChatBackend._payload(user_id=1, message="hi", response_mode="blocking")
+        self.assertNotIn("conversation_id", payload_without)
+
+    def test_chat_service_reuses_dify_conversation_per_user(self):
+        import asyncio
+        from unittest import mock
+
+        from app.integrations.chat_backend import ChatReply
+        from app.services.chat import ChatService
+
+        class StubBackend:
+            type = "dify"
+
+            def __init__(self):
+                self.seen_conversation_ids = []
+
+            async def send_message(self, user_id, message, context, conversation_id=None):
+                self.seen_conversation_ids.append(conversation_id)
+                return ChatReply(answer="ok", conversation_id="conv-9")
+
+            async def stream_message(self, user_id, message, context, conversation_id=None):
+                yield "ok"
+
+        store: dict[str, str] = {}
+
+        async def fake_get(key):
+            return store.get(key)
+
+        async def fake_set(key, ttl, value):
+            store[key] = value
+
+        async def scenario():
+            backend = StubBackend()
+            svc = ChatService(backend=backend)
+            with mock.patch("app.services.chat.redis_get_safe", fake_get), \
+                 mock.patch("app.services.chat.redis_setex_safe", fake_set), \
+                 mock.patch.object(ChatService, "_save_conversation", new=mock.AsyncMock()):
+                await svc.process_message(user_id=7, message="第一问", session_id="s1")
+                await svc.process_message(user_id=7, message="第二问", session_id="s2")
+                await svc.process_message(user_id=8, message="另一用户", session_id="s3")
+            return backend
+
+        backend = asyncio.run(scenario())
+        self.assertEqual(backend.seen_conversation_ids, [None, "conv-9", None])
+        self.assertEqual(
+            store.get("chat:difyconv:user:7"), "conv-9",
+            "per-user mapping should be stored with TTL and reused on the next turn",
+        )
+        self.assertEqual(
+            store.get("chat:difyconv:user:8"), "conv-9",
+            "a user's first reply also yields a Dify conversation id for their next turn",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
