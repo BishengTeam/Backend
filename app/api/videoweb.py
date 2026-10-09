@@ -12,6 +12,9 @@ from app.schemas.common import APIResponse, success
 from app.schemas.videoweb import (
     VideoWebCodeCreate,
     VideoWebCodeStatus,
+    VideoWebLoginCodeResponse,
+    VideoWebLoginExchangeRequest,
+    VideoWebLoginExchangeResponse,
     VideoWebUserLookupResponse,
 )
 from app.services.videoweb import VideoWebService
@@ -57,6 +60,50 @@ async def my_video_web_codes(
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[list[dict]]:
     return success(data=await VideoWebService.list_user_codes(current_user.id))
+
+
+@user_router.post(
+    "/login-code",
+    response_model=APIResponse[VideoWebLoginCodeResponse],
+    summary="生成课程视频站一次性登录码",
+)
+async def create_video_web_login_code(
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[VideoWebLoginCodeResponse]:
+    login_code = await VideoWebService.create_login_code(current_user.id)
+    return success(
+        data=VideoWebLoginCodeResponse(
+            login_code=login_code,
+            expires_in=settings.VIDEOWEB_LOGIN_CODE_TTL_SECONDS,
+        ),
+        message="登录码已生成",
+    )
+
+
+@internal_router.post(
+    "/login/exchange",
+    response_model=APIResponse[VideoWebLoginExchangeResponse],
+    include_in_schema=False,
+)
+async def exchange_video_web_login_code(
+    body: VideoWebLoginExchangeRequest,
+    x_service_token: str | None = Header(default=None),
+    db=Depends(get_db),
+) -> APIResponse[VideoWebLoginExchangeResponse]:
+    expected = settings.VIDEOWEB_LOOKUP_SERVICE_TOKEN
+    if not expected or not x_service_token or not compare_digest(x_service_token, expected):
+        raise UnauthorizedException("服务认证失败")
+    user_id = await VideoWebService.exchange_login_code(body.login_code)
+    user = await db.get(User, user_id)
+    if user is None:
+        raise NotFoundException("小程序用户")
+    return success(
+        data=VideoWebLoginExchangeResponse(
+            user_id=user.id,
+            phone=user.phone,
+            is_active=user.is_active,
+        )
+    )
 
 
 @admin_router.get("/codes", response_model=APIResponse[dict])

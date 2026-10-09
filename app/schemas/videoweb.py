@@ -6,7 +6,24 @@ from pydantic import BaseModel, Field
 
 class VideoWebUserLookupResponse(BaseModel):
     user_id: int
-    phone: str
+    phone: str | None = None
+    is_active: bool
+
+
+class VideoWebLoginCodeResponse(BaseModel):
+    login_code: str = Field(min_length=6, max_length=6)
+    expires_in: int
+
+
+class VideoWebLoginExchangeRequest(BaseModel):
+    login_code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+    model_config = {"extra": "forbid"}
+
+
+class VideoWebLoginExchangeResponse(BaseModel):
+    user_id: int
+    phone: str | None = None
     is_active: bool
 
 

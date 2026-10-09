@@ -311,10 +311,7 @@ class UserService:
 
             update_data = data.model_dump(exclude_unset=True)
             for key, value in update_data.items():
-                if key == "phone":
-                    user.phone = value
-                else:
-                    setattr(profile, key, value)
+                setattr(profile, key, value)
 
             await db.commit()
             return await self.get_profile(user_id)

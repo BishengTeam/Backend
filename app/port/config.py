@@ -354,6 +354,9 @@ class Settings(BaseSettings):
     VIDEOWEB_ISSUE_DELAY_SECONDS: float = 1.0
     VIDEOWEB_RECONCILE_POLL_SECONDS: int = 300
     VIDEOWEB_RECONCILE_WINDOW_DAYS: int = 7
+    VIDEOWEB_LOGIN_CODE_TTL_SECONDS: int = 300
+    VIDEOWEB_LOGIN_CODE_COOLDOWN_SECONDS: int = 60
+    VIDEOWEB_LOGIN_CODE_MAX_ATTEMPTS: int = 5
 
     @model_validator(mode="after")
     def validate_renshe_storage(self) -> "Settings":

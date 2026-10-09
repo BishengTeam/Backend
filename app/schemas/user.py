@@ -49,10 +49,13 @@ class PhoneDecryptRequest(BaseModel):
 # ── Level 1: 基础资料（无需审核） ──
 
 class UserProfileUpdate(BaseModel):
-    """修改基础资料，所有字段可选，仅传入要改的字段"""
+    """修改基础资料，所有字段可选，仅传入要改的字段。
+
+    Phone is intentionally absent: an unverified profile edit must never change
+    the identifier used by downstream services.
+    """
     nickname: str | None = Field(None, max_length=64, description="昵称/网名")
     email: str | None = Field(None, max_length=128, description="邮箱")
-    phone: str | None = Field(None, min_length=11, max_length=11, description="手机号")
     province: str | None = Field(None, max_length=32, description="省份")
     city: str | None = Field(None, max_length=32, description="城市")
     address: str | None = Field(None, max_length=256, description="详细地址")

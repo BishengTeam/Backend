@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
@@ -12,12 +13,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db_ctx
+from app.adapter.redis import redis_client
 from app.domain.certification.src.index import Course, CourseEnrollment
 from app.domain.community.src.index import QuizCourseLibraryBinding
 from app.domain.order.src.index import Order
 from app.domain.user.src.index import User
 from app.port.config import settings
-from app.port.exceptions import ThirdPartyException
+from app.port.exceptions import RateLimitException, ThirdPartyException, UnauthorizedException
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,108 @@ class VideoWebService:
     """
 
     _issue_tasks: set[asyncio.Task[None]] = set()
+
+    @staticmethod
+    def _login_keys(
+        *, login_code: str | None = None, user_id: int | None = None
+    ) -> dict[str, str]:
+        prefix = "videoweb:login"
+        keys: dict[str, str] = {}
+        if login_code is not None:
+            keys.update(
+                {
+                    "code": f"{prefix}:code:{login_code}",
+                    "user": f"{prefix}:user:{login_code}",
+                    "attempts": f"{prefix}:attempts:{login_code}",
+                }
+            )
+        if user_id is not None:
+            keys.update(
+                {
+                    "owner": f"{prefix}:owner:{user_id}",
+                    "cooldown": f"{prefix}:cooldown:{user_id}",
+                    "lock": f"{prefix}:lock:{user_id}",
+                }
+            )
+        return keys
+
+    @staticmethod
+    def _text(value: object | None) -> str:
+        return value.decode() if isinstance(value, bytes) else str(value or "")
+
+    @classmethod
+    async def create_login_code(cls, user_id: int) -> str:
+        """Create a short-lived, single-use website login code.
+
+        The credential is never logged. Redis failures fail closed because this
+        value authenticates a user on the independent website.
+        """
+        owner_keys = cls._login_keys(user_id=user_id)
+        ttl = settings.VIDEOWEB_LOGIN_CODE_TTL_SECONDS
+        if not await redis_client.set(
+            owner_keys["lock"], "1", nx=True, ex=max(1, min(ttl, 5))
+        ):
+            raise RateLimitException("登录码正在生成，请稍后再试")
+        try:
+            if not await redis_client.set(
+                owner_keys["cooldown"],
+                "1",
+                nx=True,
+                ex=settings.VIDEOWEB_LOGIN_CODE_COOLDOWN_SECONDS,
+            ):
+                raise RateLimitException("登录码生成过于频繁，请稍后再试")
+
+            previous = cls._text(await redis_client.get(owner_keys["owner"]))
+            if previous:
+                previous_keys = cls._login_keys(login_code=previous)
+                await redis_client.delete(
+                    previous_keys["code"],
+                    previous_keys["user"],
+                    previous_keys["attempts"],
+                )
+
+            for _ in range(20):
+                login_code = f"{secrets.randbelow(1_000_000):06d}"
+                code_keys = cls._login_keys(login_code=login_code)
+                if await redis_client.set(
+                    code_keys["code"], str(user_id), nx=True, ex=ttl
+                ):
+                    await redis_client.set(code_keys["user"], str(user_id), ex=ttl)
+                    await redis_client.set(owner_keys["owner"], login_code, ex=ttl)
+                    return login_code
+            raise RateLimitException("登录码生成失败，请稍后再试")
+        finally:
+            await redis_client.delete(owner_keys["lock"])
+
+    @classmethod
+    async def exchange_login_code(cls, login_code: str) -> int:
+        """Consume a login code once and return its mini-program user ID."""
+        code_keys = cls._login_keys(login_code=login_code)
+        attempts = await redis_client.incr(code_keys["attempts"])
+        if attempts == 1:
+            await redis_client.expire(
+                code_keys["attempts"], settings.VIDEOWEB_LOGIN_CODE_TTL_SECONDS
+            )
+        if attempts > settings.VIDEOWEB_LOGIN_CODE_MAX_ATTEMPTS:
+            owner = cls._text(await redis_client.get(code_keys["user"]))
+            await redis_client.delete(
+                code_keys["code"], code_keys["user"], code_keys["attempts"]
+            )
+            if owner.isdigit():
+                await redis_client.delete(
+                    cls._login_keys(user_id=int(owner))["owner"]
+                )
+            raise UnauthorizedException("登录码错误次数过多，请重新生成")
+
+        if await redis_client.delete(code_keys["code"]) != 1:
+            raise UnauthorizedException("登录码不存在、已过期或已使用")
+
+        owner = cls._text(await redis_client.get(code_keys["user"]))
+        await redis_client.delete(code_keys["user"], code_keys["attempts"])
+        if not owner.isdigit():
+            raise UnauthorizedException("登录码无效，请重新生成")
+        await redis_client.delete(cls._login_keys(user_id=int(owner))["owner"])
+        return int(owner)
 
     @staticmethod
     def _enabled() -> bool:
