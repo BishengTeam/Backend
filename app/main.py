@@ -14,6 +14,7 @@ from sqlalchemy import text
 from app.api import router as api_router
 from app.api.admin import router as admin_router
 from app.api.agreement import router as agreement_router
+from app.api.videoweb import internal_router as videoweb_internal_router
 from app.contracts.quiz import QUIZ_CONTRACT_VERSION
 from app.port.config import settings
 from app.adapter.database import engine, get_db_ctx
@@ -54,6 +55,7 @@ from app.services.dependency_health import (
     is_ready,
 )
 from app.services.quiz_metrics import QuizMetricsMiddleware, quiz_metrics
+from app.services.videoweb import videoweb_code_reconciliation_worker_loop
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +90,9 @@ async def lifespan(app: FastAPI):
         if settings.WECHAT_PAY_ENABLED
         else None
     )
+    videoweb_reconciliation_task = asyncio.create_task(
+        videoweb_code_reconciliation_worker_loop()
+    )
     logger.info("Application startup complete")
     yield
     logger.info("Shutting down background tasks...")
@@ -105,6 +110,7 @@ async def lifespan(app: FastAPI):
         refund_reconciliation_task.cancel()
     if h3c_refund_task is not None:
         h3c_refund_task.cancel()
+    videoweb_reconciliation_task.cancel()
     try:
         await cleanup_task
     except asyncio.CancelledError:
@@ -149,6 +155,10 @@ async def lifespan(app: FastAPI):
             await h3c_refund_task
         except asyncio.CancelledError:
             pass
+    try:
+        await videoweb_reconciliation_task
+    except asyncio.CancelledError:
+        pass
     logger.info("Closing database connections...")
     await engine.dispose()
     logger.info("Closing Redis connections...")
@@ -375,6 +385,7 @@ app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(QuizMetricsMiddleware)
 app.include_router(api_router)
 app.include_router(admin_router)
+app.include_router(videoweb_internal_router)
 app.include_router(agreement_router)
 
 

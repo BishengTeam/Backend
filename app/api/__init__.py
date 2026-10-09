@@ -30,6 +30,7 @@ from app.api.ticket import router as ticket_router
 from app.api.training import router as training_router
 from app.api.upload import media_router, upload_router
 from app.api.user import router as user_router
+from app.api.videoweb import router as videoweb_router
 from app.api.zone import router as zone_router
 
 router = APIRouter(prefix="/api")
@@ -66,3 +67,4 @@ router.include_router(share_router)
 router.include_router(training_router)
 router.include_router(upload_router)
 router.include_router(media_router)
+router.include_router(videoweb_router)

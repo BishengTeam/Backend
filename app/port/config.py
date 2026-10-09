@@ -22,6 +22,8 @@ SECRET_FILE_FIELDS = (
     "QUIZ_OSS_ACCESS_KEY_ID",
     "QUIZ_OSS_ACCESS_KEY_SECRET",
     "QUIZ_METRICS_BEARER_TOKEN",
+    "VIDEOWEB_SERVICE_TOKEN",
+    "VIDEOWEB_LOOKUP_SERVICE_TOKEN",
 )
 SECRET_FILE_NAMES = {f"{field_name}_FILE" for field_name in SECRET_FILE_FIELDS}
 OPTIONAL_EMPTY_SECRET_FIELDS = frozenset(
@@ -30,6 +32,8 @@ OPTIONAL_EMPTY_SECRET_FIELDS = frozenset(
         "ALIYUN_OSS_ACCESS_KEY_SECRET",
         "QUIZ_OSS_ACCESS_KEY_ID",
         "QUIZ_OSS_ACCESS_KEY_SECRET",
+        "VIDEOWEB_SERVICE_TOKEN",
+        "VIDEOWEB_LOOKUP_SERVICE_TOKEN",
     }
 )
 
@@ -342,6 +346,14 @@ class Settings(BaseSettings):
     # Prometheus must authenticate with this dedicated Bearer token.  It is
     # never emitted in metrics, health documents or logs.
     QUIZ_METRICS_BEARER_TOKEN: str = ""
+    # Closed course-video website integration. Empty values disable the
+    # corresponding bridge without affecting existing payment fulfilment.
+    VIDEOWEB_BASE_URL: str = ""
+    VIDEOWEB_SERVICE_TOKEN: str = ""
+    VIDEOWEB_LOOKUP_SERVICE_TOKEN: str = ""
+    VIDEOWEB_ISSUE_DELAY_SECONDS: float = 1.0
+    VIDEOWEB_RECONCILE_POLL_SECONDS: int = 300
+    VIDEOWEB_RECONCILE_WINDOW_DAYS: int = 7
 
     @model_validator(mode="after")
     def validate_renshe_storage(self) -> "Settings":

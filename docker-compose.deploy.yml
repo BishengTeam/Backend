@@ -68,6 +68,13 @@ x-backend-environment: &backend_environment
   QUIZ_WORKER_MAX_RETRIES: ${QUIZ_WORKER_MAX_RETRIES:-5}
   QUIZ_METRICS_ENABLED: "true"
   QUIZ_METRICS_BEARER_TOKEN_FILE: /run/secrets/quiz_metrics_bearer_token
+  # Closed course-video website bridge. Empty disables all bridge behaviour.
+  VIDEOWEB_BASE_URL: ${VIDEOWEB_BASE_URL:-}
+  VIDEOWEB_SERVICE_TOKEN: ${VIDEOWEB_SERVICE_TOKEN:-}
+  VIDEOWEB_LOOKUP_SERVICE_TOKEN: ${VIDEOWEB_LOOKUP_SERVICE_TOKEN:-}
+  VIDEOWEB_ISSUE_DELAY_SECONDS: "1"
+  VIDEOWEB_RECONCILE_POLL_SECONDS: ${VIDEOWEB_RECONCILE_POLL_SECONDS:-300}
+  VIDEOWEB_RECONCILE_WINDOW_DAYS: ${VIDEOWEB_RECONCILE_WINDOW_DAYS:-7}
   # AI chat backend (Dify); values come from runtime.env.
   CHAT_BACKEND: ${CHAT_BACKEND:-disabled}
   DIFY_API_BASE: ${DIFY_API_BASE:-}
@@ -118,7 +125,9 @@ services:
       - uploads:/app/uploads
       - ${RENSHE_TEMPLATE_HOST_DIR:?RENSHE_TEMPLATE_HOST_DIR is required}:/app/renshe-templates:ro
     ports:
-      - 127.0.0.1:${BACKEND_PORT:-8000}:8000
+      # Keep loopback-only by default. An internal deployment can set
+      # BACKEND_BIND=0.0.0.0 and rely on the VPC/security-group boundary.
+      - ${BACKEND_BIND:-127.0.0.1}:${BACKEND_PORT:-8000}:8000
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"]
       interval: 10s
@@ -185,6 +194,8 @@ services:
       - postgres_password
     volumes:
       - pgdata:/var/lib/postgresql/data
+    ports:
+      - ${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PUBLISHED_PORT:-5432}:5432
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 3s
