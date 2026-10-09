@@ -17,6 +17,7 @@ from app.schemas.nisp import (
     NispResubmitRequest,
 )
 from app.services.nisp_registration import NispRegistrationService
+from app.services.nisp_lifecycle import occupied_count
 
 router = APIRouter(prefix="/nisp", tags=["NISP认证"])
 _service = NispRegistrationService()
@@ -47,12 +48,7 @@ async def list_batches(
         rows = (await db.execute(stmt)).all()
         items = []
         for batch, plan in rows:
-            occupied = (await db.scalar(
-                select(func.count()).select_from(Order).where(
-                    Order.plan_id == plan.id,
-                    Order.status.in_(("pending", "paid", "completed")),
-                )
-            )) or 0
+            occupied = await occupied_count(db, plan.id)
             remaining = max(0, plan.capacity - occupied) if plan.capacity > 0 else -1
             items.append(NispBatchListItem(
                 id=batch.id,

@@ -7,7 +7,10 @@ from sqlalchemy import func, select
 from app.adapter.database import get_db_ctx
 from app.domain.nisp.src import NispExamBatch, NispRegistration
 from app.domain.plan.src.index import Plan
-from app.port.exceptions import BusinessException, NotFoundException
+from app.port.exceptions import BusinessException, ConflictException, NotFoundException
+from app.domain.order.src.index import Order, apply_order_status_transition
+from app.services.nisp_lifecycle import occupied_count, request_refund
+from app.services.points_mall import release_order_coupon
 from app.schemas.nisp import (
     NispExamBatchCreate,
     NispExamBatchResponse,
@@ -89,12 +92,16 @@ class NispAdminService:
 
     async def close_registration(self, batch_id: int) -> NispExamBatchResponse:
         async with get_db_ctx() as db:
-            batch = await db.get(NispExamBatch, batch_id)
+            batch = await db.scalar(select(NispExamBatch).where(
+                NispExamBatch.id == batch_id
+            ).with_for_update())
             if batch is None:
                 raise NotFoundException("NISP 考试批次")
-            plan = await db.get(Plan, batch.plan_id)
+            plan = await db.scalar(select(Plan).where(Plan.id == batch.plan_id).with_for_update())
             if plan is None:
                 raise NotFoundException("Plan")
+            if plan.status not in {"published", "registration_closed"}:
+                raise ConflictException("当前批次不能关闭报名")
             plan.status = "registration_closed"
             plan.registration_closed_at = _now()
             await db.commit()
@@ -103,12 +110,44 @@ class NispAdminService:
 
     async def cancel_batch(self, batch_id: int) -> NispExamBatchResponse:
         async with get_db_ctx() as db:
-            batch = await db.get(NispExamBatch, batch_id)
+            batch = await db.scalar(select(NispExamBatch).where(
+                NispExamBatch.id == batch_id
+            ).with_for_update())
             if batch is None:
                 raise NotFoundException("NISP 考试批次")
-            plan = await db.get(Plan, batch.plan_id)
+            plan = await db.scalar(select(Plan).where(Plan.id == batch.plan_id).with_for_update())
             if plan is None:
                 raise NotFoundException("Plan")
+            if plan.status not in {"published", "registration_closed", "cancelled"}:
+                raise ConflictException("当前批次不能取消")
+            # Re-running cancellation also repairs batches cancelled by the
+            # previous implementation, which only changed the plan status.
+            registrations = (await db.execute(select(
+                NispRegistration.id, NispRegistration.order_id
+            ).where(NispRegistration.batch_id == batch.id).order_by(NispRegistration.order_id))).all()
+            for registration_id, order_id in registrations:
+                # Payment and refund callbacks lock order before registration.
+                order = await db.scalar(select(Order).where(Order.id == order_id).with_for_update())
+                reg = await db.scalar(select(NispRegistration).where(
+                    NispRegistration.id == registration_id
+                ).with_for_update())
+                if reg.status in {"cancelled", "refunded_closed"}:
+                    continue
+                if order is None:
+                    raise ConflictException("NISP 报名缺少订单")
+                if order.status == "pending":
+                    await release_order_coupon(db, order_id=order.id,
+                                               user_id=order.user_id, coupon_code=order.coupon_code)
+                    apply_order_status_transition(order, "closed")
+                    order.closed_at = _now()
+                    order.close_reason = "batch_cancelled"
+                    reg.status = "cancelled"
+                    reg.closed_at = order.closed_at
+                    reg.close_reason = "batch_cancelled"
+                    reg.resubmission_due_at = None
+                elif order.status in {"paid", "completed"}:
+                    await request_refund(db, reg, order, request_kind="batch_cancelled",
+                                         reason_code="batch_cancelled", reason_detail="考试批次已取消")
             plan.status = "cancelled"
             plan.cancelled_at = _now()
             await db.commit()
@@ -160,15 +199,7 @@ class NispAdminService:
 
     async def _response(self, db, batch: NispExamBatch) -> NispExamBatchResponse:
         plan = await db.get(Plan, batch.plan_id)
-        occupied = (await db.scalar(
-            select(func.count()).select_from(NispRegistration).where(
-                NispRegistration.batch_id == batch.id,
-                NispRegistration.status.in_(
-                    ("pending_payment", "pending_review",
-                     "rejected_awaiting_resubmission", "approved")
-                ),
-            )
-        )) or 0
+        occupied = await occupied_count(db, batch.plan_id)
         return NispExamBatchResponse(
             id=batch.id,
             plan_id=batch.plan_id,

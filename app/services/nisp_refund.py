@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.adapter.database import get_db_ctx
 from app.domain.nisp.src import NispRefundRequest, NispRegistration
 from app.domain.order.src.index import Order, apply_order_status_transition
-from app.integrations.wechat_pay import WechatPayClient, WechatPayRefund
+from app.integrations.wechat_pay import WechatPayClient, WechatPayRefund, WechatPayAPIError
 from app.port.exceptions import ConflictException, NotFoundException
 from app.schemas.nisp import NispRefundResponse
 from app.port.config import settings
@@ -90,7 +90,7 @@ class NispRefundService:
                 raise NotFoundException("NISP 退款任务")
             if refund.status in {"processing", "succeeded"}:
                 return self._response(refund)
-            if refund.status not in {"requested", "failed"}:
+            if refund.status not in {"requested", "approved", "failed"}:
                 raise ConflictException("当前 NISP 退款状态不能确认")
 
             order = await db.scalar(
@@ -151,7 +151,7 @@ class NispRefundService:
                 .with_for_update()
             )
             now = _now()
-            if order is not None and order.status == "pending":
+            if order is not None and order.status in {"paid", "completed"}:
                 apply_order_status_transition(order, "refunded")
             if registration is not None:
                 registration.status = "refunded_closed"
@@ -172,8 +172,15 @@ class NispRefundService:
             )
             if refund is None:
                 raise NotFoundException("NISP 退款任务")
+            if refund.status == "succeeded":
+                return self._response(refund)
             refund.status = "processing"
             refund.processing_at = _now()
+            registration = await db.scalar(select(NispRegistration).where(
+                NispRegistration.id == refund.registration_id
+            ).with_for_update())
+            if registration is not None:
+                registration.status = "refund_processing"
             await db.commit()
 
         try:
@@ -191,12 +198,14 @@ class NispRefundService:
                     .where(NispRefundRequest.id == prepared.refund_id)
                     .with_for_update()
                 )
-                if refund is not None:
-                    refund.status = "failed"
-                    refund.last_error = f"{type(exc).__name__}: {exc}"[:2000]
+                if refund is not None and refund.status != "succeeded":
+                    # A transport failure does not prove WeChat rejected the
+                    # refund. Keep the merchant number and reconcile it.
+                    refund.status = "failed" if isinstance(exc, WechatPayAPIError) else "processing"
+                    refund.last_error = type(exc).__name__
                     refund.retry_count += 1
                     await db.commit()
-            raise ConflictException(f"微信退款提交失败: {exc}") from exc
+            raise ConflictException("微信退款结果暂未确认，系统将自动对账") from exc
 
         result = WechatPayRefund.from_payload(raw)
         if (
@@ -221,14 +230,29 @@ class NispRefundService:
             )
             if refund is None:
                 raise NotFoundException("NISP 退款任务")
-            if refund.status != "processing" or not refund.out_refund_no:
+            if refund.status not in {"approved", "processing", "failed"} or not refund.out_refund_no:
                 return self._response(refund)
             order = await db.get(Order, refund.order_id)
             expected_out_trade_no = order.out_trade_no if order else None
             expected_amount_total = order.price if order else None
             expected_amount_refund = refund.amount_cents
+            approved_by = refund.approved_by_admin_id
+            if approved_by is None:
+                raise ConflictException("退款尚未经管理员确认")
+            prepared = _PreparedRefund(refund.id, refund.order_id,
+                                       expected_out_trade_no or "", refund.out_refund_no,
+                                       expected_amount_total or 0, expected_amount_refund)
 
-        raw = await self.wechat_pay.query_refund(out_refund_no=refund.out_refund_no)
+        if expected_amount_refund == 0:
+            return await self._complete_zero_refund(refund_id)
+        try:
+            raw = await self.wechat_pay.query_refund(out_refund_no=refund.out_refund_no)
+        except WechatPayAPIError as exc:
+            if exc.api_code not in {"RESOURCE_NOT_EXISTS", "REFUND_NOT_EXIST"}:
+                raise
+            # Confirmed locally but never accepted remotely (including a crash
+            # before submission): retry the same idempotent merchant number.
+            return await self._submit(prepared)
         result = WechatPayRefund.from_payload(raw)
         if (
             result.out_trade_no != expected_out_trade_no
@@ -261,6 +285,11 @@ class NispRefundService:
             )
             if refund is None:
                 raise NotFoundException("NISP 退款任务")
+            order = await db.get(Order, refund.order_id)
+            if (order is None or provider_refund.out_trade_no != order.out_trade_no
+                    or provider_refund.amount_total != order.price
+                    or provider_refund.amount_refund != refund.amount_cents):
+                raise ConflictException("微信退款通知与 NISP 订单不一致")
             refund_id = refund.id
 
         return await self._apply_provider_result(
@@ -312,7 +341,13 @@ class NispRefundService:
             elif status in {"ABNORMAL", "CLOSED"}:
                 refund.status = "failed"
                 refund.last_error = f"provider status: {status}"
-            # PROCESSING stays as processing
+            elif status == "PROCESSING":
+                refund.status = "processing"
+                registration = await db.scalar(select(NispRegistration).where(
+                    NispRegistration.id == refund.registration_id
+                ).with_for_update())
+                if registration is not None:
+                    registration.status = "refund_processing"
 
             await db.commit()
             await db.refresh(refund)
