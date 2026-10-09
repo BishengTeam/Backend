@@ -150,7 +150,7 @@ class OrderFulfillmentService:
             )
         return bool(entitlements)
 
-    async def on_paid(self, db: AsyncSession, order: Order) -> bool:
+    async def _on_paid_impl(self, db: AsyncSession, order: Order) -> bool:
         from app.services.h3c_registration import H3cRegistrationService
         from app.services.nisp_registration import NispRegistrationService
 
@@ -195,6 +195,15 @@ class OrderFulfillmentService:
         enrollment.access_revoked_at = None
         await self._grant_quiz_entitlements(db, order, enrollment)
         return True
+
+    async def on_paid(self, db: AsyncSession, order: Order) -> bool:
+        """Fulfil an order, then schedule a closed-video-site code issue."""
+        from app.services.videoweb import VideoWebService
+
+        processed = await self._on_paid_impl(db, order)
+        if order.order_kind in {"course", "quiz_order"}:
+            VideoWebService.schedule_issue_for_order(order.id)
+        return processed
 
     async def on_refunded(self, db: AsyncSession, order: Order) -> bool:
         application = await self._lock_renshe_application(db, order)

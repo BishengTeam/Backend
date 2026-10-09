@@ -32,6 +32,7 @@ from app.api.admin.tickets import router as tickets_router
 from app.api.admin.training import router as training_router
 from app.api.admin.upload import router as upload_router
 from app.api.admin.users import router as users_router
+from app.api.videoweb import admin_router as videoweb_router
 from app.api.admin.zones import router as zones_router
 
 router = APIRouter(prefix="/admin")
@@ -68,3 +69,4 @@ router.include_router(competition_legacy_router)
 router.include_router(competitions_router)
 router.include_router(training_router)
 router.include_router(upload_router)
+router.include_router(videoweb_router)
