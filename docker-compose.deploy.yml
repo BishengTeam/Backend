@@ -68,6 +68,13 @@ x-backend-environment: &backend_environment
   QUIZ_WORKER_MAX_RETRIES: ${QUIZ_WORKER_MAX_RETRIES:-5}
   QUIZ_METRICS_ENABLED: "true"
   QUIZ_METRICS_BEARER_TOKEN_FILE: /run/secrets/quiz_metrics_bearer_token
+  # Closed course-video website bridge. Empty disables all bridge behaviour.
+  VIDEOWEB_BASE_URL: ${VIDEOWEB_BASE_URL:-}
+  VIDEOWEB_SERVICE_TOKEN: ${VIDEOWEB_SERVICE_TOKEN:-}
+  VIDEOWEB_LOOKUP_SERVICE_TOKEN: ${VIDEOWEB_LOOKUP_SERVICE_TOKEN:-}
+  VIDEOWEB_ISSUE_DELAY_SECONDS: "1"
+  VIDEOWEB_RECONCILE_POLL_SECONDS: ${VIDEOWEB_RECONCILE_POLL_SECONDS:-300}
+  VIDEOWEB_RECONCILE_WINDOW_DAYS: ${VIDEOWEB_RECONCILE_WINDOW_DAYS:-7}
   # AI chat backend (Dify); values come from runtime.env.
   CHAT_BACKEND: ${CHAT_BACKEND:-disabled}
   DIFY_API_BASE: ${DIFY_API_BASE:-}
@@ -125,6 +132,19 @@ services:
       timeout: 5s
       retries: 18
       start_period: 30s
+    restart: unless-stopped
+
+  backend-vpc-proxy:
+    image: alpine/socat:1.8.0.1
+    # The image entrypoint is already `socat`; pass only its two addresses.
+    command: ["TCP-LISTEN:8000,fork,reuseaddr", "TCP:app:8000"]
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      # Loopback-only by default. An internal deployment can expose this proxy
+      # on the VPC address without changing the Backend's public boundary.
+      - ${BACKEND_VPC_BIND:-127.0.0.1}:${BACKEND_VPC_PORT:-8001}:8000
     restart: unless-stopped
 
   quiz-worker:
@@ -185,11 +205,24 @@ services:
       - postgres_password
     volumes:
       - pgdata:/var/lib/postgresql/data
+    ports:
+      - ${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PUBLISHED_PORT:-5432}:5432
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 3s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
+
+  db-vpc-proxy:
+    profiles: [internal]
+    image: alpine/socat:1.8.0.1
+    command: ["TCP-LISTEN:5432,fork,reuseaddr", "TCP:db:5432"]
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - ${POSTGRES_VPC_BIND:-127.0.0.1}:${POSTGRES_VPC_PORT:-5433}:5432
     restart: unless-stopped
 
   redis:
