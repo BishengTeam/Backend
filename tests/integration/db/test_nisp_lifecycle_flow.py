@@ -39,6 +39,13 @@ async def context(monkeypatch):
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with engine.begin() as conn:
+            await conn.execute(text("""
+                CREATE FUNCTION quiz_library_code() RETURNS text AS $$
+                BEGIN
+                    RETURN 'QL-' || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 12));
+                END;
+                $$ LANGUAGE plpgsql;
+            """))
             await conn.run_sync(Base.metadata.create_all)
 
         @asynccontextmanager
