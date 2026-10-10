@@ -26,6 +26,7 @@ H3cRejectionReasonCode = Literal[
     "verify_code_invalid",
     "suspected_forged_material",
 ]
+H3cCorrectionFieldType = Literal["phone", "email", "school", "address", "verify_code"]
 
 
 class H3cProfileDefaults(BaseModel):
@@ -260,18 +261,61 @@ class H3cRegistrationResponse(BaseModel):
     exam_location: str | None = None
     materials: list[H3cMaterialResponse]
     latest_review: H3cReviewResponse | None = None
+    pending_correction: "H3cCorrectionRequestResponse | None" = None
+    versions: list["H3cRegistrationVersionResponse"] = []
     created_at: datetime
     updated_at: datetime
 
 
+class H3cRegistrationVersionResponse(BaseModel):
+    id: int
+    registration_id: int
+    version_no: int
+    candidate_snapshot: dict
+    material_versions: dict | None = None
+    source: str
+    submitted_at: datetime
+    superseded_at: datetime | None = None
+    is_current: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class H3cCorrectionRequestResponse(BaseModel):
+    id: int
+    registration_id: int
+    allowed_fields: list[str]
+    allowed_material_types: list[str] | None = None
+    reason_code: str
+    reason_detail: str | None
+    due_at: datetime
+    status: str
+    created_by_admin_id: int | None = None
+    submitted_version_id: int | None = None
+    submitted_at: datetime | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class H3cResubmissionCreate(BaseModel):
+    phone: str | None = Field(None, min_length=5, max_length=20)
+    email: str | None = Field(None, min_length=3, max_length=128)
+    school: str | None = Field(None, min_length=1, max_length=128)
+    address: str | None = Field(None, min_length=1, max_length=256)
+    verify_code: str | None = Field(None, min_length=1, max_length=64)
     coupon_proof_key: str | None = Field(None, min_length=1, max_length=512)
     student_proof_key: str | None = Field(None, min_length=1, max_length=512)
 
     @model_validator(mode="after")
     def validate_nonempty(self):
-        if not self.coupon_proof_key and not self.student_proof_key:
-            raise ValueError("请至少重新上传一项被拒绝的证明材料")
+        values = [
+            self.phone, self.email, self.school, self.address, self.verify_code,
+            self.coupon_proof_key, self.student_proof_key,
+        ]
+        if not any(values):
+            raise ValueError("请至少提交一项补正内容")
         return self
 
 
@@ -280,14 +324,21 @@ class H3cReviewDecision(BaseModel):
     reason_code: H3cRejectionReasonCode | None = None
     reason_detail: str | None = Field(None, max_length=1000)
     rejected_material_types: list[Literal["coupon_proof", "student_proof"]] = []
+    allowed_fields: list[H3cCorrectionFieldType] = []
 
     @model_validator(mode="after")
     def validate_rejection(self):
         if self.decision == "rejected" and (
-            not self.reason_code or not self.rejected_material_types
+            not self.reason_code
+            or (not self.rejected_material_types and not self.allowed_fields)
         ):
-            raise ValueError("拒绝时必须选择拒绝原因和被拒绝材料")
+            raise ValueError("拒绝时必须选择拒绝原因和至少一项补正内容")
         return self
+
+
+class H3cRejectRefundRequest(BaseModel):
+    reason_code: str = Field(..., min_length=1, max_length=64)
+    reason_detail: str = Field(..., min_length=1, max_length=1000)
 
 
 class H3cRefundConfirmRequest(BaseModel):

@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db_ctx
@@ -19,6 +19,8 @@ from app.domain.h3c.src.index import (
     H3cRefundRequest,
     H3cRegistration,
     H3cReview,
+    H3cRegistrationVersion,
+    H3cCorrectionRequest,
 )
 from app.domain.order.src.index import (
     INVENTORY_LOCK_ACTION,
@@ -45,7 +47,10 @@ from app.schemas.h3c_registration import (
     H3cResubmissionCreate,
     H3cReviewDecision,
     H3cReviewResponse,
+    H3cRejectRefundRequest,
     H3cUserExamBatchResponse,
+    H3cCorrectionRequestResponse,
+    H3cRegistrationVersionResponse,
 )
 from app.services.agreement_template import ensure_accepted
 from app.services.certification_identity import (
@@ -74,6 +79,7 @@ H3C_VISIBLE_PLAN_STATUSES = (
     "registration_closed",
     "finalized",
 )
+H3C_CORRECTABLE_FIELDS = {"phone", "email", "school", "address", "verify_code"}
 
 
 def _utc(value: datetime | None) -> datetime | None:
@@ -368,6 +374,15 @@ class H3cRegistrationService:
                     order.expires_at = None
                     await confirm_inventory_sale(db, order, reason="h3c_zero_price_order")
                     registration.status = "pending_review"
+                db.add(H3cRegistrationVersion(
+                    registration_id=registration.id,
+                    version_no=1,
+                    candidate_snapshot=registration.candidate_snapshot,
+                    material_versions={},
+                    source="initial",
+                    submitted_at=now,
+                    is_current=True,
+                ))
                 await db.flush()
             return await self.get_registration(user_id, registration.id)
 
@@ -535,15 +550,18 @@ class H3cRegistrationService:
         data = H3cResubmissionCreate.model_validate(data)
         async with get_db_ctx() as db:
             async with db.begin():
-                batch_id = await db.scalar(
-                    select(H3cRegistration.batch_id).where(
+                unresolved = await db.scalar(
+                    select(H3cRegistration).where(
                         H3cRegistration.id == registration_id,
                         H3cRegistration.user_id == user_id,
                     )
                 )
-                if batch_id is None:
+                if unresolved is None:
                     raise NotFoundException("H3C 报名")
-                batch = await self._get_batch_for_update(db, batch_id)
+                batch = await self._get_batch_for_update(db, unresolved.batch_id)
+                order = await db.scalar(
+                    select(Order).where(Order.id == unresolved.order_id).with_for_update()
+                )
                 registration = await db.scalar(
                     select(H3cRegistration)
                     .where(
@@ -552,29 +570,44 @@ class H3cRegistrationService:
                     )
                     .with_for_update()
                 )
-                if registration is None:
+                if registration is None or order is None:
                     raise NotFoundException("H3C 报名")
-                if registration.batch_id != batch.id:
-                    raise ConflictException("H3C 报名与考试批次关联不一致")
+                if registration.batch_id != batch.id or registration.order_id != order.id:
+                    raise ConflictException("H3C 报名关联记录不一致")
                 if registration.status != "rejected_awaiting_resubmission":
-                    raise ConflictException("当前报名状态不能补交材料")
+                    raise ConflictException("当前报名状态不能补正")
                 now = _now()
                 if registration.resubmission_count >= batch.max_resubmissions:
-                    raise ConflictException("补交次数已用完")
+                    raise ConflictException("补正次数已用完")
                 due_at = _utc(registration.resubmission_due_at)
                 if due_at is not None and now > due_at:
-                    raise ConflictException("补交材料已超时，请等待退款处理")
+                    raise ConflictException("补正已超时，请等待退款处理")
 
-                latest_review = await db.scalar(
-                    select(H3cReview)
-                    .where(H3cReview.registration_id == registration.id)
-                    .order_by(H3cReview.id.desc())
-                    .limit(1)
+                correction = await db.scalar(
+                    select(H3cCorrectionRequest)
+                    .where(
+                        H3cCorrectionRequest.registration_id == registration.id,
+                        H3cCorrectionRequest.status == "pending",
+                    )
+                    .with_for_update()
                 )
-                if latest_review is None or not latest_review.rejected_material_types:
-                    raise ConflictException("未找到可补交的材料项")
-                allowed = set(latest_review.rejected_material_types)
-                submitted = {
+                if correction is None:
+                    raise ConflictException("未找到待补正请求")
+
+                allowed_fields = set(correction.allowed_fields or [])
+                allowed_materials = set(correction.allowed_material_types or [])
+                submitted_fields = {
+                    key: value
+                    for key, value in {
+                        "phone": data.phone,
+                        "email": data.email,
+                        "school": data.school,
+                        "address": data.address,
+                        "verify_code": data.verify_code,
+                    }.items()
+                    if value is not None
+                }
+                submitted_materials = {
                     key: value
                     for key, value in {
                         "coupon_proof": data.coupon_proof_key,
@@ -582,13 +615,20 @@ class H3cRegistrationService:
                     }.items()
                     if value
                 }
-                if set(submitted) != allowed:
-                    raise ValidationException("只能重新上传被拒绝的材料项")
-                for key, value in submitted.items():
+                if not set(submitted_fields).issubset(H3C_CORRECTABLE_FIELDS):
+                    raise ValidationException("包含不允许补正的 H3C 字段")
+                if set(submitted_fields) != allowed_fields:
+                    raise ValidationException("请且只能提交管理员允许修改的信息")
+                if set(submitted_materials) != allowed_materials:
+                    raise ValidationException("请且只能重新上传管理员指定材料")
+                if "verify_code" in submitted_fields and registration.registration_type != "student":
+                    raise ValidationException("仅学生报名允许补正学籍验证码")
+
+                snapshot = dict(registration.candidate_snapshot or {})
+                snapshot.update(submitted_fields)
+                for key, value in submitted_materials.items():
                     upload_rows = await self._material_uploads(
-                        db,
-                        user_id=user_id,
-                        keys={key: value},
+                        db, user_id=user_id, keys={key: value}
                     )
                     upload = upload_rows[key]
                     old_rows = (
@@ -604,7 +644,7 @@ class H3cRegistrationService:
                     ).scalars().all()
                     for old in old_rows:
                         old.is_current = False
-                    next_version = 1 + len(
+                    next_material_version = 1 + len(
                         (
                             await db.execute(
                                 select(H3cMaterial.id).where(
@@ -618,7 +658,7 @@ class H3cRegistrationService:
                         H3cMaterial(
                             registration_id=registration.id,
                             material_type=key,
-                            version_no=next_version,
+                            version_no=next_material_version,
                             storage_key=upload.storage_key,
                             original_filename=upload.original_filename,
                             size_bytes=upload.size_bytes,
@@ -626,6 +666,62 @@ class H3cRegistrationService:
                             uploaded_at=now,
                         )
                     )
+
+                current_version = await db.scalar(
+                    select(H3cRegistrationVersion)
+                    .where(
+                        H3cRegistrationVersion.registration_id == registration.id,
+                        H3cRegistrationVersion.is_current.is_(True),
+                    )
+                    .with_for_update()
+                )
+                if current_version is None:
+                    current_version = H3cRegistrationVersion(
+                        registration_id=registration.id,
+                        version_no=1,
+                        candidate_snapshot=dict(registration.candidate_snapshot or {}),
+                        material_versions={},
+                        source="initial",
+                        submitted_at=registration.created_at or now,
+                        is_current=True,
+                    )
+                    db.add(current_version)
+                    await db.flush()
+                current_version.is_current = False
+                current_version.superseded_at = now
+                next_version_no = current_version.version_no + 1
+                await db.flush()
+                current_materials = (
+                    await db.execute(
+                        select(H3cMaterial).where(
+                            H3cMaterial.registration_id == registration.id,
+                            H3cMaterial.is_current.is_(True),
+                        )
+                    )
+                ).scalars().all()
+                new_version = H3cRegistrationVersion(
+                    registration_id=registration.id,
+                    version_no=next_version_no,
+                    candidate_snapshot=snapshot,
+                    material_versions={
+                        row.material_type: {
+                            "material_id": row.id,
+                            "version_no": row.version_no,
+                            "sha256": row.sha256,
+                        }
+                        for row in current_materials
+                    },
+                    source="user_resubmission",
+                    submitted_at=now,
+                    is_current=True,
+                )
+                db.add(new_version)
+                await db.flush()
+
+                correction.status = "submitted"
+                correction.submitted_version_id = new_version.id
+                correction.submitted_at = now
+                registration.candidate_snapshot = snapshot
                 registration.resubmission_count += 1
                 registration.resubmission_due_at = None
                 registration.status = "pending_review"
@@ -666,7 +762,7 @@ class H3cRegistrationService:
                     or registration.order_id != order.id
                 ):
                     raise ConflictException("H3C 报名关联记录不一致")
-                if registration.status != "pending_review":
+                if registration.status not in {"pending_review", "approved"}:
                     raise ConflictException("当前报名状态不能审核")
                 now = _now()
                 current_material_ids = (
@@ -688,18 +784,44 @@ class H3cRegistrationService:
                     reviewed_at=now,
                 )
                 db.add(review)
+                await db.flush()
                 registration.last_reviewed_at = now
                 if decision_data.decision == "approved":
                     registration.status = "approved"
                     registration.approved_at = now
                     registration.resubmission_due_at = None
                 else:
+                    allowed_fields = list(dict.fromkeys(decision_data.allowed_fields))
+                    allowed_materials = list(
+                        dict.fromkeys(decision_data.rejected_material_types or [])
+                    )
+                    if any(
+                        key == "coupon_proof" and registration.registration_type != "coupon"
+                        for key in allowed_materials
+                    ) or any(
+                        key == "student_proof" and registration.registration_type != "student"
+                        for key in allowed_materials
+                    ):
+                        raise ValidationException("补正材料类型与报名类型不匹配")
+                    if not set(allowed_fields).issubset(H3C_CORRECTABLE_FIELDS):
+                        raise ValidationException("包含不允许补正的 H3C 字段")
                     registration.rejection_count += 1
                     if registration.resubmission_count < batch.max_resubmissions:
                         registration.status = "rejected_awaiting_resubmission"
                         registration.resubmission_due_at = now + timedelta(
                             hours=batch.resubmission_window_hours
                         )
+                        db.add(H3cCorrectionRequest(
+                            registration_id=registration.id,
+                            review_id=review.id,
+                            allowed_fields=allowed_fields,
+                            allowed_material_types=allowed_materials or None,
+                            reason_code=decision_data.reason_code or "review_rejected",
+                            reason_detail=decision_data.reason_detail,
+                            due_at=registration.resubmission_due_at,
+                            status="pending",
+                            created_by_admin_id=admin_id,
+                        ))
                     else:
                         registration.status = "pending_refund_confirmation"
                         registration.resubmission_due_at = None
@@ -717,6 +839,75 @@ class H3cRegistrationService:
                     await self._send_approved_notification(registration_id)
                 except Exception:
                     pass  # Notification failure must not block review approval.
+            return await self._admin_registration(registration_id)
+
+    async def reject_and_refund(
+        self,
+        *,
+        admin_id: int,
+        registration_id: int,
+        data: H3cRejectRefundRequest,
+    ) -> H3cRegistrationResponse:
+        """Authorize a dedicated H3C refund without waiting for WeChat Pay."""
+        async with get_db_ctx() as db:
+            async with db.begin():
+                unresolved = await db.scalar(
+                    select(H3cRegistration).where(H3cRegistration.id == registration_id)
+                )
+                if unresolved is None:
+                    raise NotFoundException("H3C 报名")
+                batch = await self._get_batch_for_update(db, unresolved.batch_id)
+                order = await db.scalar(
+                    select(Order).where(Order.id == unresolved.order_id).with_for_update()
+                )
+                registration = await db.scalar(
+                    select(H3cRegistration)
+                    .where(H3cRegistration.id == registration_id)
+                    .with_for_update()
+                )
+                if registration is None or order is None:
+                    raise NotFoundException("H3C 报名")
+                if (
+                    registration.batch_id != batch.id
+                    or registration.order_id != order.id
+                ):
+                    raise ConflictException("H3C 报名关联记录不一致")
+                if registration.status not in {
+                    "pending_review", "approved", "rejected_awaiting_resubmission"
+                }:
+                    raise ConflictException("当前报名状态不能拒绝并退款")
+                if order.status not in {"paid", "completed"}:
+                    raise ConflictException("H3C 订单不是可退款状态")
+
+                now = _now()
+                review = H3cReview(
+                    registration_id=registration.id,
+                    decision="rejected_refund",
+                    reason_code=data.reason_code,
+                    reason_detail=data.reason_detail,
+                    reviewer_admin_id=admin_id,
+                    reviewed_at=now,
+                )
+                db.add(review)
+                refund = await self._create_refund_request(
+                    db,
+                    registration=registration,
+                    request_kind="review_failed",
+                    reason_code=data.reason_code,
+                    reason_detail=data.reason_detail,
+                    admin_id=admin_id,
+                )
+                if refund.status != "succeeded":
+                    await db.flush()
+                    refund.status = "approved"
+                    refund.approved_by_admin_id = admin_id
+                    refund.approved_at = now
+                    refund.last_error = None
+                    refund.out_refund_no = f"H3RF{refund.id:028d}"
+                registration.last_reviewed_at = now
+                registration.status = "refund_processing"
+                registration.resubmission_due_at = None
+                registration.close_reason = "refund_authorized"
             return await self._admin_registration(registration_id)
 
     async def close_registration(
@@ -845,6 +1036,14 @@ class H3cRegistrationService:
                     continue
                 registration.status = "pending_refund_confirmation"
                 registration.resubmission_due_at = None
+                await db.execute(
+                    sa_update(H3cCorrectionRequest)
+                    .where(
+                        H3cCorrectionRequest.registration_id == registration.id,
+                        H3cCorrectionRequest.status == "pending",
+                    )
+                    .values(status="expired")
+                )
                 await self._create_refund_request(
                     db,
                     registration=registration,
@@ -971,6 +1170,21 @@ class H3cRegistrationService:
             .order_by(H3cReview.id.desc())
             .limit(1)
         )
+        pending_correction = await db.scalar(
+            select(H3cCorrectionRequest)
+            .where(
+                H3cCorrectionRequest.registration_id == registration.id,
+                H3cCorrectionRequest.status == "pending",
+            )
+            .limit(1)
+        )
+        versions = (
+            await db.execute(
+                select(H3cRegistrationVersion)
+                .where(H3cRegistrationVersion.registration_id == registration.id)
+                .order_by(H3cRegistrationVersion.version_no.desc())
+            )
+        ).scalars().all()
 
         async def preview(material: H3cMaterial) -> str | None:
             if not material.is_current:
@@ -1021,6 +1235,15 @@ class H3cRegistrationService:
                 if latest_review is not None
                 else None
             ),
+            pending_correction=(
+                H3cCorrectionRequestResponse.model_validate(pending_correction)
+                if pending_correction is not None
+                else None
+            ),
+            versions=[
+                H3cRegistrationVersionResponse.model_validate(row)
+                for row in versions
+            ],
             created_at=registration.created_at,
             updated_at=registration.updated_at,
         )

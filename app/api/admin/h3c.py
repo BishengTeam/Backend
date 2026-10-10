@@ -19,6 +19,7 @@ from app.schemas.h3c_registration import (
     H3cRefundResponse,
     H3cRegistrationResponse,
     H3cReviewDecision,
+    H3cRejectRefundRequest,
     H3cSignedUrlResponse,
 )
 from app.services.h3c_admin import H3cAdminBatchService
@@ -254,6 +255,27 @@ async def review_registration(
             admin_id=admin.id,
             registration_id=registration_id,
             decision_data=body,
+        )
+    )
+
+
+@router.post(
+    "/registrations/{registration_id}/reject-refund",
+    response_model=APIResponse[H3cRegistrationResponse],
+    summary="拒绝 H3C 报名并授权退款",
+)
+async def reject_registration_and_refund(
+    body: H3cRejectRefundRequest,
+    registration_id: int = Path(..., gt=0),
+    _review_admin=Depends(require_permission("h3c:review")),
+    _refund_admin=Depends(require_permission("h3c:refund")),
+    _reauth_admin=Depends(require_reauthenticated_admin),
+) -> APIResponse[H3cRegistrationResponse]:
+    return success(
+        data=await H3cRegistrationService().reject_and_refund(
+            admin_id=_review_admin.id,
+            registration_id=registration_id,
+            data=body,
         )
     )
 

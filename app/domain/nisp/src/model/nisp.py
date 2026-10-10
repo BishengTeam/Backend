@@ -251,7 +251,7 @@ class NispReview(Base, TimestampMixin):
     __tablename__ = "nisp_review"
     __table_args__ = (
         CheckConstraint(
-            "decision IN ('approved', 'rejected')",
+            "decision IN ('approved', 'rejected', 'rejected_refund')",
             name="ck_nisp_review_decision",
         ),
         Index("ix_nisp_review_registration", "registration_id"),
@@ -332,6 +332,70 @@ class NispRefundRequest(Base, TimestampMixin):
     succeeded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class NispRegistrationVersion(Base, TimestampMixin):
+    __tablename__ = "nisp_registration_version"
+    __table_args__ = (
+        CheckConstraint("version_no > 0", name="ck_nisp_version_no_positive"),
+        CheckConstraint(
+            "source IN ('initial', 'user_resubmission')",
+            name="ck_nisp_version_source",
+        ),
+        UniqueConstraint("registration_id", "version_no", name="uq_nisp_version_no"),
+        Index("ix_nisp_version_current", "registration_id", "is_current"),
+    )
+
+    registration_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("nisp_registration.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    candidate_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    material_versions: Mapped[dict | None] = mapped_column(JSONB)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    is_current: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+
+
+class NispCorrectionRequest(Base, TimestampMixin):
+    __tablename__ = "nisp_correction_request"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'submitted', 'expired', 'cancelled')",
+            name="ck_nisp_correction_status",
+        ),
+        Index("ix_nisp_correction_registration", "registration_id"),
+        Index(
+            "uq_nisp_correction_pending",
+            "registration_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+    )
+
+    registration_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("nisp_registration.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    review_id: Mapped[int | None] = mapped_column(BigInteger)
+    allowed_fields: Mapped[list] = mapped_column(JSONB, nullable=False)
+    allowed_material_types: Mapped[list | None] = mapped_column(JSONB)
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason_detail: Mapped[str | None] = mapped_column(Text)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    created_by_admin_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("admin_user.id")
+    )
+    submitted_version_id: Mapped[int | None] = mapped_column(BigInteger)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class NispExportJob(Base, TimestampMixin):

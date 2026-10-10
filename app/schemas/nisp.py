@@ -16,7 +16,11 @@ NispRegistrationStatus = Literal[
     "refunded_closed",
     "cancelled",
 ]
-NispReviewDecision = Literal["approved", "rejected"]
+NispReviewDecision = Literal["approved", "rejected", "rejected_refund"]
+NispCorrectionFieldType = Literal[
+    "pinyin", "phone", "email", "school", "major", "province",
+    "gender", "age", "education", "address", "zip_code",
+]
 
 
 # ── Admin: batch management ──
@@ -147,6 +151,8 @@ class NispRegistrationResponse(BaseModel):
     approved_at: datetime | None
     latest_review: "NispReviewResponse | None" = None
     materials: list["NispMaterialResponse"] = []
+    pending_correction: "NispCorrectionRequestResponse | None" = None
+    versions: list["NispRegistrationVersionResponse"] = []
     created_at: datetime
     updated_at: datetime
 
@@ -197,15 +203,65 @@ class NispReviewDecisionRequest(BaseModel):
     reason_code: str | None = Field(None, max_length=64)
     reason_detail: str | None = Field(None, max_length=2000)
     rejected_material_types: list[str] | None = None
+    allowed_fields: list[NispCorrectionFieldType] = []
 
 
 # ── User: resubmit materials ──
 
 class NispResubmitRequest(BaseModel):
+    pinyin: str | None = Field(None, min_length=1, max_length=128)
+    phone: str | None = Field(None, min_length=11, max_length=11)
+    email: str | None = Field(None, min_length=3, max_length=128)
+    school: str | None = Field(None, min_length=1, max_length=128)
+    major: str | None = Field(None, min_length=1, max_length=64)
+    province: str | None = Field(None, min_length=1, max_length=32)
+    gender: str | None = Field(None, min_length=1, max_length=2)
+    age: int | None = Field(None, ge=16, le=80)
+    education: str | None = Field(None, min_length=1, max_length=32)
+    address: str | None = Field(None, min_length=1, max_length=256)
+    zip_code: str | None = Field(None, min_length=6, max_length=6)
     id_card_both_sides_key: str | None = Field(None, min_length=1, max_length=512)
     portrait_photo_key: str | None = Field(None, min_length=1, max_length=512)
     xuexin_report_key: str | None = Field(None, min_length=1, max_length=512)
     application_form_key: str | None = Field(None, min_length=1, max_length=512)
+
+
+
+class NispRegistrationVersionResponse(BaseModel):
+    id: int
+    registration_id: int
+    version_no: int
+    candidate_snapshot: dict
+    material_versions: dict | None = None
+    source: str
+    submitted_at: datetime
+    superseded_at: datetime | None = None
+    is_current: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class NispCorrectionRequestResponse(BaseModel):
+    id: int
+    registration_id: int
+    allowed_fields: list[str]
+    allowed_material_types: list[str] | None = None
+    reason_code: str
+    reason_detail: str | None
+    due_at: datetime
+    status: str
+    created_by_admin_id: int | None = None
+    submitted_version_id: int | None = None
+    submitted_at: datetime | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class NispRejectRefundRequest(BaseModel):
+    reason_code: str = Field(..., min_length=1, max_length=64)
+    reason_detail: str = Field(..., min_length=1, max_length=2000)
 
 
 # ── Export ──

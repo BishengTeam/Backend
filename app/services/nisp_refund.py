@@ -1,5 +1,6 @@
 """NISP refund service — modeled after H3cRefundService."""
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -343,3 +344,39 @@ class NispRefundService:
             last_error=refund.last_error,
             retry_count=refund.retry_count,
         )
+
+
+async def nisp_refund_reconciliation_worker_loop(
+    service: NispRefundService | None = None,
+) -> None:
+    """Recover authorized NISP refunds outside the API request transaction."""
+    active_service = service or NispRefundService()
+    last_refund_id = 0
+    while True:
+        try:
+            async with get_db_ctx() as db:
+                rows = (
+                    await db.execute(
+                        select(NispRefundRequest.id)
+                        .where(
+                            NispRefundRequest.status.in_(
+                                ("approved", "processing", "failed")
+                            ),
+                            NispRefundRequest.id > last_refund_id,
+                        )
+                        .order_by(NispRefundRequest.id)
+                        .limit(settings.WECHAT_PAY_REFUND_RECONCILE_BATCH_SIZE)
+                    )
+                ).scalars().all()
+                refund_ids = list(rows)
+                last_refund_id = refund_ids[-1] if refund_ids else 0
+            for refund_id in refund_ids:
+                try:
+                    await active_service.reconcile(refund_id)
+                except Exception:
+                    # One poisoned refund must not block later refunds. Retry
+                    # state is persisted by reconcile/_submit.
+                    continue
+        except Exception:
+            last_refund_id = 0
+        await asyncio.sleep(settings.WECHAT_PAY_REFUND_RECONCILE_POLL_SECONDS)

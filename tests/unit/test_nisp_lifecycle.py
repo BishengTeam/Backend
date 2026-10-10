@@ -121,7 +121,9 @@ async def test_new_order_has_plan_and_database_id_registration_number(monkeypatc
 
     db.flush.side_effect = flush
     await service.create_order(10, payload())
-    order, reg = [c.args[0] for c in db.add.call_args_list]
+    added = [c.args[0] for c in db.add.call_args_list]
+    order = next(row for row in added if isinstance(row, Order))
+    reg = next(row for row in added if row.__class__.__name__ == "NispRegistration")
     assert order.plan_id == 2
     assert reg.registration_no == 'NISP-1-00000765'
     assert reg.status == ('pending_review' if price == 0 else 'pending_payment')
@@ -140,10 +142,11 @@ async def test_resubmission_rejects_empty_unrequested_exhausted_or_expired(monke
              user_id=10, order_id=2,
              resubmission_count=count, resubmission_due_at=NOW+timedelta(hours=-1 if expired else 1),
              material_keys={'id_card_both_sides': 'old-id', 'portrait_photo': 'old-photo'})
-    review = NS(rejected_material_types=['id_card_both_sides'])
     order = NS(id=2)
+    correction = NS(allowed_fields=[], allowed_material_types=['id_card_both_sides'],
+                    status='pending')
     db = session(monkeypatch, 'app.services.nisp_registration',
-                 execute=[result(reg)], scalars=[reg, batch(), order, review])
+                 execute=[result([])], scalars=[reg, batch(), order, reg, correction])
     with pytest.raises((BusinessException, ConflictException)):
         await NispRegistrationService().resubmit_materials(10, 1, NispResubmitRequest(**updates))
     assert reg.status == 'rejected_awaiting_resubmission'
@@ -153,13 +156,17 @@ async def test_resubmission_rejects_empty_unrequested_exhausted_or_expired(monke
 @pytest.mark.asyncio
 async def test_resubmission_preserves_old_json_and_replaces_only_rejected_material(monkeypatch):
     old_keys = {'id_card_both_sides': 'old-id', 'portrait_photo': 'old-photo'}
-    reg = NS(id=1, batch_id=1, status='rejected_awaiting_resubmission', resubmission_count=0,
+    reg = NS(id=1, batch_id=1, status='rejected_awaiting_resubmission', level='1',
+             candidate_snapshot={}, resubmission_count=0,
              user_id=10, order_id=2,
              resubmission_due_at=NOW+timedelta(hours=1), material_keys=old_keys)
-    review = NS(rejected_material_types=['id_card_both_sides'])
     order = NS(id=2)
-    db = session(monkeypatch, 'app.services.nisp_registration', execute=[result(reg)],
-                 scalars=[reg, batch(), order, review])
+    correction = NS(allowed_fields=[], allowed_material_types=['id_card_both_sides'],
+                    status='pending')
+    current_version = NS(version_no=1, is_current=True)
+    db = session(monkeypatch, 'app.services.nisp_registration',
+                 execute=[NS(scalars=lambda: NS(all=lambda: []))],
+                 scalars=[reg, batch(), order, reg, correction, current_version])
     service = NispRegistrationService()
     service._bind_material = AsyncMock()
     service._response = AsyncMock()
@@ -176,7 +183,8 @@ async def test_timeout_requests_refund_once(monkeypatch):
              resubmission_due_at=NOW - timedelta(minutes=1))
     order = NS(id=2, status='paid', price=100)
     db = session(monkeypatch, 'app.services.nisp_registration',
-                 scalars=[order, reg, None], execute=[NS(all=lambda: [(2, 1)])])
+                 scalars=[order, reg, None],
+                 execute=[NS(all=lambda: [(2, 1)]), NS(rowcount=1)])
     assert await NispRegistrationService().process_resubmission_timeouts() == 1
     refund = db.add.call_args.args[0]
     assert reg.status == 'pending_refund_confirmation'
@@ -289,7 +297,7 @@ async def test_callback_success_is_not_overwritten_by_submission_error(monkeypat
 
 @pytest.mark.asyncio
 async def test_rejection_requires_material_selection(monkeypatch):
-    reg = NS(id=1, batch_id=1, order_id=2, status='pending_review',
+    reg = NS(id=1, batch_id=1, order_id=2, status='pending_review', level='1',
              material_keys={'portrait_photo': 'old'})
     db = session(monkeypatch, 'app.services.nisp_registration', execute=[result(reg)],
                  scalars=[reg, batch(), NS(id=2), None])

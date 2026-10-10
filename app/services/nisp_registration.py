@@ -4,7 +4,7 @@ import re
 from uuid import uuid4
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update as sa_update
 
 from app.adapter.database import get_db_ctx
 from app.domain.order.src.index import Order
@@ -14,6 +14,8 @@ from app.domain.nisp.src import (
     NispRegistration,
     NispReview,
     NispRefundRequest,
+    NispRegistrationVersion,
+    NispCorrectionRequest,
 )
 from app.integrations.nisp_storage import NispObjectStorage
 from app.domain.plan.src.index import Plan
@@ -26,7 +28,14 @@ from app.schemas.nisp import (
     NispReviewDecisionRequest,
     NispResubmitRequest,
     NispMaterialResponse,
+    NispRejectRefundRequest,
+    NispCorrectionRequestResponse,
+    NispRegistrationVersionResponse,
 )
+NISP_CORRECTABLE_FIELDS = {
+    "pinyin", "phone", "email", "school", "major", "province",
+    "gender", "age", "education", "address", "zip_code",
+}
 from app.services.points_mall import release_order_coupon
 from app.services.certification_identity import (
     assert_submitted_identity,
@@ -238,6 +247,15 @@ class NispRegistrationService:
                     material_type="application_form",
                     storage_key=data.application_form_key,
                 )
+            db.add(NispRegistrationVersion(
+                registration_id=registration.id,
+                version_no=1,
+                candidate_snapshot=snapshot,
+                material_versions=material_keys,
+                source="initial",
+                submitted_at=_now(),
+                is_current=True,
+            ))
             await db.commit()
             await db.refresh(registration)
             return await self._response(db, registration)
@@ -353,54 +371,142 @@ class NispRegistrationService:
             )
             if order is None:
                 raise ConflictException("NISP 报名缺少订单")
-            reg = (
-                await db.execute(
-                    select(NispRegistration)
-                    .where(
-                        NispRegistration.id == registration_id,
-                        NispRegistration.user_id == user_id,
-                    )
-                    .with_for_update()
+            reg = await db.scalar(
+                select(NispRegistration)
+                .where(
+                    NispRegistration.id == registration_id,
+                    NispRegistration.user_id == user_id,
                 )
-            ).scalar_one_or_none()
+                .with_for_update()
+            )
             if reg is None:
                 raise NotFoundException("NISP 报名记录")
+            if reg.batch_id != batch.id or reg.order_id != order.id:
+                raise ConflictException("NISP 报名关联记录不一致")
             if reg.status != "rejected_awaiting_resubmission":
-                raise ConflictException("当前状态不能补交材料")
-
-            if batch is None or reg.resubmission_count >= batch.max_resubmissions:
-                raise ConflictException("补交次数已用完")
+                raise ConflictException("当前状态不能补正")
+            if reg.resubmission_count >= batch.max_resubmissions:
+                raise ConflictException("补正次数已用完")
             if reg.resubmission_due_at and reg.resubmission_due_at < _now():
-                raise ConflictException("补交材料已超时")
+                raise ConflictException("补正已超时")
 
-            # Update provided material keys
-            keys = dict(reg.material_keys or {})
-            updates = {
-                "id_card_both_sides": data.id_card_both_sides_key,
-                "portrait_photo": data.portrait_photo_key,
-                "xuexin_report": data.xuexin_report_key,
-                "application_form": data.application_form_key,
+            correction = await db.scalar(
+                select(NispCorrectionRequest)
+                .where(
+                    NispCorrectionRequest.registration_id == reg.id,
+                    NispCorrectionRequest.status == "pending",
+                )
+                .with_for_update()
+            )
+            if correction is None:
+                raise ConflictException("未找到待补正请求")
+            allowed_fields = set(correction.allowed_fields or [])
+            allowed_materials = set(correction.allowed_material_types or [])
+            field_values = {
+                "pinyin": data.pinyin,
+                "phone": data.phone,
+                "email": data.email,
+                "school": data.school,
+                "major": data.major,
+                "province": data.province,
+                "gender": data.gender,
+                "age": data.age,
+                "education": data.education,
+                "address": data.address,
+                "zip_code": data.zip_code,
             }
-            latest_review = await db.scalar(select(NispReview).where(
-                NispReview.registration_id == reg.id
-            ).order_by(NispReview.id.desc()).limit(1))
-            # Historical reviews did not record rejected types: require all
-            # existing materials once, rather than stranding those applicants.
-            allowed = set(latest_review.rejected_material_types or keys) if latest_review else set()
-            submitted = {key for key, value in updates.items() if value}
-            if not submitted or submitted != allowed:
-                raise BusinessException("请且只能重新上传被驳回的材料项")
-            for k, v in updates.items():
-                if v:
-                    await self._bind_material(
-                        db,
-                        user_id=user_id,
-                        registration_id=reg.id,
-                        material_type=k,
-                        storage_key=v,
-                        replace_current=True,
+            submitted_fields = {
+                key: value for key, value in field_values.items() if value is not None
+            }
+            submitted_materials = {
+                key: value
+                for key, value in {
+                    "id_card_both_sides": data.id_card_both_sides_key,
+                    "portrait_photo": data.portrait_photo_key,
+                    "xuexin_report": data.xuexin_report_key,
+                    "application_form": data.application_form_key,
+                }.items()
+                if value
+            }
+            if not set(submitted_fields).issubset(NISP_CORRECTABLE_FIELDS):
+                raise BusinessException("包含不允许补正的 NISP 字段")
+            if set(submitted_fields) != allowed_fields:
+                raise BusinessException("请且只能提交管理员允许修改的信息")
+            if set(submitted_materials) != allowed_materials:
+                raise BusinessException("请且只能重新上传管理员指定材料")
+            level2_only = {"xuexin_report", "application_form"}
+            if reg.level != "2" and allowed_materials & level2_only:
+                raise BusinessException("仅 NISP 二级允许提交该材料")
+
+            now = _now()
+            snapshot = dict(reg.candidate_snapshot or {})
+            snapshot.update(submitted_fields)
+            keys = dict(reg.material_keys or {})
+            for key, value in submitted_materials.items():
+                await self._bind_material(
+                    db,
+                    user_id=user_id,
+                    registration_id=reg.id,
+                    material_type=key,
+                    storage_key=value,
+                    replace_current=True,
+                )
+                keys[key] = value
+
+            current_version = await db.scalar(
+                select(NispRegistrationVersion)
+                .where(
+                    NispRegistrationVersion.registration_id == reg.id,
+                    NispRegistrationVersion.is_current.is_(True),
+                )
+                .with_for_update()
+            )
+            if current_version is None:
+                current_version = NispRegistrationVersion(
+                    registration_id=reg.id,
+                    version_no=1,
+                    candidate_snapshot=dict(reg.candidate_snapshot or {}),
+                    material_versions=dict(reg.material_keys or {}),
+                    source="initial",
+                    submitted_at=reg.created_at or now,
+                    is_current=True,
+                )
+                db.add(current_version)
+                await db.flush()
+            current_version.is_current = False
+            current_version.superseded_at = now
+            await db.flush()
+            current_materials = (
+                await db.execute(
+                    select(NispMaterialFile).where(
+                        NispMaterialFile.registration_id == reg.id,
+                        NispMaterialFile.is_current.is_(True),
                     )
-                    keys[k] = v
+                )
+            ).scalars().all()
+            new_version = NispRegistrationVersion(
+                registration_id=reg.id,
+                version_no=current_version.version_no + 1,
+                candidate_snapshot=snapshot,
+                material_versions={
+                    row.material_type: {
+                        "material_id": row.id,
+                        "version_no": row.version_no,
+                        "sha256": row.sha256,
+                    }
+                    for row in current_materials
+                },
+                source="user_resubmission",
+                submitted_at=now,
+                is_current=True,
+            )
+            db.add(new_version)
+            await db.flush()
+
+            correction.status = "submitted"
+            correction.submitted_version_id = new_version.id
+            correction.submitted_at = now
+            reg.candidate_snapshot = snapshot
             reg.material_keys = keys
             reg.resubmission_count += 1
             reg.status = "pending_review"
@@ -445,7 +551,7 @@ class NispRegistrationService:
                 raise NotFoundException("NISP 报名记录")
             if reg.batch_id != batch.id or reg.order_id != order.id:
                 raise ConflictException("NISP 报名关联记录不一致")
-            if reg.status != "pending_review":
+            if reg.status not in {"pending_review", "approved"}:
                 raise ConflictException("当前状态不能审核")
 
             now = _now()
@@ -453,8 +559,14 @@ class NispRegistrationService:
                 rejected = set(data.rejected_material_types or [])
                 if not data.reason_detail or not data.reason_detail.strip():
                     raise BusinessException("请填写驳回原因")
-                if not rejected or not rejected.issubset(reg.material_keys or {}):
-                    raise BusinessException("请选择本次报名中需要补交的材料项")
+                if rejected and not rejected.issubset(reg.material_keys or {}):
+                    raise BusinessException("请选择本次报名中已有的材料项")
+                if reg.level != "2" and rejected & {"xuexin_report", "application_form"}:
+                    raise BusinessException("仅 NISP 二级允许补交该材料")
+                if not set(data.allowed_fields).issubset(NISP_CORRECTABLE_FIELDS):
+                    raise BusinessException("包含不允许补正的 NISP 字段")
+                if not rejected and not data.allowed_fields:
+                    raise BusinessException("请选择至少一项补正内容")
             review = NispReview(
                 registration_id=reg.id,
                 decision=data.decision,
@@ -465,6 +577,7 @@ class NispRegistrationService:
                 reviewed_at=now,
             )
             db.add(review)
+            await db.flush()
             reg.last_reviewed_at = now
 
             if data.decision == "approved":
@@ -478,6 +591,17 @@ class NispRegistrationService:
                     reg.resubmission_due_at = now + timedelta(
                         hours=batch.resubmission_window_hours if batch else 72
                     )
+                    db.add(NispCorrectionRequest(
+                        registration_id=reg.id,
+                        review_id=review.id,
+                        allowed_fields=list(dict.fromkeys(data.allowed_fields)),
+                        allowed_material_types=data.rejected_material_types or None,
+                        reason_code=data.reason_code or "review_rejected",
+                        reason_detail=data.reason_detail,
+                        due_at=reg.resubmission_due_at,
+                        status="pending",
+                        created_by_admin_id=admin_id,
+                    ))
                 else:
                     # Max resubmissions reached — transition to refund flow
                     await request_refund(
@@ -486,6 +610,82 @@ class NispRegistrationService:
                         reason_detail=data.reason_detail,
                     )
 
+            await db.commit()
+            await db.refresh(reg)
+            return await self._response(db, reg)
+
+    async def reject_and_refund(
+        self,
+        *,
+        admin_id: int,
+        registration_id: int,
+        data: NispRejectRefundRequest,
+    ) -> NispRegistrationResponse:
+        """Authorize a dedicated NISP refund; a worker performs provider I/O."""
+        async with get_db_ctx() as db:
+            unresolved = await db.scalar(
+                select(NispRegistration).where(NispRegistration.id == registration_id)
+            )
+            if unresolved is None:
+                raise NotFoundException("NISP 报名记录")
+            batch = await db.scalar(
+                select(NispExamBatch)
+                .where(NispExamBatch.id == unresolved.batch_id)
+                .with_for_update()
+            )
+            if batch is None:
+                raise NotFoundException("NISP 考试批次")
+            order = await db.scalar(
+                select(Order)
+                .where(Order.id == unresolved.order_id)
+                .with_for_update()
+            )
+            if order is None:
+                raise ConflictException("NISP 报名缺少订单")
+            reg = await db.scalar(
+                select(NispRegistration)
+                .where(NispRegistration.id == registration_id)
+                .with_for_update()
+            )
+            if reg is None:
+                raise NotFoundException("NISP 报名记录")
+            if reg.batch_id != batch.id or reg.order_id != order.id:
+                raise ConflictException("NISP 报名关联记录不一致")
+            if reg.status not in {
+                "pending_review", "approved", "rejected_awaiting_resubmission"
+            }:
+                raise ConflictException("当前状态不能拒绝并退款")
+            if order.status not in {"paid", "completed"}:
+                raise ConflictException("NISP 订单不是可退款状态")
+
+            now = _now()
+            review = NispReview(
+                registration_id=reg.id,
+                decision="rejected_refund",
+                reason_code=data.reason_code,
+                reason_detail=data.reason_detail,
+                reviewer_admin_id=admin_id,
+                reviewed_at=now,
+            )
+            db.add(review)
+            refund = await request_refund(
+                db,
+                reg,
+                order,
+                reason_code=data.reason_code,
+                reason_detail=data.reason_detail,
+            )
+            if refund.status in {"requested", "failed"}:
+                await db.flush()
+                refund.status = "approved"
+                refund.approved_by_admin_id = admin_id
+                refund.approved_at = now
+                refund.last_error = None
+                refund.out_refund_no = f"NISP-RF-{refund.id:08d}"
+            reg.last_reviewed_at = now
+            reg.status = "refund_processing"
+            reg.resubmission_due_at = None
+            reg.close_reason = "refund_authorized"
             await db.commit()
             await db.refresh(reg)
             return await self._response(db, reg)
@@ -525,6 +725,14 @@ class NispRegistrationService:
                     or reg.resubmission_due_at > _now()
                 ):
                     continue
+                await db.execute(
+                    sa_update(NispCorrectionRequest)
+                    .where(
+                        NispCorrectionRequest.registration_id == reg.id,
+                        NispCorrectionRequest.status == "pending",
+                    )
+                    .values(status="expired")
+                )
                 await request_refund(
                     db,
                     reg,
@@ -651,9 +859,21 @@ class NispRegistrationService:
         )
         materials = []
         review_response = NispReviewResponse.model_validate(latest_review) if latest_review is not None else None
-        if (review_response is not None and review_response.decision == "rejected"
-                and not review_response.rejected_material_types):
-            review_response.rejected_material_types = list(registration.material_keys or {})
+        pending_correction = await db.scalar(
+            select(NispCorrectionRequest)
+            .where(
+                NispCorrectionRequest.registration_id == registration.id,
+                NispCorrectionRequest.status == "pending",
+            )
+            .limit(1)
+        )
+        versions = (
+            await db.execute(
+                select(NispRegistrationVersion)
+                .where(NispRegistrationVersion.registration_id == registration.id)
+                .order_by(NispRegistrationVersion.version_no.desc())
+            )
+        ).scalars().all()
         return NispRegistrationResponse(
             id=registration.id,
             registration_no=registration.registration_no,
@@ -674,6 +894,15 @@ class NispRegistrationService:
             approved_at=registration.approved_at,
             latest_review=review_response,
             materials=materials,
+            pending_correction=(
+                NispCorrectionRequestResponse.model_validate(pending_correction)
+                if pending_correction is not None
+                else None
+            ),
+            versions=[
+                NispRegistrationVersionResponse.model_validate(row)
+                for row in versions
+            ],
             created_at=registration.created_at,
             updated_at=registration.updated_at,
         )

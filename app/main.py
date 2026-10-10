@@ -30,6 +30,7 @@ from app.services.h3c_export import h3c_export_worker_loop
 from app.services.h3c_refund import h3c_refund_reconciliation_worker_loop
 from app.services.h3c_registration import h3c_registration_worker_loop
 from app.services.nisp_export import nisp_export_worker_loop
+from app.services.nisp_refund import nisp_refund_reconciliation_worker_loop
 from app.services.nisp_worker import nisp_lifecycle_worker_loop
 from app.services.payment_reconciliation import (
     payment_reconciliation_metrics,
@@ -98,6 +99,11 @@ async def lifespan(app: FastAPI):
         if settings.WECHAT_PAY_ENABLED
         else None
     )
+    nisp_refund_task = (
+        asyncio.create_task(nisp_refund_reconciliation_worker_loop())
+        if settings.WECHAT_PAY_ENABLED
+        else None
+    )
     videoweb_reconciliation_task = asyncio.create_task(
         videoweb_code_reconciliation_worker_loop()
     )
@@ -121,6 +127,8 @@ async def lifespan(app: FastAPI):
         refund_reconciliation_task.cancel()
     if h3c_refund_task is not None:
         h3c_refund_task.cancel()
+    if nisp_refund_task is not None:
+        nisp_refund_task.cancel()
     videoweb_reconciliation_task.cancel()
     try:
         await cleanup_task
@@ -173,6 +181,11 @@ async def lifespan(app: FastAPI):
     if h3c_refund_task is not None:
         try:
             await h3c_refund_task
+        except asyncio.CancelledError:
+            pass
+    if nisp_refund_task is not None:
+        try:
+            await nisp_refund_task
         except asyncio.CancelledError:
             pass
     try:

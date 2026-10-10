@@ -221,6 +221,76 @@ async def test_generic_order_creation_rejects_nisp(context):
     }
 
 
+async def test_nisp_correction_versions_and_return_after_approval(context):
+    from app.domain.nisp.src import NispCorrectionRequest, NispRegistrationVersion
+
+    batch, admin_id = await seed(context)
+    user_id, payload = await applicant(context, batch)
+    service = NispRegistrationService()
+    reg = await service.create_order(user_id, payload)
+    approved = await service.review(
+        admin_id=admin_id,
+        registration_id=reg.id,
+        data=NispReviewDecisionRequest(decision='approved'),
+    )
+    assert approved.status == 'approved'
+    returned = await service.review(
+        admin_id=admin_id,
+        registration_id=reg.id,
+        data=NispReviewDecisionRequest(
+            decision='rejected',
+            reason_detail='联系信息需要补正',
+            allowed_fields=['phone', 'email'],
+        ),
+    )
+    assert returned.status == 'rejected_awaiting_resubmission'
+    assert set(returned.pending_correction.allowed_fields) == {'phone', 'email'}
+    corrected = await service.resubmit_materials(
+        user_id,
+        reg.id,
+        NispResubmitRequest(phone='13900000000', email='corrected@example.test'),
+    )
+    assert corrected.status == 'pending_review'
+    assert corrected.candidate_snapshot['phone'] == '13900000000'
+    assert corrected.candidate_snapshot['email'] == 'corrected@example.test'
+    async with context.factory() as db:
+        versions = (await db.scalars(select(NispRegistrationVersion).where(
+            NispRegistrationVersion.registration_id == reg.id
+        ).order_by(NispRegistrationVersion.version_no))).all()
+        correction = await db.scalar(select(NispCorrectionRequest).where(
+            NispCorrectionRequest.registration_id == reg.id
+        ))
+    assert [row.version_no for row in versions] == [1, 2]
+    assert [row.is_current for row in versions] == [False, True]
+    assert versions[0].candidate_snapshot['email'] == 'test@example.test'
+    assert correction.status == 'submitted'
+
+
+async def test_nisp_direct_reject_refund_authorizes_worker(context):
+    from app.schemas.nisp import NispRejectRefundRequest
+
+    batch, admin_id = await seed(context)
+    user_id, payload = await applicant(context, batch)
+    service = NispRegistrationService()
+    reg = await service.create_order(user_id, payload)
+    rejected = await service.reject_and_refund(
+        admin_id=admin_id,
+        registration_id=reg.id,
+        data=NispRejectRefundRequest(
+            reason_code='review_rejected',
+            reason_detail='资料不符合报名要求',
+        ),
+    )
+    assert rejected.status == 'refund_processing'
+    async with context.factory() as db:
+        refund = await db.scalar(select(NispRefundRequest).where(
+            NispRefundRequest.registration_id == reg.id
+        ))
+    assert refund.status == 'approved'
+    assert refund.approved_by_admin_id == admin_id
+    assert refund.out_refund_no == f'NISP-RF-{refund.id:08d}'
+
+
 async def test_last_seat_is_not_oversold(context):
     batch, _ = await seed(context, capacity=1)
     applicants = [await applicant(context, batch) for _ in range(2)]

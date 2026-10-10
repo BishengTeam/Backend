@@ -38,6 +38,8 @@ async def context(monkeypatch):
         H3cRefundRequest,
         H3cRegistration,
         H3cReview,
+        H3cCorrectionRequest,
+        H3cRegistrationVersion,
     )
     from app.domain.order.src.index import Inventory, InventoryRecord, Order
     from app.domain.plan.src.index import Plan
@@ -72,6 +74,16 @@ async def context(monkeypatch):
         await db.execute(
             delete(H3cMaterialUpload).where(
                 H3cMaterialUpload.storage_key.like(f"h3c/materials/%{prefix}%")
+            )
+        )
+        await db.execute(
+            delete(H3cCorrectionRequest).where(
+                H3cCorrectionRequest.registration_id.in_(registration_ids)
+            )
+        )
+        await db.execute(
+            delete(H3cRegistrationVersion).where(
+                H3cRegistrationVersion.registration_id.in_(registration_ids)
             )
         )
         await db.execute(
@@ -444,6 +456,92 @@ async def test_generic_order_creation_rejects_h3c(context):
             await db.execute(select(Order).where(Order.user_id == seed.user_id))
         ).scalars().all()
     assert orders == []
+
+
+async def test_h3c_correction_versions_and_return_after_approval(context):
+    from app.domain.h3c.src.index import (
+        H3cCorrectionRequest,
+        H3cRegistrationVersion,
+    )
+    from app.schemas.h3c_registration import H3cResubmissionCreate
+    from app.services.h3c_registration import H3cRegistrationService
+
+    seed = await _seed(context)
+    service = H3cRegistrationService()
+    created = await service.create_order(seed.user_id, _request(context, seed))
+    approved = await service.review(
+        admin_id=seed.admin_id,
+        registration_id=created.id,
+        decision_data={"decision": "approved"},
+    )
+    assert approved.status == "approved"
+
+    returned = await service.review(
+        admin_id=seed.admin_id,
+        registration_id=created.id,
+        decision_data={
+            "decision": "rejected",
+            "reason_code": "verify_code_invalid",
+            "reason_detail": "邮箱需要补正",
+            "allowed_fields": ["email"],
+        },
+    )
+    assert returned.status == "rejected_awaiting_resubmission"
+    assert set(returned.pending_correction.allowed_fields) == {"email"}
+
+    corrected = await service.resubmit_materials(
+        seed.user_id,
+        created.id,
+        H3cResubmissionCreate(email="corrected@example.com"),
+    )
+    assert corrected.status == "pending_review"
+    assert corrected.candidate_snapshot["email"] == "corrected@example.com"
+
+    async with context.factory() as db:
+        versions = (
+            await db.scalars(
+                select(H3cRegistrationVersion).where(
+                    H3cRegistrationVersion.registration_id == created.id
+                ).order_by(H3cRegistrationVersion.version_no)
+            )
+        ).all()
+        correction = await db.scalar(
+            select(H3cCorrectionRequest).where(
+                H3cCorrectionRequest.registration_id == created.id
+            )
+        )
+    assert [row.version_no for row in versions] == [1, 2]
+    assert [row.is_current for row in versions] == [False, True]
+    assert versions[0].candidate_snapshot["email"] == "user@example.com"
+    assert correction.status == "submitted"
+
+
+async def test_h3c_direct_reject_refund_authorizes_worker(context):
+    from app.domain.h3c.src.index import H3cRefundRequest
+    from app.schemas.h3c_registration import H3cRejectRefundRequest
+    from app.services.h3c_registration import H3cRegistrationService
+
+    seed = await _seed(context)
+    service = H3cRegistrationService()
+    created = await service.create_order(seed.user_id, _request(context, seed))
+    rejected = await service.reject_and_refund(
+        admin_id=seed.admin_id,
+        registration_id=created.id,
+        data=H3cRejectRefundRequest(
+            reason_code="review_rejected",
+            reason_detail="资料不符合报名要求",
+        ),
+    )
+    assert rejected.status == "refund_processing"
+    async with context.factory() as db:
+        refund = await db.scalar(
+            select(H3cRefundRequest).where(
+                H3cRefundRequest.registration_id == created.id
+            )
+        )
+    assert refund.status == "approved"
+    assert refund.approved_by_admin_id == seed.admin_id
+    assert refund.out_refund_no == f"H3RF{refund.id:028d}"
 
 
 async def test_h3c_order_accepts_cert_product_only_batch(context):

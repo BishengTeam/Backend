@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 
-from app.middleware.auth import require_permission
+from app.middleware.auth import require_permission, require_reauthenticated_admin
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.nisp import (
     NispExportCreate,
@@ -14,6 +14,7 @@ from app.schemas.nisp import (
     NispExamBatchUpdate,
     NispRegistrationResponse,
     NispReviewDecisionRequest,
+    NispRejectRefundRequest,
 )
 from app.services.nisp_admin import NispAdminService
 from app.services.nisp_export import NispExportService
@@ -123,6 +124,26 @@ async def review_registration(
     _admin=Depends(require_permission("nisp:review")),
 ) -> APIResponse[NispRegistrationResponse]:
     return success(data=await _service.review(admin_id=_admin.id, registration_id=registration_id, data=body))
+
+
+@router.post(
+    "/registrations/{registration_id}/reject-refund",
+    response_model=APIResponse[NispRegistrationResponse],
+)
+async def reject_registration_and_refund(
+    registration_id: int,
+    body: NispRejectRefundRequest,
+    _review_admin=Depends(require_permission("nisp:review")),
+    _refund_admin=Depends(require_permission("nisp:refund")),
+    _reauth_admin=Depends(require_reauthenticated_admin),
+) -> APIResponse[NispRegistrationResponse]:
+    return success(
+        data=await NispRegistrationService().reject_and_refund(
+            admin_id=_review_admin.id,
+            registration_id=registration_id,
+            data=body,
+        )
+    )
 
 
 @router.post("/export", response_model=APIResponse[NispExportJobResponse])
