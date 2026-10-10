@@ -32,6 +32,7 @@ async def context(monkeypatch):
     engine = create_async_engine(url, pool_size=8, max_overflow=8)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     prefix = f"r1_{uuid4().hex[:12]}"
+    monkeypatch.setattr(settings, "WECHAT_PAY_MCHID", "1900000001")
 
     @asynccontextmanager
     async def db_ctx():
