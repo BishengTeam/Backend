@@ -134,10 +134,26 @@ async def refund_callback(request: Request) -> JSONResponse:
     from app.services.renshe_refund import RensheRefundService
     from app.services.h3c_refund import H3cRefundService
     from app.services.nisp_refund import NispRefundService
+    from app.services.payment_refund import PaymentRefundService
 
     raw_body = await request.body()
     try:
         headers = dict(request.headers)
+        try:
+            result = await PaymentRefundService().handle_callback_raw(
+                raw_body=raw_body,
+                headers=headers,
+            )
+            logger.info(
+                "wechat late-payment refund notification acknowledged: task_id=%s",
+                result.id,
+            )
+            return JSONResponse(
+                status_code=200, content={"code": "SUCCESS", "message": "成功"}
+            )
+        except AppException:
+            pass
+
         try:
             result = await H3cRefundService().handle_callback_raw(
                 raw_body=raw_body,

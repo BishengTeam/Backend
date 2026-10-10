@@ -8,6 +8,8 @@ from app.adapter.database import get_db_ctx
 from app.port.config import settings
 from app.port.exceptions import BusinessException, NotFoundException, ThirdPartyException
 from app.integrations.wechat_pay import WechatPayClient
+from app.domain.h3c.src.index import H3cRegistration
+from app.domain.nisp.src.index import NispRegistration
 from app.domain.order.src.index import (
     Order,
     apply_order_status_transition,
@@ -22,6 +24,28 @@ class AdminOrderService:
 
     def __init__(self) -> None:
         self.fulfillment = OrderFulfillmentService()
+
+    @staticmethod
+    async def _reject_dedicated_certification_order(db, order: Order) -> None:
+        """Keep H3C/NISP state transitions inside their dedicated services."""
+        if order.application_id is not None:
+            raise BusinessException("人社订单必须使用专用报名审核和退款流程")
+        if order.product_type.startswith("NISP-"):
+            raise BusinessException("NISP 订单必须使用专用报名审核和退款流程")
+        linked_h3c = await db.scalar(
+            select(H3cRegistration.id)
+            .where(H3cRegistration.order_id == order.id)
+            .limit(1)
+        )
+        if linked_h3c is not None:
+            raise BusinessException("H3C 订单必须使用专用报名审核和退款流程")
+        linked_nisp = await db.scalar(
+            select(NispRegistration.id)
+            .where(NispRegistration.order_id == order.id)
+            .limit(1)
+        )
+        if linked_nisp is not None:
+            raise BusinessException("NISP 订单必须使用专用报名审核和退款流程")
 
     @staticmethod
     async def _submit_wechat_v3_refund(
@@ -132,8 +156,7 @@ class AdminOrderService:
             ).scalar_one_or_none()
             if order is None:
                 raise NotFoundException("订单")
-            if order.application_id is not None:
-                raise BusinessException("人社订单必须使用专用报名审核和退款流程")
+            await self._reject_dedicated_certification_order(db, order)
             if order.status != "paid":
                 raise BusinessException("仅已支付订单可审核")
 
@@ -171,8 +194,7 @@ class AdminOrderService:
             ).scalar_one_or_none()
             if order is None:
                 raise NotFoundException("订单")
-            if order.application_id is not None:
-                raise BusinessException("人社订单必须使用专用报名审核和退款流程")
+            await self._reject_dedicated_certification_order(db, order)
             if order.status == "refunded":
                 inventory_changed = await refund_inventory_sale(
                     db,

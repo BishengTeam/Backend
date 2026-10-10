@@ -35,6 +35,7 @@ from app.services.payment_reconciliation import (
     payment_reconciliation_metrics,
     payment_reconciliation_worker_loop,
 )
+from app.services.payment_refund import late_payment_refund_worker_loop
 from app.services.renshe_refund_reconciliation import (
     renshe_refund_reconciliation_metrics,
     renshe_refund_reconciliation_worker_loop,
@@ -82,6 +83,11 @@ async def lifespan(app: FastAPI):
         if settings.WECHAT_PAY_ENABLED
         else None
     )
+    late_payment_refund_task = (
+        asyncio.create_task(late_payment_refund_worker_loop())
+        if settings.WECHAT_PAY_ENABLED
+        else None
+    )
     refund_reconciliation_task = (
         asyncio.create_task(renshe_refund_reconciliation_worker_loop())
         if settings.WECHAT_PAY_ENABLED
@@ -109,6 +115,8 @@ async def lifespan(app: FastAPI):
         quiz_task.cancel()
     if payment_reconciliation_task is not None:
         payment_reconciliation_task.cancel()
+    if late_payment_refund_task is not None:
+        late_payment_refund_task.cancel()
     if refund_reconciliation_task is not None:
         refund_reconciliation_task.cancel()
     if h3c_refund_task is not None:
@@ -150,6 +158,11 @@ async def lifespan(app: FastAPI):
     if payment_reconciliation_task is not None:
         try:
             await payment_reconciliation_task
+        except asyncio.CancelledError:
+            pass
+    if late_payment_refund_task is not None:
+        try:
+            await late_payment_refund_task
         except asyncio.CancelledError:
             pass
     if refund_reconciliation_task is not None:

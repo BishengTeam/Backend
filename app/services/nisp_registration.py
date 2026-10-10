@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
+from app.domain.order.src.index import Order
 from app.domain.nisp.src import (
     NispExamBatch,
     NispMaterialFile,
@@ -79,7 +80,22 @@ class NispRegistrationService:
                 message="请先阅读并同意认证报名信息处理授权协议",
             )
 
-            # Lock batch
+            # Resolve IDs without locking first, then acquire locks in the
+            # certification-wide order: Plan -> Batch -> Order -> Registration.
+            resolved_plan_id = (
+                await db.scalar(
+                    select(NispExamBatch.plan_id).where(
+                        NispExamBatch.id == data.batch_id
+                    )
+                )
+            )
+            if resolved_plan_id is None:
+                raise NotFoundException("NISP 考试批次")
+            plan = await db.scalar(
+                select(Plan).where(Plan.id == resolved_plan_id).with_for_update()
+            )
+            if plan is None:
+                raise NotFoundException("NISP 报名计划")
             batch = (
                 await db.execute(
                     select(NispExamBatch)
@@ -87,14 +103,8 @@ class NispRegistrationService:
                     .with_for_update()
                 )
             ).scalar_one_or_none()
-            if batch is None:
+            if batch is None or batch.plan_id != plan.id:
                 raise NotFoundException("NISP 考试批次")
-
-            plan = await db.scalar(select(Plan).where(
-                Plan.id == batch.plan_id
-            ).with_for_update())
-            if plan is None:
-                raise NotFoundException("NISP 报名计划")
             PlanEnrollmentService.validate_application_window(plan)
             if plan.capacity > 0 and await occupied_count(db, plan.id) >= plan.capacity:
                 raise ConflictException("该考试批次名额已满")
@@ -305,6 +315,25 @@ class NispRegistrationService:
         self, user_id: int, registration_id: int, data: NispResubmitRequest
     ) -> NispRegistrationResponse:
         async with get_db_ctx() as db:
+            unresolved = await db.scalar(
+                select(NispRegistration).where(NispRegistration.id == registration_id)
+            )
+            if unresolved is None:
+                raise NotFoundException("NISP 报名记录")
+            batch = await db.scalar(
+                select(NispExamBatch)
+                .where(NispExamBatch.id == unresolved.batch_id)
+                .with_for_update()
+            )
+            if batch is None:
+                raise NotFoundException("NISP 考试批次")
+            order = await db.scalar(
+                select(Order)
+                .where(Order.id == unresolved.order_id)
+                .with_for_update()
+            )
+            if order is None:
+                raise ConflictException("NISP 报名缺少订单")
             reg = (
                 await db.execute(
                     select(NispRegistration)
@@ -320,7 +349,6 @@ class NispRegistrationService:
             if reg.status != "rejected_awaiting_resubmission":
                 raise ConflictException("当前状态不能补交材料")
 
-            batch = await db.get(NispExamBatch, reg.batch_id)
             if batch is None or reg.resubmission_count >= batch.max_resubmissions:
                 raise ConflictException("补交次数已用完")
             if reg.resubmission_due_at and reg.resubmission_due_at < _now():
@@ -370,6 +398,23 @@ class NispRegistrationService:
         data: NispReviewDecisionRequest,
     ) -> NispRegistrationResponse:
         async with get_db_ctx() as db:
+            unresolved = await db.scalar(
+                select(NispRegistration).where(NispRegistration.id == registration_id)
+            )
+            if unresolved is None:
+                raise NotFoundException("NISP 报名记录")
+            batch = await db.scalar(
+                select(NispExamBatch)
+                .where(NispExamBatch.id == unresolved.batch_id)
+                .with_for_update()
+            )
+            if batch is None:
+                raise NotFoundException("NISP 考试批次")
+            order = await db.scalar(
+                select(Order).where(Order.id == unresolved.order_id).with_for_update()
+            )
+            if order is None:
+                raise ConflictException("NISP 报名缺少订单")
             reg = (
                 await db.execute(
                     select(NispRegistration)
@@ -379,10 +424,11 @@ class NispRegistrationService:
             ).scalar_one_or_none()
             if reg is None:
                 raise NotFoundException("NISP 报名记录")
+            if reg.batch_id != batch.id or reg.order_id != order.id:
+                raise ConflictException("NISP 报名关联记录不一致")
             if reg.status != "pending_review":
                 raise ConflictException("当前状态不能审核")
 
-            batch = await db.get(NispExamBatch, reg.batch_id)
             now = _now()
             if data.decision == "rejected":
                 rejected = set(data.rejected_material_types or [])
@@ -415,8 +461,6 @@ class NispRegistrationService:
                     )
                 else:
                     # Max resubmissions reached — transition to refund flow
-                    from app.domain.order.src.index import Order
-                    order = await db.get(Order, reg.order_id)
                     await request_refund(
                         db, reg, order,
                         reason_code="review_failed_max_resubmissions",
@@ -429,17 +473,49 @@ class NispRegistrationService:
 
     async def process_resubmission_timeouts(self, *, limit: int = 100) -> int:
         async with get_db_ctx() as db:
-            rows = (await db.scalars(select(NispRegistration).where(
-                NispRegistration.status == "rejected_awaiting_resubmission",
-                NispRegistration.resubmission_due_at <= _now(),
-            ).order_by(NispRegistration.id).limit(limit).with_for_update(skip_locked=True))).all()
-            from app.domain.order.src.index import Order
-            for reg in rows:
-                await request_refund(db, reg, await db.get(Order, reg.order_id),
-                                     reason_code="resubmission_timeout",
-                                     reason_detail="补交材料已超时")
+            rows = (
+                await db.execute(
+                    select(Order.id, NispRegistration.id)
+                    .join(NispRegistration, NispRegistration.order_id == Order.id)
+                    .where(
+                        NispRegistration.status == "rejected_awaiting_resubmission",
+                        NispRegistration.resubmission_due_at <= _now(),
+                    )
+                    .order_by(Order.id)
+                    .limit(limit)
+                )
+            ).all()
+            processed = 0
+            for order_id, registration_id in rows:
+                order = await db.scalar(
+                    select(Order)
+                    .where(Order.id == order_id)
+                    .with_for_update(skip_locked=True)
+                )
+                if order is None:
+                    continue
+                reg = await db.scalar(
+                    select(NispRegistration)
+                    .where(NispRegistration.id == registration_id)
+                    .with_for_update(skip_locked=True)
+                )
+                if (
+                    reg is None
+                    or reg.status != "rejected_awaiting_resubmission"
+                    or reg.resubmission_due_at is None
+                    or reg.resubmission_due_at > _now()
+                ):
+                    continue
+                await request_refund(
+                    db,
+                    reg,
+                    order,
+                    reason_code="resubmission_timeout",
+                    reason_detail="补交材料已超时",
+                )
+                processed += 1
             await db.commit()
-            return len(rows)
+            return processed
 
     async def on_order_paid(self, db, order) -> bool:
         """Callback when order is paid: transition to pending_review."""

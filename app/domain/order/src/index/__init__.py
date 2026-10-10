@@ -2,6 +2,7 @@
 
 # Models
 from app.domain.order.src.model.order import Order
+from app.domain.order.src.model.payment_refund import PaymentRefundTask
 from app.domain.order.src.model.price_config import PriceConfig
 from app.domain.order.src.model.inventory import Inventory, InventoryRecord
 from app.domain.order.src.model.coupon import Coupon, UserCoupon
@@ -38,6 +39,7 @@ from app.domain.order.src.transition.inventory_transitions import (
 __all__ = [
     # Models
     "Order",
+    "PaymentRefundTask",
     "PriceConfig",
     "Inventory",
     "InventoryRecord",

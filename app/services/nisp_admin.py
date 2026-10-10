@@ -110,14 +110,23 @@ class NispAdminService:
 
     async def cancel_batch(self, batch_id: int) -> NispExamBatchResponse:
         async with get_db_ctx() as db:
-            batch = await db.scalar(select(NispExamBatch).where(
-                NispExamBatch.id == batch_id
-            ).with_for_update())
-            if batch is None:
+            plan_id = await db.scalar(
+                select(NispExamBatch.plan_id).where(NispExamBatch.id == batch_id)
+            )
+            if plan_id is None:
                 raise NotFoundException("NISP 考试批次")
-            plan = await db.scalar(select(Plan).where(Plan.id == batch.plan_id).with_for_update())
+            plan = await db.scalar(
+                select(Plan).where(Plan.id == plan_id).with_for_update()
+            )
             if plan is None:
                 raise NotFoundException("Plan")
+            batch = await db.scalar(
+                select(NispExamBatch)
+                .where(NispExamBatch.id == batch_id)
+                .with_for_update()
+            )
+            if batch is None or batch.plan_id != plan.id:
+                raise NotFoundException("NISP 考试批次")
             if plan.status not in {"published", "registration_closed", "cancelled"}:
                 raise ConflictException("当前批次不能取消")
             # Re-running cancellation also repairs batches cancelled by the

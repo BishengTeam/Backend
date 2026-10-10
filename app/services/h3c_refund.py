@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 
@@ -21,6 +22,7 @@ from app.integrations.wechat_pay import (
     WechatPayRefund,
     WechatPayResultUnknownError,
 )
+from app.port.config import settings
 from app.port.exceptions import ConflictException, NotFoundException
 from app.schemas.common import PaginatedData
 from app.schemas.h3c_registration import H3cRefundResponse
@@ -48,11 +50,53 @@ class H3cRefundService:
         return f"H3RF{refund_id:028d}"
 
     @staticmethod
+    def _retry_delay(retry_count: int) -> int:
+        delays = [
+            int(value)
+            for value in settings.WECHAT_PAY_REFUND_RETRY_DELAYS_SECONDS.split(",")
+            if value.strip()
+        ]
+        return delays[min(retry_count, len(delays) - 1)]
+
+    @staticmethod
     def _response(refund: H3cRefundRequest, *, hide_error: bool = True) -> H3cRefundResponse:
         result = H3cRefundResponse.model_validate(refund)
         if hide_error:
             result.last_error = None
         return result
+
+    @staticmethod
+    async def _lock_refund_chain(
+        db,
+        *,
+        refund_id: int | None = None,
+        out_refund_no: str | None = None,
+    ) -> tuple[H3cRefundRequest, Order, H3cRegistration]:
+        """Lock Order -> Registration -> Refund in the certification-wide order."""
+        filters = []
+        if refund_id is not None:
+            filters.append(H3cRefundRequest.id == refund_id)
+        if out_refund_no is not None:
+            filters.append(H3cRefundRequest.out_refund_no == out_refund_no)
+        unresolved = await db.scalar(select(H3cRefundRequest).where(*filters))
+        if unresolved is None:
+            raise NotFoundException("H3C 退款任务")
+        order = await db.scalar(
+            select(Order).where(Order.id == unresolved.order_id).with_for_update()
+        )
+        registration = await db.scalar(
+            select(H3cRegistration)
+            .where(H3cRegistration.id == unresolved.registration_id)
+            .with_for_update()
+        )
+        refund = await db.scalar(
+            select(H3cRefundRequest)
+            .where(H3cRefundRequest.id == unresolved.id)
+            .with_for_update()
+        )
+        if order is None or registration is None or refund is None:
+            raise NotFoundException("H3C 退款关联记录")
+        return refund, order, registration
 
     async def list_refunds(
         self,
@@ -100,25 +144,13 @@ class H3cRefundService:
         refund_id: int,
     ) -> _PreparedRefund | H3cRefundResponse:
         async with get_db_ctx() as db:
-            refund = await db.scalar(
-                select(H3cRefundRequest)
-                .where(H3cRefundRequest.id == refund_id)
-                .with_for_update()
+            refund, order, registration = await self._lock_refund_chain(
+                db, refund_id=refund_id
             )
-            if refund is None:
-                raise NotFoundException("H3C 退款任务")
             if refund.status in {"processing", "succeeded"}:
                 return self._response(refund)
             if refund.status not in {"requested", "failed"}:
                 raise ConflictException("当前 H3C 退款状态不能确认")
-            order = await db.scalar(
-                select(Order).where(Order.id == refund.order_id).with_for_update()
-            )
-            registration = await db.scalar(
-                select(H3cRegistration)
-                .where(H3cRegistration.id == refund.registration_id)
-                .with_for_update()
-            )
             if order is None or registration is None:
                 raise NotFoundException("H3C 退款关联记录")
             if registration.order_id != order.id or order.user_id != refund.user_id:
@@ -149,20 +181,8 @@ class H3cRefundService:
 
     async def _complete_zero_refund(self, refund_id: int) -> H3cRefundResponse:
         async with get_db_ctx() as db:
-            refund = await db.scalar(
-                select(H3cRefundRequest)
-                .where(H3cRefundRequest.id == refund_id)
-                .with_for_update()
-            )
-            if refund is None:
-                raise NotFoundException("H3C 退款任务")
-            order = await db.scalar(
-                select(Order).where(Order.id == refund.order_id).with_for_update()
-            )
-            registration = await db.scalar(
-                select(H3cRegistration)
-                .where(H3cRegistration.id == refund.registration_id)
-                .with_for_update()
+            refund, order, registration = await self._lock_refund_chain(
+                db, refund_id=refund_id
             )
             if order is None or registration is None:
                 raise NotFoundException("H3C 退款关联记录")
@@ -199,10 +219,7 @@ class H3cRefundService:
         except Exception as exc:
             await self._record_failure(prepared.refund_id, exc, result_unknown=True)
             raise
-        return await self._apply_provider_result(
-            provider_refund,
-            allow_success=False,
-        )
+        return await self._apply_provider_result(provider_refund)
 
     async def handle_callback_raw(
         self,
@@ -214,7 +231,7 @@ class H3cRefundService:
             headers=headers,
             raw_body=raw_body,
         )
-        return await self._apply_provider_result(provider_refund, allow_success=True)
+        return await self._apply_provider_result(provider_refund)
 
     async def reconcile(self, refund_id: int) -> H3cRefundResponse:
         async with get_db_ctx() as db:
@@ -228,37 +245,80 @@ class H3cRefundService:
             raise ConflictException("H3C 退款缺少商户退款号")
         payload = await self.wechat_pay.query_refund(out_refund_no=out_refund_no)
         provider_refund = WechatPayRefund.from_payload(payload, require_mchid=True)
-        return await self._apply_provider_result(provider_refund, allow_success=True)
+        return await self._apply_provider_result(provider_refund)
+
+    async def recover(self, refund_id: int) -> H3cRefundResponse:
+        """Query an uncertain refund and resubmit a confirmed-missing request."""
+        async with get_db_ctx() as db:
+            refund = await db.get(H3cRefundRequest, refund_id)
+            if refund is None:
+                raise NotFoundException("H3C 退款任务")
+            if refund.status == "succeeded":
+                return self._response(refund)
+            if refund.status not in {"approved", "processing", "failed"}:
+                return self._response(refund)
+            if not refund.out_refund_no:
+                raise ConflictException("H3C 退款缺少商户退款号")
+            order = await db.get(Order, refund.order_id)
+            if order is None:
+                raise NotFoundException("H3C 退款订单")
+            prepared = _PreparedRefund(
+                refund_id=refund.id,
+                out_refund_no=refund.out_refund_no,
+                out_trade_no=order.out_trade_no or "",
+                transaction_id=order.transaction_id or "",
+                amount_cents=refund.amount_cents,
+            )
+
+        if prepared.amount_cents == 0:
+            return await self._complete_zero_refund(refund_id)
+        try:
+            payload = await self.wechat_pay.query_refund(
+                out_refund_no=prepared.out_refund_no
+            )
+        except WechatPayAPIError as exc:
+            provider_missing = (
+                exc.status_code == 404
+                or exc.api_code
+                in {"NOT_FOUND", "RESOURCE_NOT_EXISTS", "REFUND_NOT_EXISTS"}
+            )
+            if provider_missing and prepared.refund_id == refund_id:
+                current = await self._refund_status(refund_id)
+                if current in {"approved", "failed"}:
+                    return await self._submit(prepared)
+            await self._record_failure(
+                refund_id,
+                exc,
+                result_unknown=exc.status_code >= 500 or not provider_missing,
+            )
+            raise
+        provider_refund = WechatPayRefund.from_payload(payload, require_mchid=True)
+        return await self._apply_provider_result(provider_refund)
+
+    async def _refund_status(self, refund_id: int) -> str | None:
+        async with get_db_ctx() as db:
+            refund = await db.get(H3cRefundRequest, refund_id)
+            return refund.status if refund is not None else None
 
     async def _apply_provider_result(
         self,
         provider_refund: WechatPayRefund,
-        *,
-        allow_success: bool,
     ) -> H3cRefundResponse:
         async with get_db_ctx() as db:
-            refund = await db.scalar(
-                select(H3cRefundRequest)
-                .where(H3cRefundRequest.out_refund_no == provider_refund.out_refund_no)
-                .with_for_update()
-            )
-            if refund is None:
-                raise NotFoundException("H3C 退款任务")
             if not provider_refund.out_refund_no.startswith("H3RF"):
                 raise NotFoundException("非 H3C 退款通知")
-            order = await db.scalar(
-                select(Order).where(Order.id == refund.order_id).with_for_update()
-            )
-            registration = await db.scalar(
-                select(H3cRegistration)
-                .where(H3cRegistration.id == refund.registration_id)
-                .with_for_update()
+            refund, order, registration = await self._lock_refund_chain(
+                db, out_refund_no=provider_refund.out_refund_no
             )
             if order is None or registration is None:
                 raise NotFoundException("H3C 退款关联记录")
             self._validate_provider_result(refund, order, provider_refund)
+            if refund.status == "succeeded":
+                # A later signed callback/response is idempotent and can never
+                # downgrade a successful refund.
+                return self._response(refund)
             now = self._now()
-            if provider_refund.status == "SUCCESS" and allow_success:
+            if provider_refund.status == "SUCCESS":
                 refund.status = "succeeded"
                 refund.wechat_refund_id = provider_refund.refund_id
                 refund.succeeded_at = provider_refund.success_time or now
@@ -269,7 +329,7 @@ class H3cRefundService:
                 registration.status = "refunded_closed"
                 registration.closed_at = now
                 registration.close_reason = "refund_succeeded"
-            elif provider_refund.status in {"PROCESSING", "SUCCESS"}:
+            elif provider_refund.status == "PROCESSING":
                 refund.status = "processing"
                 refund.wechat_refund_id = provider_refund.refund_id
                 refund.processing_at = refund.processing_at or now
@@ -312,8 +372,12 @@ class H3cRefundService:
         result_unknown: bool,
     ) -> None:
         async with get_db_ctx() as db:
-            refund = await db.get(H3cRefundRequest, refund_id)
+            refund, _order, _registration = await self._lock_refund_chain(
+                db, refund_id=refund_id
+            )
             if refund is None:
+                return
+            if refund.status == "succeeded":
                 return
             refund.status = "processing" if result_unknown else "failed"
             refund.last_error = f"{type(exc).__name__}: {exc}"[:2000]
@@ -325,24 +389,42 @@ async def h3c_refund_reconciliation_worker_loop(
     service: H3cRefundService | None = None,
 ) -> None:
     active_service = service or H3cRefundService()
+    last_refund_id = 0
     while True:
-        async with get_db_ctx() as db:
-            refund_ids = (
-                await db.execute(
-                    select(H3cRefundRequest.id)
-                    .where(
-                        H3cRefundRequest.status.in_(("approved", "processing", "failed")),
-                        H3cRefundRequest.out_refund_no.is_not(None),
+        try:
+            async with get_db_ctx() as db:
+                candidates = (
+                    await db.execute(
+                        select(H3cRefundRequest)
+                        .where(
+                            H3cRefundRequest.status.in_(
+                                ("approved", "processing", "failed")
+                            ),
+                            H3cRefundRequest.out_refund_no.is_not(None),
+                            H3cRefundRequest.id > last_refund_id,
+                        )
+                        .order_by(H3cRefundRequest.id)
+                        .limit(settings.WECHAT_PAY_REFUND_RECONCILE_BATCH_SIZE)
                     )
-                    .order_by(H3cRefundRequest.id)
-                    .limit(50)
-                )
-            ).scalars().all()
-        for refund_id in refund_ids:
-            try:
-                await active_service.reconcile(refund_id)
-            except Exception:
-                continue
-        import asyncio
+                ).scalars().all()
+                now = active_service._now()
+                refund_ids = [
+                    row.id
+                    for row in candidates
+                    if row.updated_at is None
+                    or row.updated_at
+                    <= now
+                    - timedelta(seconds=active_service._retry_delay(row.retry_count))
+                ]
+                last_refund_id = candidates[-1].id if candidates else 0
+            for refund_id in refund_ids:
+                try:
+                    await active_service.recover(refund_id)
+                except Exception:
+                    # A poisoned task must not prevent later tasks from being
+                    # scanned; its retry delay is persisted through retry_count.
+                    continue
+        except Exception:
+            last_refund_id = 0
 
-        await asyncio.sleep(30)
+        await asyncio.sleep(settings.WECHAT_PAY_REFUND_RECONCILE_POLL_SECONDS)

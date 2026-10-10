@@ -273,6 +273,9 @@ class Settings(BaseSettings):
     WECHAT_PAY_REFUND_RECONCILE_POLL_SECONDS: int = 30
     WECHAT_PAY_REFUND_RECONCILE_BATCH_SIZE: int = 100
     WECHAT_PAY_REFUND_RECONCILE_AFTER_SECONDS: int = 60
+    WECHAT_PAY_REFUND_RETRY_DELAYS_SECONDS: str = "60,300,900,1800,3600,21600"
+    WECHAT_PAY_LATE_REFUND_MAX_SUBMIT_ATTEMPTS: int = 3
+    WECHAT_PAY_LATE_REFUND_MAX_QUERY_ATTEMPTS: int = 24
     WECHAT_PAY_SYNC_RATE_PER_MINUTE: int = 10
 
     CHAT_BACKEND: str = "disabled"
@@ -539,6 +542,21 @@ class Settings(BaseSettings):
         if not 10 <= self.WECHAT_PAY_REFUND_RECONCILE_AFTER_SECONDS <= 86400:
             raise ValueError(
                 "WECHAT_PAY_REFUND_RECONCILE_AFTER_SECONDS must be between 10 and 86400"
+            )
+        retry_delays = [
+            int(value)
+            for value in self.WECHAT_PAY_REFUND_RETRY_DELAYS_SECONDS.split(",")
+            if value.strip()
+        ]
+        if not retry_delays or any(value < 10 for value in retry_delays):
+            raise ValueError("WECHAT_PAY_REFUND_RETRY_DELAYS_SECONDS is invalid")
+        if not 1 <= self.WECHAT_PAY_LATE_REFUND_MAX_SUBMIT_ATTEMPTS <= 10:
+            raise ValueError(
+                "WECHAT_PAY_LATE_REFUND_MAX_SUBMIT_ATTEMPTS must be between 1 and 10"
+            )
+        if not 3 <= self.WECHAT_PAY_LATE_REFUND_MAX_QUERY_ATTEMPTS <= 100:
+            raise ValueError(
+                "WECHAT_PAY_LATE_REFUND_MAX_QUERY_ATTEMPTS must be between 3 and 100"
             )
         if not 1 <= self.WECHAT_PAY_SYNC_RATE_PER_MINUTE <= 60:
             raise ValueError(

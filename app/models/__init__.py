@@ -49,7 +49,15 @@ from app.domain.community.src.index import (
     Share,
 )
 from app.domain.plan.src.index import Plan
-from app.domain.order.src.index import Coupon, Inventory, InventoryRecord, Order, PriceConfig, UserCoupon
+from app.domain.order.src.index import (
+    Coupon,
+    Inventory,
+    InventoryRecord,
+    Order,
+    PaymentRefundTask,
+    PriceConfig,
+    UserCoupon,
+)
 from app.domain.user.src.index import (
     AdminPasswordHistory, AdminSecurityAudit, AdminUser,
     DeletedIdentityHash, DeletedOpenid, PointsHistory,
@@ -91,6 +99,7 @@ from app.models.deployment_acceptance import (
 )
 
 from app.models.cert_product import CertProduct
+from app.models.cert_product_catalog import CertProductCatalog
 
 __all__ = [
     "Activity",
@@ -102,6 +111,7 @@ __all__ = [
     "AdminUser",
     "Agreement",
     "Certification",
+    "CertProductCatalog",
     "Collection",
     "CompetitionReg",
     "Conversation",
@@ -124,6 +134,7 @@ __all__ = [
     "Job",
     "JobApplication",
     "Order",
+    "PaymentRefundTask",
     "Plan",
     "PointsHistory",
     "PriceConfig",

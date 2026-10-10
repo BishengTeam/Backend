@@ -226,7 +226,36 @@ class H3cRegistrationService:
                     message="请先阅读并同意认证报名信息处理授权协议",
                 )
 
+                batch_plan_id = await db.scalar(
+                    select(H3cExamBatch.plan_id).where(
+                        H3cExamBatch.id == data.batch_id
+                    )
+                )
+                if batch_plan_id is None:
+                    raise NotFoundException("H3C 考试批次")
+                # Keep the domain-specific duplicate-candidate error ahead of the
+                # generic plan-enrollment guard. The authoritative check is repeated
+                # after Plan -> Batch locks below.
+                active_candidate_id = await db.scalar(
+                    select(H3cRegistration.id)
+                    .where(
+                        H3cRegistration.batch_id == data.batch_id,
+                        H3cRegistration.candidate_idcard == data.candidate_idcard,
+                        H3cRegistration.status.in_(H3C_ACTIVE_STATUSES),
+                    )
+                    .limit(1)
+                )
+                if active_candidate_id is not None:
+                    raise ConflictException("该身份证号已报名此考试批次")
+                plan = await PlanEnrollmentService().lock_enrollable_plan(
+                    db,
+                    plan_id=batch_plan_id,
+                    user_id=user_id,
+                    expected_vendor="H3C",
+                )
                 batch = await self._get_batch_for_update(db, data.batch_id)
+                if batch.plan_id != plan.id:
+                    raise ConflictException("H3C 批次与报名计划关联不一致")
                 active_registration_id = await db.scalar(
                     select(H3cRegistration.id)
                     .where(
@@ -238,12 +267,6 @@ class H3cRegistrationService:
                 )
                 if active_registration_id is not None:
                     raise ConflictException("该身份证号已报名此考试批次")
-                plan = await PlanEnrollmentService().lock_enrollable_plan(
-                    db,
-                    plan_id=batch.plan_id,
-                    user_id=user_id,
-                    expected_vendor="H3C",
-                )
 
                 requested_keys = {
                     key: value
@@ -265,18 +288,12 @@ class H3cRegistrationService:
                     keys=requested_keys,
                 )
                 price_cents = _price(batch, data.registration_type)
-                inventory_change = await lock_inventory(
-                    db,
-                    inventory_type="h3c_batch",
-                    ref_code=f"h3c-batch-{batch.id}",
-                )
                 now = _now()
                 order = Order(
                     user_id=user_id,
                     order_kind="certification",
                     product_type=plan.product_type,
                     plan_id=plan.id,
-                    inventory_id=inventory_change.inventory_id,
                     candidate_name=data.candidate_name,
                     candidate_phone=data.phone,
                     candidate_idcard=data.candidate_idcard,
@@ -290,13 +307,6 @@ class H3cRegistrationService:
                 )
                 db.add(order)
                 await db.flush()
-                add_inventory_record(
-                    db,
-                    change=inventory_change,
-                    order_id=order.id,
-                    action=INVENTORY_LOCK_ACTION,
-                    reason="h3c_order_created",
-                )
 
                 registration = H3cRegistration(
                     batch_id=batch.id,
@@ -317,6 +327,21 @@ class H3cRegistrationService:
                 await db.flush()
                 registration.registration_no = (
                     f"H3C-{data.registration_type.upper()}-{registration.id:08d}"
+                )
+                # Lock the synchronized inventory account only after Plan ->
+                # Batch -> Order -> Registration, then bind material versions.
+                inventory_change = await lock_inventory(
+                    db,
+                    inventory_type="h3c_batch",
+                    ref_code=f"h3c-batch-{batch.id}",
+                )
+                order.inventory_id = inventory_change.inventory_id
+                add_inventory_record(
+                    db,
+                    change=inventory_change,
+                    order_id=order.id,
+                    action=INVENTORY_LOCK_ACTION,
+                    reason="h3c_order_created",
                 )
                 for material_type, upload in material_uploads.items():
                     db.add(
@@ -460,6 +485,17 @@ class H3cRegistrationService:
     async def cancel_pending_payment(self, user_id: int, registration_id: int) -> H3cRegistrationResponse:
         async with get_db_ctx() as db:
             async with db.begin():
+                order_id = await db.scalar(
+                    select(H3cRegistration.order_id).where(
+                        H3cRegistration.id == registration_id,
+                        H3cRegistration.user_id == user_id,
+                    )
+                )
+                if order_id is None:
+                    raise NotFoundException("H3C 报名")
+                order = await db.scalar(
+                    select(Order).where(Order.id == order_id).with_for_update()
+                )
                 registration = await db.scalar(
                     select(H3cRegistration)
                     .where(
@@ -468,13 +504,10 @@ class H3cRegistrationService:
                     )
                     .with_for_update()
                 )
-                if registration is None:
+                if registration is None or order is None:
                     raise NotFoundException("H3C 报名")
                 if registration.status != "pending_payment":
                     raise ConflictException("仅待支付报名可以取消")
-                order = await db.scalar(
-                    select(Order).where(Order.id == registration.order_id).with_for_update()
-                )
                 if order is None or order.status != "pending":
                     raise ConflictException("订单状态不允许取消")
                 apply_order_status_transition(order, "closed")
@@ -495,6 +528,15 @@ class H3cRegistrationService:
         data = H3cResubmissionCreate.model_validate(data)
         async with get_db_ctx() as db:
             async with db.begin():
+                batch_id = await db.scalar(
+                    select(H3cRegistration.batch_id).where(
+                        H3cRegistration.id == registration_id,
+                        H3cRegistration.user_id == user_id,
+                    )
+                )
+                if batch_id is None:
+                    raise NotFoundException("H3C 报名")
+                batch = await self._get_batch_for_update(db, batch_id)
                 registration = await db.scalar(
                     select(H3cRegistration)
                     .where(
@@ -505,9 +547,10 @@ class H3cRegistrationService:
                 )
                 if registration is None:
                     raise NotFoundException("H3C 报名")
+                if registration.batch_id != batch.id:
+                    raise ConflictException("H3C 报名与考试批次关联不一致")
                 if registration.status != "rejected_awaiting_resubmission":
                     raise ConflictException("当前报名状态不能补交材料")
-                batch = await self._get_batch_for_update(db, registration.batch_id)
                 now = _now()
                 if registration.resubmission_count >= batch.max_resubmissions:
                     raise ConflictException("补交次数已用完")
@@ -591,6 +634,19 @@ class H3cRegistrationService:
         decision_data = H3cReviewDecision.model_validate(decision_data)
         async with get_db_ctx() as db:
             async with db.begin():
+                unresolved = await db.scalar(
+                    select(H3cRegistration).where(
+                        H3cRegistration.id == registration_id
+                    )
+                )
+                if unresolved is None:
+                    raise NotFoundException("H3C 报名")
+                batch = await self._get_batch_for_update(db, unresolved.batch_id)
+                order = await db.scalar(
+                    select(Order).where(Order.id == unresolved.order_id).with_for_update()
+                )
+                if order is None:
+                    raise ConflictException("H3C 报名缺少订单")
                 registration = await db.scalar(
                     select(H3cRegistration)
                     .where(H3cRegistration.id == registration_id)
@@ -598,9 +654,13 @@ class H3cRegistrationService:
                 )
                 if registration is None:
                     raise NotFoundException("H3C 报名")
+                if (
+                    registration.batch_id != batch.id
+                    or registration.order_id != order.id
+                ):
+                    raise ConflictException("H3C 报名关联记录不一致")
                 if registration.status != "pending_review":
                     raise ConflictException("当前报名状态不能审核")
-                batch = await self._get_batch_for_update(db, registration.batch_id)
                 now = _now()
                 current_material_ids = (
                     await db.execute(
@@ -661,6 +721,16 @@ class H3cRegistrationService:
     ) -> H3cRegistrationResponse:
         async with get_db_ctx() as db:
             async with db.begin():
+                order_id = await db.scalar(
+                    select(H3cRegistration.order_id).where(
+                        H3cRegistration.id == registration_id
+                    )
+                )
+                if order_id is None:
+                    raise NotFoundException("H3C 报名")
+                order = await db.scalar(
+                    select(Order).where(Order.id == order_id).with_for_update()
+                )
                 registration = await db.scalar(
                     select(H3cRegistration)
                     .where(H3cRegistration.id == registration_id)
@@ -668,13 +738,10 @@ class H3cRegistrationService:
                 )
                 if registration is None:
                     raise NotFoundException("H3C 报名")
+                if order is None or registration.order_id != order.id:
+                    raise ConflictException("H3C 报名缺少订单")
                 if registration.status in {"cancelled", "refunded_closed", "refund_processing"}:
                     raise ConflictException("当前 H3C 报名状态不能关闭")
-                order = await db.scalar(
-                    select(Order).where(Order.id == registration.order_id).with_for_update()
-                )
-                if order is None:
-                    raise ConflictException("H3C 报名缺少订单")
                 now = _now()
                 if order.status == "pending":
                     apply_order_status_transition(order, "closed")
@@ -738,18 +805,37 @@ class H3cRegistrationService:
         async with get_db_ctx() as db:
             rows = (
                 await db.execute(
-                    select(H3cRegistration)
+                    select(Order.id, H3cRegistration.id)
+                    .join(H3cRegistration, H3cRegistration.order_id == Order.id)
                     .where(
                         H3cRegistration.status == "rejected_awaiting_resubmission",
                         H3cRegistration.resubmission_due_at.is_not(None),
                         H3cRegistration.resubmission_due_at <= now,
                     )
-                    .order_by(H3cRegistration.id)
+                    .order_by(Order.id)
                     .limit(limit)
+                )
+            ).all()
+            for order_id, registration_id in rows:
+                order = await db.scalar(
+                    select(Order)
+                    .where(Order.id == order_id)
                     .with_for_update(skip_locked=True)
                 )
-            ).scalars().all()
-            for registration in rows:
+                if order is None:
+                    continue
+                registration = await db.scalar(
+                    select(H3cRegistration)
+                    .where(H3cRegistration.id == registration_id)
+                    .with_for_update(skip_locked=True)
+                )
+                if (
+                    registration is None
+                    or registration.status != "rejected_awaiting_resubmission"
+                    or registration.resubmission_due_at is None
+                    or registration.resubmission_due_at > now
+                ):
+                    continue
                 registration.status = "pending_refund_confirmation"
                 registration.resubmission_due_at = None
                 await self._create_refund_request(

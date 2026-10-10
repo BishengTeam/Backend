@@ -63,7 +63,7 @@ def plan(**kwargs):
 ])
 async def test_invalid_batch_never_creates_order(monkeypatch, changes, occupied):
     db = session(monkeypatch, 'app.services.nisp_registration',
-                 scalars=[plan(**changes), occupied], execute=[result(batch())])
+                 scalars=[2, plan(**changes), occupied], execute=[result(batch())])
     monkeypatch.setattr('app.services.agreement_template.ensure_accepted', AsyncMock())
     with pytest.raises((BusinessException, ConflictException)):
         await NispRegistrationService().create_order(10, payload())
@@ -76,7 +76,7 @@ async def test_invalid_batch_never_creates_order(monkeypatch, changes, occupied)
 async def test_new_order_has_plan_and_database_id_registration_number(monkeypatch, price):
     b = batch()
     b.level1_price_cents = price
-    db = session(monkeypatch, 'app.services.nisp_registration', scalars=[plan(), 0, None],
+    db = session(monkeypatch, 'app.services.nisp_registration', scalars=[2, plan(), 0, None],
                  execute=[result(b), result(None)])
     monkeypatch.setattr('app.services.agreement_template.ensure_accepted', AsyncMock())
     service = NispRegistrationService()
@@ -107,11 +107,13 @@ async def test_new_order_has_plan_and_database_id_registration_number(monkeypatc
     ({'id_card_both_sides_key': 'new.jpg'}, 0, True)])
 async def test_resubmission_rejects_empty_unrequested_exhausted_or_expired(monkeypatch, updates, count, expired):
     reg = NS(id=1, batch_id=1, status='rejected_awaiting_resubmission',
+             user_id=10, order_id=2,
              resubmission_count=count, resubmission_due_at=NOW+timedelta(hours=-1 if expired else 1),
              material_keys={'id_card_both_sides': 'old-id', 'portrait_photo': 'old-photo'})
+    review = NS(rejected_material_types=['id_card_both_sides'])
+    order = NS(id=2)
     db = session(monkeypatch, 'app.services.nisp_registration',
-                 execute=[result(reg)], scalars=[NS(rejected_material_types=['id_card_both_sides'])])
-    db.get = AsyncMock(return_value=batch())
+                 execute=[result(reg)], scalars=[reg, batch(), order, review])
     with pytest.raises((BusinessException, ConflictException)):
         await NispRegistrationService().resubmit_materials(10, 1, NispResubmitRequest(**updates))
     assert reg.status == 'rejected_awaiting_resubmission'
@@ -122,10 +124,12 @@ async def test_resubmission_rejects_empty_unrequested_exhausted_or_expired(monke
 async def test_resubmission_preserves_old_json_and_replaces_only_rejected_material(monkeypatch):
     old_keys = {'id_card_both_sides': 'old-id', 'portrait_photo': 'old-photo'}
     reg = NS(id=1, batch_id=1, status='rejected_awaiting_resubmission', resubmission_count=0,
+             user_id=10, order_id=2,
              resubmission_due_at=NOW+timedelta(hours=1), material_keys=old_keys)
+    review = NS(rejected_material_types=['id_card_both_sides'])
+    order = NS(id=2)
     db = session(monkeypatch, 'app.services.nisp_registration', execute=[result(reg)],
-                 scalars=[NS(rejected_material_types=['id_card_both_sides'])])
-    db.get = AsyncMock(return_value=batch())
+                 scalars=[reg, batch(), order, review])
     service = NispRegistrationService()
     service._bind_material = AsyncMock()
     service._response = AsyncMock()
@@ -138,11 +142,11 @@ async def test_resubmission_preserves_old_json_and_replaces_only_rejected_materi
 
 @pytest.mark.asyncio
 async def test_timeout_requests_refund_once(monkeypatch):
-    reg = NS(id=1, order_id=2, user_id=3, status='rejected_awaiting_resubmission')
+    reg = NS(id=1, order_id=2, user_id=3, status='rejected_awaiting_resubmission',
+             resubmission_due_at=NOW - timedelta(minutes=1))
     order = NS(id=2, status='paid', price=100)
-    db = session(monkeypatch, 'app.services.nisp_registration', scalars=[None])
-    db.scalars.return_value = NS(all=lambda: [reg])
-    db.get = AsyncMock(return_value=order)
+    db = session(monkeypatch, 'app.services.nisp_registration',
+                 scalars=[order, reg, None], execute=[NS(all=lambda: [(2, 1)])])
     assert await NispRegistrationService().process_resubmission_timeouts() == 1
     refund = db.add.call_args.args[0]
     assert reg.status == 'pending_refund_confirmation'
@@ -160,7 +164,7 @@ async def test_cancel_batch_closes_pending_and_requests_paid_refund(monkeypatch)
     second = NS(id=2, status='approved', user_id=5)
     p = plan()
     db = session(monkeypatch, 'app.services.nisp_admin',
-                 scalars=[batch(), p, pending, first, paid, second, None],
+                 scalars=[2, p, batch(), pending, first, paid, second, None],
                  execute=[NS(all=lambda: [(1, 10), (2, 20)])])
     monkeypatch.setattr('app.services.nisp_admin.release_order_coupon', AsyncMock())
     service = NispAdminService()
@@ -201,6 +205,7 @@ async def test_processing_result_updates_registration(monkeypatch):
     db = session(monkeypatch, 'app.services.nisp_refund', scalars=[refund, reg])
     service = NispRefundService()
     service._response = Mock()
+    service._lock_refund_chain = AsyncMock(return_value=(refund, NS(), reg))
     await service._apply_provider_result(refund_id=1, status='PROCESSING', refund_id_wechat='wx-1')
     assert refund.status == 'processing' and reg.status == 'refund_processing'
 
@@ -212,6 +217,7 @@ async def test_zero_refund_updates_completed_order(monkeypatch):
     session(monkeypatch, 'app.services.nisp_refund', scalars=[refund, order, reg])
     service = NispRefundService()
     service._response = Mock()
+    service._lock_refund_chain = AsyncMock(return_value=(refund, order, reg))
     await service._complete_zero_refund(1)
     assert order.status == 'refunded' and reg.status == 'refunded_closed'
 
@@ -222,8 +228,10 @@ async def test_uncertain_refund_preserves_processing_for_reconciliation(monkeypa
     reg = NS(status='pending_refund_confirmation')
     session(monkeypatch, 'app.services.nisp_refund', scalars=[refund, reg, refund])
     provider = NS(refund=AsyncMock(side_effect=WechatPayResultUnknownError('timeout')))
+    service = NispRefundService(provider)
+    service._lock_refund_chain = AsyncMock(return_value=(refund, NS(), reg))
     with pytest.raises(ConflictException):
-        await NispRefundService(provider)._submit(_PreparedRefund(1, 2, 'trade', 'refund', 100, 100))
+        await service._submit(_PreparedRefund(1, 2, 'trade', 'refund', 100, 100))
     assert refund.status == 'processing' and reg.status == 'refund_processing'
     assert refund.retry_count == 1
 
@@ -239,8 +247,11 @@ async def test_callback_success_is_not_overwritten_by_submission_error(monkeypat
         reg.status = 'refunded_closed'
         raise WechatPayResultUnknownError('timeout after callback')
 
+    service = NispRefundService(NS(refund=provider_refund))
+    service._lock_refund_chain = AsyncMock(return_value=(refund, NS(), reg))
+
     with pytest.raises(ConflictException):
-        await NispRefundService(NS(refund=provider_refund))._submit(
+        await service._submit(
             _PreparedRefund(1, 2, 'trade', 'refund', 100, 100))
     assert refund.status == 'succeeded' and reg.status == 'refunded_closed'
     assert refund.retry_count == 0
@@ -248,9 +259,10 @@ async def test_callback_success_is_not_overwritten_by_submission_error(monkeypat
 
 @pytest.mark.asyncio
 async def test_rejection_requires_material_selection(monkeypatch):
-    reg = NS(id=1, batch_id=1, status='pending_review', material_keys={'portrait_photo': 'old'})
-    db = session(monkeypatch, 'app.services.nisp_registration', execute=[result(reg)])
-    db.get = AsyncMock(return_value=batch())
+    reg = NS(id=1, batch_id=1, order_id=2, status='pending_review',
+             material_keys={'portrait_photo': 'old'})
+    db = session(monkeypatch, 'app.services.nisp_registration', execute=[result(reg)],
+                 scalars=[reg, batch(), NS(id=2), None])
     with pytest.raises(BusinessException):
         await NispRegistrationService().review(admin_id=9, registration_id=1,
             data=NispReviewDecisionRequest(decision='rejected', reason_detail='照片不清晰'))

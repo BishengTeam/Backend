@@ -275,21 +275,28 @@ class H3cAdminBatchService:
                 batch, plan = await self._lock(db, batch_id)
                 if plan.status not in {"published", "registration_closed"}:
                     raise ConflictException("当前批次状态不能取消")
-                registrations = (
+                registration_rows = (
                     await db.execute(
-                        select(H3cRegistration)
+                        select(H3cRegistration.id, H3cRegistration.order_id)
                         .where(H3cRegistration.batch_id == batch.id)
+                        .order_by(H3cRegistration.order_id.asc())
+                    )
+                ).all()
+                registrations = []
+                for registration_id, order_id in registration_rows:
+                    order = await db.scalar(
+                        select(Order).where(Order.id == order_id).with_for_update()
+                    )
+                    registration = await db.scalar(
+                        select(H3cRegistration)
+                        .where(H3cRegistration.id == registration_id)
                         .with_for_update()
                     )
-                ).scalars().all()
-                for registration in registrations:
+                    if registration is None:
+                        continue
                     if registration.status in {"refunded_closed", "cancelled"}:
                         continue
-                    order = await db.scalar(
-                        select(Order)
-                        .where(Order.id == registration.order_id)
-                        .with_for_update()
-                    )
+                    registrations.append(registration)
                     if order is None:
                         continue
                     if order.status == "pending":
@@ -400,17 +407,22 @@ class H3cAdminBatchService:
 
     @staticmethod
     async def _lock(db: AsyncSession, batch_id: int) -> tuple[H3cExamBatch, Plan]:
+        plan_id = await db.scalar(
+            select(H3cExamBatch.plan_id).where(H3cExamBatch.id == batch_id)
+        )
+        if plan_id is None:
+            raise NotFoundException("H3C 考试批次")
+        plan = await db.scalar(
+            select(Plan).where(Plan.id == plan_id).with_for_update()
+        )
+        if plan is None:
+            raise NotFoundException("H3C 考试批次")
         batch = await db.scalar(
             select(H3cExamBatch)
             .where(H3cExamBatch.id == batch_id)
             .with_for_update()
         )
         if batch is None:
-            raise NotFoundException("H3C 考试批次")
-        plan = await db.scalar(
-            select(Plan).where(Plan.id == batch.plan_id).with_for_update()
-        )
-        if plan is None:
             raise NotFoundException("H3C 考试批次")
         return batch, plan
 

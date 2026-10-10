@@ -312,6 +312,8 @@ class H3cRefundResponse(BaseModel):
     last_error: str | None = None
     created_at: datetime
 
+    model_config = {"from_attributes": True}
+
 
 class H3cCloseRequest(BaseModel):
     reason_detail: str = Field(..., min_length=3, max_length=500)

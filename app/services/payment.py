@@ -10,6 +10,8 @@ from sqlalchemy.exc import IntegrityError
 
 from app.adapter.database import get_db_ctx
 from app.domain.h3c.src.index import H3cRefundRequest
+from app.domain.h3c.src.index import H3cRegistration
+from app.domain.nisp.src.index import NispRegistration, NispRefundRequest
 from app.domain.order.src.index import (
     Order,
     apply_order_status_transition,
@@ -18,6 +20,7 @@ from app.domain.order.src.index import (
     release_inventory_lock,
 )
 from app.domain.user.src.index import User
+from app.domain.plan.src.index import Plan
 from app.integrations.wechat_pay import (
     WECHAT_PAY_CURRENCY,
     WechatPayAPIError,
@@ -37,6 +40,7 @@ from app.schemas.payment import (
     PaymentSyncResponse,
 )
 from app.services.order_fulfillment import OrderFulfillmentService
+from app.services.payment_refund import PaymentRefundService
 from app.utils.payment import generate_out_trade_no
 
 logger = logging.getLogger(__name__)
@@ -321,9 +325,12 @@ class PaymentService:
             if user is None or transaction.payer_openid != user.openid:
                 raise BusinessException("微信支付付款人与订单用户不一致")
 
-    @staticmethod
-    def _record_late_payment(
-        order: Order, transaction: WechatPayTransaction, reason: str
+    async def _record_late_payment(
+        self,
+        db,
+        order: Order,
+        transaction: WechatPayTransaction,
+        reason: str,
     ) -> None:
         extra = dict(order.extra_data or {})
         payment_metadata = dict(extra.get("_wechat_pay_v3") or {})
@@ -339,6 +346,15 @@ class PaymentService:
         }
         extra["_wechat_pay_v3"] = payment_metadata
         order.extra_data = extra
+        # Materialize the late-payment credentials before querying/inserting
+        # the refund task; otherwise SQLAlchemy autoflushes the order update
+        # while this helper is taking the next lock.
+        await db.flush()
+        await self._schedule_late_payment_refund(db, order)
+
+    @staticmethod
+    async def _schedule_late_payment_refund(db, order: Order) -> None:
+        await PaymentRefundService.schedule_late_payment_refund(db, order)
 
     async def _apply_transaction(
         self,
@@ -360,9 +376,7 @@ class PaymentService:
             filters.append(Order.user_id == expected_user_id)
 
         async with get_db_ctx() as db:
-            order = (
-                await db.execute(select(Order).where(*filters).with_for_update())
-            ).scalar_one_or_none()
+            order = await self._lock_order_for_transaction(db, filters)
             if order is None:
                 raise NotFoundException("订单")
             if verify_provider_fields:
@@ -403,8 +417,8 @@ class PaymentService:
                     processed = processed or fulfillment_closed
                     order.transaction_id = transaction.transaction_id
                     order.paid_at = transaction.success_time
-                    self._record_late_payment(
-                        order, transaction, "provider_success_after_expiration"
+                    await self._record_late_payment(
+                        db, order, transaction, "provider_success_after_expiration"
                     )
                     metadata_changed = True
                 elif order.status == "closed":
@@ -412,8 +426,8 @@ class PaymentService:
                         order.transaction_id = transaction.transaction_id
                     if not order.paid_at:
                         order.paid_at = transaction.success_time or self._now()
-                    self._record_late_payment(
-                        order, transaction, "local_order_already_closed"
+                    await self._record_late_payment(
+                        db, order, transaction, "local_order_already_closed"
                     )
                     metadata_changed = True
                 elif order.status == "pending":
@@ -451,7 +465,27 @@ class PaymentService:
                         .limit(1)
                     )
                 ) is not None
-                if order.application_id is None and not has_h3c_refund:
+                has_nisp_refund = (
+                    await db.scalar(
+                        select(NispRefundRequest.id)
+                        .where(NispRefundRequest.order_id == order.id)
+                        .limit(1)
+                    )
+                ) is not None
+                has_h3c_registration = (
+                    await db.scalar(
+                        select(H3cRegistration.id)
+                        .where(H3cRegistration.order_id == order.id)
+                        .limit(1)
+                    )
+                ) is not None
+                if (
+                    order.application_id is None
+                    and not has_h3c_refund
+                    and not has_h3c_registration
+                    and not has_nisp_refund
+                    and not order.product_type.startswith("NISP-")
+                ):
                     if order.status == "refunded":
                         processed = await self._refund_inventory_sale(db, order)
                     elif order.status in {"paid", "completed"}:
@@ -492,6 +526,32 @@ class PaymentService:
                 status=order.status,
                 processed=processed,
             )
+
+    @staticmethod
+    async def _lock_order_for_transaction(db, filters: list):
+        """Lock a plan-bearing certification order in the shared lock order."""
+        order_ref = await db.scalar(select(Order).where(*filters))
+        if order_ref is not None:
+            plan_id = order_ref.plan_id
+            if plan_id is None:
+                plan_id = await db.scalar(
+                    select(H3cRegistration.plan_id).where(
+                        H3cRegistration.order_id == order_ref.id
+                    )
+                )
+            if plan_id is None:
+                plan_id = await db.scalar(
+                    select(NispRegistration.plan_id).where(
+                        NispRegistration.order_id == order_ref.id
+                    )
+                )
+            if plan_id is not None:
+                await db.scalar(
+                    select(Plan).where(Plan.id == plan_id).with_for_update()
+                )
+        return (
+            await db.execute(select(Order).where(*filters).with_for_update())
+        ).scalar_one_or_none()
 
 
 __all__ = ["PaymentService", "SUPPORTED_TRANSACTION_STATES"]

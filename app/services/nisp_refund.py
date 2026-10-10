@@ -37,6 +37,29 @@ class NispRefundService:
     def __init__(self, wechat_pay: WechatPayClient | None = None) -> None:
         self.wechat_pay = wechat_pay or WechatPayClient()
 
+    @staticmethod
+    async def _lock_refund_chain(db, refund_id: int):
+        """Lock Order -> Registration -> Refund without holding locks over HTTP."""
+        unresolved = await db.get(NispRefundRequest, refund_id)
+        if unresolved is None:
+            raise NotFoundException("NISP 退款任务")
+        order = await db.scalar(
+            select(Order).where(Order.id == unresolved.order_id).with_for_update()
+        )
+        registration = await db.scalar(
+            select(NispRegistration)
+            .where(NispRegistration.id == unresolved.registration_id)
+            .with_for_update()
+        )
+        refund = await db.scalar(
+            select(NispRefundRequest)
+            .where(NispRefundRequest.id == refund_id)
+            .with_for_update()
+        )
+        if order is None or registration is None or refund is None:
+            raise NotFoundException("NISP 退款关联记录")
+        return refund, order, registration
+
     async def list_refunds(
         self,
         *,
@@ -81,26 +104,11 @@ class NispRefundService:
         refund_id: int,
     ) -> _PreparedRefund | NispRefundResponse:
         async with get_db_ctx() as db:
-            refund = await db.scalar(
-                select(NispRefundRequest)
-                .where(NispRefundRequest.id == refund_id)
-                .with_for_update()
-            )
-            if refund is None:
-                raise NotFoundException("NISP 退款任务")
+            refund, order, registration = await self._lock_refund_chain(db, refund_id)
             if refund.status in {"processing", "succeeded"}:
                 return self._response(refund)
             if refund.status not in {"requested", "approved", "failed"}:
                 raise ConflictException("当前 NISP 退款状态不能确认")
-
-            order = await db.scalar(
-                select(Order).where(Order.id == refund.order_id).with_for_update()
-            )
-            registration = await db.scalar(
-                select(NispRegistration)
-                .where(NispRegistration.id == refund.registration_id)
-                .with_for_update()
-            )
             if order is None or registration is None:
                 raise NotFoundException("NISP 退款关联记录")
             if registration.order_id != order.id or order.user_id != refund.user_id:
@@ -135,21 +143,7 @@ class NispRefundService:
 
     async def _complete_zero_refund(self, refund_id: int) -> NispRefundResponse:
         async with get_db_ctx() as db:
-            refund = await db.scalar(
-                select(NispRefundRequest)
-                .where(NispRefundRequest.id == refund_id)
-                .with_for_update()
-            )
-            if refund is None:
-                raise NotFoundException("NISP 退款任务")
-            order = await db.scalar(
-                select(Order).where(Order.id == refund.order_id).with_for_update()
-            )
-            registration = await db.scalar(
-                select(NispRegistration)
-                .where(NispRegistration.id == refund.registration_id)
-                .with_for_update()
-            )
+            refund, order, registration = await self._lock_refund_chain(db, refund_id)
             now = _now()
             if order is not None and order.status in {"paid", "completed"}:
                 apply_order_status_transition(order, "refunded")
@@ -165,20 +159,13 @@ class NispRefundService:
 
     async def _submit(self, prepared: _PreparedRefund) -> NispRefundResponse:
         async with get_db_ctx() as db:
-            refund = await db.scalar(
-                select(NispRefundRequest)
-                .where(NispRefundRequest.id == prepared.refund_id)
-                .with_for_update()
+            refund, _order, registration = await self._lock_refund_chain(
+                db, prepared.refund_id
             )
-            if refund is None:
-                raise NotFoundException("NISP 退款任务")
             if refund.status == "succeeded":
                 return self._response(refund)
             refund.status = "processing"
             refund.processing_at = _now()
-            registration = await db.scalar(select(NispRegistration).where(
-                NispRegistration.id == refund.registration_id
-            ).with_for_update())
             if registration is not None:
                 registration.status = "refund_processing"
             await db.commit()
@@ -193,10 +180,8 @@ class NispRefundService:
             )
         except Exception as exc:
             async with get_db_ctx() as db:
-                refund = await db.scalar(
-                    select(NispRefundRequest)
-                    .where(NispRefundRequest.id == prepared.refund_id)
-                    .with_for_update()
+                refund, _order, _registration = await self._lock_refund_chain(
+                    db, prepared.refund_id
                 )
                 if refund is not None and refund.status != "succeeded":
                     # A transport failure does not prove WeChat rejected the
@@ -226,7 +211,6 @@ class NispRefundService:
             refund = await db.scalar(
                 select(NispRefundRequest)
                 .where(NispRefundRequest.id == refund_id)
-                .with_for_update()
             )
             if refund is None:
                 raise NotFoundException("NISP 退款任务")
@@ -281,7 +265,7 @@ class NispRefundService:
             refund = await db.scalar(
                 select(NispRefundRequest)
                 .where(NispRefundRequest.out_refund_no == provider_refund.out_refund_no)
-                .with_for_update()
+                .limit(1)
             )
             if refund is None:
                 raise NotFoundException("NISP 退款任务")
@@ -306,13 +290,9 @@ class NispRefundService:
         refund_id_wechat: str,
     ) -> NispRefundResponse:
         async with get_db_ctx() as db:
-            refund = await db.scalar(
-                select(NispRefundRequest)
-                .where(NispRefundRequest.id == refund_id)
-                .with_for_update()
+            refund, order, registration = await self._lock_refund_chain(
+                db, refund_id
             )
-            if refund is None:
-                raise NotFoundException("NISP 退款任务")
 
             if refund.status == "succeeded":
                 return self._response(refund)
@@ -324,14 +304,6 @@ class NispRefundService:
                 refund.status = "succeeded"
                 refund.succeeded_at = now
                 refund.last_error = None
-                order = await db.scalar(
-                    select(Order).where(Order.id == refund.order_id).with_for_update()
-                )
-                registration = await db.scalar(
-                    select(NispRegistration)
-                    .where(NispRegistration.id == refund.registration_id)
-                    .with_for_update()
-                )
                 if order is not None and order.status in {"paid", "completed"}:
                     apply_order_status_transition(order, "refunded")
                 if registration is not None:
@@ -343,9 +315,6 @@ class NispRefundService:
                 refund.last_error = f"provider status: {status}"
             elif status == "PROCESSING":
                 refund.status = "processing"
-                registration = await db.scalar(select(NispRegistration).where(
-                    NispRegistration.id == refund.registration_id
-                ).with_for_update())
                 if registration is not None:
                     registration.status = "refund_processing"
 

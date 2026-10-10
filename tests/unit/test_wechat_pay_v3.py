@@ -606,6 +606,12 @@ class _PaymentSession:
             return _ScalarResult(self.store.order)
         return _ScalarResult(self.store.duplicate)
 
+    async def scalar(self, _statement):
+        return self.store.order
+
+    async def flush(self):
+        return None
+
     async def get(self, model, _identifier):
         if model.__name__ == "User":
             return SimpleNamespace(openid="openid-1001", is_active=True)
@@ -627,6 +633,7 @@ def _order(**overrides):
         "user_id": 51,
         "order_kind": "certification",
         "product_type": "RS-ZY",
+        "plan_id": None,
         "application_id": None,
         "out_trade_no": "order-1001",
         "transaction_id": None,
@@ -674,6 +681,7 @@ def _payment_service_with_store(monkeypatch, store):
     service._confirm_inventory_sale = AsyncMock()
     service._release_inventory_lock = AsyncMock()
     service._refund_inventory_sale = AsyncMock(return_value=False)
+    service._schedule_late_payment_refund = AsyncMock()
     service.fulfillment = SimpleNamespace(
         on_paid=AsyncMock(return_value=False),
         on_closed=AsyncMock(return_value=False),
@@ -814,6 +822,7 @@ async def test_payment_after_expiration_closes_without_fulfilling(monkeypatch) -
     assert order.extra_data["_wechat_pay_v3"]["late_payment"][
         "requires_refund_review"
     ] is True
+    service._schedule_late_payment_refund.assert_awaited_once()
     service._confirm_inventory_sale.assert_not_awaited()
     service.fulfillment.on_paid.assert_not_awaited()
     service._release_inventory_lock.assert_awaited_once()

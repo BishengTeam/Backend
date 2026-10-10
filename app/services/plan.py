@@ -4,6 +4,8 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
+from app.domain.h3c.src.index import H3cExamBatch
+from app.domain.nisp.src.index import NispExamBatch
 from app.domain.order.src.index import Order
 from app.domain.plan.src.index import Plan
 from app.domain.renshe.src.index import RensheApplication, RensheAuditLog
@@ -49,6 +51,19 @@ class PlanService:
         if value.tzinfo is None:
             value = value.replace(tzinfo=ZoneInfo(settings.APP_TIMEZONE))
         return value.astimezone(timezone.utc)
+
+    @staticmethod
+    async def _reject_dedicated_certification_batch(db, plan_id: int) -> None:
+        linked_h3c = await db.scalar(
+            select(H3cExamBatch.id).where(H3cExamBatch.plan_id == plan_id).limit(1)
+        )
+        if linked_h3c is not None:
+            raise BusinessException("H3C 批次必须使用专用批次管理接口")
+        linked_nisp = await db.scalar(
+            select(NispExamBatch.id).where(NispExamBatch.plan_id == plan_id).limit(1)
+        )
+        if linked_nisp is not None:
+            raise BusinessException("NISP 批次必须使用专用批次管理接口")
 
     @classmethod
     def _validate_schedule(
@@ -316,6 +331,7 @@ class PlanService:
     ) -> PlanResponse:
         async with get_db_ctx() as db:
             plan = await self._get_plan(db, plan_id, product_type, for_update=True)
+            await self._reject_dedicated_certification_batch(db, plan.id)
             allowed = {"finalized", "cancelled"} if plan.product_type == "RS-ZY" else {"published"}
             if plan.status not in allowed:
                 raise BusinessException("当前批次状态不可归档")
@@ -340,6 +356,7 @@ class PlanService:
     ) -> PlanResponse:
         async with get_db_ctx() as db:
             plan = await self._get_plan(db, plan_id, product_type, for_update=True)
+            await self._reject_dedicated_certification_batch(db, plan.id)
             if plan.product_type == "RS-ZY":
                 await RensheBatchService().cancel(db, plan=plan, admin_id=admin_id)
             else:
