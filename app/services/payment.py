@@ -9,7 +9,6 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.adapter.database import get_db_ctx
-from app.domain.certification.src.index import Course, CourseEnrollment
 from app.domain.h3c.src.index import H3cRefundRequest
 from app.domain.order.src.index import (
     Order,
@@ -124,28 +123,8 @@ class PaymentService:
             raise BusinessException("订单已过期，已关闭")
         if self._is_expiring_soon(order, now):
             raise BusinessException("订单即将过期，请重新下单")
-        if order.order_kind == "course":
-            enrollment = (
-                await db.execute(
-                    select(CourseEnrollment).where(
-                        CourseEnrollment.order_id == order.id
-                    )
-                )
-            ).scalar_one_or_none()
-            course = (
-                await db.get(Course, enrollment.course_id)
-                if enrollment is not None
-                else None
-            )
-            if enrollment is None or course is None or course.status != "published":
-                if order.status == "pending":
-                    apply_order_status_transition(order, "closed")
-                    order.closed_at = now
-                    order.close_reason = "course_not_purchasable"
-                    await self.fulfillment.on_closed(db, order)
-                    await db.commit()
-                    await db.refresh(order)
-                raise BusinessException("课程已下线，订单无法支付")
+        if order.order_kind in {"course", "quiz_order"}:
+            raise BusinessException("课程/题库订单支付通道已关闭，学习权益请通过认证报名获取")
 
     async def create_prepay(
         self, user_id: int, data: PaymentPrepayRequest

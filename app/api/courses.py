@@ -13,11 +13,10 @@ from app.schemas.course import (
     CourseEnrollmentResponse,
     CourseFilter,
     CourseListResponse,
-    CoursePurchaseRequest,
     CoursePurchaseResponse,
 )
+from app.port.exceptions import BusinessException
 from app.services.course import CourseService
-from app.services.course_purchase import CoursePurchaseService
 
 
 router = APIRouter(prefix="/courses", tags=["课程"])
@@ -81,18 +80,14 @@ async def get_course(
 @router.post(
     "/{course_id}/purchase",
     response_model=APIResponse[CoursePurchaseResponse],
-    summary="购买课程",
+    summary="购买课程（已下线）",
+    deprecated=True,
 )
 async def purchase_course(
     course_id: int = Path(..., ge=1),
-    body: CoursePurchaseRequest | None = None,
     current_user: User = Depends(get_current_user),
 ):
-    return success(
-        data=await CoursePurchaseService().purchase(
-            current_user.id, course_id, allow_paid=True
-        )
-    )
+    raise BusinessException("课程购买已下线，学习权益请通过认证报名获取")
 
 
 @router.post(

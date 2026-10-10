@@ -52,6 +52,7 @@ from app.services.quiz_exam import QuizExamService
 from app.services.quiz_practice import QuizPracticeService
 from app.services.quiz_v2 import QuizV2Service
 from app.port.config import settings
+from app.port.exceptions import BusinessException
 from app.domain.community.src.rule.quiz import QuizQuestionType
 from app.domain.community.src.rule.quiz import QuizPracticeMode, QuizPracticeScopeType
 
@@ -174,21 +175,17 @@ async def list_quiz_libraries(
 @router.post(
     "/libraries/{library_id}/purchase",
     response_model=APIResponse,
-    summary="购买题库（创建待支付订单）",
+    summary="购买题库（已下线）",
     description="""
-小程序 **题库详情页** 购买按钮使用。
-
-**使用场景**: 用户点击"购买题库"创建订单，然后走微信支付。
-
-**响应**: order_id + price_cents（用于调起支付）
+题库购买通道已关闭，题库权益请通过认证报名获取。
     """,
+    deprecated=True,
 )
 async def purchase_quiz_library(
     library_id: int = Path(..., ge=1),
     current_user: User = Depends(get_current_user),
 ) -> APIResponse:
-    result = await QuizPurchaseService().purchase(current_user.id, library_id)
-    return success(data=result)
+    raise BusinessException("题库购买已下线，练习权益请通过认证报名获取")
 
 
 @router.get(
