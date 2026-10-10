@@ -54,7 +54,8 @@ async def context(monkeypatch):
             async with factory() as db:
                 yield db
 
-        for module in ['nisp_registration', 'nisp_admin', 'nisp_refund']:
+        for module in ['nisp_registration', 'nisp_admin', 'nisp_refund',
+                       'certification_final_review']:
             monkeypatch.setattr(f'app.services.{module}.get_db_ctx', db_ctx)
         monkeypatch.setattr('app.services.order.get_db_ctx', db_ctx)
         monkeypatch.setattr('app.services.agreement_template.ensure_accepted', AsyncMock())
@@ -383,3 +384,66 @@ async def test_batch_cancellation_closes_unpaid_order(context):
         assert (await db.get(Order, reg.order_id)).status == 'closed'
         assert (await db.get(NispRegistration, reg.id)).status == 'cancelled'
         assert await occupied_count(db, batch.plan_id) == 0
+
+
+async def test_nisp_final_review_binds_effective_export_version(context):
+    from app.domain.nisp.src import (
+        NispExportItem,
+        NispExportJob,
+        NispFinalReview,
+        NispRegistrationVersion,
+    )
+    from app.schemas.nisp import NispFinalReviewRequest
+    from app.services.certification_final_review import NispFinalReviewService
+
+    batch, admin_id = await seed(context)
+    user_id, payload = await applicant(context, batch)
+    service = NispRegistrationService()
+    reg = await service.create_order(user_id, payload)
+    await service.review(
+        admin_id=admin_id,
+        registration_id=reg.id,
+        data=NispReviewDecisionRequest(decision='approved'),
+    )
+    async with context.factory() as db:
+        version = await db.scalar(select(NispRegistrationVersion).where(
+            NispRegistrationVersion.registration_id == reg.id,
+            NispRegistrationVersion.is_current.is_(True),
+        ))
+        job = NispExportJob(
+            batch_id=batch.id,
+            level='1',
+            requested_by_admin_id=admin_id,
+            include_statuses=['approved'],
+            status='succeeded',
+            artifact_type='full_package',
+            registration_count=1,
+            storage_key='test-export.zip',
+        )
+        db.add(job)
+        await db.flush()
+        item = NispExportItem(
+            job_id=job.id,
+            registration_id=reg.id,
+            registration_version_id=version.id,
+            candidate_snapshot=version.candidate_snapshot,
+            material_versions=version.material_versions,
+            is_valid=True,
+        )
+        db.add(item)
+        await db.commit()
+        item_id = item.id
+
+    finalized = await NispFinalReviewService().review(
+        admin_id=admin_id,
+        registration_id=reg.id,
+        data=NispFinalReviewRequest(export_item_id=item_id),
+    )
+    assert finalized.status == 'final_approved'
+    async with context.factory() as db:
+        stored_review = await db.scalar(select(NispFinalReview).where(
+            NispFinalReview.registration_id == reg.id
+        ))
+        stored_item = await db.get(NispExportItem, item_id)
+    assert stored_review.export_item_id == item_id
+    assert stored_item.is_valid is True

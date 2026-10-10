@@ -16,6 +16,8 @@ from app.domain.nisp.src import (
     NispRefundRequest,
     NispRegistrationVersion,
     NispCorrectionRequest,
+    NispExportItem,
+    NispExportJob,
 )
 from app.integrations.nisp_storage import NispObjectStorage
 from app.domain.plan.src.index import Plan
@@ -511,6 +513,18 @@ class NispRegistrationService:
             reg.resubmission_count += 1
             reg.status = "pending_review"
             reg.resubmission_due_at = None
+            await db.execute(
+                sa_update(NispExportItem)
+                .where(
+                    NispExportItem.registration_id == reg.id,
+                    NispExportItem.is_valid.is_(True),
+                )
+                .values(
+                    is_valid=False,
+                    invalidated_at=now,
+                    invalidated_reason="new_registration_version",
+                )
+            )
             await db.commit()
             await db.refresh(reg)
             return await self._response(db, reg)
@@ -874,6 +888,17 @@ class NispRegistrationService:
                 .order_by(NispRegistrationVersion.version_no.desc())
             )
         ).scalars().all()
+        final_export_item_id = await db.scalar(
+            select(NispExportItem.id)
+            .join(NispExportJob, NispExportJob.id == NispExportItem.job_id)
+            .where(
+                NispExportItem.registration_id == registration.id,
+                NispExportItem.is_valid.is_(True),
+                NispExportJob.status == "succeeded",
+            )
+            .order_by(NispExportItem.id.desc())
+            .limit(1)
+        )
         return NispRegistrationResponse(
             id=registration.id,
             registration_no=registration.registration_no,
@@ -903,6 +928,7 @@ class NispRegistrationService:
                 NispRegistrationVersionResponse.model_validate(row)
                 for row in versions
             ],
+            final_export_item_id=final_export_item_id,
             created_at=registration.created_at,
             updated_at=registration.updated_at,
         )

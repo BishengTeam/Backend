@@ -125,7 +125,8 @@ class NispRegistration(Base, TimestampMixin):
         CheckConstraint(
             "status IN ('pending_payment', 'pending_review', "
             "'rejected_awaiting_resubmission', 'pending_refund_confirmation', "
-            "'refund_processing', 'approved', 'refunded_closed', 'cancelled')",
+            "'refund_processing', 'approved', 'final_approved', "
+            "'refunded_closed', 'cancelled')",
             name="ck_nisp_registration_status",
         ),
         CheckConstraint("resubmission_count >= 0", name="ck_nisp_resub_count"),
@@ -140,7 +141,7 @@ class NispRegistration(Base, TimestampMixin):
             postgresql_where=text(
                 "status IN ('pending_payment', 'pending_review', "
                 "'rejected_awaiting_resubmission', 'pending_refund_confirmation', "
-                "'refund_processing', 'approved')"
+                "'refund_processing', 'approved', 'final_approved')"
             ),
         ),
         Index("ix_nisp_registration_batch_status", "batch_id", "status"),
@@ -440,9 +441,75 @@ class NispExportJob(Base, TimestampMixin):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     storage_key: Mapped[str | None] = mapped_column(String(512))
     artifact_sha256: Mapped[str | None] = mapped_column(String(64))
     artifact_bytes: Mapped[int | None] = mapped_column(Integer)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
     result_summary: Mapped[dict | None] = mapped_column(JSONB)
+
+
+class NispExportItem(Base, TimestampMixin):
+    __tablename__ = "nisp_export_item"
+    __table_args__ = (
+        UniqueConstraint("job_id", "registration_id", name="uq_nisp_export_item"),
+        Index("ix_nisp_export_item_registration", "registration_id", "id"),
+    )
+
+    job_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("nisp_export_job.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    registration_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("nisp_registration.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    registration_version_id: Mapped[int | None] = mapped_column(BigInteger)
+    candidate_snapshot: Mapped[dict | None] = mapped_column(JSONB)
+    material_versions: Mapped[dict | None] = mapped_column(JSONB)
+    is_valid: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    invalidated_reason: Mapped[str | None] = mapped_column(String(128))
+
+
+class NispFinalReview(Base, TimestampMixin):
+    __tablename__ = "nisp_final_review"
+    __table_args__ = (
+        CheckConstraint(
+            "decision IN ('approved', 'rejected')",
+            name="ck_nisp_final_review_decision",
+        ),
+        UniqueConstraint("registration_id", name="uq_nisp_final_review_registration"),
+        Index("ix_nisp_final_review_job", "export_job_id", "registration_id"),
+    )
+
+    registration_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("nisp_registration.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    export_job_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("nisp_export_job.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    export_item_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("nisp_export_item.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    registration_version_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    material_version_ids: Mapped[list | None] = mapped_column(JSONB)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(String(64))
+    reason_detail: Mapped[str | None] = mapped_column(Text)
+    reviewer_admin_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("admin_user.id"), nullable=False
+    )
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

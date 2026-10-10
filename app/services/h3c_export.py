@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 from copy import copy
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update as sa_update
 
 from app.adapter.database import get_db_ctx
 from app.domain.h3c.src.index import (
@@ -25,6 +25,7 @@ from app.domain.h3c.src.index import (
     H3cExportJob,
     H3cMaterial,
     H3cRegistration,
+    H3cRegistrationVersion,
 )
 from app.domain.plan.src.index import Plan
 from app.integrations.h3c_storage import H3cObjectStorage
@@ -111,10 +112,24 @@ class H3cExportService:
                 db.add(job)
                 await db.flush()
                 for registration in registrations:
+                    version = await db.scalar(
+                        select(H3cRegistrationVersion)
+                        .where(
+                            H3cRegistrationVersion.registration_id == registration.id,
+                            H3cRegistrationVersion.is_current.is_(True),
+                        )
+                        .with_for_update()
+                    )
+                    if version is None:
+                        raise ConflictException("H3C 报名缺少当前信息版本")
                     db.add(
                         H3cExportItem(
                             job_id=job.id,
                             registration_id=registration.id,
+                            registration_version_id=version.id,
+                            candidate_snapshot=version.candidate_snapshot,
+                            material_versions=version.material_versions,
+                            is_valid=True,
                         )
                     )
             return await self.get_job(job.id)
@@ -177,6 +192,18 @@ class H3cExportService:
 
     async def process_next_job(self) -> bool:
         async with get_db_ctx() as db:
+            await db.execute(
+                sa_update(H3cExportJob)
+                .where(
+                    H3cExportJob.status == "running",
+                    H3cExportJob.lease_expires_at < datetime.now(timezone.utc),
+                )
+                .values(
+                    status="queued",
+                    last_error="worker lease expired; job recovered",
+                )
+            )
+            await db.commit()
             job = await db.scalar(
                 select(H3cExportJob)
                 .where(H3cExportJob.status == "queued")
@@ -190,6 +217,7 @@ class H3cExportService:
             job.status = "running"
             job.started_at = datetime.now(timezone.utc)
             job.heartbeat_at = job.started_at
+            job.lease_expires_at = job.started_at + timedelta(minutes=10)
             await db.commit()
         try:
             await self._run_job(job_id)
@@ -214,11 +242,25 @@ class H3cExportService:
             registration_rows = (
                 await db.execute(
                     select(H3cRegistration)
-                    .join(H3cExportItem, H3cExportItem.registration_id == H3cRegistration.id)
-                    .where(H3cExportItem.job_id == job.id)
+                    .join(
+                        H3cExportItem,
+                        H3cExportItem.registration_id == H3cRegistration.id,
+                    )
+                    .join(
+                        H3cRegistrationVersion,
+                        H3cRegistrationVersion.id
+                        == H3cExportItem.registration_version_id,
+                    )
+                    .where(
+                        H3cExportItem.job_id == job.id,
+                        H3cExportItem.is_valid.is_(True),
+                        H3cRegistrationVersion.is_current.is_(True),
+                    )
                     .order_by(H3cRegistration.id)
                 )
             ).scalars().all()
+            if not registration_rows:
+                raise ConflictException("H3C 导出清单中没有有效报名版本")
             material_map: dict[int, tuple[H3cMaterial, ...]] = {}
             for registration in registration_rows:
                 material_map[registration.id] = tuple(

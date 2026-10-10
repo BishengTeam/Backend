@@ -8,10 +8,16 @@ import uuid
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update as sa_update
 
 from app.adapter.database import get_db_ctx
-from app.domain.nisp.src import NispExportJob, NispMaterialFile, NispRegistration
+from app.domain.nisp.src import (
+    NispExportItem,
+    NispExportJob,
+    NispMaterialFile,
+    NispRegistration,
+    NispRegistrationVersion,
+)
 from app.integrations.nisp_storage import NispObjectStorage
 from app.port.exceptions import BusinessException, NotFoundException
 from app.schemas.nisp import NispExportJobResponse
@@ -91,14 +97,19 @@ class NispExportService:
     ) -> NispExportJobResponse:
         include_statuses = include_statuses or ["approved"]
         async with get_db_ctx() as db:
-            count = await db.scalar(
-                select(func.count()).select_from(NispRegistration).where(
+            registrations = (
+                await db.execute(
+                    select(NispRegistration)
+                    .where(
                     NispRegistration.batch_id == batch_id,
                     NispRegistration.level == level,
                     NispRegistration.status.in_(include_statuses),
                 )
-            ) or 0
-            if count == 0:
+                    .order_by(NispRegistration.id)
+                    .with_for_update()
+                )
+            ).scalars().all()
+            if not registrations:
                 raise BusinessException("没有符合条件的报名记录")
 
             job = NispExportJob(
@@ -108,9 +119,29 @@ class NispExportService:
                 include_statuses=include_statuses,
                 status="queued",
                 artifact_type="full_package",
-                registration_count=count,
+                registration_count=len(registrations),
             )
             db.add(job)
+            await db.flush()
+            for registration in registrations:
+                version = await db.scalar(
+                    select(NispRegistrationVersion)
+                    .where(
+                        NispRegistrationVersion.registration_id == registration.id,
+                        NispRegistrationVersion.is_current.is_(True),
+                    )
+                    .with_for_update()
+                )
+                if version is None:
+                    raise BusinessException("NISP 报名缺少当前信息版本")
+                db.add(NispExportItem(
+                    job_id=job.id,
+                    registration_id=registration.id,
+                    registration_version_id=version.id,
+                    candidate_snapshot=version.candidate_snapshot,
+                    material_versions=version.material_versions,
+                    is_valid=True,
+                ))
             await db.commit()
             await db.refresh(job)
             return NispExportJobResponse.model_validate(job)
@@ -153,6 +184,18 @@ class NispExportService:
     async def process_next_job(self) -> bool:
         """Pick up and process one queued job. Returns True if a job was processed."""
         async with get_db_ctx() as db:
+            await db.execute(
+                sa_update(NispExportJob)
+                .where(
+                    NispExportJob.status == "running",
+                    NispExportJob.lease_expires_at < _now(),
+                )
+                .values(
+                    status="queued",
+                    last_error="worker lease expired; job recovered",
+                )
+            )
+            await db.commit()
             job = (
                 await db.execute(
                     select(NispExportJob)
@@ -168,6 +211,7 @@ class NispExportService:
             job.status = "running"
             job.started_at = _now()
             job.heartbeat_at = _now()
+            job.lease_expires_at = _now() + timedelta(minutes=10)
             await db.commit()
 
             try:
@@ -202,14 +246,25 @@ class NispExportService:
             registrations = (
                 await db.execute(
                     select(NispRegistration)
+                    .join(
+                        NispExportItem,
+                        NispExportItem.registration_id == NispRegistration.id,
+                    )
+                    .join(
+                        NispRegistrationVersion,
+                        NispRegistrationVersion.id
+                        == NispExportItem.registration_version_id,
+                    )
                     .where(
-                        NispRegistration.batch_id == job.batch_id,
-                        NispRegistration.level == job.level,
-                        NispRegistration.status.in_(job.include_statuses),
+                        NispExportItem.job_id == job.id,
+                        NispExportItem.is_valid.is_(True),
+                        NispRegistrationVersion.is_current.is_(True),
                     )
                     .order_by(NispRegistration.id.asc())
                 )
             ).scalars().all()
+            if not registrations:
+                raise BusinessException("NISP 导出清单中没有有效报名版本")
 
             material_rows = (
                 await db.execute(

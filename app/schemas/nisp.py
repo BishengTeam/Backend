@@ -13,6 +13,7 @@ NispRegistrationStatus = Literal[
     "pending_refund_confirmation",
     "refund_processing",
     "approved",
+    "final_approved",
     "refunded_closed",
     "cancelled",
 ]
@@ -153,6 +154,7 @@ class NispRegistrationResponse(BaseModel):
     materials: list["NispMaterialResponse"] = []
     pending_correction: "NispCorrectionRequestResponse | None" = None
     versions: list["NispRegistrationVersionResponse"] = []
+    final_export_item_id: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -262,6 +264,28 @@ class NispCorrectionRequestResponse(BaseModel):
 class NispRejectRefundRequest(BaseModel):
     reason_code: str = Field(..., min_length=1, max_length=64)
     reason_detail: str = Field(..., min_length=1, max_length=2000)
+
+
+class NispFinalReviewRequest(BaseModel):
+    decision: Literal["approved", "rejected"] = "approved"
+    export_item_id: int = Field(..., gt=0)
+    reason_code: str | None = Field(None, max_length=64)
+    reason_detail: str | None = Field(None, max_length=2000)
+
+
+class NispBatchFinalReviewRequest(BaseModel):
+    export_job_id: int = Field(..., gt=0)
+    registration_ids: list[int] = Field(..., min_length=1)
+
+
+class NispFinalReviewResult(BaseModel):
+    registration_id: int
+    success: bool
+    reason: str | None = None
+
+
+class NispBatchFinalReviewResponse(BaseModel):
+    items: list[NispFinalReviewResult]
 
 
 # ── Export ──

@@ -11,6 +11,7 @@ from app.port.exceptions import ConflictException
 ACTIVE_REGISTRATION_STATUSES = (
     "pending_payment", "pending_review", "rejected_awaiting_resubmission",
     "pending_refund_confirmation", "refund_processing", "approved",
+    "final_approved",
 )
 
 

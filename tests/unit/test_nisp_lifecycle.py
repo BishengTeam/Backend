@@ -165,7 +165,7 @@ async def test_resubmission_preserves_old_json_and_replaces_only_rejected_materi
                     status='pending')
     current_version = NS(version_no=1, is_current=True)
     db = session(monkeypatch, 'app.services.nisp_registration',
-                 execute=[NS(scalars=lambda: NS(all=lambda: []))],
+                 execute=[NS(scalars=lambda: NS(all=lambda: [])), NS(rowcount=1)],
                  scalars=[reg, batch(), order, reg, correction, current_version])
     service = NispRegistrationService()
     service._bind_material = AsyncMock()

@@ -86,6 +86,7 @@ from app.domain.h3c.src.index import (
     H3cReview,
     H3cRegistrationVersion,
     H3cCorrectionRequest,
+    H3cFinalReview,
 )
 from app.domain.nisp.src.index import (
     NispExamBatch,
@@ -96,6 +97,8 @@ from app.domain.nisp.src.index import (
     NispReview,
     NispRegistrationVersion,
     NispCorrectionRequest,
+    NispExportItem,
+    NispFinalReview,
 )
 from app.models.deployment_acceptance import (
     DeploymentAcceptance,
@@ -199,6 +202,7 @@ __all__ = [
     "H3cReview",
     "H3cRegistrationVersion",
     "H3cCorrectionRequest",
+    "H3cFinalReview",
     "NispExamBatch",
     "NispExportJob",
     "NispMaterialFile",
@@ -207,4 +211,6 @@ __all__ = [
     "NispReview",
     "NispRegistrationVersion",
     "NispCorrectionRequest",
+    "NispExportItem",
+    "NispFinalReview",
 ]

@@ -100,7 +100,8 @@ class H3cRegistration(Base, TimestampMixin):
         CheckConstraint(
             "status IN ('pending_payment', 'pending_review', "
             "'rejected_awaiting_resubmission', 'pending_refund_confirmation', "
-            "'refund_processing', 'approved', 'refunded_closed', 'cancelled')",
+            "'refund_processing', 'approved', 'final_approved', "
+            "'refunded_closed', 'cancelled')",
             name="ck_h3c_registration_status",
         ),
         CheckConstraint(
@@ -118,7 +119,7 @@ class H3cRegistration(Base, TimestampMixin):
             postgresql_where=text(
                 "status IN ('pending_payment', 'pending_review', "
                 "'rejected_awaiting_resubmission', 'pending_refund_confirmation', "
-                "'refund_processing', 'approved')"
+                "'refund_processing', 'approved', 'final_approved')"
             ),
             sqlite_where=text(
                 "status IN ('pending_payment', 'pending_review', "
@@ -441,6 +442,8 @@ class H3cExportJob(Base, TimestampMixin):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     storage_key: Mapped[str | None] = mapped_column(String(512))
     artifact_sha256: Mapped[str | None] = mapped_column(String(64))
     artifact_bytes: Mapped[int | None] = mapped_column(Integer)
@@ -461,3 +464,48 @@ class H3cExportItem(Base, TimestampMixin):
     registration_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("h3c_registration.id", ondelete="RESTRICT"), nullable=False
     )
+    registration_version_id: Mapped[int | None] = mapped_column(BigInteger)
+    candidate_snapshot: Mapped[dict | None] = mapped_column(JSONB)
+    material_versions: Mapped[dict | None] = mapped_column(JSONB)
+    is_valid: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    invalidated_reason: Mapped[str | None] = mapped_column(String(128))
+
+
+class H3cFinalReview(Base, TimestampMixin):
+    __tablename__ = "h3c_final_review"
+    __table_args__ = (
+        CheckConstraint(
+            "decision IN ('approved', 'rejected')",
+            name="ck_h3c_final_review_decision",
+        ),
+        UniqueConstraint("registration_id", name="uq_h3c_final_review_registration"),
+        Index("ix_h3c_final_review_job", "export_job_id", "registration_id"),
+    )
+
+    registration_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("h3c_registration.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    export_job_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("h3c_export_job.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    export_item_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("h3c_export_item.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    registration_version_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    material_version_ids: Mapped[list | None] = mapped_column(JSONB)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(String(64))
+    reason_detail: Mapped[str | None] = mapped_column(Text)
+    reviewer_admin_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("admin_user.id"), nullable=False
+    )
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -26,9 +26,11 @@ async def context(monkeypatch):
 
     import app.services.h3c_registration as registration_module
     import app.services.order as order_module
+    import app.services.certification_final_review as final_review_module
 
     monkeypatch.setattr(registration_module, "get_db_ctx", db_ctx)
     monkeypatch.setattr(order_module, "get_db_ctx", db_ctx)
+    monkeypatch.setattr(final_review_module, "get_db_ctx", db_ctx)
     yield SimpleNamespace(factory=factory, prefix=prefix, db_ctx=db_ctx)
 
     from app.domain.h3c.src.index import (
@@ -40,6 +42,9 @@ async def context(monkeypatch):
         H3cReview,
         H3cCorrectionRequest,
         H3cRegistrationVersion,
+        H3cExportItem,
+        H3cExportJob,
+        H3cFinalReview,
     )
     from app.domain.order.src.index import Inventory, InventoryRecord, Order
     from app.domain.plan.src.index import Plan
@@ -85,6 +90,19 @@ async def context(monkeypatch):
             delete(H3cRegistrationVersion).where(
                 H3cRegistrationVersion.registration_id.in_(registration_ids)
             )
+        )
+        await db.execute(
+            delete(H3cFinalReview).where(
+                H3cFinalReview.registration_id.in_(registration_ids)
+            )
+        )
+        await db.execute(
+            delete(H3cExportItem).where(
+                H3cExportItem.registration_id.in_(registration_ids)
+            )
+        )
+        await db.execute(
+            delete(H3cExportJob).where(H3cExportJob.batch_id.in_(batch_ids))
         )
         await db.execute(
             delete(H3cRegistration).where(H3cRegistration.id.in_(registration_ids))
@@ -272,7 +290,7 @@ def _request(context, seed, *, registration_type="coupon"):
 
 
 async def test_h3c_zero_price_review_and_resubmission_refund_flow(context):
-    from app.port.exceptions import ConflictException
+    from app.port.exceptions import ConflictException, NotFoundException
     from app.services.h3c_registration import H3cRegistrationService
 
     seed = await _seed(context)
@@ -556,3 +574,83 @@ async def test_h3c_order_accepts_cert_product_only_batch(context):
 
     assert created.status == "pending_review"
     assert created.order_status == "completed"
+
+
+async def test_h3c_final_review_requires_effective_export_version(context):
+    from app.domain.h3c.src.index import (
+        H3cExportItem,
+        H3cExportJob,
+        H3cFinalReview,
+        H3cRegistrationVersion,
+    )
+    from app.port.exceptions import ConflictException, NotFoundException
+    from app.schemas.h3c_registration import H3cFinalReviewRequest
+    from app.services.certification_final_review import H3cFinalReviewService
+    from app.services.h3c_registration import H3cRegistrationService
+
+    seed = await _seed(context)
+    service = H3cRegistrationService()
+    created = await service.create_order(seed.user_id, _request(context, seed))
+    await service.review(
+        admin_id=seed.admin_id,
+        registration_id=created.id,
+        decision_data={"decision": "approved"},
+    )
+    final_service = H3cFinalReviewService()
+    with pytest.raises(NotFoundException, match="导出版本"):
+        await final_service.review(
+            admin_id=seed.admin_id,
+            registration_id=created.id,
+            data=H3cFinalReviewRequest(export_item_id=999999),
+        )
+
+    async with context.factory() as db:
+        version = await db.scalar(
+            select(H3cRegistrationVersion).where(
+                H3cRegistrationVersion.registration_id == created.id,
+                H3cRegistrationVersion.is_current.is_(True),
+            )
+        )
+        job = H3cExportJob(
+            batch_id=seed.batch_id,
+            registration_type="coupon",
+            artifact_type="embedded_xlsx",
+            requested_by_admin_id=seed.admin_id,
+            include_statuses=["approved"],
+            status="succeeded",
+            registration_count=1,
+            storage_key="test-export.xlsx",
+        )
+        db.add(job)
+        await db.flush()
+        item = H3cExportItem(
+            job_id=job.id,
+            registration_id=created.id,
+            registration_version_id=version.id,
+            candidate_snapshot=version.candidate_snapshot,
+            material_versions=version.material_versions,
+            is_valid=True,
+        )
+        db.add(item)
+        await db.commit()
+        item_id = item.id
+
+    finalized = await final_service.review(
+        admin_id=seed.admin_id,
+        registration_id=created.id,
+        data=H3cFinalReviewRequest(export_item_id=item_id),
+    )
+    assert finalized.status == "final_approved"
+    async with context.factory() as db:
+        review = await db.scalar(
+            select(H3cFinalReview).where(H3cFinalReview.registration_id == created.id)
+        )
+    assert review.decision == "approved"
+    assert review.export_item_id == item_id
+
+    with pytest.raises(ConflictException, match="仅初审通过"):
+        await final_service.review(
+            admin_id=seed.admin_id,
+            registration_id=created.id,
+            data=H3cFinalReviewRequest(export_item_id=item_id),
+        )

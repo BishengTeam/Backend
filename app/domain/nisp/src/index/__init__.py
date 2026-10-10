@@ -7,8 +7,11 @@ from app.domain.nisp.src.model import (
     NispExportJob,
     NispRegistrationVersion,
     NispCorrectionRequest,
+    NispExportItem,
+    NispFinalReview,
 )
 
 __all__ = ["NispExamBatch", "NispRegistration", "NispMaterialFile", "NispReview",
     "NispRefundRequest",
-    "NispExportJob", "NispRegistrationVersion", "NispCorrectionRequest"]
+    "NispExportJob", "NispRegistrationVersion", "NispCorrectionRequest",
+    "NispExportItem", "NispFinalReview"]

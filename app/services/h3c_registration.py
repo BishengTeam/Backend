@@ -21,6 +21,8 @@ from app.domain.h3c.src.index import (
     H3cReview,
     H3cRegistrationVersion,
     H3cCorrectionRequest,
+    H3cExportItem,
+    H3cExportJob,
 )
 from app.domain.order.src.index import (
     INVENTORY_LOCK_ACTION,
@@ -70,6 +72,7 @@ H3C_ACTIVE_STATUSES = (
     "pending_refund_confirmation",
     "refund_processing",
     "approved",
+    "final_approved",
 )
 
 # H3C batch cards remain visible after enrollment closes or the exam finishes.
@@ -725,6 +728,18 @@ class H3cRegistrationService:
                 registration.resubmission_count += 1
                 registration.resubmission_due_at = None
                 registration.status = "pending_review"
+                await db.execute(
+                    sa_update(H3cExportItem)
+                    .where(
+                        H3cExportItem.registration_id == registration.id,
+                        H3cExportItem.is_valid.is_(True),
+                    )
+                    .values(
+                        is_valid=False,
+                        invalidated_at=now,
+                        invalidated_reason="new_registration_version",
+                    )
+                )
             return await self.get_registration(user_id, registration_id)
 
     async def review(
@@ -1185,6 +1200,17 @@ class H3cRegistrationService:
                 .order_by(H3cRegistrationVersion.version_no.desc())
             )
         ).scalars().all()
+        final_export_item_id = await db.scalar(
+            select(H3cExportItem.id)
+            .join(H3cExportJob, H3cExportJob.id == H3cExportItem.job_id)
+            .where(
+                H3cExportItem.registration_id == registration.id,
+                H3cExportItem.is_valid.is_(True),
+                H3cExportJob.status == "succeeded",
+            )
+            .order_by(H3cExportItem.id.desc())
+            .limit(1)
+        )
 
         async def preview(material: H3cMaterial) -> str | None:
             if not material.is_current:
@@ -1244,6 +1270,7 @@ class H3cRegistrationService:
                 H3cRegistrationVersionResponse.model_validate(row)
                 for row in versions
             ],
+            final_export_item_id=final_export_item_id,
             created_at=registration.created_at,
             updated_at=registration.updated_at,
         )

@@ -15,6 +15,7 @@ H3cRegistrationStatus = Literal[
     "pending_refund_confirmation",
     "refund_processing",
     "approved",
+    "final_approved",
     "refunded_closed",
     "cancelled",
 ]
@@ -263,6 +264,7 @@ class H3cRegistrationResponse(BaseModel):
     latest_review: H3cReviewResponse | None = None
     pending_correction: "H3cCorrectionRequestResponse | None" = None
     versions: list["H3cRegistrationVersionResponse"] = []
+    final_export_item_id: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -339,6 +341,28 @@ class H3cReviewDecision(BaseModel):
 class H3cRejectRefundRequest(BaseModel):
     reason_code: str = Field(..., min_length=1, max_length=64)
     reason_detail: str = Field(..., min_length=1, max_length=1000)
+
+
+class H3cFinalReviewRequest(BaseModel):
+    decision: Literal["approved", "rejected"] = "approved"
+    export_item_id: int = Field(..., gt=0)
+    reason_code: str | None = Field(None, max_length=64)
+    reason_detail: str | None = Field(None, max_length=1000)
+
+
+class H3cBatchFinalReviewRequest(BaseModel):
+    export_job_id: int = Field(..., gt=0)
+    registration_ids: list[int] = Field(..., min_length=1)
+
+
+class CertificationFinalReviewResult(BaseModel):
+    registration_id: int
+    success: bool
+    reason: str | None = None
+
+
+class H3cBatchFinalReviewResponse(BaseModel):
+    items: list[CertificationFinalReviewResult]
 
 
 class H3cRefundConfirmRequest(BaseModel):

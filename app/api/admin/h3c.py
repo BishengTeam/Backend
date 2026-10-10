@@ -20,12 +20,16 @@ from app.schemas.h3c_registration import (
     H3cRegistrationResponse,
     H3cReviewDecision,
     H3cRejectRefundRequest,
+    H3cFinalReviewRequest,
+    H3cBatchFinalReviewRequest,
+    H3cBatchFinalReviewResponse,
     H3cSignedUrlResponse,
 )
 from app.services.h3c_admin import H3cAdminBatchService
 from app.services.h3c_export import H3cExportService
 from app.services.h3c_refund import H3cRefundService
 from app.services.h3c_registration import H3cRegistrationService
+from app.services.certification_final_review import H3cFinalReviewService
 
 
 router = APIRouter(prefix="/cert-products/h3c", tags=["管理后台-H3C 认证"])
@@ -275,6 +279,44 @@ async def reject_registration_and_refund(
         data=await H3cRegistrationService().reject_and_refund(
             admin_id=_review_admin.id,
             registration_id=registration_id,
+            data=body,
+        )
+    )
+
+
+@router.post(
+    "/registrations/{registration_id}/final-review",
+    response_model=APIResponse[H3cRegistrationResponse],
+    summary="H3C 单人终审",
+)
+async def final_review_registration(
+    body: H3cFinalReviewRequest,
+    registration_id: int = Path(..., gt=0),
+    _review_admin=Depends(require_permission("h3c:final_review")),
+    _reauth_admin=Depends(require_reauthenticated_admin),
+) -> APIResponse[H3cRegistrationResponse]:
+    return success(
+        data=await H3cFinalReviewService().review(
+            admin_id=_review_admin.id,
+            registration_id=registration_id,
+            data=body,
+        )
+    )
+
+
+@router.post(
+    "/final-reviews/batch",
+    response_model=APIResponse[H3cBatchFinalReviewResponse],
+    summary="H3C 批量终审",
+)
+async def batch_final_review(
+    body: H3cBatchFinalReviewRequest,
+    _review_admin=Depends(require_permission("h3c:final_review")),
+    _reauth_admin=Depends(require_reauthenticated_admin),
+) -> APIResponse[H3cBatchFinalReviewResponse]:
+    return success(
+        data=await H3cFinalReviewService().review_batch(
+            admin_id=_review_admin.id,
             data=body,
         )
     )

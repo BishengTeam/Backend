@@ -15,11 +15,15 @@ from app.schemas.nisp import (
     NispRegistrationResponse,
     NispReviewDecisionRequest,
     NispRejectRefundRequest,
+    NispFinalReviewRequest,
+    NispBatchFinalReviewRequest,
+    NispBatchFinalReviewResponse,
 )
 from app.services.nisp_admin import NispAdminService
 from app.services.nisp_export import NispExportService
 from app.services.nisp_refund import NispRefundService
 from app.services.nisp_registration import NispRegistrationService
+from app.services.certification_final_review import NispFinalReviewService
 
 router = APIRouter(prefix="/nisp", tags=["管理后台-NISP认证"])
 _service = NispAdminService()
@@ -141,6 +145,42 @@ async def reject_registration_and_refund(
         data=await NispRegistrationService().reject_and_refund(
             admin_id=_review_admin.id,
             registration_id=registration_id,
+            data=body,
+        )
+    )
+
+
+@router.post(
+    "/registrations/{registration_id}/final-review",
+    response_model=APIResponse[NispRegistrationResponse],
+)
+async def final_review_registration(
+    registration_id: int,
+    body: NispFinalReviewRequest,
+    _review_admin=Depends(require_permission("nisp:final_review")),
+    _reauth_admin=Depends(require_reauthenticated_admin),
+) -> APIResponse[NispRegistrationResponse]:
+    return success(
+        data=await NispFinalReviewService().review(
+            admin_id=_review_admin.id,
+            registration_id=registration_id,
+            data=body,
+        )
+    )
+
+
+@router.post(
+    "/final-reviews/batch",
+    response_model=APIResponse[NispBatchFinalReviewResponse],
+)
+async def batch_final_review(
+    body: NispBatchFinalReviewRequest,
+    _review_admin=Depends(require_permission("nisp:final_review")),
+    _reauth_admin=Depends(require_reauthenticated_admin),
+) -> APIResponse[NispBatchFinalReviewResponse]:
+    return success(
+        data=await NispFinalReviewService().review_batch(
+            admin_id=_review_admin.id,
             data=body,
         )
     )
