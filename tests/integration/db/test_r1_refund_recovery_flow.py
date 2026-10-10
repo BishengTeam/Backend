@@ -473,11 +473,15 @@ async def test_batch_cancel_and_late_payment_are_consistent_without_deadlock(con
         assert tasks[0].out_refund_no.startswith("LPRF")
 
 
-async def test_late_payment_task_submits_once_and_callback_is_idempotent(context):
+async def test_late_payment_task_submits_once_and_callback_is_idempotent(
+    context, monkeypatch
+):
     from app.domain.order.src.index import Order, PaymentRefundTask
     from app.domain.user.src.index import User
     from app.services.payment_refund import PaymentRefundService
 
+    merchant_id = "1900000001"
+    monkeypatch.setattr(settings, "WECHAT_PAY_MCHID", merchant_id)
     prefix = context.prefix
     async with context.factory() as db:
         user = User(openid=f"{prefix}-openid")
@@ -519,7 +523,7 @@ async def test_late_payment_task_submits_once_and_callback_is_idempotent(context
                 "status": "SUCCESS",
                 "success_time": _now().isoformat(),
                 "amount": {"total": 100, "refund": 100, "currency": "CNY"},
-                "mchid": settings.WECHAT_PAY_MCHID,
+                "mchid": merchant_id,
             }
 
     service = PaymentRefundService(Provider())
@@ -540,7 +544,7 @@ async def test_late_payment_task_submits_once_and_callback_is_idempotent(context
             amount_total=100,
             amount_refund=100,
             currency="CNY",
-            mchid=settings.WECHAT_PAY_MCHID,
+            mchid=merchant_id,
         ),
     )
     assert submitted == [result.out_refund_no]
