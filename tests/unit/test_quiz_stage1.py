@@ -85,6 +85,8 @@ def _production_settings(**overrides) -> Settings:
         "JWT_SECRET": "stage-one-test-secret-that-is-long-enough",
         "PII_HASH_KEY": "stage-one-test-pii-key-that-is-long-enough",
         "DB_PASSWORD": "stage-one-db-password",
+        "DATABASE_URL": "postgresql://stage-one:stage-one-password@db.internal:5432/wemini",
+        "DATABASE_URL_SYNC": "postgresql://stage-one:stage-one-password@db.internal:5432/wemini",
         "REDIS_URL": "rediss://redis.internal:6379/0",
         "WECHAT_APPID": "wx-stage-one-appid",
         "WECHAT_SECRET": "stage-one-wechat-secret",

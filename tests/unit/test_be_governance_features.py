@@ -421,6 +421,8 @@ def test_production_settings_require_explicit_wechat_v3_configuration() -> None:
         "JWT_SECRET": "be-test-jwt-secret-that-is-at-least-32-characters",
         "PII_HASH_KEY": "be-test-pii-secret-that-is-at-least-32-characters",
         "DB_PASSWORD": "db-password",
+        "DATABASE_URL": "postgresql://settings-test:settings-password@db.internal:5432/wemini",
+        "DATABASE_URL_SYNC": "postgresql://settings-test:settings-password@db.internal:5432/wemini",
         "REDIS_URL": "rediss://redis.example/0",
         "WECHAT_APPID": "wx-appid",
         "WECHAT_SECRET": "wx-secret",
