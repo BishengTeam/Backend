@@ -49,8 +49,34 @@ def batch(**kwargs):
 
 
 def plan(**kwargs):
-    fields = dict(id=2, status='published', capacity=10, apply_start=NOW-timedelta(days=1),
+    fields = dict(id=2, product_type='NISP-1', status='published', capacity=10,
+                  apply_start=NOW-timedelta(days=1),
                   apply_end=NOW+timedelta(days=1), exam_date=None, exam_location=None)
+    return NS(**(fields | kwargs))
+
+
+def identity(**kwargs):
+    fields = dict(
+        user_id=10,
+        real_name='张三',
+        id_card_number='110101199001010011',
+        status='verified',
+        verified_at='2026-01-01T00:00:00Z',
+        id_card_hash='hash',
+        last_name_zh=None,
+        first_name_zh=None,
+        last_name_en=None,
+        first_name_en=None,
+        gender='男',
+        age=26,
+        birth_date='1990-01-01',
+        zip_code='110101',
+    )
+    return NS(**(fields | kwargs))
+
+
+def cert_product(**kwargs):
+    fields = dict(id=1, type='nisp', code='NISP-1', is_active=True)
     return NS(**(fields | kwargs))
 
 
@@ -63,7 +89,9 @@ def plan(**kwargs):
 ])
 async def test_invalid_batch_never_creates_order(monkeypatch, changes, occupied):
     db = session(monkeypatch, 'app.services.nisp_registration',
-                 scalars=[2, plan(**changes), occupied], execute=[result(batch())])
+                 scalars=[identity(), 2, plan(**changes), cert_product(), occupied],
+                 execute=[result(batch())])
+    db.get = AsyncMock(return_value=NS(is_active=True))
     monkeypatch.setattr('app.services.agreement_template.ensure_accepted', AsyncMock())
     with pytest.raises((BusinessException, ConflictException)):
         await NispRegistrationService().create_order(10, payload())
@@ -76,8 +104,10 @@ async def test_invalid_batch_never_creates_order(monkeypatch, changes, occupied)
 async def test_new_order_has_plan_and_database_id_registration_number(monkeypatch, price):
     b = batch()
     b.level1_price_cents = price
-    db = session(monkeypatch, 'app.services.nisp_registration', scalars=[2, plan(), 0, None],
+    db = session(monkeypatch, 'app.services.nisp_registration',
+                 scalars=[identity(), 2, plan(), cert_product(), 0, None],
                  execute=[result(b), result(None)])
+    db.get = AsyncMock(return_value=NS(is_active=True))
     monkeypatch.setattr('app.services.agreement_template.ensure_accepted', AsyncMock())
     service = NispRegistrationService()
     service._bind_material = AsyncMock()

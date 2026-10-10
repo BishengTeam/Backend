@@ -25,8 +25,10 @@ async def context(monkeypatch):
             yield session
 
     import app.services.h3c_registration as registration_module
+    import app.services.order as order_module
 
     monkeypatch.setattr(registration_module, "get_db_ctx", db_ctx)
+    monkeypatch.setattr(order_module, "get_db_ctx", db_ctx)
     yield SimpleNamespace(factory=factory, prefix=prefix, db_ctx=db_ctx)
 
     from app.domain.h3c.src.index import (
@@ -369,6 +371,79 @@ async def test_h3c_zero_price_review_and_resubmission_refund_flow(context):
         assert refund is not None
     assert refund.request_kind == "review_failed"
     assert refund.amount_cents == 0
+
+
+async def test_h3c_rejects_proxy_registration_and_freezes_verified_identity(context):
+    from app.domain.order.src.index import Order
+    from app.domain.user.src.index import User
+    from app.port.exceptions import BusinessException, ConflictException
+    from app.services.h3c_registration import H3cRegistrationService
+
+    seed = await _seed(context)
+    service = H3cRegistrationService()
+    proxy_request = _request(context, seed).model_copy(
+        update={"candidate_name": "代报名"}
+    )
+    with pytest.raises(ConflictException, match="本人不一致"):
+        await service.create_order(seed.user_id, proxy_request)
+
+    async with context.factory() as db:
+        unverified = User(openid=f"{context.prefix}_unverified")
+        db.add(unverified)
+        await db.commit()
+        unverified_id = unverified.id
+
+    with pytest.raises(BusinessException, match="请先完成实名认证"):
+        await service.create_order(unverified_id, _request(context, seed))
+
+    created = await service.create_order(seed.user_id, _request(context, seed))
+    identity_basis = created.candidate_snapshot["identity_verification"]
+    assert created.candidate_snapshot["candidate_name"] == "王小明"
+    assert created.candidate_snapshot["candidate_idcard"] == "510101200001010123"
+    assert identity_basis["source_table"] == "user_realname"
+    assert identity_basis["status"] == "verified"
+    assert identity_basis["real_name"] == "王小明"
+    assert identity_basis["id_card_number"] == "510101200001010123"
+
+    async with context.factory() as db:
+        order_count = len(
+            (
+                await db.execute(
+                    select(Order).where(Order.user_id.in_([seed.user_id, unverified_id]))
+                )
+            ).scalars().all()
+        )
+    assert order_count == 1
+
+
+async def test_generic_order_creation_rejects_h3c(context):
+    from app.domain.order.src.index import Order
+    from app.port.exceptions import DedicatedCertificationOrderRequiredException
+    from app.schemas.order import OrderCreate
+    from app.services.order import OrderService
+
+    seed = await _seed(context)
+    payload = OrderCreate(
+        order_kind="certification",
+        product_type=seed.code,
+        candidate_name="王小明",
+        candidate_phone="13800000001",
+    )
+    with pytest.raises(
+        DedicatedCertificationOrderRequiredException, match="H3C"
+    ) as exc_info:
+        await OrderService().create_order(seed.user_id, payload)
+
+    assert exc_info.value.code == 40210
+    assert exc_info.value.detail == {
+        "reason": "dedicated_certification_order_required",
+        "vendor": "H3C",
+    }
+    async with context.factory() as db:
+        orders = (
+            await db.execute(select(Order).where(Order.user_id == seed.user_id))
+        ).scalars().all()
+    assert orders == []
 
 
 async def test_h3c_order_accepts_cert_product_only_batch(context):

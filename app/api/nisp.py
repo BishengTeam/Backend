@@ -35,12 +35,19 @@ async def list_batches(
     from app.domain.nisp.src import NispExamBatch
     from app.domain.plan.src.index import Plan
     from app.domain.order.src.index import Order
+    from app.models.cert_product import CertProduct
 
     async with get_db_ctx() as db:
         stmt = (
             select(NispExamBatch, Plan)
             .join(Plan, Plan.id == NispExamBatch.plan_id)
-            .where(Plan.status == "published")
+            .join(CertProduct, CertProduct.code == Plan.product_type)
+            .where(
+                Plan.status == "published",
+                CertProduct.type == "nisp",
+                CertProduct.is_active.is_(True),
+                CertProduct.code == func.concat("NISP-", NispExamBatch.level),
+            )
             .order_by(Plan.sort_order.desc(), NispExamBatch.id.desc())
         )
         if level is not None:

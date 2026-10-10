@@ -21,6 +21,7 @@ from app.domain.user.src.index import UserRealname
 from app.schemas.common import PaginatedData
 from app.schemas.order import OrderCouponAppliedResponse, OrderCreate, OrderDetailResponse, OrderFilter, OrderResponse
 from app.services.agreement_template import ensure_accepted
+from app.services.certification_identity import reject_dedicated_certification_order
 from app.services.order_fulfillment import OrderFulfillmentService
 from app.utils.payment import generate_out_trade_no
 
@@ -41,6 +42,10 @@ class OrderService:
             raise BusinessException("人社订单只能通过人社报名提交接口创建")
         async with get_db_ctx() as db:
             async with db.begin():
+                if data.order_kind == "certification":
+                    await reject_dedicated_certification_order(
+                        db, product_type=data.product_type
+                    )
                 # 认证报名需要实名验证
                 if data.order_kind == "certification":
                     identity = (

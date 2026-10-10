@@ -45,6 +45,21 @@ class RateLimitException(AppException):
         super().__init__(code=40202, message=message, http_status_code=429)
 
 
+class DedicatedCertificationOrderRequiredException(AppException):
+    """A certification product may only use its dedicated registration flow."""
+
+    def __init__(self, vendor: str) -> None:
+        super().__init__(
+            code=40210,
+            message=f"{vendor} 订单必须使用{vendor}专用报名接口创建",
+            http_status_code=422,
+            detail={
+                "reason": "dedicated_certification_order_required",
+                "vendor": vendor,
+            },
+        )
+
+
 class ThirdPartyException(AppException):
     def __init__(self, message: str):
         super().__init__(code=40400, message=message, http_status_code=502)

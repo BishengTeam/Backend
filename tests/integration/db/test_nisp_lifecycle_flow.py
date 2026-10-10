@@ -17,7 +17,8 @@ from app.adapter.database import Base
 from app.domain.nisp.src import NispExamBatch, NispRegistration, NispMaterialFile, NispRefundRequest
 from app.domain.order.src.index import Order
 from app.domain.plan.src.index import Plan
-from app.domain.user.src.index import User, AdminUser
+from app.domain.user.src.index import User, UserRealname, AdminUser
+from app.models.cert_product import CertProduct
 from app.port.exceptions import ConflictException
 from app.schemas.nisp import NispOrderCreate, NispReviewDecisionRequest, NispResubmitRequest
 from app.services.nisp_admin import NispAdminService
@@ -55,6 +56,7 @@ async def context(monkeypatch):
 
         for module in ['nisp_registration', 'nisp_admin', 'nisp_refund']:
             monkeypatch.setattr(f'app.services.{module}.get_db_ctx', db_ctx)
+        monkeypatch.setattr('app.services.order.get_db_ctx', db_ctx)
         monkeypatch.setattr('app.services.agreement_template.ensure_accepted', AsyncMock())
         yield NS(factory=factory)
     finally:
@@ -67,11 +69,23 @@ async def context(monkeypatch):
 async def seed(context, *, capacity=10, price=0):
     async with context.factory() as db:
         now = datetime.now(timezone.utc)
+        product = await db.scalar(
+            select(CertProduct).where(CertProduct.code == 'NISP-1')
+        )
+        if product is None:
+            product = CertProduct(
+                type='nisp',
+                code='NISP-1',
+                name='NISP',
+                chinese_name='NISP 一级',
+                is_active=True,
+            )
+            db.add(product)
         plan = Plan(product_type='NISP-1', name=uuid4().hex,
                     status='published', capacity=capacity,
                     apply_start=now-timedelta(days=1), apply_end=now+timedelta(days=1))
-        db.add(plan)
         admin = AdminUser(username=uuid4().hex, password_hash='test-only', role='cert_admin')
+        db.add_all([product, plan, admin])
         db.add(admin)
         await db.flush()
         batch = NispExamBatch(plan_id=plan.id, level='1',
@@ -86,6 +100,14 @@ async def applicant(context, batch):
         user = User(openid=uuid4().hex)
         db.add(user)
         await db.flush()
+        id_card = f'110101199001{user.id:06d}'
+        db.add(UserRealname(
+            user_id=user.id,
+            user_type='student',
+            real_name='测试',
+            id_card_number=id_card,
+            status='verified',
+        ))
         keys = {}
         for kind in ['id_card_both_sides', 'portrait_photo']:
             key = f'nisp/materials/{user.id}/{uuid4().hex}.jpg'
@@ -94,9 +116,109 @@ async def applicant(context, batch):
         await db.commit()
         return user.id, NispOrderCreate(
             batch_id=batch.id, level='1', name='测试', pinyin='CE SHI', major='计算机',
-            school='测试学校', id_card=f'110101199001{user.id:06d}', phone='13800000000',
+            school='测试学校', id_card=id_card, phone='13800000000',
             email='test@example.test', province='四川',
             id_card_both_sides_key=keys['id_card_both_sides'], portrait_photo_key=keys['portrait_photo'])
+
+
+async def test_nisp_rejects_proxy_registration_and_freezes_verified_identity(context):
+    from app.domain.user.src.index import User
+    from app.port.exceptions import BusinessException, ConflictException
+
+    batch, _ = await seed(context)
+    user_id, payload = await applicant(context, batch)
+    proxy_payload = payload.model_copy(update={'name': '代报名'})
+    with pytest.raises(ConflictException, match='本人不一致'):
+        await NispRegistrationService().create_order(user_id, proxy_payload)
+
+    async with context.factory() as db:
+        unverified = User(openid=uuid4().hex)
+        db.add(unverified)
+        await db.commit()
+        unverified_id = unverified.id
+    with pytest.raises(BusinessException, match='请先完成实名认证'):
+        await NispRegistrationService().create_order(unverified_id, payload)
+
+    created = await NispRegistrationService().create_order(user_id, payload)
+    identity_basis = created.candidate_snapshot['identity_verification']
+    assert created.candidate_snapshot['name'] == '测试'
+    assert created.candidate_snapshot['id_card'] == payload.id_card
+    assert identity_basis['source_table'] == 'user_realname'
+    assert identity_basis['status'] == 'verified'
+    assert identity_basis['real_name'] == '测试'
+    assert identity_basis['id_card_number'] == payload.id_card
+
+
+async def test_nisp_rejects_registration_when_product_is_inactive(context):
+    from app.port.exceptions import BusinessException
+
+    batch, _ = await seed(context)
+    user_id, payload = await applicant(context, batch)
+    async with context.factory() as db:
+        product = await db.scalar(
+            select(CertProduct).where(CertProduct.code == 'NISP-1')
+        )
+        assert product is not None
+        product.is_active = False
+        await db.commit()
+    try:
+        with pytest.raises(BusinessException, match='已下架'):
+            await NispRegistrationService().create_order(user_id, payload)
+    finally:
+        async with context.factory() as db:
+            product = await db.scalar(
+                select(CertProduct).where(CertProduct.code == 'NISP-1')
+            )
+            product.is_active = True
+            await db.commit()
+
+
+async def test_nisp_admin_rejects_wrong_level_product_binding(context):
+    from app.port.exceptions import BusinessException
+    from app.schemas.nisp import NispExamBatchCreate
+
+    async with context.factory() as db:
+        plan = Plan(
+            product_type='NISP-2',
+            name=uuid4().hex,
+            capacity=10,
+            status='draft',
+        )
+        db.add(plan)
+        await db.commit()
+        plan_id = plan.id
+
+    with pytest.raises(BusinessException, match='对应级别'):
+        await NispAdminService().create_batch(NispExamBatchCreate(
+            plan_id=plan_id,
+            level='1',
+            level1_price_cents=100,
+            level2_price_cents=200,
+        ))
+
+
+async def test_generic_order_creation_rejects_nisp(context):
+    from app.port.exceptions import DedicatedCertificationOrderRequiredException
+    from app.schemas.order import OrderCreate
+    from app.services.order import OrderService
+
+    batch, _ = await seed(context)
+    user_id, _ = await applicant(context, batch)
+    payload = OrderCreate(
+        order_kind='certification',
+        product_type='NISP-1',
+        candidate_name='测试',
+        candidate_phone='13800000000',
+    )
+    with pytest.raises(
+        DedicatedCertificationOrderRequiredException, match='NISP'
+    ) as exc_info:
+        await OrderService().create_order(user_id, payload)
+    assert exc_info.value.code == 40210
+    assert exc_info.value.detail == {
+        'reason': 'dedicated_certification_order_required',
+        'vendor': 'NISP',
+    }
 
 
 async def test_last_seat_is_not_oversold(context):

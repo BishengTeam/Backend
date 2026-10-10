@@ -17,6 +17,7 @@ from app.domain.nisp.src import (
 )
 from app.integrations.nisp_storage import NispObjectStorage
 from app.domain.plan.src.index import Plan
+from app.domain.user.src.index import User, UserRealname
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.nisp import (
     NispOrderCreate,
@@ -27,6 +28,12 @@ from app.schemas.nisp import (
     NispMaterialResponse,
 )
 from app.services.points_mall import release_order_coupon
+from app.services.certification_identity import (
+    assert_submitted_identity,
+    lock_verified_identity,
+    validate_nisp_batch_product,
+    verified_identity_snapshot,
+)
 from app.services.plan_enrollment import PlanEnrollmentService
 from app.services.nisp_lifecycle import (
     ACTIVE_REGISTRATION_STATUSES, occupied_count, occupied_orders, request_refund,
@@ -72,6 +79,15 @@ class NispRegistrationService:
         from app.services.agreement_template import ensure_accepted
 
         async with get_db_ctx() as db:
+            user = await db.get(User, user_id)
+            if user is None or not user.is_active:
+                raise BusinessException("用户不可用")
+            identity = await lock_verified_identity(db, user_id=user_id)
+            assert_submitted_identity(
+                identity,
+                submitted_name=data.name,
+                submitted_id_card=data.id_card,
+            )
             # Agreement check
             await ensure_accepted(
                 db,
@@ -105,6 +121,9 @@ class NispRegistrationService:
             ).scalar_one_or_none()
             if batch is None or batch.plan_id != plan.id:
                 raise NotFoundException("NISP 考试批次")
+            product = await validate_nisp_batch_product(
+                db, plan=plan, level=batch.level, require_active=True
+            )
             PlanEnrollmentService.validate_application_window(plan)
             if plan.capacity > 0 and await occupied_count(db, plan.id) >= plan.capacity:
                 raise ConflictException("该考试批次名额已满")
@@ -120,7 +139,7 @@ class NispRegistrationService:
                 await db.execute(
                     select(NispRegistration).where(
                         NispRegistration.batch_id == batch.id,
-                        NispRegistration.candidate_idcard == data.id_card,
+                        NispRegistration.candidate_idcard == identity.id_card_number,
                         NispRegistration.status.in_(ACTIVE_REGISTRATION_STATUSES),
                     )
                 )
@@ -145,11 +164,11 @@ class NispRegistrationService:
             order = Order(
                 user_id=user_id,
                 order_kind="certification",
-                product_type=f"NISP-{data.level}",
+                product_type=product.code,
                 plan_id=plan.id,
-                candidate_name=data.name,
+                candidate_name=identity.real_name,
                 candidate_phone=data.phone,
-                candidate_idcard=data.id_card,
+                candidate_idcard=identity.id_card_number,
                 price=price,
                 status="pending",
                 out_trade_no=generate_out_trade_no("ORD"),
@@ -159,7 +178,7 @@ class NispRegistrationService:
             await db.flush()
 
             # Build snapshot (matching Excel export columns)
-            snapshot = self._build_snapshot(data, batch, plan)
+            snapshot = self._build_snapshot(data, batch, plan, identity)
 
             # Build material keys
             material_keys = {
@@ -179,7 +198,7 @@ class NispRegistrationService:
                 level=data.level,
                 status="pending_payment",
                 candidate_snapshot=snapshot,
-                candidate_idcard=data.id_card,
+                candidate_idcard=identity.id_card_number,
                 material_keys=material_keys,
             )
             db.add(registration)
@@ -532,23 +551,28 @@ class NispRegistrationService:
         return True
 
     def _build_snapshot(
-        self, data: NispOrderCreate, batch: NispExamBatch, plan: Plan
+        self,
+        data: NispOrderCreate,
+        batch: NispExamBatch,
+        plan: Plan,
+        identity: UserRealname,
     ) -> dict:
         """Build a snapshot matching NISP Excel export columns."""
         snapshot = {
-            "name": data.name,
+            "name": identity.real_name,
             "pinyin": data.pinyin,
             "major": data.major,
             "school": data.school,
-            "id_card": data.id_card,
+            "id_card": identity.id_card_number,
             "phone": data.phone,
             "email": data.email,
             "province": data.province,
             "training_type": f"NISP{'一级' if data.level == '1' else '二级'}",
-            "birth_date": _birth_date_from_idcard(data.id_card),
+            "birth_date": _birth_date_from_idcard(identity.id_card_number),
             "exam_date": plan.exam_date.isoformat() if plan.exam_date else None,
             "exam_location": plan.exam_location,
             "institution": batch.training_org,
+            "identity_verification": verified_identity_snapshot(identity),
         }
         if data.level == "2":
             snapshot.update({

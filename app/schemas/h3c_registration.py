@@ -29,6 +29,7 @@ H3cRejectionReasonCode = Literal[
 
 
 class H3cProfileDefaults(BaseModel):
+    identity_status: str | None = None
     candidate_name: str | None = None
     gender: str | None = None
     candidate_idcard: str | None = None

@@ -48,6 +48,11 @@ from app.schemas.h3c_registration import (
     H3cUserExamBatchResponse,
 )
 from app.services.agreement_template import ensure_accepted
+from app.services.certification_identity import (
+    assert_submitted_identity,
+    lock_verified_identity,
+    verified_identity_snapshot,
+)
 from app.services.plan_enrollment import PlanEnrollmentService
 from app.services.user import UserService
 from app.utils.payment import generate_out_trade_no
@@ -102,6 +107,7 @@ class H3cRegistrationService:
     async def get_profile_defaults(self, user_id: int) -> H3cProfileDefaults:
         profile = await UserService().get_profile(user_id)
         return H3cProfileDefaults(
+            identity_status=profile.identity_status,
             candidate_name=profile.real_name,
             gender=profile.gender,
             candidate_idcard=profile.id_card_raw,
@@ -211,14 +217,12 @@ class H3cRegistrationService:
                 user = await db.get(User, user_id)
                 if user is None or not user.is_active:
                     raise BusinessException("用户不可用")
-                identity = await db.scalar(
-                    select(UserRealname).where(
-                        UserRealname.user_id == user_id,
-                        UserRealname.status == "verified",
-                    )
+                identity = await lock_verified_identity(db, user_id=user_id)
+                assert_submitted_identity(
+                    identity,
+                    submitted_name=data.candidate_name,
+                    submitted_id_card=data.candidate_idcard,
                 )
-                if identity is None:
-                    raise BusinessException("请先完成实名认证")
                 await ensure_accepted(
                     db,
                     user_id,
@@ -240,7 +244,7 @@ class H3cRegistrationService:
                     select(H3cRegistration.id)
                     .where(
                         H3cRegistration.batch_id == data.batch_id,
-                        H3cRegistration.candidate_idcard == data.candidate_idcard,
+                        H3cRegistration.candidate_idcard == identity.id_card_number,
                         H3cRegistration.status.in_(H3C_ACTIVE_STATUSES),
                     )
                     .limit(1)
@@ -260,7 +264,7 @@ class H3cRegistrationService:
                     select(H3cRegistration.id)
                     .where(
                         H3cRegistration.batch_id == batch.id,
-                        H3cRegistration.candidate_idcard == data.candidate_idcard,
+                        H3cRegistration.candidate_idcard == identity.id_card_number,
                         H3cRegistration.status.in_(H3C_ACTIVE_STATUSES),
                     )
                     .limit(1)
@@ -294,9 +298,9 @@ class H3cRegistrationService:
                     order_kind="certification",
                     product_type=plan.product_type,
                     plan_id=plan.id,
-                    candidate_name=data.candidate_name,
+                    candidate_name=identity.real_name,
                     candidate_phone=data.phone,
-                    candidate_idcard=data.candidate_idcard,
+                    candidate_idcard=identity.id_card_number,
                     price=price_cents,
                     status="pending",
                     out_trade_no=generate_out_trade_no("H3C"),
@@ -320,8 +324,9 @@ class H3cRegistrationService:
                         data=data,
                         batch=batch,
                         plan=plan,
+                        identity=identity,
                     ),
-                    candidate_idcard=data.candidate_idcard,
+                    candidate_idcard=identity.id_card_number,
                 )
                 db.add(registration)
                 await db.flush()
@@ -389,11 +394,12 @@ class H3cRegistrationService:
         data: H3cOrderCreate,
         batch: H3cExamBatch,
         plan: Plan,
+        identity: UserRealname,
     ) -> dict:
         return {
-            "candidate_name": data.candidate_name,
-            "gender": data.gender,
-            "candidate_idcard": data.candidate_idcard,
+            "candidate_name": identity.real_name,
+            "gender": identity.gender or data.gender,
+            "candidate_idcard": identity.id_card_number,
             "school": data.school,
             "address": data.address,
             "phone": data.phone,
@@ -403,7 +409,8 @@ class H3cRegistrationService:
             "last_name_en": data.last_name_en,
             "coupon_code": data.coupon_code,
             "verify_code": data.verify_code,
-            "birth_date": _birth_date_from_idcard(data.candidate_idcard),
+            "birth_date": _birth_date_from_idcard(identity.id_card_number),
+            "identity_verification": verified_identity_snapshot(identity),
             "candidate_no": None,
             "exam_code": batch.exam_code,
             "exam_datetime": plan.exam_date.isoformat() if plan.exam_date else None,

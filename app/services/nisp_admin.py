@@ -11,6 +11,7 @@ from app.port.exceptions import BusinessException, ConflictException, NotFoundEx
 from app.domain.order.src.index import Order, apply_order_status_transition
 from app.services.nisp_lifecycle import occupied_count, request_refund
 from app.services.points_mall import release_order_coupon
+from app.services.certification_identity import validate_nisp_batch_product
 from app.schemas.nisp import (
     NispExamBatchCreate,
     NispExamBatchResponse,
@@ -29,9 +30,14 @@ class NispAdminService:
 
     async def create_batch(self, data: NispExamBatchCreate) -> NispExamBatchResponse:
         async with get_db_ctx() as db:
-            plan = await db.get(Plan, data.plan_id)
+            plan = await db.scalar(
+                select(Plan).where(Plan.id == data.plan_id).with_for_update()
+            )
             if plan is None:
                 raise NotFoundException("Plan")
+            await validate_nisp_batch_product(
+                db, plan=plan, level=data.level, require_active=True
+            )
             batch = NispExamBatch(**data.model_dump())
             db.add(batch)
             await db.commit()
@@ -49,9 +55,26 @@ class NispAdminService:
         self, batch_id: int, data: NispExamBatchUpdate
     ) -> NispExamBatchResponse:
         async with get_db_ctx() as db:
-            batch = await db.get(NispExamBatch, batch_id)
+            plan_id = await db.scalar(
+                select(NispExamBatch.plan_id).where(NispExamBatch.id == batch_id)
+            )
+            if plan_id is None:
+                raise NotFoundException("NISP 考试批次")
+            plan = await db.scalar(
+                select(Plan).where(Plan.id == plan_id).with_for_update()
+            )
+            if plan is None:
+                raise NotFoundException("Plan")
+            batch = await db.scalar(
+                select(NispExamBatch)
+                .where(NispExamBatch.id == batch_id)
+                .with_for_update()
+            )
             if batch is None:
                 raise NotFoundException("NISP 考试批次")
+            await validate_nisp_batch_product(
+                db, plan=plan, level=batch.level, require_active=False
+            )
             for key, value in data.model_dump(exclude_unset=True).items():
                 setattr(batch, key, value)
             await db.commit()
@@ -77,12 +100,26 @@ class NispAdminService:
 
     async def publish_batch(self, batch_id: int) -> NispExamBatchResponse:
         async with get_db_ctx() as db:
-            batch = await db.get(NispExamBatch, batch_id)
-            if batch is None:
+            plan_id = await db.scalar(
+                select(NispExamBatch.plan_id).where(NispExamBatch.id == batch_id)
+            )
+            if plan_id is None:
                 raise NotFoundException("NISP 考试批次")
-            plan = await db.get(Plan, batch.plan_id)
+            plan = await db.scalar(
+                select(Plan).where(Plan.id == plan_id).with_for_update()
+            )
             if plan is None:
                 raise NotFoundException("Plan")
+            batch = await db.scalar(
+                select(NispExamBatch)
+                .where(NispExamBatch.id == batch_id)
+                .with_for_update()
+            )
+            if batch is None:
+                raise NotFoundException("NISP 考试批次")
+            await validate_nisp_batch_product(
+                db, plan=plan, level=batch.level, require_active=True
+            )
             if plan.status == "draft":
                 plan.status = "published"
                 plan.published_at = _now()
@@ -92,14 +129,23 @@ class NispAdminService:
 
     async def close_registration(self, batch_id: int) -> NispExamBatchResponse:
         async with get_db_ctx() as db:
-            batch = await db.scalar(select(NispExamBatch).where(
-                NispExamBatch.id == batch_id
-            ).with_for_update())
-            if batch is None:
+            plan_id = await db.scalar(
+                select(NispExamBatch.plan_id).where(NispExamBatch.id == batch_id)
+            )
+            if plan_id is None:
                 raise NotFoundException("NISP 考试批次")
-            plan = await db.scalar(select(Plan).where(Plan.id == batch.plan_id).with_for_update())
+            plan = await db.scalar(
+                select(Plan).where(Plan.id == plan_id).with_for_update()
+            )
             if plan is None:
                 raise NotFoundException("Plan")
+            batch = await db.scalar(
+                select(NispExamBatch)
+                .where(NispExamBatch.id == batch_id)
+                .with_for_update()
+            )
+            if batch is None or batch.plan_id != plan.id:
+                raise NotFoundException("NISP 考试批次")
             if plan.status not in {"published", "registration_closed"}:
                 raise ConflictException("当前批次不能关闭报名")
             plan.status = "registration_closed"
