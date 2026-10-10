@@ -118,9 +118,37 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://test:isolated-test-password@127.0.0.1:5432/wemini_app_test
           DATABASE_URL_SYNC: postgresql://test:isolated-test-password@127.0.0.1:5432/wemini_app_test
         run: |
-          scripts/quality_gate.sh backend
-          python -m alembic upgrade head
-          python -m pytest -q -p no:cacheprovider tests/integration/db
+          set -Eeuo pipefail
+          scripts/quality_gate.sh backend 2>&1 | tee backend-quality.log
+          python -m alembic upgrade head 2>&1 | tee backend-migration.log
+          python -m pytest -q -p no:cacheprovider tests/integration/db 2>&1 | tee backend-integration.log
+
+      - name: Publish backend test failure summary
+        if: failure()
+        working-directory: Backend
+        shell: bash
+        run: |
+          {
+            printf '### Backend test failure tail\n\n```text\n'
+            for log in backend-quality.log backend-migration.log backend-integration.log; do
+              if [[ -f "$log" ]]; then
+                printf '\n--- %s ---\n' "$log"
+                tail -n 240 "$log" || true
+              fi
+            done
+            printf '\n```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload backend test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-logs
+          path: |
+            Backend/backend-quality.log
+            Backend/backend-migration.log
+            Backend/backend-integration.log
+          if-no-files-found: ignore
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
