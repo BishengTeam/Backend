@@ -587,6 +587,7 @@ class H3cExportService:
             batch = await db.get(H3cExamBatch, job.batch_id)
             if batch is None:
                 raise NotFoundException("H3C 考试批次")
+            plan = await db.get(Plan, batch.plan_id)
             export_rows = (
                 await db.execute(
                     select(H3cRegistration, H3cExportItem)
@@ -683,6 +684,7 @@ class H3cExportService:
             elif job.artifact_type == "full_package":
                 artifact = await self._build_full_package(
                     batch=batch,
+                    batch_name=plan.name if plan is not None else None,
                     job_id=job.id,
                     rows=rows,
                     destination=directory,
@@ -1012,6 +1014,7 @@ class H3cExportService:
         self,
         *,
         batch: H3cExamBatch,
+        batch_name: str | None = None,
         job_id: int,
         rows: list[_ExportRow],
         destination: Path,
@@ -1052,6 +1055,11 @@ class H3cExportService:
         records: list[dict[str, object]] = []
         attachment_files: list[tuple[Path, str]] = []
         exported_at = datetime.now(H3C_EXPORT_TZ).replace(microsecond=0, tzinfo=None)
+        display_batch_name = (
+            batch_name
+            or getattr(batch, "name", None)
+            or f"H3C批次-{batch.id}"
+        )
         for registration_type in ("coupon", "student", "full"):
             for row in grouped.get(registration_type, []):
                 registration = row.registration
@@ -1134,7 +1142,7 @@ class H3cExportService:
                 record["attachment_count"],
                 record["result"],
                 record["failure_reason"],
-                batch.name,
+                display_batch_name,
                 job_id,
                 exported_at,
             ])

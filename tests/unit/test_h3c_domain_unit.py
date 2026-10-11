@@ -161,7 +161,7 @@ def test_h3c_full_package_contains_manifest_tables_and_person_attachments(tmp_pa
 
     service = H3cExportService(storage=Storage())
     batch = SimpleNamespace(
-        name="2026 年 10 月考区",
+        id=99,
         exam_code="GB0-192",
         country="CHN",
         language="CHS",
@@ -234,6 +234,7 @@ def test_h3c_full_package_contains_manifest_tables_and_person_attachments(tmp_pa
         assert not any(name.startswith("附件/H3C-FULL") for name in names)
         manifest = load_workbook(archive.open("导出清单.xlsx"), read_only=True)["导出清单"]
         assert manifest.max_row - 1 == 3
+        assert manifest["L2"].value == "H3C批次-99"
 
 
 def test_h3c_safe_zip_component_removes_path_characters():
