@@ -154,6 +154,7 @@ class H3cExamBatchResponse(BaseModel):
     max_resubmissions: int
     max_material_bytes: int
     prices: list[H3cPriceOption]
+    registration_counts: dict[str, int] = {}
     published_at: datetime | None
     registration_closed_at: datetime | None
     cancelled_at: datetime | None

@@ -437,6 +437,13 @@ class H3cAdminBatchService:
                 Order.status.in_(("pending", "paid", "completed")),
             )
         ) or 0
+        count_rows = (
+            await db.execute(
+                select(H3cRegistration.status, func.count())
+                .where(H3cRegistration.batch_id == batch.id)
+                .group_by(H3cRegistration.status)
+            )
+        ).all()
         return H3cExamBatchResponse(
             id=batch.id,
             plan_id=plan.id,
@@ -469,6 +476,7 @@ class H3cAdminBatchService:
                 {"registration_type": kind, "price_cents": getattr(batch, H3C_PRICE_FIELDS[kind])}
                 for kind in H3C_REGISTRATION_TYPES
             ],
+            registration_counts={status: int(count) for status, count in count_rows},
             published_at=plan.published_at,
             registration_closed_at=plan.registration_closed_at,
             cancelled_at=plan.cancelled_at,
