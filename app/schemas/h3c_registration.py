@@ -7,7 +7,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 H3cRegistrationType = Literal["coupon", "student", "full"]
-H3cArtifactType = Literal["embedded_xlsx", "images_zip"]
+H3cExportRegistrationType = Literal["coupon", "student", "full", "mixed"]
+H3cArtifactType = Literal["embedded_xlsx", "images_zip", "full_package"]
 H3cRegistrationStatus = Literal[
     "pending_payment",
     "pending_review",
@@ -265,6 +266,10 @@ class H3cRegistrationResponse(BaseModel):
     pending_correction: "H3cCorrectionRequestResponse | None" = None
     versions: list["H3cRegistrationVersionResponse"] = []
     final_export_item_id: int | None = None
+    latest_valid_export_job_id: int | None = None
+    latest_valid_export_finished_at: datetime | None = None
+    final_review_ready: bool = False
+    final_review_block_reason: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -351,13 +356,56 @@ class H3cFinalReviewRequest(BaseModel):
 
 
 class H3cBatchFinalReviewRequest(BaseModel):
-    export_job_id: int = Field(..., gt=0)
-    registration_ids: list[int] = Field(..., min_length=1)
+    export_job_id: int | None = Field(None, gt=0)
+    registration_ids: list[int] | None = None
+    targets: list["H3cBatchFinalReviewTarget"] | None = None
+
+    @field_validator("registration_ids")
+    @classmethod
+    def _validate_registration_ids(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        if not value or any(item <= 0 for item in value):
+            raise ValueError("报名 ID 必须为正整数且不能为空")
+        if len(set(value)) != len(value):
+            raise ValueError("报名 ID 不能重复")
+        return value
+
+    @field_validator("targets")
+    @classmethod
+    def _validate_targets(
+        cls, value: list["H3cBatchFinalReviewTarget"] | None
+    ) -> list["H3cBatchFinalReviewTarget"] | None:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("至少选择一名报名人员")
+        registration_ids = [item.registration_id for item in value]
+        if len(set(registration_ids)) != len(registration_ids):
+            raise ValueError("同一报名不能重复终审")
+        return value
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if self.targets:
+            return self
+        if self.export_job_id is None or not self.registration_ids:
+            raise ValueError("请提交逐人导出版本或使用兼容的批量终审参数")
+        return self
+
+
+class H3cBatchFinalReviewTarget(BaseModel):
+    registration_id: int = Field(..., gt=0)
+    export_item_id: int = Field(..., gt=0)
 
 
 class CertificationFinalReviewResult(BaseModel):
     registration_id: int
+    export_item_id: int | None = None
+    registration_no: str | None = None
+    name: str | None = None
     success: bool
+    status: Literal["success", "skipped", "failed"] = "success"
     reason: str | None = None
 
 
@@ -397,9 +445,10 @@ class H3cCloseRequest(BaseModel):
 
 class H3cExportCreate(BaseModel):
     batch_id: int = Field(..., gt=0)
-    registration_type: H3cRegistrationType
+    registration_type: H3cExportRegistrationType | None = None
     artifact_type: H3cArtifactType
     include_statuses: list[H3cRegistrationStatus] = Field(default=["approved"])
+    registration_ids: list[int] | None = Field(None)
 
     @field_validator("include_statuses")
     @classmethod
@@ -408,15 +457,78 @@ class H3cExportCreate(BaseModel):
             raise ValueError("至少选择一个导出状态")
         return list(dict.fromkeys(value))
 
+    @field_validator("registration_ids")
+    @classmethod
+    def _validate_registration_ids(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        if not value or any(item <= 0 for item in value):
+            raise ValueError("报名 ID 必须为正整数且不能为空")
+        if len(set(value)) != len(value):
+            raise ValueError("报名 ID 不能重复")
+        return value
+
+    @model_validator(mode="after")
+    def validate_artifact(self):
+        if self.artifact_type == "full_package":
+            if self.registration_type is None:
+                self.registration_type = "mixed"
+        elif self.registration_type in (None, "mixed"):
+            raise ValueError("该导出产物必须选择具体报名类型")
+        return self
+
+
+class H3cExportPrecheckRequest(BaseModel):
+    batch_id: int = Field(..., gt=0)
+    registration_ids: list[int] | None = Field(None)
+    registration_type: H3cRegistrationType | None = None
+    status: H3cRegistrationStatus | None = "approved"
+    keyword: str | None = Field(None, max_length=64)
+
+    @field_validator("registration_ids")
+    @classmethod
+    def _validate_registration_ids(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        if not value or any(item <= 0 for item in value):
+            raise ValueError("报名 ID 必须为正整数且不能为空")
+        if len(set(value)) != len(value):
+            raise ValueError("报名 ID 不能重复")
+        return value
+
+
+class H3cExportPrecheckPerson(BaseModel):
+    registration_id: int
+    registration_no: str
+    name: str
+    registration_type: H3cRegistrationType
+    status: H3cRegistrationStatus
+    exportable: bool
+    reason: str | None = None
+
+
+class H3cExportPrecheckResponse(BaseModel):
+    selected_count: int
+    exportable_count: int
+    blocked_count: int
+    counts_by_type: dict[str, int]
+    exportable_registration_ids: list[int]
+    people: list[H3cExportPrecheckPerson]
+
 
 class H3cExportJobResponse(BaseModel):
     id: int
     batch_id: int
-    registration_type: H3cRegistrationType
+    registration_type: H3cExportRegistrationType
     artifact_type: H3cArtifactType
+    requested_by_admin_id: int
+    requested_by_admin_name: str | None = None
     include_statuses: list[str]
     status: H3cExportStatus
     registration_count: int
+    valid_item_count: int = 0
+    counts_by_type: dict[str, int] = {}
+    registration_ids: list[int] = []
     started_at: datetime | None
     finished_at: datetime | None
     storage_key: str | None
@@ -428,6 +540,22 @@ class H3cExportJobResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class H3cExportItemResponse(BaseModel):
+    id: int
+    job_id: int
+    registration_id: int
+    registration_no: str
+    name: str
+    registration_type: H3cRegistrationType
+    current_status: H3cRegistrationStatus
+    version_no: int | None = None
+    is_valid: bool
+    invalidated_reason: str | None = None
+    review_ready: bool
+    block_reason: str | None = None
+    created_at: datetime
 
 
 class H3cSignedUrlResponse(BaseModel):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import asyncio
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from datetime import datetime, timezone
@@ -151,3 +152,91 @@ def test_h3c_workbook_replaces_samples_with_formatted_export_rows(tmp_path):
     assert worksheet["Q3"].number_format == "yyyy/m/d h:mm"
     assert worksheet["U3"].value == datetime(2026, 10, 1)
     assert worksheet["U3"].number_format == "yyyy/m/d"
+
+
+def test_h3c_full_package_contains_manifest_tables_and_person_attachments(tmp_path):
+    class Storage:
+        async def download_file(self, storage_key: str, destination: Path) -> None:
+            PillowImage.new("RGB", (120, 160), "white").save(destination, "JPEG")
+
+    service = H3cExportService(storage=Storage())
+    batch = SimpleNamespace(
+        name="2026 年 10 月考区",
+        exam_code="GB0-192",
+        country="CHN",
+        language="CHS",
+        identity_tag="社会考生",
+        training_org="智天远",
+        training_teacher="王老师",
+        training_address="成都",
+        training_start="2026-09-01T00:00:00+00:00",
+        training_end="2026-10-01T00:00:00+00:00",
+    )
+    base_snapshot = {
+        "candidate_name": "王小龙",
+        "gender": "男",
+        "candidate_idcard": "510101200001011234",
+        "school": "四川智天远",
+        "address": "成都市高新区",
+        "phone": "13800138000",
+        "email": "user@example.com",
+        "education": "大学本科",
+        "birth_date": "2000/01/01",
+        "first_name_en": "Xiaolong",
+        "last_name_en": "Wang",
+        "exam_datetime": "2026-10-10 09:00",
+    }
+
+    def row(registration_id: int, registration_no: str, registration_type: str, material=None):
+        return SimpleNamespace(
+            registration=SimpleNamespace(
+                id=registration_id,
+                registration_no=registration_no,
+                registration_type=registration_type,
+                status="approved",
+                candidate_snapshot={**base_snapshot, "candidate_name": f"考生{registration_id}"},
+                materials=(material,) if material else (),
+            ),
+            materials=(material,) if material else (),
+            item=SimpleNamespace(
+                candidate_snapshot={**base_snapshot, "candidate_name": f"考生{registration_id}"},
+                registration_version_id=registration_id,
+            ),
+        )
+
+    rows = [
+        row(1, "H3C-COUPON-00000001", "coupon", SimpleNamespace(
+            id=101, material_type="coupon_proof", storage_key="materials/101.jpg",
+            original_filename="coupon-proof.png",
+        )),
+        row(2, "H3C-STUDENT-00000002", "student", SimpleNamespace(
+            id=102, material_type="student_proof", storage_key="materials/102.jpg",
+            original_filename="student-proof.jpeg",
+        )),
+        row(3, "H3C-FULL-00000003", "full"),
+    ]
+    output = asyncio.run(
+        service._build_full_package(
+            batch=batch,
+            job_id=99,
+            rows=rows,
+            destination=tmp_path,
+        )
+    )
+    with zipfile.ZipFile(output) as archive:
+        names = set(archive.namelist())
+        assert "导出清单.xlsx" in names
+        assert "报名表/考券报名.xlsx" in names
+        assert "报名表/学生报名.xlsx" in names
+        assert "报名表/全额报名.xlsx" in names
+        assert "附件/H3C-COUPON-00000001_考生1/考券证明.png" in names
+        assert "附件/H3C-STUDENT-00000002_考生2/学生证明.jpeg" in names
+        assert not any(name.startswith("附件/H3C-FULL") for name in names)
+        manifest = load_workbook(archive.open("导出清单.xlsx"), read_only=True)["导出清单"]
+        assert manifest.max_row - 1 == 3
+
+
+def test_h3c_safe_zip_component_removes_path_characters():
+    service = H3cExportService(storage=SimpleNamespace())
+    assert service._safe_zip_component(' 张/../三 :*?"<>| ', fallback="fallback") == "张..三"
+    assert service._safe_zip_component(None, fallback="fallback") == "fallback"

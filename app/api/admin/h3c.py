@@ -14,7 +14,10 @@ from app.schemas.h3c_registration import (
     H3cExamBatchResponse,
     H3cExamBatchUpdate,
     H3cExportCreate,
+    H3cExportItemResponse,
     H3cExportJobResponse,
+    H3cExportPrecheckRequest,
+    H3cExportPrecheckResponse,
     H3cRefundConfirmRequest,
     H3cRefundResponse,
     H3cRegistrationResponse,
@@ -214,6 +217,8 @@ async def list_registrations(
     batch_id: int | None = Query(None, gt=0),
     registration_type: str | None = Query(None),
     status: str | None = Query(None),
+    keyword: str | None = Query(None, max_length=64),
+    has_valid_export: bool | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     _admin=Depends(require_permission("h3c:review")),
@@ -223,6 +228,8 @@ async def list_registrations(
             batch_id=batch_id,
             registration_type=registration_type,
             status=status,
+            keyword=keyword,
+            has_valid_export=has_valid_export,
             page=page,
             page_size=page_size,
         )
@@ -382,6 +389,48 @@ async def confirm_refund(
             refund_id=refund_id,
         ),
         message="H3C 退款已确认提交",
+    )
+
+
+@router.post(
+    "/exports/precheck",
+    response_model=APIResponse[H3cExportPrecheckResponse],
+    summary="H3C 完整资料包导出预检",
+    **admin_error_contract("40001", "40100", "40101", "40200", "40300", "50000"),
+)
+async def precheck_export(
+    body: H3cExportPrecheckRequest,
+    _admin=Depends(require_permission("h3c:export")),
+) -> APIResponse[H3cExportPrecheckResponse]:
+    return success(data=await H3cExportService().precheck(body))
+
+
+@router.get(
+    "/exports/{job_id}/items",
+    response_model=APIResponse[PaginatedData[H3cExportItemResponse]],
+    summary="H3C 导出任务人员清单",
+    **admin_error_contract("40001", "40100", "40101", "40300", "50000"),
+)
+async def list_export_items(
+    job_id: int = Path(..., gt=0),
+    registration_type: str | None = Query(None),
+    current_status: str | None = Query(None),
+    is_valid: bool | None = Query(None),
+    keyword: str | None = Query(None, max_length=64),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    _admin=Depends(require_permission("h3c:export")),
+) -> APIResponse[PaginatedData[H3cExportItemResponse]]:
+    return success(
+        data=await H3cExportService().list_items(
+            job_id=job_id,
+            registration_type=registration_type,
+            current_status=current_status,
+            is_valid=is_valid,
+            keyword=keyword,
+            page=page,
+            page_size=page_size,
+        )
     )
 
 

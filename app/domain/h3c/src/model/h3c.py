@@ -414,7 +414,7 @@ class H3cExportJob(Base, TimestampMixin):
             name="ck_h3c_export_job_status",
         ),
         CheckConstraint(
-            "artifact_type IN ('embedded_xlsx', 'images_zip')",
+            "artifact_type IN ('embedded_xlsx', 'images_zip', 'full_package')",
             name="ck_h3c_export_artifact_type",
         ),
         CheckConstraint(

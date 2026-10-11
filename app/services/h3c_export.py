@@ -15,8 +15,11 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from copy import copy
 from pathlib import Path
+import re
+from collections import defaultdict
+from typing import Sequence
 
-from sqlalchemy import func, select, update as sa_update
+from sqlalchemy import func, or_, select, update as sa_update
 
 from app.adapter.database import get_db_ctx
 from app.domain.h3c.src.index import (
@@ -27,6 +30,7 @@ from app.domain.h3c.src.index import (
     H3cRegistration,
     H3cRegistrationVersion,
 )
+from app.domain.user.src.model.admin_user import AdminUser
 from app.domain.plan.src.index import Plan
 from app.integrations.h3c_storage import H3cObjectStorage
 from app.port.config import settings
@@ -34,7 +38,11 @@ from app.port.exceptions import BusinessException, ConflictException, NotFoundEx
 from app.schemas.common import PaginatedData
 from app.schemas.h3c_registration import (
     H3cExportCreate,
+    H3cExportItemResponse,
     H3cExportJobResponse,
+    H3cExportPrecheckPerson,
+    H3cExportPrecheckRequest,
+    H3cExportPrecheckResponse,
     H3cSignedUrlResponse,
 )
 
@@ -49,6 +57,16 @@ H3C_TEMPLATE_SHA256 = {
 MATERIAL_SLUGS = {
     "coupon_proof": "coupon-proof",
     "student_proof": "student-proof",
+}
+REQUIRED_MATERIAL_TYPES = {
+    "coupon": "coupon_proof",
+    "student": "student_proof",
+    "full": None,
+}
+TYPE_FILE_NAMES = {
+    "coupon": "考券报名.xlsx",
+    "student": "学生报名.xlsx",
+    "full": "全额报名.xlsx",
 }
 H3C_EXPORT_TZ = timezone(timedelta(hours=8), name="Asia/Shanghai")
 H3C_DATE_COLUMNS = {
@@ -67,11 +85,192 @@ H3C_DATETIME_COLUMNS = {
 class _ExportRow:
     registration: H3cRegistration
     materials: tuple[H3cMaterial, ...]
+    item: H3cExportItem | None = None
 
 
 class H3cExportService:
     def __init__(self, storage: H3cObjectStorage | None = None) -> None:
         self.storage = storage or H3cObjectStorage()
+
+    @staticmethod
+    def _precheck_stmt(data: H3cExportPrecheckRequest):
+        stmt = select(H3cRegistration).where(H3cRegistration.batch_id == data.batch_id)
+        if data.registration_ids is not None:
+            stmt = stmt.where(H3cRegistration.id.in_(data.registration_ids))
+        else:
+            if data.registration_type:
+                stmt = stmt.where(
+                    H3cRegistration.registration_type == data.registration_type
+                )
+            if data.status:
+                stmt = stmt.where(H3cRegistration.status == data.status)
+            if data.keyword:
+                pattern = f"%{data.keyword.strip()}%"
+                stmt = stmt.where(
+                    or_(
+                        H3cRegistration.registration_no.ilike(pattern),
+                        H3cRegistration.candidate_snapshot["candidate_name"].astext.ilike(
+                            pattern
+                        ),
+                    )
+                )
+        return stmt.order_by(H3cRegistration.id)
+
+    @staticmethod
+    async def _current_versions(
+        db, registration_ids: Sequence[int]
+    ) -> dict[int, H3cRegistrationVersion]:
+        if not registration_ids:
+            return {}
+        rows = (
+            await db.execute(
+                select(H3cRegistrationVersion)
+                .where(
+                    H3cRegistrationVersion.registration_id.in_(registration_ids),
+                    H3cRegistrationVersion.is_current.is_(True),
+                )
+            )
+        ).scalars().all()
+        return {row.registration_id: row for row in rows}
+
+    @staticmethod
+    async def _current_materials(
+        db, registration_ids: Sequence[int]
+    ) -> dict[int, dict[str, H3cMaterial]]:
+        if not registration_ids:
+            return {}
+        rows = (
+            await db.execute(
+                select(H3cMaterial)
+                .where(
+                    H3cMaterial.registration_id.in_(registration_ids),
+                    H3cMaterial.is_current.is_(True),
+                )
+                .order_by(H3cMaterial.registration_id, H3cMaterial.id)
+            )
+        ).scalars().all()
+        result: dict[int, dict[str, H3cMaterial]] = defaultdict(dict)
+        for row in rows:
+            result[row.registration_id][row.material_type] = row
+        return dict(result)
+
+    @staticmethod
+    def _material_version(material: H3cMaterial) -> dict:
+        return {
+            "material_id": material.id,
+            "version_no": material.version_no,
+            "sha256": material.sha256,
+        }
+
+    @staticmethod
+    def _export_block_reason(
+        *,
+        registration: H3cRegistration,
+        version: H3cRegistrationVersion | None,
+        materials: dict[str, H3cMaterial],
+        allowed_statuses: Sequence[str],
+    ) -> str | None:
+        if registration.status not in allowed_statuses:
+            return "当前状态不可导出"
+        if version is None:
+            return "缺少当前报名信息版本"
+        required_type = REQUIRED_MATERIAL_TYPES[registration.registration_type]
+        if required_type and required_type not in materials:
+            return "缺少必需证明材料"
+        return None
+
+    @staticmethod
+    def _review_readiness(
+        *,
+        registration_status: str,
+        item: H3cExportItem,
+        job_status: str,
+        current_version_id: int | None,
+    ) -> tuple[bool, str | None]:
+        if registration_status == "final_approved":
+            return False, "已终审通过"
+        if registration_status != "approved":
+            return False, "仅初审通过人员可终审"
+        if job_status != "succeeded":
+            return False, "导出任务未成功"
+        if not item.is_valid:
+            return False, item.invalidated_reason or "导出版本已失效"
+        if current_version_id is None or item.registration_version_id != current_version_id:
+            return False, "导出版本与当前报名版本不一致"
+        return True, None
+
+    @staticmethod
+    async def _job_item_stats(
+        db, job_ids: Sequence[int]
+    ) -> dict[int, dict]:
+        if not job_ids:
+            return {}
+        rows = (
+            await db.execute(
+                select(H3cExportItem, H3cRegistration.registration_type)
+                .join(
+                    H3cRegistration,
+                    H3cRegistration.id == H3cExportItem.registration_id,
+                )
+                .where(H3cExportItem.job_id.in_(job_ids))
+                .order_by(H3cExportItem.job_id, H3cExportItem.id)
+            )
+        ).all()
+        result: dict[int, dict] = {
+            job_id: {
+                "valid_item_count": 0,
+                "counts_by_type": {"coupon": 0, "student": 0, "full": 0},
+                "registration_ids": [],
+            }
+            for job_id in job_ids
+        }
+        for item, registration_type in rows:
+            stats = result[item.job_id]
+            stats["registration_ids"].append(item.registration_id)
+            stats["counts_by_type"][registration_type] += 1
+            if item.is_valid:
+                stats["valid_item_count"] += 1
+        return result
+
+    async def precheck(self, data: H3cExportPrecheckRequest) -> H3cExportPrecheckResponse:
+        async with get_db_ctx() as db:
+            batch = await db.get(H3cExamBatch, data.batch_id)
+            if batch is None:
+                raise NotFoundException("H3C 考试批次")
+            registrations = (await db.execute(self._precheck_stmt(data))).scalars().all()
+            versions = await self._current_versions(db, [row.id for row in registrations])
+            materials = await self._current_materials(db, [row.id for row in registrations])
+            people: list[H3cExportPrecheckPerson] = []
+            exportable_ids: list[int] = []
+            counts_by_type = {"coupon": 0, "student": 0, "full": 0}
+            for registration in registrations:
+                reason = self._export_block_reason(
+                    registration=registration,
+                    version=versions.get(registration.id),
+                    materials=materials.get(registration.id, {}),
+                    allowed_statuses=("approved", "final_approved"),
+                )
+                person = H3cExportPrecheckPerson(
+                    registration_id=registration.id,
+                    registration_no=registration.registration_no,
+                    name=str((registration.candidate_snapshot or {}).get("candidate_name") or ""),
+                    registration_type=registration.registration_type,
+                    status=registration.status,
+                    exportable=reason is None,
+                    reason=reason,
+                )
+                people.append(person)
+                if reason is None:
+                    exportable_ids.append(registration.id)
+                    counts_by_type[registration.registration_type] += 1
+            return H3cExportPrecheckResponse(
+                selected_count=len(people),
+                exportable_count=len(exportable_ids),
+                blocked_count=len(people) - len(exportable_ids),
+                counts_by_type=counts_by_type,
+                exportable_registration_ids=exportable_ids,
+                people=people,
+            )
 
     async def create_job(
         self,
@@ -88,18 +287,63 @@ class H3cExportService:
                 )
                 if batch is None:
                     raise NotFoundException("H3C 考试批次")
-                registrations = (
-                    await db.execute(
+                if data.registration_ids is not None:
+                    registrations = (
+                        await db.execute(
+                            select(H3cRegistration)
+                            .where(
+                                H3cRegistration.batch_id == batch.id,
+                                H3cRegistration.id.in_(data.registration_ids),
+                            )
+                            .order_by(H3cRegistration.id)
+                            .with_for_update()
+                        )
+                    ).scalars().all()
+                else:
+                    stmt = (
                         select(H3cRegistration)
                         .where(
                             H3cRegistration.batch_id == batch.id,
-                            H3cRegistration.registration_type == data.registration_type,
                             H3cRegistration.status.in_(data.include_statuses),
                         )
                         .order_by(H3cRegistration.id)
                         .with_for_update()
                     )
-                ).scalars().all()
+                    if data.registration_type not in (None, "mixed"):
+                        stmt = stmt.where(
+                            H3cRegistration.registration_type == data.registration_type
+                        )
+                    registrations = (await db.execute(stmt)).scalars().all()
+                versions = await self._current_versions(db, [row.id for row in registrations])
+                materials = await self._current_materials(db, [row.id for row in registrations])
+                blocked: list[str] = []
+                exportable_registrations: list[H3cRegistration] = []
+                for registration in registrations:
+                    reason = self._export_block_reason(
+                        registration=registration,
+                        version=versions.get(registration.id),
+                        materials=materials.get(registration.id, {}),
+                        allowed_statuses=tuple(data.include_statuses),
+                    )
+                    if reason is None:
+                        exportable_registrations.append(registration)
+                    else:
+                        blocked.append(
+                            f"{registration.registration_no} {reason}"
+                        )
+                if data.registration_ids is not None:
+                    missing_ids = set(data.registration_ids) - {
+                        row.id for row in registrations
+                    }
+                    if missing_ids:
+                        blocked.append(f"以下报名不属于该批次：{','.join(map(str, sorted(missing_ids)))}")
+                    if blocked:
+                        raise ConflictException(
+                            "所选人员暂不可导出：" + "；".join(blocked[:20])
+                        )
+                registrations = exportable_registrations
+                if not registrations:
+                    raise ConflictException("H3C 导出清单中没有可导出报名")
                 job = H3cExportJob(
                     batch_id=batch.id,
                     registration_type=data.registration_type,
@@ -112,23 +356,24 @@ class H3cExportService:
                 db.add(job)
                 await db.flush()
                 for registration in registrations:
-                    version = await db.scalar(
-                        select(H3cRegistrationVersion)
-                        .where(
-                            H3cRegistrationVersion.registration_id == registration.id,
-                            H3cRegistrationVersion.is_current.is_(True),
-                        )
-                        .with_for_update()
-                    )
+                    version = versions[registration.id]
                     if version is None:
                         raise ConflictException("H3C 报名缺少当前信息版本")
+                    material_versions = dict(version.material_versions or {})
+                    if not material_versions:
+                        material_versions = {
+                            material_type: self._material_version(material)
+                            for material_type, material in materials.get(
+                                registration.id, {}
+                            ).items()
+                        }
                     db.add(
                         H3cExportItem(
                             job_id=job.id,
                             registration_id=registration.id,
                             registration_version_id=version.id,
                             candidate_snapshot=version.candidate_snapshot,
-                            material_versions=version.material_versions,
+                            material_versions=material_versions,
                             is_valid=True,
                         )
                     )
@@ -143,7 +388,9 @@ class H3cExportService:
         page_size: int = 20,
     ) -> PaginatedData[H3cExportJobResponse]:
         async with get_db_ctx() as db:
-            stmt = select(H3cExportJob)
+            stmt = select(H3cExportJob, AdminUser.display_name).outerjoin(
+                AdminUser, AdminUser.id == H3cExportJob.requested_by_admin_id
+            )
             if batch_id is not None:
                 stmt = stmt.where(H3cExportJob.batch_id == batch_id)
             if status:
@@ -155,9 +402,17 @@ class H3cExportService:
                     .offset((page - 1) * page_size)
                     .limit(page_size)
                 )
-            ).scalars().all()
+            ).all()
+            stats = await self._job_item_stats(db, [row[0].id for row in rows])
             return PaginatedData(
-                items=[self._response(row) for row in rows],
+                items=[
+                    self._response(
+                        row[0],
+                        requested_by_admin_name=row[1],
+                        stats=stats.get(row[0].id),
+                    )
+                    for row in rows
+                ],
                 total=int(total),
                 page=page,
                 page_size=page_size,
@@ -168,7 +423,100 @@ class H3cExportService:
             job = await db.get(H3cExportJob, job_id)
             if job is None:
                 raise NotFoundException("H3C 导出任务")
-            return self._response(job)
+            admin_name = await db.scalar(
+                select(AdminUser.display_name).where(
+                    AdminUser.id == job.requested_by_admin_id
+                )
+            )
+            stats = await self._job_item_stats(db, [job.id])
+            return self._response(
+                job,
+                requested_by_admin_name=admin_name,
+                stats=stats.get(job.id),
+            )
+
+    async def list_items(
+        self,
+        *,
+        job_id: int,
+        registration_type: str | None = None,
+        current_status: str | None = None,
+        is_valid: bool | None = None,
+        keyword: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> PaginatedData[H3cExportItemResponse]:
+        async with get_db_ctx() as db:
+            job = await db.get(H3cExportJob, job_id)
+            if job is None:
+                raise NotFoundException("H3C 导出任务")
+            base = (
+                select(H3cExportItem, H3cRegistration)
+                .join(
+                    H3cRegistration,
+                    H3cRegistration.id == H3cExportItem.registration_id,
+                )
+                .where(H3cExportItem.job_id == job.id)
+            )
+            if registration_type:
+                base = base.where(H3cRegistration.registration_type == registration_type)
+            if current_status:
+                base = base.where(H3cRegistration.status == current_status)
+            if is_valid is not None:
+                base = base.where(H3cExportItem.is_valid.is_(is_valid))
+            if keyword:
+                pattern = f"%{keyword.strip()}%"
+                base = base.where(
+                    or_(
+                        H3cRegistration.registration_no.ilike(pattern),
+                        H3cRegistration.candidate_snapshot["candidate_name"].astext.ilike(
+                            pattern
+                        ),
+                    )
+                )
+            total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
+            rows = (
+                await db.execute(
+                    base.order_by(H3cExportItem.id)
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                )
+            ).all()
+            current_versions = await self._current_versions(
+                db, [item.registration_id for item, _registration in rows]
+            )
+            items: list[H3cExportItemResponse] = []
+            for item, registration in rows:
+                version = current_versions.get(registration.id)
+                review_ready, block_reason = self._review_readiness(
+                    registration_status=registration.status,
+                    item=item,
+                    job_status=job.status,
+                    current_version_id=version.id if version else None,
+                )
+                items.append(
+                    H3cExportItemResponse(
+                        id=item.id,
+                        job_id=item.job_id,
+                        registration_id=registration.id,
+                        registration_no=registration.registration_no,
+                        name=str((registration.candidate_snapshot or {}).get("candidate_name") or ""),
+                        registration_type=registration.registration_type,
+                        current_status=registration.status,
+                        version_no=version.version_no if version else None,
+                        is_valid=item.is_valid,
+                        invalidated_reason=item.invalidated_reason,
+                        review_ready=review_ready,
+                        block_reason=block_reason,
+                        created_at=item.created_at,
+                    )
+                )
+            return PaginatedData(
+                items=items,
+                total=int(total),
+                page=page,
+                page_size=page_size,
+            )
 
     async def signed_url(
         self,
@@ -239,9 +587,9 @@ class H3cExportService:
             batch = await db.get(H3cExamBatch, job.batch_id)
             if batch is None:
                 raise NotFoundException("H3C 考试批次")
-            registration_rows = (
+            export_rows = (
                 await db.execute(
-                    select(H3cRegistration)
+                    select(H3cRegistration, H3cExportItem)
                     .join(
                         H3cExportItem,
                         H3cExportItem.registration_id == H3cRegistration.id,
@@ -258,31 +606,66 @@ class H3cExportService:
                     )
                     .order_by(H3cRegistration.id)
                 )
-            ).scalars().all()
-            if not registration_rows:
+            ).all()
+            if not export_rows:
                 raise ConflictException("H3C 导出清单中没有有效报名版本")
-            material_map: dict[int, tuple[H3cMaterial, ...]] = {}
-            for registration in registration_rows:
-                material_map[registration.id] = tuple(
+            all_material_ids = [
+                int(value["material_id"])
+                for _registration, item in export_rows
+                for value in (item.material_versions or {}).values()
+                if isinstance(value, dict) and value.get("material_id")
+            ]
+            material_rows: list[H3cMaterial] = []
+            if all_material_ids:
+                material_rows = list(
                     (
                         await db.execute(
                             select(H3cMaterial)
-                            .where(
-                                H3cMaterial.registration_id == registration.id,
-                                H3cMaterial.is_current.is_(True),
-                            )
-                            .order_by(H3cMaterial.material_type)
+                            .where(H3cMaterial.id.in_(all_material_ids))
+                            .order_by(H3cMaterial.registration_id, H3cMaterial.id)
                         )
                     ).scalars().all()
                 )
+            # Legacy jobs created before material snapshots were frozen have an
+            # empty mapping. Keep them downloadable by falling back to materials
+            # that were current when the older worker implementation ran.
+            legacy_registration_ids = [
+                registration.id
+                for registration, item in export_rows
+                if not (item.material_versions or {})
+                and REQUIRED_MATERIAL_TYPES[registration.registration_type]
+            ]
+            if legacy_registration_ids:
+                legacy_rows = (
+                    await db.execute(
+                        select(H3cMaterial)
+                        .where(
+                            H3cMaterial.registration_id.in_(legacy_registration_ids),
+                            H3cMaterial.is_current.is_(True),
+                        )
+                        .order_by(H3cMaterial.registration_id, H3cMaterial.id)
+                    )
+                ).scalars().all()
+                existing_ids = {row.id for row in material_rows}
+                material_rows.extend(row for row in legacy_rows if row.id not in existing_ids)
+            materials_by_registration: dict[int, dict[str, H3cMaterial]] = defaultdict(dict)
+            for material in material_rows:
+                materials_by_registration[material.registration_id][material.material_type] = material
             rows = [
-                _ExportRow(registration=row, materials=material_map[row.id])
-                for row in registration_rows
+                _ExportRow(
+                    registration=registration,
+                    materials=tuple(materials_by_registration.get(registration.id, {}).values()),
+                    item=item,
+                )
+                for registration, item in export_rows
             ]
             storage_key = f"h3c/exports/{batch.id}/{job.id}/{uuid.uuid4().hex}"
             if job.artifact_type == "embedded_xlsx":
                 extension = "xlsx"
                 content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            elif job.artifact_type == "full_package":
+                extension = "zip"
+                content_type = "application/zip"
             else:
                 extension = "zip"
                 content_type = "application/zip"
@@ -294,6 +677,13 @@ class H3cExportService:
                 artifact = await self._build_workbook(
                     batch=batch,
                     registration_type=job.registration_type,
+                    rows=rows,
+                    destination=directory,
+                )
+            elif job.artifact_type == "full_package":
+                artifact = await self._build_full_package(
+                    batch=batch,
+                    job_id=job.id,
                     rows=rows,
                     destination=directory,
                 )
@@ -354,16 +744,23 @@ class H3cExportService:
         worksheet._images = []
 
         material_dir = destination / "materials"
-        material_dir.mkdir(parents=True)
+        material_dir.mkdir(parents=True, exist_ok=True)
         date_columns = H3C_DATE_COLUMNS[registration_type]
         datetime_columns = H3C_DATETIME_COLUMNS[registration_type]
         content_widths: dict[int, float] = {}
         for index, row in enumerate(rows):
             excel_row = index + 3
+            frozen_item = getattr(row, "item", None)
+            snapshot = (
+                frozen_item.candidate_snapshot
+                if frozen_item is not None and frozen_item.candidate_snapshot is not None
+                else row.registration.candidate_snapshot
+            )
             values = self._workbook_row(
                 batch=batch,
                 registration=row.registration,
                 registration_type=registration_type,
+                snapshot=snapshot,
             )
             for column, value in enumerate(values, 1):
                 if column in date_columns:
@@ -515,8 +912,9 @@ class H3cExportService:
         batch: H3cExamBatch,
         registration: H3cRegistration,
         registration_type: str,
+        snapshot: dict | None = None,
     ) -> list[object | None]:
-        snapshot = registration.candidate_snapshot
+        snapshot = snapshot if snapshot is not None else registration.candidate_snapshot
         common = [
             snapshot.get("candidate_name"),
             snapshot.get("gender"),
@@ -604,6 +1002,168 @@ class H3cExportService:
                     archive.write(material_path, arcname=candidate)
         return output
 
+    @staticmethod
+    def _safe_zip_component(value: object, *, fallback: str) -> str:
+        normalized = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "", str(value or "")).strip().strip(".")
+        normalized = re.sub(r"\s+", " ", normalized)
+        return (normalized[:120] if normalized else fallback)
+
+    async def _build_full_package(
+        self,
+        *,
+        batch: H3cExamBatch,
+        job_id: int,
+        rows: list[_ExportRow],
+        destination: Path,
+    ) -> Path:
+        try:
+            from openpyxl import Workbook, load_workbook
+        except ImportError as exc:
+            raise ThirdPartyException("H3C 完整资料包依赖未安装") from exc
+
+        workdir = destination / f"full-package-{job_id}"
+        workbook_dir = workdir / "workbooks"
+        attachment_staging = workdir / "attachments"
+        workbook_dir.mkdir(parents=True)
+        attachment_staging.mkdir()
+
+        grouped: dict[str, list[_ExportRow]] = defaultdict(list)
+        for row in rows:
+            grouped[row.registration.registration_type].append(row)
+
+        workbook_paths: dict[str, Path] = {}
+        for registration_type, type_rows in grouped.items():
+            path = await self._build_workbook(
+                batch=batch,
+                registration_type=registration_type,
+                rows=type_rows,
+                destination=workbook_dir,
+            )
+            renamed = workbook_dir / TYPE_FILE_NAMES[registration_type]
+            if renamed.exists():
+                raise ConflictException("H3C 完整资料包内文件名冲突")
+            path.rename(renamed)
+            workbook_paths[registration_type] = renamed
+            worksheet = load_workbook(renamed, read_only=True)["模板"]
+            generated_rows = max(0, worksheet.max_row - 2)
+            if generated_rows != len(type_rows):
+                raise ConflictException("H3C 报名表人数与导出清单不一致")
+
+        records: list[dict[str, object]] = []
+        attachment_files: list[tuple[Path, str]] = []
+        exported_at = datetime.now(H3C_EXPORT_TZ).replace(microsecond=0, tzinfo=None)
+        for registration_type in ("coupon", "student", "full"):
+            for row in grouped.get(registration_type, []):
+                registration = row.registration
+                snapshot = (
+                    row.item.candidate_snapshot
+                    if row.item is not None and row.item.candidate_snapshot is not None
+                    else registration.candidate_snapshot
+                ) or {}
+                registration_no = self._safe_zip_component(
+                    registration.registration_no, fallback=f"registration-{registration.id}"
+                )
+                name = self._safe_zip_component(
+                    snapshot.get("candidate_name"), fallback=f"candidate-{registration.id}"
+                )
+                person_dir = self._safe_zip_component(
+                    f"{registration_no}_{name}", fallback=f"person-{registration.id}"
+                )
+                required_type = REQUIRED_MATERIAL_TYPES[registration_type]
+                material = next(
+                    (item for item in row.materials if item.material_type == required_type),
+                    None,
+                ) if required_type else None
+                attachment_dir: str | None = None
+                attachment_count = 0
+                if material is not None:
+                    extension = self._safe_zip_component(
+                        Path(material.original_filename or "").suffix, fallback=".jpg"
+                    )
+                    if not extension.startswith("."):
+                        extension = f".{extension}"
+                    file_name = f"{'考券证明' if registration_type == 'coupon' else '学生证明'}{extension}"
+                    local_path = attachment_staging / f"{material.id}-{uuid.uuid4().hex}"
+                    await self.storage.download_file(material.storage_key, local_path)
+                    arcname = f"附件/{person_dir}/{file_name}"
+                    attachment_files.append((local_path, arcname))
+                    attachment_dir = f"附件/{person_dir}"
+                    attachment_count = 1
+                records.append(
+                    {
+                        "registration_no": registration.registration_no,
+                        "name": snapshot.get("candidate_name", ""),
+                        "registration_type": registration_type,
+                        "status": registration.status,
+                        "version_no": row.item.registration_version_id if row.item else None,
+                        "table_path": f"报名表/{TYPE_FILE_NAMES[registration_type]}",
+                        "attachment_dir": attachment_dir or "-",
+                        "attachment_count": attachment_count,
+                        "result": "成功",
+                        "failure_reason": "-",
+                    }
+                )
+
+        manifest_path = workbook_dir / "导出清单.xlsx"
+        manifest_workbook = Workbook()
+        manifest_sheet = manifest_workbook.active
+        manifest_sheet.title = "导出清单"
+        headers = [
+            "序号", "姓名", "报名编号", "报名类型", "导出时状态", "报名版本ID",
+            "报名表位置", "附件目录", "附件数量", "导出结果", "失败原因",
+            "批次名称", "任务编号", "导出时间",
+        ]
+        manifest_sheet.append(headers)
+        for column in range(1, len(headers) + 1):
+            manifest_sheet.column_dimensions[
+                manifest_sheet.cell(row=1, column=column).coordinate[:1]
+            ].width = 18
+        status_labels = {
+            "coupon": "考券报名", "student": "学生报名", "full": "全额报名",
+        }
+        for index, record in enumerate(records, 1):
+            manifest_sheet.append([
+                index,
+                record["name"],
+                record["registration_no"],
+                status_labels[str(record["registration_type"])],
+                "终审通过" if record["status"] == "final_approved" else "初审通过",
+                record["version_no"],
+                record["table_path"],
+                record["attachment_dir"],
+                record["attachment_count"],
+                record["result"],
+                record["failure_reason"],
+                batch.name,
+                job_id,
+                exported_at,
+            ])
+        if manifest_sheet.max_row - 1 != len(rows):
+            raise ConflictException("H3C 导出清单人数与任务人数不一致")
+        manifest_workbook.save(manifest_path)
+
+        output = destination / f"h3c-full-package-{job_id}-{uuid.uuid4().hex}.zip"
+        with zipfile.ZipFile(
+            output, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True
+        ) as archive:
+            archive.write(manifest_path, arcname="导出清单.xlsx")
+            for registration_type, path in workbook_paths.items():
+                archive.write(path, arcname=f"报名表/{TYPE_FILE_NAMES[registration_type]}")
+            for path, arcname in attachment_files:
+                archive.write(path, arcname=arcname)
+
+        expected_rows = sum(len(items) for items in grouped.values())
+        if expected_rows != len(rows) or len(records) != len(rows):
+            raise ConflictException("H3C 完整资料包人员数量不一致")
+        expected_attachment_people = sum(
+            1
+            for row in rows
+            if REQUIRED_MATERIAL_TYPES[row.registration.registration_type]
+        )
+        if len(attachment_files) != expected_attachment_people:
+            raise ConflictException("H3C 完整资料包附件人数不一致")
+        return output
+
     async def expire_artifacts(self) -> int:
         now = datetime.now(timezone.utc)
         expired_count = 0
@@ -644,8 +1204,19 @@ class H3cExportService:
             await db.commit()
 
     @staticmethod
-    def _response(job: H3cExportJob) -> H3cExportJobResponse:
-        return H3cExportJobResponse.model_validate(job)
+    def _response(
+        job: H3cExportJob,
+        *,
+        requested_by_admin_name: str | None = None,
+        stats: dict | None = None,
+    ) -> H3cExportJobResponse:
+        response = H3cExportJobResponse.model_validate(job)
+        response.requested_by_admin_name = requested_by_admin_name
+        if stats is not None:
+            response.valid_item_count = int(stats.get("valid_item_count", 0))
+            response.counts_by_type = dict(stats.get("counts_by_type", {}))
+            response.registration_ids = list(stats.get("registration_ids", []))
+        return response
 
 
 async def h3c_export_worker_loop(service: H3cExportService | None = None) -> None:
@@ -655,7 +1226,7 @@ async def h3c_export_worker_loop(service: H3cExportService | None = None) -> Non
             processed = await active_service.process_next_job()
             if not processed:
                 await active_service.expire_artifacts()
-        except Exception:
+        except Exception as exc:
             logger.warning(
                 "H3C export worker iteration failed: exception_type=%s",
                 type(exc).__name__,

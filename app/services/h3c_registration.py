@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import func, select, update as sa_update
+from sqlalchemy import func, or_, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db_ctx
@@ -370,6 +370,15 @@ class H3cRegistrationService:
                             uploaded_at=now,
                         )
                     )
+                await db.flush()
+                current_materials = (
+                    await db.execute(
+                        select(H3cMaterial).where(
+                            H3cMaterial.registration_id == registration.id,
+                            H3cMaterial.is_current.is_(True),
+                        )
+                    )
+                ).scalars().all()
 
                 if price_cents == 0:
                     apply_order_status_transition(order, "completed")
@@ -381,7 +390,14 @@ class H3cRegistrationService:
                     registration_id=registration.id,
                     version_no=1,
                     candidate_snapshot=registration.candidate_snapshot,
-                    material_versions={},
+                    material_versions={
+                        row.material_type: {
+                            "material_id": row.id,
+                            "version_no": row.version_no,
+                            "sha256": row.sha256,
+                        }
+                        for row in current_materials
+                    },
                     source="initial",
                     submitted_at=now,
                     is_current=True,
@@ -472,6 +488,9 @@ class H3cRegistrationService:
         batch_id: int | None = None,
         registration_type: str | None = None,
         status: str | None = None,
+        keyword: str | None = None,
+        registration_ids: list[int] | None = None,
+        has_valid_export: bool | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> PaginatedData[H3cRegistrationResponse]:
@@ -483,6 +502,30 @@ class H3cRegistrationService:
                 base = base.where(H3cRegistration.registration_type == registration_type)
             if status:
                 base = base.where(H3cRegistration.status == status)
+            if registration_ids is not None:
+                base = base.where(H3cRegistration.id.in_(registration_ids))
+            if keyword:
+                pattern = f"%{keyword.strip()}%"
+                base = base.where(
+                    or_(
+                        H3cRegistration.registration_no.ilike(pattern),
+                        H3cRegistration.candidate_snapshot["candidate_name"].astext.ilike(pattern),
+                    )
+                )
+            if has_valid_export is not None:
+                valid_export_exists = (
+                    select(H3cExportItem.id)
+                    .join(H3cExportJob, H3cExportJob.id == H3cExportItem.job_id)
+                    .where(
+                        H3cExportItem.registration_id == H3cRegistration.id,
+                        H3cExportItem.is_valid.is_(True),
+                        H3cExportJob.status == "succeeded",
+                    )
+                    .exists()
+                )
+                base = base.where(
+                    valid_export_exists if has_valid_export else ~valid_export_exists
+                )
             total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
             rows = (
                 await db.execute(
@@ -1200,8 +1243,9 @@ class H3cRegistrationService:
                 .order_by(H3cRegistrationVersion.version_no.desc())
             )
         ).scalars().all()
-        final_export_item_id = await db.scalar(
-            select(H3cExportItem.id)
+        final_export_row = (
+            await db.execute(
+                select(H3cExportItem, H3cExportJob)
             .join(H3cExportJob, H3cExportJob.id == H3cExportItem.job_id)
             .where(
                 H3cExportItem.registration_id == registration.id,
@@ -1210,7 +1254,33 @@ class H3cRegistrationService:
             )
             .order_by(H3cExportItem.id.desc())
             .limit(1)
+            )
+        ).first()
+        final_export_item = final_export_row[0] if final_export_row else None
+        final_export_job = final_export_row[1] if final_export_row else None
+        current_version = next(
+            (version for version in versions if version.is_current), None
         )
+        if registration.status == "final_approved":
+            final_review_ready, final_review_block_reason = False, "已终审通过"
+        elif registration.status != "approved":
+            final_review_ready, final_review_block_reason = False, "仅初审通过人员可终审"
+        elif final_export_item is None or final_export_job is None:
+            final_review_ready, final_review_block_reason = False, "缺少成功导出版本"
+        elif not final_export_item.is_valid:
+            final_review_ready, final_review_block_reason = (
+                False,
+                final_export_item.invalidated_reason or "导出版本已失效",
+            )
+        elif final_export_job.status != "succeeded":
+            final_review_ready, final_review_block_reason = False, "导出任务未成功"
+        elif (
+            current_version is None
+            or final_export_item.registration_version_id != current_version.id
+        ):
+            final_review_ready, final_review_block_reason = False, "导出版本与当前报名版本不一致"
+        else:
+            final_review_ready, final_review_block_reason = True, None
 
         async def preview(material: H3cMaterial) -> str | None:
             if not material.is_current:
@@ -1270,7 +1340,11 @@ class H3cRegistrationService:
                 H3cRegistrationVersionResponse.model_validate(row)
                 for row in versions
             ],
-            final_export_item_id=final_export_item_id,
+            final_export_item_id=final_export_item.id if final_export_item else None,
+            latest_valid_export_job_id=final_export_job.id if final_export_job else None,
+            latest_valid_export_finished_at=final_export_job.finished_at if final_export_job else None,
+            final_review_ready=final_review_ready,
+            final_review_block_reason=final_review_block_reason,
             created_at=registration.created_at,
             updated_at=registration.updated_at,
         )

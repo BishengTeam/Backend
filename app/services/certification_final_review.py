@@ -170,23 +170,69 @@ class H3cFinalReviewService:
         self, *, admin_id: int, data: H3cBatchFinalReviewRequest
     ) -> H3cBatchFinalReviewResponse:
         results = []
-        for registration_id in data.registration_ids:
-            try:
+        targets = (
+            [(target.registration_id, target.export_item_id) for target in data.targets]
+            if data.targets
+            else []
+        )
+        if not targets:
+            for registration_id in data.registration_ids or []:
                 item_id = await self._effective_item_id(
-                    registration_id=registration_id, export_job_id=data.export_job_id
+                    registration_id=registration_id,
+                    export_job_id=data.export_job_id or 0,
                 )
+                targets.append((registration_id, item_id))
+
+        for registration_id, export_item_id in targets:
+            summary = {"registration_no": None, "name": None}
+            try:
+                async with get_db_ctx() as db:
+                    registration = await db.get(H3cRegistration, registration_id)
+                    if registration is not None:
+                        summary = {
+                            "registration_no": registration.registration_no,
+                            "name": (registration.candidate_snapshot or {}).get(
+                                "candidate_name"
+                            ),
+                        }
+                        if registration.status == "final_approved":
+                            existing = await db.scalar(
+                                select(H3cFinalReview).where(
+                                    H3cFinalReview.registration_id == registration.id
+                                )
+                            )
+                            if existing is not None and existing.decision == "approved":
+                                results.append(CertificationFinalReviewResult(
+                                    registration_id=registration_id,
+                                    export_item_id=export_item_id,
+                                    registration_no=summary["registration_no"],
+                                    name=summary["name"],
+                                    success=True,
+                                    status="skipped",
+                                    reason="已终审通过，本次跳过",
+                                ))
+                                continue
                 await self.review(
                     admin_id=admin_id,
                     registration_id=registration_id,
-                    data=H3cFinalReviewRequest(export_item_id=item_id),
+                    data=H3cFinalReviewRequest(export_item_id=export_item_id),
                 )
                 results.append(CertificationFinalReviewResult(
-                    registration_id=registration_id, success=True
+                    registration_id=registration_id,
+                    export_item_id=export_item_id,
+                    registration_no=summary["registration_no"],
+                    name=summary["name"],
+                    success=True,
+                    status="success",
                 ))
             except Exception as exc:
                 results.append(CertificationFinalReviewResult(
                     registration_id=registration_id,
+                    export_item_id=export_item_id,
+                    registration_no=summary["registration_no"],
+                    name=summary["name"],
                     success=False,
+                    status="failed",
                     reason=exc.message if hasattr(exc, "message") else type(exc).__name__,
                 ))
         return H3cBatchFinalReviewResponse(items=results)
