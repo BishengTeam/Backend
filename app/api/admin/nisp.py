@@ -7,7 +7,10 @@ from app.middleware.auth import require_permission, require_reauthenticated_admi
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.nisp import (
     NispExportCreate,
+    NispExportItemResponse,
     NispExportJobResponse,
+    NispExportPrecheckRequest,
+    NispExportPrecheckResponse,
     NispRefundResponse,
     NispExamBatchCreate,
     NispExamBatchResponse,
@@ -93,6 +96,8 @@ async def list_registrations(
     batch_id: int | None = Query(None),
     level: str | None = Query(None),
     status: str | None = Query(None),
+    keyword: str | None = Query(None, max_length=64),
+    has_valid_export: bool | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     _admin=Depends(require_permission("nisp:review")),
@@ -101,6 +106,8 @@ async def list_registrations(
         batch_id=batch_id,
         level=level,
         status=status,
+        keyword=keyword,
+        has_valid_export=has_valid_export,
         page=page,
         page_size=page_size,
     )
@@ -197,20 +204,58 @@ async def create_export_job(
         batch_id=body.batch_id,
         level=body.level,
         include_statuses=body.include_statuses,
+        registration_ids=body.registration_ids,
     )
     return success(data=result)
 
 
-@router.get("/export/jobs", response_model=APIResponse)
+@router.post("/export/precheck", response_model=APIResponse[NispExportPrecheckResponse])
+async def precheck_export(
+    body: NispExportPrecheckRequest,
+    _admin=Depends(require_permission("nisp:export")),
+):
+    """Precheck selectable NISP registrations for a full package export."""
+    return success(data=await NispExportService().precheck(body))
+
+
+@router.get("/export/jobs", response_model=APIResponse[PaginatedData[NispExportJobResponse]])
 async def list_export_jobs(
+    batch_id: int | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     _admin=Depends(require_permission("nisp:export")),
 ):
     """List NISP export jobs."""
-    from app.schemas.common import PaginatedData
-    items, total = await NispExportService().list_jobs(page=page, page_size=page_size)
+    items, total = await NispExportService().list_jobs(
+        batch_id=batch_id, page=page, page_size=page_size
+    )
     return success(data=PaginatedData(items=items, total=total, page=page, page_size=page_size))
+
+
+@router.get(
+    "/export/jobs/{job_id}/items",
+    response_model=APIResponse[PaginatedData[NispExportItemResponse]],
+)
+async def list_export_job_items(
+    job_id: int,
+    current_status: str | None = Query(None),
+    is_valid: bool | None = Query(None),
+    keyword: str | None = Query(None, max_length=64),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    _admin=Depends(require_permission("nisp:export")),
+):
+    """List the frozen registration items belonging to one NISP export job."""
+    return success(
+        data=await NispExportService().list_items(
+            job_id=job_id,
+            current_status=current_status,
+            is_valid=is_valid,
+            keyword=keyword,
+            page=page,
+            page_size=page_size,
+        )
+    )
 
 
 @router.get("/export/jobs/{job_id}/signed-url", response_model=APIResponse)

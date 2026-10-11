@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 NispLevel = Literal["1", "2"]
 NispRegistrationStatus = Literal[
@@ -78,6 +78,7 @@ class NispExamBatchResponse(BaseModel):
     resubmission_window_hours: int
     max_resubmissions: int
     max_material_bytes: int
+    registration_counts: dict[str, int] = {}
     created_at: datetime
     updated_at: datetime
 
@@ -155,6 +156,10 @@ class NispRegistrationResponse(BaseModel):
     pending_correction: "NispCorrectionRequestResponse | None" = None
     versions: list["NispRegistrationVersionResponse"] = []
     final_export_item_id: int | None = None
+    latest_valid_export_job_id: int | None = None
+    latest_valid_export_finished_at: datetime | None = None
+    final_review_ready: bool = False
+    final_review_block_reason: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -274,13 +279,56 @@ class NispFinalReviewRequest(BaseModel):
 
 
 class NispBatchFinalReviewRequest(BaseModel):
-    export_job_id: int = Field(..., gt=0)
-    registration_ids: list[int] = Field(..., min_length=1)
+    export_job_id: int | None = Field(None, gt=0)
+    registration_ids: list[int] | None = None
+    targets: list["NispBatchFinalReviewTarget"] | None = None
+
+    @field_validator("registration_ids")
+    @classmethod
+    def _validate_registration_ids(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        if not value or any(item <= 0 for item in value):
+            raise ValueError("报名 ID 必须为正整数且不能为空")
+        if len(set(value)) != len(value):
+            raise ValueError("报名 ID 不能重复")
+        return value
+
+    @field_validator("targets")
+    @classmethod
+    def _validate_targets(
+        cls, value: list["NispBatchFinalReviewTarget"] | None
+    ) -> list["NispBatchFinalReviewTarget"] | None:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("至少选择一名报名人员")
+        registration_ids = [item.registration_id for item in value]
+        if len(set(registration_ids)) != len(registration_ids):
+            raise ValueError("同一报名不能重复终审")
+        return value
+
+    @model_validator(mode="after")
+    def validate_request(self):
+        if self.targets:
+            return self
+        if self.export_job_id is None or not self.registration_ids:
+            raise ValueError("请提交逐人导出版本或使用兼容的批量终审参数")
+        return self
+
+
+class NispBatchFinalReviewTarget(BaseModel):
+    registration_id: int = Field(..., gt=0)
+    export_item_id: int = Field(..., gt=0)
 
 
 class NispFinalReviewResult(BaseModel):
     registration_id: int
+    export_item_id: int | None = None
+    registration_no: str | None = None
+    name: str | None = None
     success: bool
+    status: Literal["success", "skipped", "failed"] = "success"
     reason: str | None = None
 
 
@@ -292,10 +340,66 @@ class NispBatchFinalReviewResponse(BaseModel):
 
 class NispExportCreate(BaseModel):
     batch_id: int
-    level: NispLevel
+    level: NispLevel | None = None
     include_statuses: list[NispRegistrationStatus] = Field(
         default=["approved"], min_length=1
     )
+    registration_ids: list[int] | None = Field(None)
+
+    @field_validator("include_statuses")
+    @classmethod
+    def _validate_statuses(cls, value: list[NispRegistrationStatus]) -> list[NispRegistrationStatus]:
+        if not value:
+            raise ValueError("至少选择一个导出状态")
+        return list(dict.fromkeys(value))
+
+    @field_validator("registration_ids")
+    @classmethod
+    def _validate_registration_ids(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        if not value or any(item <= 0 for item in value):
+            raise ValueError("报名 ID 必须为正整数且不能为空")
+        if len(set(value)) != len(value):
+            raise ValueError("报名 ID 不能重复")
+        return value
+
+
+class NispExportPrecheckRequest(BaseModel):
+    batch_id: int
+    registration_ids: list[int] | None = Field(None)
+    status: NispRegistrationStatus | None = "approved"
+    keyword: str | None = Field(None, max_length=64)
+
+    @field_validator("registration_ids")
+    @classmethod
+    def _validate_registration_ids(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        if not value or any(item <= 0 for item in value):
+            raise ValueError("报名 ID 必须为正整数且不能为空")
+        if len(set(value)) != len(value):
+            raise ValueError("报名 ID 不能重复")
+        return value
+
+
+class NispExportPrecheckPerson(BaseModel):
+    registration_id: int
+    registration_no: str
+    name: str
+    level: NispLevel
+    status: NispRegistrationStatus
+    exportable: bool
+    reason: str | None = None
+
+
+class NispExportPrecheckResponse(BaseModel):
+    selected_count: int
+    exportable_count: int
+    blocked_count: int
+    level: NispLevel
+    exportable_registration_ids: list[int]
+    people: list[NispExportPrecheckPerson]
 
 
 class NispExportJobResponse(BaseModel):
@@ -306,6 +410,12 @@ class NispExportJobResponse(BaseModel):
     status: str
     artifact_type: str
     registration_count: int
+    requested_by_admin_id: int
+    requested_by_admin_name: str | None = None
+    valid_item_count: int = 0
+    registration_ids: list[int] = []
+    file_expired: bool = False
+    download_available: bool = False
     started_at: datetime | None
     finished_at: datetime | None
     storage_key: str | None
@@ -318,6 +428,22 @@ class NispExportJobResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class NispExportItemResponse(BaseModel):
+    id: int
+    job_id: int
+    registration_id: int
+    registration_no: str
+    name: str
+    level: NispLevel
+    current_status: NispRegistrationStatus
+    version_no: int | None = None
+    is_valid: bool
+    invalidated_reason: str | None = None
+    review_ready: bool
+    block_reason: str | None = None
+    created_at: datetime
 
 
 class NispSignedUrlResponse(BaseModel):

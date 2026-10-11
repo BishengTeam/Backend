@@ -4,7 +4,7 @@ import re
 from uuid import uuid4
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import func, select, update as sa_update
+from sqlalchemy import func, or_, select, update as sa_update
 
 from app.adapter.database import get_db_ctx
 from app.domain.order.src.index import Order
@@ -74,6 +74,18 @@ def _price(batch: NispExamBatch, level: str) -> int:
 def _registration_no(level: str, seq: int) -> str:
     prefix = "NISP-1" if level == "1" else "NISP-2"
     return f"{prefix}-{seq:08d}"
+
+
+def _export_version_available(job: NispExportJob) -> bool:
+    if job.status == "succeeded":
+        return True
+    # Old expiration workers marked the job failed when removing the file. The
+    # file is unavailable, but an otherwise valid export item remains reviewable.
+    return (
+        job.status == "failed"
+        and job.last_error == "expired"
+        and job.storage_key is None
+    )
 
 
 class NispRegistrationService:
@@ -888,17 +900,51 @@ class NispRegistrationService:
                 .order_by(NispRegistrationVersion.version_no.desc())
             )
         ).scalars().all()
-        final_export_item_id = await db.scalar(
-            select(NispExportItem.id)
-            .join(NispExportJob, NispExportJob.id == NispExportItem.job_id)
-            .where(
-                NispExportItem.registration_id == registration.id,
-                NispExportItem.is_valid.is_(True),
-                NispExportJob.status == "succeeded",
+        final_export_row = (
+            await db.execute(
+                select(NispExportItem, NispExportJob)
+                .join(NispExportJob, NispExportJob.id == NispExportItem.job_id)
+                .where(
+                    NispExportItem.registration_id == registration.id,
+                    NispExportItem.is_valid.is_(True),
+                    or_(
+                        NispExportJob.status == "succeeded",
+                        (
+                            (NispExportJob.status == "failed")
+                            & (NispExportJob.last_error == "expired")
+                            & NispExportJob.storage_key.is_(None)
+                        ),
+                    ),
+                )
+                .order_by(NispExportItem.id.desc())
+                .limit(1)
             )
-            .order_by(NispExportItem.id.desc())
-            .limit(1)
+        ).first()
+        final_export_item = final_export_row[0] if final_export_row else None
+        final_export_job = final_export_row[1] if final_export_row else None
+        current_version = next(
+            (version for version in versions if version.is_current), None
         )
+        if registration.status == "final_approved":
+            final_review_ready, final_review_block_reason = False, "已终审通过"
+        elif registration.status != "approved":
+            final_review_ready, final_review_block_reason = False, "仅初审通过人员可终审"
+        elif final_export_item is None or final_export_job is None:
+            final_review_ready, final_review_block_reason = False, "缺少成功导出版本"
+        elif not final_export_item.is_valid:
+            final_review_ready, final_review_block_reason = (
+                False,
+                final_export_item.invalidated_reason or "导出版本已失效",
+            )
+        elif not _export_version_available(final_export_job):
+            final_review_ready, final_review_block_reason = False, "导出任务未成功"
+        elif (
+            current_version is None
+            or final_export_item.registration_version_id != current_version.id
+        ):
+            final_review_ready, final_review_block_reason = False, "导出版本与当前报名版本不一致"
+        else:
+            final_review_ready, final_review_block_reason = True, None
         return NispRegistrationResponse(
             id=registration.id,
             registration_no=registration.registration_no,
@@ -928,7 +974,11 @@ class NispRegistrationService:
                 NispRegistrationVersionResponse.model_validate(row)
                 for row in versions
             ],
-            final_export_item_id=final_export_item_id,
+            final_export_item_id=final_export_item.id if final_export_item else None,
+            latest_valid_export_job_id=final_export_job.id if final_export_job else None,
+            latest_valid_export_finished_at=final_export_job.finished_at if final_export_job else None,
+            final_review_ready=final_review_ready,
+            final_review_block_reason=final_review_block_reason,
             created_at=registration.created_at,
             updated_at=registration.updated_at,
         )

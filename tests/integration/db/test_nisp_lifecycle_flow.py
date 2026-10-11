@@ -55,7 +55,7 @@ async def context(monkeypatch):
                 yield db
 
         for module in ['nisp_registration', 'nisp_admin', 'nisp_refund',
-                       'certification_final_review']:
+                       'nisp_export', 'certification_final_review']:
             monkeypatch.setattr(f'app.services.{module}.get_db_ctx', db_ctx)
         monkeypatch.setattr('app.services.order.get_db_ctx', db_ctx)
         monkeypatch.setattr('app.services.agreement_template.ensure_accepted', AsyncMock())
@@ -447,3 +447,201 @@ async def test_nisp_final_review_binds_effective_export_version(context):
         stored_item = await db.get(NispExportItem, item_id)
     assert stored_review.export_item_id == item_id
     assert stored_item.is_valid is True
+
+
+async def test_nisp_batch_export_precheck_selection_and_cross_job_final_review(context):
+    from app.domain.nisp.src import NispExportItem, NispExportJob
+    from app.port.exceptions import BusinessException, ConflictException
+    from app.schemas.nisp import (
+        NispBatchFinalReviewRequest,
+        NispBatchFinalReviewTarget,
+        NispExportPrecheckRequest,
+    )
+    from app.services.certification_final_review import NispFinalReviewService
+    from app.services.nisp_export import NispExportService
+
+    batch, admin_id = await seed(context)
+    applicants = [await applicant(context, batch) for _ in range(2)]
+    registration_service = NispRegistrationService()
+    registrations = []
+    for user_id, payload in applicants:
+        row = await registration_service.create_order(user_id, payload)
+        registrations.append(await registration_service.review(
+            admin_id=admin_id,
+            registration_id=row.id,
+            data=NispReviewDecisionRequest(decision='approved'),
+        ))
+
+    export_service = NispExportService()
+    precheck = await export_service.precheck(NispExportPrecheckRequest(
+        batch_id=batch.id,
+        registration_ids=[row.id for row in registrations],
+    ))
+    assert precheck.selected_count == 2
+    assert precheck.exportable_count == 2
+    assert precheck.blocked_count == 0
+    assert precheck.level == batch.level
+    assert precheck.exportable_registration_ids == [row.id for row in registrations]
+
+    with pytest.raises(BusinessException, match='级别与批次级别不一致'):
+        await export_service.create_job(
+            admin_id=admin_id,
+            batch_id=batch.id,
+            level='2' if batch.level == '1' else '1',
+        )
+
+    first_job = await export_service.create_job(
+        admin_id=admin_id,
+        batch_id=batch.id,
+        level=None,
+        registration_ids=[registrations[0].id],
+    )
+    second_job = await export_service.create_job(
+        admin_id=admin_id,
+        batch_id=batch.id,
+        level=None,
+        registration_ids=[registrations[1].id],
+    )
+    assert first_job.level == batch.level
+    assert first_job.registration_count == 1
+    assert second_job.registration_count == 1
+
+    jobs, total = await export_service.list_jobs(batch_id=batch.id)
+    assert total == 2
+    assert {job.id for job in jobs} == {first_job.id, second_job.id}
+    assert all(job.registration_ids for job in jobs)
+
+    async with context.factory() as db:
+        for job_id in [first_job.id, second_job.id]:
+            stored_job = await db.get(NispExportJob, job_id)
+            stored_job.status = 'succeeded'
+            stored_job.storage_key = f'test-export-{job_id}.zip'
+        items = (await db.scalars(select(NispExportItem).where(
+            NispExportItem.job_id.in_([first_job.id, second_job.id])
+        ).order_by(NispExportItem.job_id))).all()
+        await db.commit()
+    assert len(items) == 2
+
+    finalized = await NispFinalReviewService().review_batch(
+        admin_id=admin_id,
+        data=NispBatchFinalReviewRequest(targets=[
+            NispBatchFinalReviewTarget(
+                registration_id=registrations[0].id,
+                export_item_id=items[0].id,
+            ),
+            NispBatchFinalReviewTarget(
+                registration_id=registrations[1].id,
+                export_item_id=items[1].id,
+            ),
+        ]),
+    )
+    assert [row.status for row in finalized.items] == ['success', 'success']
+    assert all(row.success for row in finalized.items)
+
+    listed = await NispAdminService().list_registrations(
+        batch_id=batch.id,
+        status='final_approved',
+    )
+    assert listed[1] == 2
+
+
+async def test_nisp_export_precheck_reports_missing_level_materials(context):
+    from app.port.exceptions import BusinessException
+    from app.schemas.nisp import NispExportPrecheckRequest
+    from app.services.nisp_export import NispExportService
+
+    batch, admin_id = await seed(context)
+    user_id, payload = await applicant(context, batch)
+    service = NispRegistrationService()
+    created = await service.create_order(user_id, payload)
+    approved = await service.review(
+        admin_id=admin_id,
+        registration_id=created.id,
+        data=NispReviewDecisionRequest(decision='approved'),
+    )
+    async with context.factory() as db:
+        material = await db.scalar(select(NispMaterialFile).where(
+            NispMaterialFile.registration_id == approved.id,
+            NispMaterialFile.material_type == 'portrait_photo',
+            NispMaterialFile.is_current.is_(True),
+        ))
+        material.is_current = False
+        await db.commit()
+
+    export_service = NispExportService()
+    precheck = await export_service.precheck(NispExportPrecheckRequest(
+        batch_id=batch.id,
+        registration_ids=[approved.id],
+    ))
+    assert precheck.selected_count == 1
+    assert precheck.exportable_count == 0
+    assert precheck.blocked_count == 1
+    assert precheck.people[0].reason == '缺少：寸照'
+    with pytest.raises(BusinessException, match='暂不可导出'):
+        await export_service.create_job(
+            admin_id=admin_id,
+            batch_id=batch.id,
+            registration_ids=[approved.id],
+        )
+
+
+async def test_nisp_expired_export_file_remains_reviewable(context):
+    from app.domain.nisp.src import NispExportItem, NispExportJob, NispRegistrationVersion
+    from app.schemas.nisp import NispBatchFinalReviewRequest, NispBatchFinalReviewTarget
+    from app.services.certification_final_review import NispFinalReviewService
+    from app.services.nisp_export import NispExportService
+
+    batch, admin_id = await seed(context)
+    user_id, payload = await applicant(context, batch)
+    service = NispRegistrationService()
+    created = await service.create_order(user_id, payload)
+    approved = await service.review(
+        admin_id=admin_id,
+        registration_id=created.id,
+        data=NispReviewDecisionRequest(decision='approved'),
+    )
+    async with context.factory() as db:
+        version = await db.scalar(select(NispRegistrationVersion).where(
+            NispRegistrationVersion.registration_id == approved.id,
+            NispRegistrationVersion.is_current.is_(True),
+        ))
+        job = NispExportJob(
+            batch_id=batch.id,
+            level=batch.level,
+            requested_by_admin_id=admin_id,
+            include_statuses=['approved'],
+            status='succeeded',
+            artifact_type='full_package',
+            registration_count=1,
+            storage_key='expired-test-export.zip',
+            expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
+        db.add(job)
+        await db.flush()
+        item = NispExportItem(
+            job_id=job.id,
+            registration_id=approved.id,
+            registration_version_id=version.id,
+            candidate_snapshot=version.candidate_snapshot,
+            material_versions=version.material_versions,
+            is_valid=True,
+        )
+        db.add(item)
+        await db.commit()
+        item_id = item.id
+
+    # New expiration behavior only removes the artifact and leaves the succeeded
+    # export version available for final review.
+    assert await NispExportService(storage=NS(delete_object=AsyncMock())).expire_artifacts() == 1
+    response = await NispExportService().get_job(job.id)
+    assert response.status == 'succeeded'
+    assert response.file_expired is True
+    assert response.download_available is False
+
+    finalized = await NispFinalReviewService().review_batch(
+        admin_id=admin_id,
+        data=NispBatchFinalReviewRequest(targets=[
+            NispBatchFinalReviewTarget(registration_id=approved.id, export_item_id=item_id),
+        ]),
+    )
+    assert finalized.items[0].success is True

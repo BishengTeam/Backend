@@ -8,19 +8,27 @@ import uuid
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, update as sa_update
+from sqlalchemy import func, or_, select, update as sa_update
 
 from app.adapter.database import get_db_ctx
 from app.domain.nisp.src import (
+    NispExamBatch,
     NispExportItem,
     NispExportJob,
     NispMaterialFile,
     NispRegistration,
     NispRegistrationVersion,
 )
+from app.domain.user.src.model.admin_user import AdminUser
 from app.integrations.nisp_storage import NispObjectStorage
 from app.port.exceptions import BusinessException, NotFoundException
-from app.schemas.nisp import NispExportJobResponse
+from app.schemas.nisp import (
+    NispExportItemResponse,
+    NispExportJobResponse,
+    NispExportPrecheckPerson,
+    NispExportPrecheckRequest,
+    NispExportPrecheckResponse,
+)
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -92,25 +100,94 @@ class NispExportService:
         *,
         admin_id: int,
         batch_id: int,
-        level: str,
+        level: str | None = None,
         include_statuses: list[str] | None = None,
+        registration_ids: list[int] | None = None,
     ) -> NispExportJobResponse:
         include_statuses = include_statuses or ["approved"]
         async with get_db_ctx() as db:
-            registrations = (
-                await db.execute(
-                    select(NispRegistration)
-                    .where(
-                    NispRegistration.batch_id == batch_id,
+            batch = await db.scalar(
+                select(NispExamBatch)
+                .where(NispExamBatch.id == batch_id)
+                .with_for_update()
+            )
+            if batch is None:
+                raise NotFoundException("NISP 考试批次")
+            level = level or batch.level
+            if level != batch.level:
+                raise BusinessException("导出级别与批次级别不一致")
+            stmt = (
+                select(NispRegistration)
+                .where(
+                    NispRegistration.batch_id == batch.id,
                     NispRegistration.level == level,
                     NispRegistration.status.in_(include_statuses),
                 )
-                    .order_by(NispRegistration.id)
-                    .with_for_update()
+                .order_by(NispRegistration.id)
+                .with_for_update()
+            )
+            if registration_ids is not None:
+                stmt = stmt.where(NispRegistration.id.in_(registration_ids))
+            registrations = (
+                await db.execute(
+                    stmt
                 )
             ).scalars().all()
             if not registrations:
                 raise BusinessException("没有符合条件的报名记录")
+            versions = {
+                row.registration_id: row
+                for row in (
+                    await db.execute(
+                        select(NispRegistrationVersion)
+                        .where(
+                            NispRegistrationVersion.registration_id.in_(
+                                [row.id for row in registrations]
+                            ),
+                            NispRegistrationVersion.is_current.is_(True),
+                        )
+                    )
+                ).scalars().all()
+            }
+            material_rows = (
+                await db.execute(
+                    select(NispMaterialFile)
+                    .where(
+                        NispMaterialFile.registration_id.in_(
+                            [row.id for row in registrations]
+                        ),
+                        NispMaterialFile.is_current.is_(True),
+                    )
+                )
+            ).scalars().all()
+            materials_by_registration: dict[int, set[str]] = {}
+            for material in material_rows:
+                materials_by_registration.setdefault(material.registration_id, set()).add(
+                    material.material_type
+                )
+            blocked: list[str] = []
+            for registration in registrations:
+                if registration.id not in versions:
+                    blocked.append(f"{registration.registration_no} 缺少当前信息版本")
+                    continue
+                missing = [
+                    material_type
+                    for material_type in REQUIRED_MATERIALS[level]
+                    if material_type not in materials_by_registration.get(registration.id, set())
+                ]
+                if missing:
+                    blocked.append(
+                        f"{registration.registration_no} 缺少："
+                        + "、".join(MATERIAL_EXPORT_NAMES[item] for item in missing)
+                    )
+            if registration_ids is not None:
+                missing_ids = set(registration_ids) - {row.id for row in registrations}
+                if missing_ids:
+                    blocked.append(
+                        f"以下报名不属于该批次：{','.join(map(str, sorted(missing_ids)))}"
+                    )
+            if blocked:
+                raise BusinessException("所选人员暂不可导出：" + "；".join(blocked[:20]))
 
             job = NispExportJob(
                 batch_id=batch_id,
@@ -124,16 +201,7 @@ class NispExportService:
             db.add(job)
             await db.flush()
             for registration in registrations:
-                version = await db.scalar(
-                    select(NispRegistrationVersion)
-                    .where(
-                        NispRegistrationVersion.registration_id == registration.id,
-                        NispRegistrationVersion.is_current.is_(True),
-                    )
-                    .with_for_update()
-                )
-                if version is None:
-                    raise BusinessException("NISP 报名缺少当前信息版本")
+                version = versions[registration.id]
                 db.add(NispExportItem(
                     job_id=job.id,
                     registration_id=registration.id,
@@ -144,31 +212,231 @@ class NispExportService:
                 ))
             await db.commit()
             await db.refresh(job)
-            return NispExportJobResponse.model_validate(job)
+            return self._response(job)
+
+    async def precheck(self, data: NispExportPrecheckRequest) -> NispExportPrecheckResponse:
+        async with get_db_ctx() as db:
+            batch = await db.get(NispExamBatch, data.batch_id)
+            if batch is None:
+                raise NotFoundException("NISP 考试批次")
+            stmt = select(NispRegistration).where(
+                NispRegistration.batch_id == batch.id,
+                NispRegistration.level == batch.level,
+            )
+            if data.registration_ids is not None:
+                stmt = stmt.where(NispRegistration.id.in_(data.registration_ids))
+            else:
+                if data.status:
+                    stmt = stmt.where(NispRegistration.status == data.status)
+                if data.keyword:
+                    pattern = f"%{data.keyword.strip()}%"
+                    stmt = stmt.where(
+                        or_(
+                            NispRegistration.registration_no.ilike(pattern),
+                            NispRegistration.candidate_snapshot["name"].astext.ilike(pattern),
+                        )
+                    )
+            registrations = (
+                await db.execute(stmt.order_by(NispRegistration.id))
+            ).scalars().all()
+            versions = {
+                row.registration_id: row
+                for row in (
+                    await db.execute(
+                        select(NispRegistrationVersion).where(
+                            NispRegistrationVersion.registration_id.in_(
+                                [row.id for row in registrations]
+                            ),
+                            NispRegistrationVersion.is_current.is_(True),
+                        )
+                    )
+                ).scalars().all()
+            }
+            material_rows = (
+                await db.execute(
+                    select(NispMaterialFile).where(
+                        NispMaterialFile.registration_id.in_(
+                            [row.id for row in registrations]
+                        ),
+                        NispMaterialFile.is_current.is_(True),
+                    )
+                )
+            ).scalars().all()
+            materials_by_registration: dict[int, set[str]] = {}
+            for material in material_rows:
+                materials_by_registration.setdefault(material.registration_id, set()).add(
+                    material.material_type
+                )
+            people: list[NispExportPrecheckPerson] = []
+            exportable_ids: list[int] = []
+            for registration in registrations:
+                reason: str | None = None
+                if registration.status not in {"approved", "final_approved"}:
+                    reason = "当前状态不可导出"
+                elif registration.id not in versions:
+                    reason = "缺少当前报名信息版本"
+                else:
+                    missing = [
+                        material_type
+                        for material_type in REQUIRED_MATERIALS[batch.level]
+                        if material_type not in materials_by_registration.get(
+                            registration.id, set()
+                        )
+                    ]
+                    if missing:
+                        reason = "缺少：" + "、".join(
+                            MATERIAL_EXPORT_NAMES[item] for item in missing
+                        )
+                people.append(
+                    NispExportPrecheckPerson(
+                        registration_id=registration.id,
+                        registration_no=registration.registration_no,
+                        name=str((registration.candidate_snapshot or {}).get("name") or ""),
+                        level=registration.level,
+                        status=registration.status,
+                        exportable=reason is None,
+                        reason=reason,
+                    )
+                )
+                if reason is None:
+                    exportable_ids.append(registration.id)
+            return NispExportPrecheckResponse(
+                selected_count=len(people),
+                exportable_count=len(exportable_ids),
+                blocked_count=len(people) - len(exportable_ids),
+                level=batch.level,
+                exportable_registration_ids=exportable_ids,
+                people=people,
+            )
 
     async def list_jobs(
-        self, *, page: int = 1, page_size: int = 20
+        self, *, batch_id: int | None = None, page: int = 1, page_size: int = 20
     ) -> tuple[list[NispExportJobResponse], int]:
         async with get_db_ctx() as db:
+            base = select(NispExportJob, AdminUser.display_name).outerjoin(
+                AdminUser, AdminUser.id == NispExportJob.requested_by_admin_id
+            )
+            if batch_id is not None:
+                base = base.where(NispExportJob.batch_id == batch_id)
             total = await db.scalar(
-                select(func.count()).select_from(NispExportJob)
+                select(func.count()).select_from(base.subquery())
             ) or 0
             rows = (
                 await db.execute(
-                    select(NispExportJob)
+                    base
                     .order_by(NispExportJob.id.desc())
                     .offset((page - 1) * page_size)
                     .limit(page_size)
                 )
-            ).scalars().all()
-            return [NispExportJobResponse.model_validate(r) for r in rows], total
+            ).all()
+            stats = await self._job_item_stats(db, [row[0].id for row in rows])
+            return [
+                self._response(row[0], admin_name=row[1], stats=stats.get(row[0].id))
+                for row in rows
+            ], total
 
     async def get_job(self, job_id: int) -> NispExportJobResponse:
         async with get_db_ctx() as db:
             job = await db.get(NispExportJob, job_id)
             if job is None:
                 raise NotFoundException("NISP 导出任务")
-            return NispExportJobResponse.model_validate(job)
+            admin_name = await db.scalar(
+                select(AdminUser.display_name).where(
+                    AdminUser.id == job.requested_by_admin_id
+                )
+            )
+            stats = await self._job_item_stats(db, [job.id])
+            return self._response(job, admin_name=admin_name, stats=stats.get(job.id))
+
+    async def list_items(
+        self,
+        *,
+        job_id: int,
+        current_status: str | None = None,
+        is_valid: bool | None = None,
+        keyword: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ):
+        from app.schemas.common import PaginatedData
+
+        async with get_db_ctx() as db:
+            job = await db.get(NispExportJob, job_id)
+            if job is None:
+                raise NotFoundException("NISP 导出任务")
+            base = (
+                select(NispExportItem, NispRegistration)
+                .join(
+                    NispRegistration,
+                    NispRegistration.id == NispExportItem.registration_id,
+                )
+                .where(NispExportItem.job_id == job.id)
+            )
+            if current_status:
+                base = base.where(NispRegistration.status == current_status)
+            if is_valid is not None:
+                base = base.where(NispExportItem.is_valid.is_(is_valid))
+            if keyword:
+                pattern = f"%{keyword.strip()}%"
+                base = base.where(
+                    or_(
+                        NispRegistration.registration_no.ilike(pattern),
+                        NispRegistration.candidate_snapshot["name"].astext.ilike(pattern),
+                    )
+                )
+            total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
+            rows = (
+                await db.execute(
+                    base.order_by(NispExportItem.id)
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                )
+            ).all()
+            current_versions = {
+                row.registration_id: row
+                for row in (
+                    await db.execute(
+                        select(NispRegistrationVersion).where(
+                            NispRegistrationVersion.registration_id.in_(
+                                [item.registration_id for item, _registration in rows]
+                            ),
+                            NispRegistrationVersion.is_current.is_(True),
+                        )
+                    )
+                ).scalars().all()
+            }
+            items: list[NispExportItemResponse] = []
+            for item, registration in rows:
+                version = current_versions.get(registration.id)
+                review_ready, block_reason = self._review_readiness(
+                    registration_status=registration.status,
+                    item=item,
+                    job=job,
+                    current_version_id=version.id if version else None,
+                )
+                items.append(
+                    NispExportItemResponse(
+                        id=item.id,
+                        job_id=item.job_id,
+                        registration_id=registration.id,
+                        registration_no=registration.registration_no,
+                        name=str((registration.candidate_snapshot or {}).get("name") or ""),
+                        level=registration.level,
+                        current_status=registration.status,
+                        version_no=version.version_no if version else None,
+                        is_valid=item.is_valid,
+                        invalidated_reason=item.invalidated_reason,
+                        review_ready=review_ready,
+                        block_reason=block_reason,
+                        created_at=item.created_at,
+                    )
+                )
+            return PaginatedData(
+                items=items,
+                total=int(total),
+                page=page,
+                page_size=page_size,
+            )
 
     async def signed_url(self, job_id: int) -> str:
         async with get_db_ctx() as db:
@@ -176,6 +444,8 @@ class NispExportService:
             if job is None:
                 raise NotFoundException("NISP 导出任务")
             if job.status != "succeeded" or not job.storage_key:
+                if job.expires_at and job.expires_at < _now():
+                    raise BusinessException("导出文件已过期，请重新导出")
                 raise BusinessException("导出任务尚未完成")
             if job.expires_at and job.expires_at < _now():
                 raise BusinessException("导出文件已过期，请重新导出")
@@ -352,7 +622,7 @@ class NispExportService:
             await db.commit()
 
     async def expire_artifacts(self) -> int:
-        """Mark expired succeeded jobs as failed and delete their artifacts."""
+        """Delete expired files without invalidating their export versions."""
         now = _now()
         async with get_db_ctx() as db:
             jobs = (
@@ -361,6 +631,7 @@ class NispExportService:
                     .where(
                         NispExportJob.status == "succeeded",
                         NispExportJob.expires_at < now,
+                        NispExportJob.storage_key.is_not(None),
                     )
                 )
             ).scalars().all()
@@ -370,11 +641,92 @@ class NispExportService:
                         await self.storage.delete_object(job.storage_key)
                     except Exception:
                         pass
-                job.status = "failed"
-                job.last_error = "expired"
                 job.storage_key = None
+                job.artifact_sha256 = None
+                job.artifact_bytes = None
             await db.commit()
             return len(jobs)
+
+    @staticmethod
+    async def _job_item_stats(db, job_ids: list[int]) -> dict[int, dict]:
+        if not job_ids:
+            return {}
+        rows = (
+            await db.execute(
+                select(
+                    NispExportItem.job_id,
+                    NispExportItem.registration_id,
+                    NispExportItem.is_valid,
+                )
+                .where(NispExportItem.job_id.in_(job_ids))
+                .order_by(NispExportItem.job_id, NispExportItem.id)
+            )
+        ).all()
+        result = {
+            job_id: {"valid_item_count": 0, "registration_ids": []}
+            for job_id in job_ids
+        }
+        for job_id, registration_id, is_valid in rows:
+            stats = result[job_id]
+            stats["registration_ids"].append(registration_id)
+            if is_valid:
+                stats["valid_item_count"] += 1
+        return result
+
+    @staticmethod
+    def _export_version_available(job: NispExportJob) -> bool:
+        if job.status == "succeeded":
+            return True
+        # Compatibility with jobs written by the old expiration worker: expiry
+        # removed the file, but it must not invalidate an otherwise valid item.
+        return (
+            job.status == "failed"
+            and job.last_error == "expired"
+            and job.storage_key is None
+        )
+
+    @classmethod
+    def _review_readiness(
+        cls,
+        *,
+        registration_status: str,
+        item: NispExportItem,
+        job: NispExportJob,
+        current_version_id: int | None,
+    ) -> tuple[bool, str | None]:
+        if registration_status == "final_approved":
+            return False, "已终审通过"
+        if registration_status != "approved":
+            return False, "仅初审通过人员可终审"
+        if not item.is_valid:
+            return False, item.invalidated_reason or "导出版本已失效"
+        if not cls._export_version_available(job):
+            return False, "导出任务未成功"
+        if current_version_id is None or item.registration_version_id != current_version_id:
+            return False, "导出版本与当前报名版本不一致"
+        return True, None
+
+    @classmethod
+    def _response(
+        cls,
+        job: NispExportJob,
+        *,
+        admin_name: str | None = None,
+        stats: dict | None = None,
+    ) -> NispExportJobResponse:
+        response = NispExportJobResponse.model_validate(job)
+        response.requested_by_admin_name = admin_name
+        file_expired = bool(job.expires_at and job.expires_at < _now())
+        response.file_expired = file_expired
+        response.download_available = (
+            job.status == "succeeded"
+            and bool(job.storage_key)
+            and not file_expired
+        )
+        if stats is not None:
+            response.valid_item_count = int(stats.get("valid_item_count", 0))
+            response.registration_ids = list(stats.get("registration_ids", []))
+        return response
 
     def _build_excel(
         self,

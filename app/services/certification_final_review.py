@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db_ctx
@@ -290,7 +290,18 @@ class NispFinalReviewService:
                 )
                 if registration.status != "approved":
                     raise ConflictException("仅初审通过报名可以终审")
-                if job is None or job.status != "succeeded" or not item.is_valid:
+                export_version_available = (
+                    job is not None
+                    and (
+                        job.status == "succeeded"
+                        or (
+                            job.status == "failed"
+                            and job.last_error == "expired"
+                            and job.storage_key is None
+                        )
+                    )
+                )
+                if job is None or not export_version_available or not item.is_valid:
                     raise ConflictException("导出版本不可用")
                 if item.registration_version_id != version.id:
                     raise ConflictException("导出版本与当前报名版本不一致")
@@ -316,32 +327,94 @@ class NispFinalReviewService:
         self, *, admin_id: int, data: NispBatchFinalReviewRequest
     ) -> NispBatchFinalReviewResponse:
         results = []
-        for registration_id in data.registration_ids:
+        targets = (
+            [(target.registration_id, target.export_item_id) for target in data.targets]
+            if data.targets
+            else []
+        )
+        if not targets:
+            for registration_id in data.registration_ids or []:
+                item_id = await db_scalar_nisp_effective_item_id(
+                    registration_id=registration_id,
+                    export_job_id=data.export_job_id or 0,
+                )
+                targets.append((registration_id, item_id))
+
+        for registration_id, export_item_id in targets:
+            summary = {"registration_no": None, "name": None}
             try:
                 async with get_db_ctx() as db:
-                    item_id = await db.scalar(
-                        select(NispExportItem.id)
-                        .join(NispExportJob, NispExportJob.id == NispExportItem.job_id)
-                        .where(
-                            NispExportItem.registration_id == registration_id,
-                            NispExportItem.job_id == data.export_job_id,
-                            NispExportItem.is_valid.is_(True),
-                            NispExportJob.status == "succeeded",
-                        )
-                        .limit(1)
-                    )
-                if item_id is None:
-                    raise ConflictException("没有可用于终审的导出版本")
+                    registration = await db.get(NispRegistration, registration_id)
+                    if registration is not None:
+                        summary = {
+                            "registration_no": registration.registration_no,
+                            "name": (registration.candidate_snapshot or {}).get("name"),
+                        }
+                        if registration.status == "final_approved":
+                            existing = await db.scalar(
+                                select(NispFinalReview).where(
+                                    NispFinalReview.registration_id == registration.id
+                                )
+                            )
+                            if existing is not None and existing.decision == "approved":
+                                results.append(NispFinalReviewResult(
+                                    registration_id=registration_id,
+                                    export_item_id=export_item_id,
+                                    registration_no=summary["registration_no"],
+                                    name=summary["name"],
+                                    success=True,
+                                    status="skipped",
+                                    reason="已终审通过，本次跳过",
+                                ))
+                                continue
                 await self.review(
                     admin_id=admin_id,
                     registration_id=registration_id,
-                    data=NispFinalReviewRequest(export_item_id=item_id),
+                    data=NispFinalReviewRequest(export_item_id=export_item_id),
                 )
-                results.append(NispFinalReviewResult(registration_id=registration_id, success=True))
+                results.append(NispFinalReviewResult(
+                    registration_id=registration_id,
+                    export_item_id=export_item_id,
+                    registration_no=summary["registration_no"],
+                    name=summary["name"],
+                    success=True,
+                    status="success",
+                ))
             except Exception as exc:
                 results.append(NispFinalReviewResult(
                     registration_id=registration_id,
+                    export_item_id=export_item_id,
+                    registration_no=summary["registration_no"],
+                    name=summary["name"],
                     success=False,
+                    status="failed",
                     reason=exc.message if hasattr(exc, "message") else type(exc).__name__,
                 ))
         return NispBatchFinalReviewResponse(items=results)
+
+
+async def db_scalar_nisp_effective_item_id(
+    *, registration_id: int, export_job_id: int
+) -> int:
+    async with get_db_ctx() as db:
+        item_id = await db.scalar(
+            select(NispExportItem.id)
+            .join(NispExportJob, NispExportJob.id == NispExportItem.job_id)
+            .where(
+                NispExportItem.registration_id == registration_id,
+                NispExportItem.job_id == export_job_id,
+                NispExportItem.is_valid.is_(True),
+                or_(
+                    NispExportJob.status == "succeeded",
+                    (
+                        (NispExportJob.status == "failed")
+                        & (NispExportJob.last_error == "expired")
+                        & NispExportJob.storage_key.is_(None)
+                    ),
+                ),
+            )
+            .limit(1)
+        )
+        if item_id is None:
+            raise ConflictException("没有可用于终审的导出版本")
+        return item_id

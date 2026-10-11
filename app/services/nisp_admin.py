@@ -2,10 +2,10 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.adapter.database import get_db_ctx
-from app.domain.nisp.src import NispExamBatch, NispRegistration
+from app.domain.nisp.src import NispExamBatch, NispExportItem, NispExportJob, NispRegistration
 from app.domain.plan.src.index import Plan
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.domain.order.src.index import Order, apply_order_status_transition
@@ -215,6 +215,8 @@ class NispAdminService:
         batch_id: int | None = None,
         level: str | None = None,
         status: str | None = None,
+        keyword: str | None = None,
+        has_valid_export: bool | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[NispRegistrationResponse], int]:
@@ -227,6 +229,35 @@ class NispAdminService:
                 base = base.where(NispRegistration.level == level)
             if status is not None:
                 base = base.where(NispRegistration.status == status)
+            if keyword:
+                pattern = f"%{keyword.strip()}%"
+                base = base.where(
+                    or_(
+                        NispRegistration.registration_no.ilike(pattern),
+                        NispRegistration.candidate_snapshot["name"].astext.ilike(pattern),
+                    )
+                )
+            if has_valid_export is not None:
+                valid_export_exists = (
+                    select(NispExportItem.id)
+                    .join(NispExportJob, NispExportJob.id == NispExportItem.job_id)
+                    .where(
+                        NispExportItem.registration_id == NispRegistration.id,
+                        NispExportItem.is_valid.is_(True),
+                        or_(
+                            NispExportJob.status == "succeeded",
+                            (
+                                (NispExportJob.status == "failed")
+                                & (NispExportJob.last_error == "expired")
+                                & NispExportJob.storage_key.is_(None)
+                            ),
+                        ),
+                    )
+                    .exists()
+                )
+                base = base.where(
+                    valid_export_exists if has_valid_export else ~valid_export_exists
+                )
             total = await db.scalar(
                 select(func.count()).select_from(base.subquery())
             ) or 0
@@ -255,6 +286,13 @@ class NispAdminService:
     async def _response(self, db, batch: NispExamBatch) -> NispExamBatchResponse:
         plan = await db.get(Plan, batch.plan_id)
         occupied = await occupied_count(db, batch.plan_id)
+        count_rows = (
+            await db.execute(
+                select(NispRegistration.status, func.count())
+                .where(NispRegistration.batch_id == batch.id)
+                .group_by(NispRegistration.status)
+            )
+        ).all()
         return NispExamBatchResponse(
             id=batch.id,
             plan_id=batch.plan_id,
@@ -278,6 +316,7 @@ class NispAdminService:
             resubmission_window_hours=batch.resubmission_window_hours,
             max_resubmissions=batch.max_resubmissions,
             max_material_bytes=batch.max_material_bytes,
+            registration_counts={status: int(count) for status, count in count_rows},
             created_at=batch.created_at,
             updated_at=batch.updated_at,
         )
