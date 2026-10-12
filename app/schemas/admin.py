@@ -89,6 +89,7 @@ class AdminUserFilter(BaseModel):
     created_at_end: datetime | None = None
     identity_status: str | None = None
     student_status: str | None = None
+    review_status: Literal["pending", "approved", "rejected"] | None = None
 
 
 class AdminUserListItem(BaseModel):
@@ -101,6 +102,25 @@ class AdminUserListItem(BaseModel):
     student_status: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class AdminUserReviewSummaryItem(BaseModel):
+    user_id: int
+    openid: str
+    phone: str | None = None
+    is_active: bool
+    created_at: datetime
+    identity_status: str | None = None
+    student_status: str | None = None
+    identity_updated_at: datetime | None = None
+    student_updated_at: datetime | None = None
+    latest_review_at: datetime
+
+
+class AdminUserReviewSummary(BaseModel):
+    identity_pending_count: int
+    student_pending_count: int
+    latest_pending: list[AdminUserReviewSummaryItem]
 
 class AdminUserStatusToggle(BaseModel):
     is_active: bool

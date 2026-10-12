@@ -1,7 +1,7 @@
 """管理端用户服务"""
 from datetime import date, datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import ConflictException, NotFoundException, ValidationException
@@ -16,6 +16,8 @@ from app.schemas.admin import (
     AdminUserConversationBrief,
     AdminUserFilter,
     AdminUserListItem,
+    AdminUserReviewSummary,
+    AdminUserReviewSummaryItem,
     AdminUserOrderBrief,
     AdminUserStatusToggle,
 )
@@ -33,6 +35,13 @@ class AdminUserService:
         if not value or len(value) < 7:
             return value
         return f"{value[:3]}****{value[-4:]}"
+
+    @staticmethod
+    def _latest_review_at_expr():
+        return func.greatest(
+            func.coalesce(UserRealname.updated_at, User.created_at),
+            func.coalesce(UserStudent.updated_at, User.created_at),
+        )
 
     # ─── 用户列表 / 导出 ───
 
@@ -66,9 +75,43 @@ class AdminUserService:
                     base = base.where(UserRealname.status == filters.identity_status)
                 if filters.student_status:
                     base = base.where(UserStudent.status == filters.student_status)
+                if filters.review_status == "pending":
+                    base = base.where(
+                        or_(
+                            UserRealname.status == "pending",
+                            UserStudent.status == "pending",
+                        )
+                    )
+                elif filters.review_status == "approved":
+                    base = base.where(
+                        and_(
+                            UserRealname.status == "verified",
+                            UserStudent.status == "verified",
+                        )
+                    )
+                elif filters.review_status == "rejected":
+                    base = base.where(
+                        or_(
+                            UserRealname.status == "rejected",
+                            UserStudent.status == "rejected",
+                        )
+                    )
             count_stmt = select(func.count()).select_from(base.subquery())
             total = (await db.execute(count_stmt)).scalar() or 0
-            stmt = base.order_by(User.id.desc()).offset((page - 1) * page_size).limit(page_size)
+            review_filter_active = bool(
+                filters
+                and (
+                    filters.review_status
+                    or filters.identity_status
+                    or filters.student_status
+                )
+            )
+            ordered_stmt = (
+                base.order_by(self._latest_review_at_expr().desc(), User.id.desc())
+                if review_filter_active
+                else base.order_by(User.id.desc())
+            )
+            stmt = ordered_stmt.offset((page - 1) * page_size).limit(page_size)
             result = await db.execute(stmt)
             rows = result.all()
             items = [AdminUserListItem(
@@ -89,6 +132,68 @@ class AdminUserService:
                 page_size=page_size,
             )
 
+    async def get_review_summary(
+        self, *, latest_limit: int = 10
+    ) -> AdminUserReviewSummary:
+        async with get_db_ctx() as db:
+            identity_pending_count = (
+                await db.scalar(
+                    select(func.count())
+                    .select_from(UserRealname)
+                    .where(UserRealname.status == "pending")
+                )
+            ) or 0
+            student_pending_count = (
+                await db.scalar(
+                    select(func.count())
+                    .select_from(UserStudent)
+                    .where(UserStudent.status == "pending")
+                )
+            ) or 0
+            latest_at = self._latest_review_at_expr()
+            rows = (
+                await db.execute(
+                    select(
+                        User,
+                        UserRealname.status.label("identity_status"),
+                        UserStudent.status.label("student_status"),
+                        UserRealname.updated_at.label("identity_updated_at"),
+                        UserStudent.updated_at.label("student_updated_at"),
+                        latest_at.label("latest_review_at"),
+                    )
+                    .outerjoin(UserRealname, UserRealname.user_id == User.id)
+                    .outerjoin(UserStudent, UserStudent.user_id == User.id)
+                    .where(
+                        or_(
+                            UserRealname.status == "pending",
+                            UserStudent.status == "pending",
+                        )
+                    )
+                    .order_by(latest_at.desc(), User.id.desc())
+                    .limit(latest_limit)
+                )
+            ).all()
+            latest_pending = [
+                AdminUserReviewSummaryItem(
+                    user_id=row.User.id,
+                    openid=row.User.openid,
+                    phone=self._mask_phone(row.User.phone),
+                    is_active=row.User.is_active,
+                    created_at=row.User.created_at,
+                    identity_status=row.identity_status,
+                    student_status=row.student_status,
+                    identity_updated_at=row.identity_updated_at,
+                    student_updated_at=row.student_updated_at,
+                    latest_review_at=row.latest_review_at,
+                )
+                for row in rows
+            ]
+            return AdminUserReviewSummary(
+                identity_pending_count=int(identity_pending_count),
+                student_pending_count=int(student_pending_count),
+                latest_pending=latest_pending,
+            )
+
     async def import_users_csv(
         self,
         filters: AdminUserFilter | None,
@@ -99,9 +204,11 @@ class AdminUserService:
         import io
 
         async with get_db_ctx() as db:
-            base = select(User)
-            need_realname = False
-            need_student = False
+            base = (
+                select(User)
+                .outerjoin(UserRealname, UserRealname.user_id == User.id)
+                .outerjoin(UserStudent, UserStudent.user_id == User.id)
+            )
             if filters:
                 if filters.openid:
                     base = base.where(User.openid == filters.openid)
@@ -112,14 +219,27 @@ class AdminUserService:
                 if filters.created_at_end:
                     base = base.where(User.created_at <= filters.created_at_end)
                 if filters.identity_status:
-                    base = base.outerjoin(UserRealname, UserRealname.user_id == User.id)
                     base = base.where(UserRealname.status == filters.identity_status)
-                    need_realname = True
                 if filters.student_status:
-                    if not need_realname:
-                        base = base.outerjoin(UserRealname, UserRealname.user_id == User.id)
-                    base = base.outerjoin(UserStudent, UserStudent.user_id == User.id)
                     base = base.where(UserStudent.status == filters.student_status)
+                if filters.review_status == "pending":
+                    base = base.where(
+                        or_(UserRealname.status == "pending", UserStudent.status == "pending")
+                    )
+                elif filters.review_status == "approved":
+                    base = base.where(
+                        and_(
+                            UserRealname.status == "verified",
+                            UserStudent.status == "verified",
+                        )
+                    )
+                elif filters.review_status == "rejected":
+                    base = base.where(
+                        or_(
+                            UserRealname.status == "rejected",
+                            UserStudent.status == "rejected",
+                        )
+                    )
             stmt = base.order_by(User.id.desc())
             result = await db.execute(stmt)
             users = result.scalars().all()

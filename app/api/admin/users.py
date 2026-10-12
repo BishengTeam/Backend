@@ -12,6 +12,7 @@ from app.schemas.admin import (
     AdminUserConversationBrief,
     AdminUserFilter,
     AdminUserListItem,
+    AdminUserReviewSummary,
     AdminUserOrderBrief,
     AdminUserStatusToggle,
 )
@@ -55,14 +56,33 @@ async def list_users(
     created_at_end: datetime | None = Query(None, description="创建时间止，ISO 8601"),
     identity_status: str | None = Query(None, description="按实名状态筛选：pending / verified / rejected"),
     student_status: str | None = Query(None, description="按学生状态筛选：pending / verified / rejected"),
+    review_status: str | None = Query(
+        None,
+        description="组合审核筛选：pending=任一待审；approved=均通过；rejected=任一驳回",
+    ),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     _admin=Depends(require_permission("user:list")),
 ) -> APIResponse[PaginatedData[AdminUserListItem]]:
-    has_filters = openid or phone or created_at_start or created_at_end or identity_status or student_status
-    filters = AdminUserFilter(openid=openid, phone=phone, created_at_start=created_at_start, created_at_end=created_at_end, identity_status=identity_status, student_status=student_status) if has_filters else None
+    has_filters = openid or phone or created_at_start or created_at_end or identity_status or student_status or review_status
+    filters = AdminUserFilter(openid=openid, phone=phone, created_at_start=created_at_start, created_at_end=created_at_end, identity_status=identity_status, student_status=student_status, review_status=review_status) if has_filters else None
     result = await AdminUserService().list_users(filters, page, page_size)
     return success(data=result)
+
+
+@router.get(
+    "/review-summary",
+    response_model=APIResponse[AdminUserReviewSummary],
+    summary="用户审核待办摘要",
+)
+async def get_user_review_summary(
+    latest_limit: int = Query(10, ge=1, le=50, description="最新待审用户数量"),
+    _admin=Depends(require_permission("user:list")),
+) -> APIResponse[AdminUserReviewSummary]:
+    """Return pending counts and latest users whose review materials changed."""
+    return success(
+        data=await AdminUserService().get_review_summary(latest_limit=latest_limit)
+    )
 
 
 @router.get("/export",
@@ -85,10 +105,13 @@ async def export_users(
     phone: str | None = Query(None, description="按手机号精确筛选"),
     created_at_start: datetime | None = Query(None, description="创建时间起，ISO 8601"),
     created_at_end: datetime | None = Query(None, description="创建时间止，ISO 8601"),
+    identity_status: str | None = Query(None, description="按实名状态筛选"),
+    student_status: str | None = Query(None, description="按学生状态筛选"),
+    review_status: str | None = Query(None, description="组合审核筛选"),
     _admin=Depends(require_permission("user:list")),
 ):
-    has_filters = openid or phone or created_at_start or created_at_end
-    filters = AdminUserFilter(openid=openid, phone=phone, created_at_start=created_at_start, created_at_end=created_at_end) if has_filters else None
+    has_filters = openid or phone or created_at_start or created_at_end or identity_status or student_status or review_status
+    filters = AdminUserFilter(openid=openid, phone=phone, created_at_start=created_at_start, created_at_end=created_at_end, identity_status=identity_status, student_status=student_status, review_status=review_status) if has_filters else None
     csv_content = await AdminUserService().export_users(
         filters, actor_id=_admin.id
     )
