@@ -107,6 +107,13 @@ from app.models.deployment_acceptance import (
 
 from app.models.cert_product import CertProduct
 from app.models.cert_product_catalog import CertProductCatalog
+from app.domain.points_mall.src import (
+    PointsMallItem,
+    PointsMallRedemption,
+    PointsVirtualOrder,
+    PointsVirtualProduct,
+    PointsVirtualRefund,
+)
 
 __all__ = [
     "Activity",
@@ -142,6 +149,11 @@ __all__ = [
     "JobApplication",
     "Order",
     "PaymentRefundTask",
+    "PointsMallItem",
+    "PointsMallRedemption",
+    "PointsVirtualOrder",
+    "PointsVirtualProduct",
+    "PointsVirtualRefund",
     "Plan",
     "PointsHistory",
     "PriceConfig",

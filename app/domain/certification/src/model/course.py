@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    BigInteger,
     JSON,
     Boolean,
     CheckConstraint,
@@ -110,6 +111,11 @@ class CourseEnrollment(Base, TimestampMixin):
     order_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("order.id", ondelete="SET NULL"), nullable=True
     )
+    points_virtual_order_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("points_virtual_order.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     status: Mapped[str] = mapped_column(
         String(16),
         nullable=False,
@@ -121,6 +127,7 @@ class CourseEnrollment(Base, TimestampMixin):
     )
     access_granted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     access_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    access_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     course: Mapped[Course] = relationship()
     order: Mapped[Order | None] = relationship()

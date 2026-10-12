@@ -1252,6 +1252,7 @@ class QuizPracticeService:
         if checkin is not None:
             checkin.questions_completed += 1
             stats.consecutive_days = checkin.consecutive_days
+            await self._award_checkin_points(db, user_id=user_id, local_day=local_day)
             return
         previous = (
             await db.execute(
@@ -1285,6 +1286,10 @@ class QuizPracticeService:
         # Award daily check-in points (idempotent per user per day).
         # SAVEPOINT 隔离积分发放：失败只回滚发放本身，不污染练习提交事务；
         # 失败必须留下日志，便于事后审计漏发（quiz_checkin 与 points_history 对账）。
+        await self._award_checkin_points(db, user_id=user_id, local_day=local_day)
+
+    async def _award_checkin_points(self, db, *, user_id: int, local_day: date) -> None:
+        """Idempotently award or repair points for an existing check-in day."""
         try:
             async with db.begin_nested():
                 await PointsService()._grant_points_in_session(
@@ -1292,7 +1297,7 @@ class QuizPracticeService:
                     user_id=user_id,
                     amount=5,
                     action_type="claim_daily_checkin",
-                    description=f"每日答题打卡 +5积分",
+                    description="每日答题打卡 +5积分",
                     source_type="points_claim",
                     source_id=f"daily_checkin:{user_id}:{local_day.isoformat()}",
                 )
@@ -1872,6 +1877,9 @@ class QuizPracticeService:
             ).scalar_one_or_none()
             if checkin is not None:
                 # 当天已打卡（手动或练习自动）时幂等返回，不重复发分。
+                # 若此前自动发分失败，这里按原业务日补发，不生成新来源。
+                await self._award_checkin_points(db, user_id=user_id, local_day=local_day)
+                await db.commit()
                 return QuizCheckinStatusResponse(
                     checkin_date=local_day,
                     checked_in=True,

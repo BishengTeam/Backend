@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -7,6 +9,7 @@ from app.adapter.database import get_db_ctx
 from app.port.exceptions import BusinessException, NotFoundException
 from app.utils.quiz_helpers import today
 from app.domain.user.src.index import PointsHistory, User, UserPoints
+from app.domain.content.src.index import Activity, ActivityRegistration
 from app.schemas.common import PaginatedData
 from app.schemas.points import (
     PointsBalanceResponse,
@@ -99,6 +102,11 @@ class PointsService:
 
         async with get_db_ctx() as db:
             await self._require_user(db, user_id)
+            activity = None
+            if data.scene == "activity":
+                activity = await self._validate_activity_claim(
+                    db, user_id=user_id, source_id=data.source_id
+                )
             history, claimed = await self._grant_points_in_session(
                 db,
                 user_id=user_id,
@@ -110,7 +118,6 @@ class PointsService:
             )
             await db.commit()
             await db.refresh(history)
-
         return PointsClaimResponse(
             claimed=claimed,
             scene=data.scene,
@@ -118,6 +125,35 @@ class PointsService:
             balance=history.balance_after,
             history_id=history.id,
         )
+
+    @staticmethod
+    async def _validate_activity_claim(
+        db: AsyncSession, *, user_id: int, source_id: str | None
+    ) -> Activity:
+        if source_id is None or not source_id.isdecimal():
+            raise BusinessException("活动积分必须使用服务端活动 ID")
+        activity_id = int(source_id)
+        activity = await db.get(Activity, activity_id)
+        if activity is None or not activity.is_active:
+            raise BusinessException("活动不存在或已下线")
+        registration = (
+            await db.execute(
+                select(ActivityRegistration.id)
+                .where(
+                    ActivityRegistration.activity_id == activity_id,
+                    ActivityRegistration.user_id == user_id,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if registration is None:
+            raise BusinessException("未报名该活动，不能领取奖励")
+        now = datetime.now(timezone.utc)
+        if activity.end_time is None:
+            raise BusinessException("活动未配置结束时间，暂不能领取奖励")
+        if now < activity.end_time:
+            raise BusinessException("活动尚未结束，不能领取奖励")
+        return activity
 
     async def redeem_points(
         self,
@@ -153,6 +189,45 @@ class PointsService:
             balance=history.balance_after,
             history_id=history.id,
         )
+
+    async def _debit_points_in_session(
+        self,
+        db: AsyncSession,
+        *,
+        user_id: int,
+        amount: int,
+        action_type: str,
+        description: str,
+        source_type: str,
+        source_id: str,
+    ) -> PointsHistory:
+        if amount <= 0:
+            raise BusinessException("消耗积分必须大于 0")
+        existing = await self._get_source_history(
+            db,
+            user_id=user_id,
+            action_type=action_type,
+            source_type=source_type,
+            source_id=source_id,
+        )
+        if existing is not None:
+            return existing
+        account = await self._get_or_create_account_for_update(db, user_id)
+        if account.balance < amount:
+            raise BusinessException("积分余额不足")
+        account.balance -= amount
+        history = PointsHistory(
+            user_id=user_id,
+            action_type=action_type,
+            amount=-amount,
+            balance_after=account.balance,
+            description=description,
+            source_type=source_type,
+            source_id=source_id,
+        )
+        db.add(history)
+        await db.flush()
+        return history
 
     async def _grant_points_in_session(
         self,

@@ -1,7 +1,8 @@
 from decimal import Decimal
 from time import time
+from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import joinedload
 
 from app.adapter.database import get_db_ctx
@@ -392,6 +393,7 @@ class CourseService:
 
     @staticmethod
     async def _get_learning_enrollment(db, user_id: int, course_id: int):
+        now = datetime.now(timezone.utc)
         return (
             await db.execute(
                 select(CourseEnrollment).where(
@@ -399,6 +401,10 @@ class CourseService:
                     CourseEnrollment.course_id == course_id,
                     CourseEnrollment.learning_access.is_(True),
                     CourseEnrollment.status.in_(("enrolled", "completed")),
+                    or_(
+                        CourseEnrollment.access_expires_at.is_(None),
+                        CourseEnrollment.access_expires_at > now,
+                    ),
                 )
             )
         ).scalar_one_or_none()

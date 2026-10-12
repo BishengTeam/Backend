@@ -92,7 +92,22 @@ async def _cleanup_test_data(session_factory, prefix: str) -> None:
             {"prefix_like": prefix_like},
         )
         await db.execute(
+            text(
+                """
+                DELETE FROM activity_registration
+                WHERE user_id IN (
+                    SELECT id FROM "user" WHERE openid LIKE :prefix_like
+                )
+                """
+            ),
+            {"prefix_like": prefix_like},
+        )
+        await db.execute(
             text('DELETE FROM "user" WHERE openid LIKE :prefix_like'),
+            {"prefix_like": prefix_like},
+        )
+        await db.execute(
+            text("DELETE FROM activity WHERE title LIKE :prefix_like"),
             {"prefix_like": prefix_like},
         )
         await db.commit()
@@ -108,6 +123,33 @@ async def _seed_user(session_factory, prefix: str, index: int = 0) -> int:
         user_id = user.id
         await db.commit()
         return user_id
+
+
+async def _seed_completed_activity(
+    session_factory, user_id: int, prefix: str, index: int = 0
+) -> int:
+    from datetime import datetime, timedelta, timezone
+
+    from app.domain.content.src.index import Activity, ActivityRegistration
+
+    async with session_factory() as db:
+        activity = Activity(
+            title=f"{prefix}-activity-{index}",
+            end_time=datetime.now(timezone.utc) - timedelta(hours=1),
+            is_active=True,
+        )
+        db.add(activity)
+        await db.flush()
+        db.add(
+            ActivityRegistration(
+                activity_id=activity.id,
+                user_id=user_id,
+                name="测试用户",
+                phone="13800000000",
+            )
+        )
+        await db.commit()
+        return activity.id
 
 
 async def test_new_user_balance_defaults_to_zero(session_factory, app_context, test_prefix):
@@ -126,15 +168,16 @@ async def test_claim_points_is_idempotent(session_factory, app_context, test_pre
     from app.schemas.points import PointsClaimRequest
 
     user_id = await _seed_user(session_factory, test_prefix)
+    activity_id = await _seed_completed_activity(session_factory, user_id, test_prefix)
     service = app_context.points_module.PointsService()
 
     first = await service.claim_points(
         user_id,
-        PointsClaimRequest(scene="activity", source_id=f"{test_prefix}-activity"),
+        PointsClaimRequest(scene="activity", source_id=str(activity_id)),
     )
     second = await service.claim_points(
         user_id,
-        PointsClaimRequest(scene="activity", source_id=f"{test_prefix}-activity"),
+        PointsClaimRequest(scene="activity", source_id=str(activity_id)),
     )
 
     async with session_factory() as db:
@@ -156,9 +199,12 @@ async def test_concurrent_claim_points_only_grants_once(session_factory, app_con
     from app.domain.user.src.index import PointsHistory, UserPoints
     from app.schemas.points import PointsClaimRequest
 
-    user_id = await _seed_user(session_factory, test_prefix)
+    user_id = await _seed_user(session_factory, test_prefix, index=1)
+    activity_id = await _seed_completed_activity(
+        session_factory, user_id, test_prefix, index=1
+    )
     service = app_context.points_module.PointsService()
-    request = PointsClaimRequest(scene="activity", source_id=f"{test_prefix}-concurrent")
+    request = PointsClaimRequest(scene="activity", source_id=str(activity_id))
 
     results = await asyncio.gather(
         service.claim_points(user_id, request),
@@ -176,6 +222,47 @@ async def test_concurrent_claim_points_only_grants_once(session_factory, app_con
     assert len({result.history_id for result in results}) == 1
     assert account.balance == results[0].amount
     assert history_count == 1
+
+
+async def test_activity_claim_requires_registration_and_completion(
+    session_factory, app_context, test_prefix
+):
+    from datetime import datetime, timedelta, timezone
+
+    from app.domain.content.src.index import Activity, ActivityRegistration
+    from app.port.exceptions import BusinessException
+    from app.schemas.points import PointsClaimRequest
+
+    user_id = await _seed_user(session_factory, test_prefix, index=2)
+    async with session_factory() as db:
+        activity = Activity(
+            title=f"{test_prefix}-activity-strict",
+            end_time=datetime.now(timezone.utc) + timedelta(hours=1),
+            is_active=True,
+        )
+        db.add(activity)
+        await db.flush()
+        activity_id = activity.id
+        await db.commit()
+
+    service = app_context.points_module.PointsService()
+    request = PointsClaimRequest(scene="activity", source_id=str(activity_id))
+    with pytest.raises(BusinessException, match="未报名"):
+        await service.claim_points(user_id, request)
+
+    async with session_factory() as db:
+        db.add(
+            ActivityRegistration(
+                activity_id=activity_id,
+                user_id=user_id,
+                name="测试用户",
+                phone="13800000000",
+            )
+        )
+        await db.commit()
+
+    with pytest.raises(BusinessException, match="尚未结束"):
+        await service.claim_points(user_id, request)
 
 
 async def test_daily_checkin_claim_does_not_duplicate_auto_checkin_grant(

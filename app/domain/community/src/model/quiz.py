@@ -175,6 +175,9 @@ class QuizLibrary(Base, _QuizTimestampMixin):
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="draft", server_default="draft"
     )
+    price_cents: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     v2_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
@@ -566,12 +569,13 @@ class QuizLibraryEntitlement(Base, _QuizTimestampMixin):
             name="ck_quiz_library_entitlement_status",
         ),
         CheckConstraint(
-            "source_type IN ('course_order', 'course_enrollment', 'quiz_order')",
+            "source_type IN ('course_order', 'course_enrollment', 'quiz_order', 'points_order')",
             name="ck_quiz_library_entitlement_source_type",
         ),
         CheckConstraint(
             "((source_type IN ('course_order', 'quiz_order') AND order_id IS NOT NULL) OR "
-            "(source_type = 'course_enrollment' AND enrollment_id IS NOT NULL))",
+            "(source_type = 'course_enrollment' AND enrollment_id IS NOT NULL) OR "
+            "(source_type = 'points_order' AND points_order_id IS NOT NULL))",
             name="ck_quiz_library_entitlement_source_ref",
         ),
         CheckConstraint(
@@ -607,8 +611,8 @@ class QuizLibraryEntitlement(Base, _QuizTimestampMixin):
     library_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("quiz_library.id", ondelete="RESTRICT"), nullable=False
     )
-    course_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("course.id", ondelete="RESTRICT"), nullable=False
+    course_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("course.id", ondelete="RESTRICT"), nullable=True
     )
     order_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("order.id", ondelete="RESTRICT"), nullable=True
@@ -616,6 +620,11 @@ class QuizLibraryEntitlement(Base, _QuizTimestampMixin):
     enrollment_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("course_enrollment.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    points_order_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("points_virtual_order.id", ondelete="RESTRICT"),
         nullable=True,
     )
     source_type: Mapped[str] = mapped_column(
@@ -1637,4 +1646,3 @@ __all__ = [
     "QuizUserStats",
     "QuizWrongItem",
 ]
-

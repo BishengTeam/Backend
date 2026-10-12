@@ -112,10 +112,20 @@ class QuizPurchaseService:
         entitlement = QuizLibraryEntitlement(
             user_id=order.user_id,
             library_id=library_id,
+            course_id=None,
             order_id=order.id,
             source_type="quiz_order",
             status="active",
+            starts_at=QuizPurchaseService._now(),
+            snapshot={
+                "library_id": library_id,
+            },
         )
         db.add(entitlement)
         await db.flush()
+        from app.services.quiz_v2 import QuizV2Service
+
+        await QuizV2Service.sync_sessions_for_library(
+            db, library_id, user_id=order.user_id, now=entitlement.starts_at
+        )
         return entitlement

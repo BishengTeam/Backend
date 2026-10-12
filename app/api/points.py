@@ -11,10 +11,20 @@ from app.schemas.points import (
     PointsRedeemRequest,
     PointsRedeemResponse,
 )
+from app.schemas.points_virtual import (
+    PointsVirtualOrderResponse,
+    PointsVirtualPrecheckRequest,
+    PointsVirtualPrecheckResponse,
+    PointsVirtualProductResponse,
+    PointsVirtualRedeemRequest,
+    PointsVirtualRedeemResponse,
+)
 from app.services.points import PointsService
+from app.services.points_virtual import PointsVirtualService
 
 router = APIRouter(prefix="/points", tags=["积分"])
 _service = PointsService()
+_virtual_service = PointsVirtualService()
 
 
 @router.get("",
@@ -107,3 +117,57 @@ async def redeem_points(
 ) -> APIResponse[PointsRedeemResponse]:
     result = await _service.redeem_points(current_user.id, body)
     return success(data=result)
+
+
+@router.get(
+    "/virtual-products",
+    response_model=APIResponse[PaginatedData[PointsVirtualProductResponse]],
+)
+async def list_virtual_products(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+):
+    return success(
+        data=await _virtual_service.list_products_for_user(
+            current_user.id, page=page, page_size=page_size
+        )
+    )
+
+
+@router.post(
+    "/virtual-orders/precheck",
+    response_model=APIResponse[PointsVirtualPrecheckResponse],
+)
+async def precheck_virtual_order(
+    body: PointsVirtualPrecheckRequest,
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[PointsVirtualPrecheckResponse]:
+    return success(data=await _virtual_service.precheck(current_user.id, body))
+
+
+@router.post(
+    "/virtual-orders",
+    response_model=APIResponse[PointsVirtualRedeemResponse],
+)
+async def redeem_virtual_product(
+    body: PointsVirtualRedeemRequest,
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[PointsVirtualRedeemResponse]:
+    return success(data=await _virtual_service.redeem(current_user.id, body))
+
+
+@router.get(
+    "/virtual-orders",
+    response_model=APIResponse[PaginatedData[PointsVirtualOrderResponse]],
+)
+async def list_virtual_orders(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+):
+    return success(
+        data=await _virtual_service.list_user_orders(
+            current_user.id, page=page, page_size=page_size
+        )
+    )

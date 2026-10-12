@@ -10,7 +10,9 @@ from sqlalchemy import (
     Integer,
     String,
     text,
+    UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.adapter.database import Base, TimestampMixin
@@ -138,3 +140,147 @@ class PointsMallRedemption(Base, TimestampMixin):
     order_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("order.id", ondelete="SET NULL")
     )
+
+
+class PointsVirtualProduct(Base, TimestampMixin):
+    """A course or quiz-library entitlement priced in points."""
+
+    __tablename__ = "points_virtual_product"
+    __table_args__ = (
+        CheckConstraint(
+            "product_type IN ('course', 'quiz_library')",
+            name="ck_points_virtual_product_type",
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'published', 'offline')",
+            name="ck_points_virtual_product_status",
+        ),
+        CheckConstraint("points_price > 0", name="ck_points_virtual_price_positive"),
+        CheckConstraint(
+            "total_redeemed >= 0",
+            name="ck_points_virtual_redeemed_nonnegative",
+        ),
+        CheckConstraint(
+            "stock_limit IS NULL OR stock_limit >= 0",
+            name="ck_points_virtual_stock_nonnegative",
+        ),
+        CheckConstraint(
+            "stock_limit IS NULL OR total_redeemed <= stock_limit",
+            name="ck_points_virtual_stock_not_oversold",
+        ),
+        CheckConstraint(
+            "entitlement_days IS NULL OR entitlement_days > 0",
+            name="ck_points_virtual_entitlement_days",
+        ),
+        CheckConstraint(
+            "((product_type = 'course' AND course_id IS NOT NULL AND library_id IS NULL) OR "
+            "(product_type = 'quiz_library' AND library_id IS NOT NULL AND course_id IS NULL))",
+            name="ck_points_virtual_product_content",
+        ),
+        CheckConstraint("version >= 1", name="ck_points_virtual_version_positive"),
+        Index("ix_points_virtual_product_status", "status", "id"),
+    )
+
+    product_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    content_key: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
+    course_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("course.id", ondelete="RESTRICT"), nullable=True
+    )
+    library_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("quiz_library.id", ondelete="RESTRICT"), nullable=True
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    cover_url: Mapped[str | None] = mapped_column(String(512))
+    description: Mapped[str | None] = mapped_column(String(512))
+    points_price: Mapped[int] = mapped_column(Integer, nullable=False)
+    stock_limit: Mapped[int | None] = mapped_column(Integer)
+    total_redeemed: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    entitlement_days: Mapped[int | None] = mapped_column(Integer)
+    available_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    available_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="draft", server_default="draft"
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    content_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+
+class PointsVirtualOrder(Base, TimestampMixin):
+    """A completed points redemption for a virtual content entitlement."""
+
+    __tablename__ = "points_virtual_order"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('completed', 'refunded')",
+            name="ck_points_virtual_order_status",
+        ),
+        CheckConstraint("points_cost > 0", name="ck_points_virtual_order_cost_positive"),
+        CheckConstraint(
+            "ends_at IS NULL OR ends_at > starts_at",
+            name="ck_points_virtual_order_period",
+        ),
+        UniqueConstraint("user_id", "idempotency_key", name="uq_points_virtual_user_idempotency"),
+        Index("ix_points_virtual_order_user", "user_id", "id"),
+        Index("ix_points_virtual_order_product", "product_id", "id"),
+    )
+
+    order_no: Mapped[str] = mapped_column(String(40), nullable=False, unique=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("user.id", ondelete="RESTRICT"), nullable=False
+    )
+    product_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("points_virtual_product.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    product_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    product_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    course_id: Mapped[int | None] = mapped_column(Integer)
+    library_id: Mapped[int | None] = mapped_column(BigInteger)
+    points_cost: Mapped[int] = mapped_column(Integer, nullable=False)
+    entitlement_days: Mapped[int | None] = mapped_column(Integer)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="completed", server_default="completed"
+    )
+    points_history_id: Mapped[int | None] = mapped_column(BigInteger)
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    refunded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PointsVirtualRefund(Base, TimestampMixin):
+    """The single successful administrator-initiated refund for one order."""
+
+    __tablename__ = "points_virtual_refund"
+    __table_args__ = (
+        CheckConstraint(
+            "points_returned > 0",
+            name="ck_points_virtual_refund_points_positive",
+        ),
+        UniqueConstraint("order_id", name="uq_points_virtual_refund_order"),
+        Index("ix_points_virtual_refund_user", "user_id", "id"),
+    )
+
+    order_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("points_virtual_order.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("user.id", ondelete="RESTRICT"), nullable=False
+    )
+    points_returned: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason_detail: Mapped[str] = mapped_column(String(500), nullable=False)
+    refunded_by_admin_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("admin_user.id"), nullable=False
+    )
+    points_history_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    refunded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
