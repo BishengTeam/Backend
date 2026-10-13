@@ -247,8 +247,10 @@ class PointsVirtualService:
             )
             profile_map = {row.user_id: row for row in profiles}
             users = (
-                await db.execute(
-                    select(User.id, User.phone).where(User.id.in_(user_ids))
+                (
+                    await db.execute(
+                        select(User.id, User.phone).where(User.id.in_(user_ids))
+                    )
                 ).all()
                 if user_ids
                 else []
