@@ -21,6 +21,7 @@ from app.schemas.nisp import (
     NispFinalReviewRequest,
     NispBatchFinalReviewRequest,
     NispBatchFinalReviewResponse,
+    NispExamBatchFullCreate,
 )
 from app.services.nisp_admin import NispAdminService
 from app.services.nisp_export import NispExportService
@@ -34,12 +35,30 @@ _service = NispAdminService()
 
 @router.get("/batches", response_model=APIResponse[PaginatedData[NispExamBatchResponse]])
 async def list_batches(
+    keyword: str | None = Query(None, max_length=64),
+    level: str | None = Query(None, pattern="^[12]$"),
+    status: str | None = Query(None, max_length=32),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     _admin=Depends(require_permission("nisp:batch_manage")),
 ) -> APIResponse[PaginatedData[NispExamBatchResponse]]:
-    items, total = await _service.list_batches(page=page, page_size=page_size)
+    items, total = await _service.list_batches(
+        keyword=keyword,
+        level=level,
+        status=status,
+        page=page,
+        page_size=page_size,
+    )
     return success(data=PaginatedData(items=items, total=total, page=page, page_size=page_size))
+
+
+@router.post("/batches/full", response_model=APIResponse[NispExamBatchResponse])
+async def create_full_batch(
+    body: NispExamBatchFullCreate,
+    _admin=Depends(require_permission("nisp:batch_manage")),
+) -> APIResponse[NispExamBatchResponse]:
+    """Create a NISP Plan and level-specific batch in one transaction."""
+    return success(data=await _service.create_full_batch(body))
 
 
 @router.post("/batches", response_model=APIResponse[NispExamBatchResponse])

@@ -9,11 +9,13 @@ from app.domain.nisp.src import NispExamBatch, NispExportItem, NispExportJob, Ni
 from app.domain.plan.src.index import Plan
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.domain.order.src.index import Order, apply_order_status_transition
+from app.models.cert_product import CertProduct
 from app.services.nisp_lifecycle import occupied_count, request_refund
 from app.services.points_mall import release_order_coupon
 from app.services.certification_identity import validate_nisp_batch_product
 from app.schemas.nisp import (
     NispExamBatchCreate,
+    NispExamBatchFullCreate,
     NispExamBatchResponse,
     NispExamBatchUpdate,
     NispRegistrationResponse,
@@ -26,7 +28,85 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 class NispAdminService:
+
+    async def create_full_batch(
+        self, data: NispExamBatchFullCreate
+    ) -> NispExamBatchResponse:
+        """Create Plan + level-specific NISP batch atomically."""
+        async with get_db_ctx() as db:
+            async with db.begin():
+                product = await db.scalar(
+                    select(CertProduct)
+                    .where(
+                        CertProduct.code == f"NISP-{data.level}",
+                        CertProduct.type == "nisp",
+                        CertProduct.is_active.is_(True),
+                    )
+                    .with_for_update()
+                )
+                if product is None:
+                    raise BusinessException(
+                        f"NISP {'一级' if data.level == '1' else '二级'}认证产品不存在或未上架"
+                    )
+
+                duplicate = await db.scalar(
+                    select(Plan.id).where(
+                        Plan.product_type == product.code,
+                        Plan.name == data.name,
+                    )
+                )
+                if duplicate is not None:
+                    raise ConflictException("同名 NISP 考试批次已存在")
+
+                selected_price_field = (
+                    "level1_price_cents" if data.level == "1" else "level2_price_cents"
+                )
+                other_price_field = (
+                    "level2_price_cents" if data.level == "1" else "level1_price_cents"
+                )
+                batch_values = {
+                    selected_price_field: data.price_cents,
+                    other_price_field: 0,
+                }
+                plan = Plan(
+                    product_type=product.code,
+                    name=data.name,
+                    apply_start=_utc(data.apply_start),
+                    apply_end=_utc(data.apply_end),
+                    exam_date=_utc(data.exam_date),
+                    capacity=data.capacity,
+                    price_cents=data.price_cents,
+                    exam_location=data.exam_location,
+                    status="published" if data.publish else "draft",
+                    published_at=_now() if data.publish else None,
+                )
+                if data.publish:
+                    self._validate_schedule(plan, require_window=True, now=_now())
+                db.add(plan)
+                await db.flush()
+
+                batch = NispExamBatch(
+                    plan_id=plan.id,
+                    level=data.level,
+                    training_org=data.training_org,
+                    consultation_group_qrcode_url=data.consultation_group_qrcode_url,
+                    payment_timeout_minutes=data.payment_timeout_minutes,
+                    resubmission_window_hours=data.resubmission_window_hours,
+                    max_resubmissions=data.max_resubmissions,
+                    **batch_values,
+                )
+                db.add(batch)
+                await db.flush()
+                return await self._response(db, batch)
 
     async def create_batch(self, data: NispExamBatchCreate) -> NispExamBatchResponse:
         async with get_db_ctx() as db:
@@ -55,42 +135,100 @@ class NispAdminService:
         self, batch_id: int, data: NispExamBatchUpdate
     ) -> NispExamBatchResponse:
         async with get_db_ctx() as db:
-            plan_id = await db.scalar(
-                select(NispExamBatch.plan_id).where(NispExamBatch.id == batch_id)
-            )
-            if plan_id is None:
-                raise NotFoundException("NISP 考试批次")
-            plan = await db.scalar(
-                select(Plan).where(Plan.id == plan_id).with_for_update()
-            )
-            if plan is None:
-                raise NotFoundException("Plan")
-            batch = await db.scalar(
-                select(NispExamBatch)
-                .where(NispExamBatch.id == batch_id)
-                .with_for_update()
-            )
-            if batch is None:
-                raise NotFoundException("NISP 考试批次")
-            await validate_nisp_batch_product(
-                db, plan=plan, level=batch.level, require_active=False
-            )
-            for key, value in data.model_dump(exclude_unset=True).items():
-                setattr(batch, key, value)
-            await db.commit()
-            await db.refresh(batch)
-            return await self._response(db, batch)
+            async with db.begin():
+                batch, plan = await self._lock_batch(db, batch_id)
+                await validate_nisp_batch_product(
+                    db, plan=plan, level=batch.level, require_active=False
+                )
+                payload = data.model_dump(exclude_unset=True)
+                draft_only_fields = {
+                    "name", "apply_start", "apply_end", "exam_date", "exam_location",
+                    "capacity", "price_cents", "payment_timeout_minutes",
+                    "resubmission_window_hours", "max_resubmissions",
+                    "level1_price_cents", "level2_price_cents",
+                }
+                if plan.status != "draft" and draft_only_fields.intersection(payload):
+                    raise ConflictException("仅草稿批次允许编辑完整批次信息")
+
+                if "name" in payload:
+                    duplicate = await db.scalar(
+                        select(Plan.id).where(
+                            Plan.product_type == plan.product_type,
+                            Plan.name == payload["name"],
+                            Plan.id != plan.id,
+                        )
+                    )
+                    if duplicate is not None:
+                        raise ConflictException("同名 NISP 考试批次已存在")
+                    plan.name = payload["name"]
+
+                plan_fields = {
+                    "apply_start", "apply_end", "exam_date", "exam_location", "capacity"
+                }
+                for field in plan_fields.intersection(payload):
+                    value = (
+                        payload[field]
+                        if field in {"exam_location", "capacity"}
+                        else _utc(payload[field])
+                    )
+                    setattr(plan, field, value)
+
+                batch_fields = {
+                    "training_org", "training_teacher", "training_address",
+                    "training_start", "training_end", "consultation_group_qrcode_url",
+                    "payment_timeout_minutes", "resubmission_window_hours",
+                    "max_resubmissions",
+                }
+                for field in batch_fields.intersection(payload):
+                    value = payload[field]
+                    if field in {"training_start", "training_end"}:
+                        value = _utc(value)
+                    setattr(batch, field, value)
+
+                if "price_cents" in payload:
+                    plan.price_cents = payload["price_cents"]
+                    if batch.level == "1":
+                        batch.level1_price_cents = payload["price_cents"]
+                    else:
+                        batch.level2_price_cents = payload["price_cents"]
+
+                if plan_fields.intersection(payload) or "price_cents" in payload:
+                    self._validate_schedule(plan)
+                if "level1_price_cents" in payload:
+                    batch.level1_price_cents = payload["level1_price_cents"]
+                    if batch.level == "1":
+                        plan.price_cents = payload["level1_price_cents"]
+                if "level2_price_cents" in payload:
+                    batch.level2_price_cents = payload["level2_price_cents"]
+                    if batch.level == "2":
+                        plan.price_cents = payload["level2_price_cents"]
+                await db.flush()
+                await db.refresh(batch)
+                return await self._response(db, batch)
 
     async def list_batches(
-        self, *, page: int = 1, page_size: int = 20
+        self,
+        *,
+        keyword: str | None = None,
+        level: str | None = None,
+        status: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
     ) -> tuple[list[NispExamBatchResponse], int]:
         async with get_db_ctx() as db:
+            stmt = select(NispExamBatch).join(Plan, Plan.id == NispExamBatch.plan_id)
+            if keyword:
+                stmt = stmt.where(Plan.name.ilike(f"%{keyword.strip()}%"))
+            if level in {"1", "2"}:
+                stmt = stmt.where(NispExamBatch.level == level)
+            if status:
+                stmt = stmt.where(Plan.status == status)
             total = await db.scalar(
-                select(func.count()).select_from(NispExamBatch)
+                select(func.count()).select_from(stmt.subquery())
             ) or 0
             rows = (
                 await db.execute(
-                    select(NispExamBatch)
+                    stmt
                     .order_by(NispExamBatch.id.desc())
                     .offset((page - 1) * page_size)
                     .limit(page_size)
@@ -120,6 +258,7 @@ class NispAdminService:
             await validate_nisp_batch_product(
                 db, plan=plan, level=batch.level, require_active=True
             )
+            self._validate_schedule(plan, require_window=True, now=_now())
             if plan.status == "draft":
                 plan.status = "published"
                 plan.published_at = _now()
@@ -282,6 +421,40 @@ class NispAdminService:
             registration_id=registration_id,
             data=data,
         )
+
+    async def _lock_batch(self, db, batch_id: int) -> tuple[NispExamBatch, Plan]:
+        batch = await db.scalar(
+            select(NispExamBatch)
+            .where(NispExamBatch.id == batch_id)
+            .with_for_update()
+        )
+        if batch is None:
+            raise NotFoundException("NISP 考试批次")
+        plan = await db.scalar(
+            select(Plan).where(Plan.id == batch.plan_id).with_for_update()
+        )
+        if plan is None:
+            raise NotFoundException("Plan")
+        return batch, plan
+
+    @staticmethod
+    def _validate_schedule(
+        plan: Plan,
+        *,
+        require_window: bool = False,
+        now: datetime | None = None,
+    ) -> None:
+        start = _utc(plan.apply_start)
+        end = _utc(plan.apply_end)
+        exam = _utc(plan.exam_date)
+        if require_window and (start is None or end is None or exam is None):
+            raise BusinessException("发布前必须配置报名开始、截止时间和考试时间")
+        if start is not None and end is not None and start >= end:
+            raise BusinessException("报名开始时间必须早于截止时间")
+        if exam is not None and end is not None and exam < end:
+            raise BusinessException("考试时间不能早于报名截止时间")
+        if require_window and end is not None and end <= (now or _now()):
+            raise BusinessException("报名截止时间必须晚于当前时间")
 
     async def _response(self, db, batch: NispExamBatch) -> NispExamBatchResponse:
         plan = await db.get(Plan, batch.plan_id)

@@ -46,15 +46,72 @@ class NispExamBatchCreate(NispExamBatchBase):
     plan_id: int
 
 
+class NispExamBatchFullCreate(BaseModel):
+    """Create a level-specific NISP batch and its Plan in one request."""
+
+    level: NispLevel
+    name: str = Field(min_length=1, max_length=128)
+    training_org: str | None = Field(None, max_length=128)
+    apply_start: datetime
+    apply_end: datetime
+    exam_date: datetime | None = None
+    exam_location: str | None = Field(None, max_length=256)
+    capacity: int = Field(ge=1)
+    price_cents: int = Field(ge=0)
+    payment_timeout_minutes: int = Field(default=30, ge=1, le=1440)
+    resubmission_window_hours: int = Field(default=72, ge=1, le=720)
+    max_resubmissions: int = Field(default=2, ge=0, le=10)
+    consultation_group_qrcode_url: str | None = Field(None, max_length=512)
+    publish: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def _trim_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("批次名称不能为空")
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_schedule(self):
+        if self.apply_start >= self.apply_end:
+            raise ValueError("报名开始时间必须早于截止时间")
+        if self.exam_date is not None and self.exam_date < self.apply_end:
+            raise ValueError("考试时间不能早于报名截止时间")
+        if self.publish and self.exam_date is None:
+            raise ValueError("保存并发布前必须填写考试时间")
+        return self
+
+
 class NispExamBatchUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=128)
+    apply_start: datetime | None = None
+    apply_end: datetime | None = None
+    exam_date: datetime | None = None
+    exam_location: str | None = Field(None, max_length=256)
+    capacity: int | None = Field(None, ge=1)
     training_org: str | None = Field(None, max_length=128)
     training_teacher: str | None = Field(None, max_length=64)
     training_address: str | None = Field(None, max_length=256)
     training_start: datetime | None = None
     training_end: datetime | None = None
+    price_cents: int | None = Field(None, ge=0)
     level1_price_cents: int | None = Field(None, ge=0)
     level2_price_cents: int | None = Field(None, ge=0)
+    payment_timeout_minutes: int | None = Field(None, ge=1, le=1440)
+    resubmission_window_hours: int | None = Field(None, ge=1, le=720)
+    max_resubmissions: int | None = Field(None, ge=0, le=10)
     consultation_group_qrcode_url: str | None = Field(None, max_length=512)
+
+    @field_validator("name")
+    @classmethod
+    def _trim_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("批次名称不能为空")
+        return cleaned
 
 
 class NispExamBatchResponse(BaseModel):

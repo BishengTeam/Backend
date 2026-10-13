@@ -19,8 +19,14 @@ from app.domain.order.src.index import Order
 from app.domain.plan.src.index import Plan
 from app.domain.user.src.index import User, UserRealname, AdminUser
 from app.models.cert_product import CertProduct
-from app.port.exceptions import ConflictException
-from app.schemas.nisp import NispOrderCreate, NispReviewDecisionRequest, NispResubmitRequest
+from app.port.exceptions import BusinessException, ConflictException
+from app.schemas.nisp import (
+    NispExamBatchFullCreate,
+    NispExamBatchUpdate,
+    NispOrderCreate,
+    NispReviewDecisionRequest,
+    NispResubmitRequest,
+)
 from app.services.nisp_admin import NispAdminService
 from app.services.nisp_registration import NispRegistrationService
 from app.services.nisp_refund import NispRefundService
@@ -196,6 +202,73 @@ async def test_nisp_admin_rejects_wrong_level_product_binding(context):
             level1_price_cents=100,
             level2_price_cents=200,
         ))
+
+
+async def test_nisp_full_batch_create_publish_and_edit_flow(context):
+    now = datetime.now(timezone.utc)
+    async with context.factory() as db:
+        db.add(CertProduct(
+            type='nisp',
+            code='NISP-2',
+            name='NISP',
+            chinese_name='NISP 二级',
+            is_active=True,
+        ))
+        await db.commit()
+
+    draft = await NispAdminService().create_full_batch(NispExamBatchFullCreate(
+        level='2',
+        name='NISP二级完整创建批次',
+        apply_start=now + timedelta(days=1),
+        apply_end=now + timedelta(days=10),
+        capacity=30,
+        price_cents=48000,
+        training_org='测试培训机构',
+    ))
+    assert draft.plan_status == 'draft'
+    assert draft.level == '2'
+    assert draft.level2_price_cents == 48000
+    assert draft.level1_price_cents == 0
+
+    updated = await NispAdminService().update_batch(draft.id, NispExamBatchUpdate(
+        name='NISP二级完整创建批次（更新）',
+        exam_date=now + timedelta(days=20),
+        exam_location='成都市测试考点',
+        capacity=35,
+        price_cents=50000,
+    ))
+    assert updated.plan_name == 'NISP二级完整创建批次（更新）'
+    assert updated.exam_location == '成都市测试考点'
+    assert updated.capacity == 35
+    assert updated.level2_price_cents == 50000
+
+    with pytest.raises(BusinessException, match='考试时间'):
+        await NispAdminService().publish_batch(
+            (await NispAdminService().create_full_batch(NispExamBatchFullCreate(
+                level='2',
+                name='NISP二级缺少考试时间批次',
+                apply_start=now + timedelta(days=1),
+                apply_end=now + timedelta(days=10),
+                capacity=20,
+                price_cents=38000,
+            ))).id
+        )
+
+    published = await NispAdminService().publish_batch(updated.id)
+    assert published.plan_status == 'published'
+
+    items, total = await NispAdminService().list_batches(
+        keyword='完整创建批次（更新）',
+        level='2',
+        status='published',
+    )
+    assert total == 1
+    assert [item.id for item in items] == [published.id]
+
+    with pytest.raises(ConflictException, match='仅草稿批次'):
+        await NispAdminService().update_batch(
+            published.id, NispExamBatchUpdate(capacity=40)
+        )
 
 
 async def test_legacy_nisp_plan_still_lists_and_supports_order(context, monkeypatch):
