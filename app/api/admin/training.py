@@ -91,13 +91,13 @@ async def update_training(
 
 @router.delete("/{training_id}",
     response_model=APIResponse,
-    summary="下架培训",
+    summary="删除培训",
     description="""
 管理后台 **培训管理** 页面使用。
 
 **页面路径**: `/admin/training`
 
-**使用场景**: 下架指定培训（软删除）
+**使用场景**: 删除指定培训
 
 **路径参数**:
 - `training_id`: 培训 ID
@@ -109,6 +109,6 @@ async def delete_training(
     training_id: int = Path(..., description="培训 ID"),
     _admin=Depends(require_permission("training:write")),
 ):
-    """下架指定培训"""
-    await AdminTrainingService().deactivate(training_id)
-    return success(message="培训已下架")
+    """删除指定培训"""
+    await AdminTrainingService().delete(training_id)
+    return success(message="培训已删除")

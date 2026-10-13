@@ -62,10 +62,10 @@ class AdminTrainingService:
             await db.refresh(training)
             return AdminTrainingListItem.model_validate(training)
 
-    async def deactivate(self, training_id: int) -> None:
+    async def delete(self, training_id: int) -> None:
         async with get_db_ctx() as db:
             training = await db.get(Training, training_id)
             if training is None:
                 raise NotFoundException("培训")
-            training.is_active = False
+            await db.delete(training)
             await db.commit()
