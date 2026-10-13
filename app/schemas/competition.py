@@ -5,6 +5,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # ── 用户端（小程序） ──────────────────────────────────────────
 
+class CompetitionAttachment(BaseModel):
+    """在线查阅附件（PDF 转页图，仅可见不可下载）"""
+
+    title: str
+    pages: list[str] = Field(default_factory=list)
+
+
 class CompetitionTrackBrief(BaseModel):
     """赛道（含报名余量）"""
 
@@ -33,6 +40,24 @@ class CompetitionListItem(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
     custom_fields: list[dict] | None = None
+
+
+class CompetitionDetail(BaseModel):
+    """赛事详情（小程序详情页专用，列表接口不携带附件页图）"""
+
+    id: int
+    name: str
+    description: str | None = None
+    cover_url: str | None = None
+    poster_url: str | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    registration_deadline: datetime | None = None
+    is_active: bool = True
+    custom_fields: list[dict] | None = None
+    attachments: list[CompetitionAttachment] = Field(default_factory=list)
+    tracks: list[CompetitionTrackBrief] = Field(default_factory=list)
+    created_at: datetime
 
 
 class CompetitionSignupRequest(BaseModel):

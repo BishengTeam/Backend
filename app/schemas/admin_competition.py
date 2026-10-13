@@ -3,7 +3,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.schemas.competition import CompetitionTrackBrief
+from app.schemas.competition import CompetitionAttachment, CompetitionTrackBrief
 from app.schemas.competition_form import FormFieldConfig
 
 
@@ -21,12 +21,14 @@ class AdminCompetitionCreate(BaseModel):
     description: str | None = None
     cover_url: str | None = Field(None, max_length=512)
     home_cover_url: str | None = Field(None, max_length=512)
+    poster_url: str | None = Field(None, max_length=512)
     start_time: datetime | None = None
     end_time: datetime | None = None
     registration_deadline: datetime | None = None
     is_active: bool = True
     tracks: list[AdminCompetitionTrackInput] = Field(default_factory=list)
     custom_fields: list[FormFieldConfig] | None = None
+    attachments: list[CompetitionAttachment] | None = None
 
 
 class AdminCompetitionUpdate(BaseModel):
@@ -34,12 +36,14 @@ class AdminCompetitionUpdate(BaseModel):
     description: str | None = None
     cover_url: str | None = Field(None, max_length=512)
     home_cover_url: str | None = Field(None, max_length=512)
+    poster_url: str | None = Field(None, max_length=512)
     start_time: datetime | None = None
     end_time: datetime | None = None
     custom_fields: list[FormFieldConfig] | None = None
     registration_deadline: datetime | None = None
     is_active: bool | None = None
     tracks: list[AdminCompetitionTrackInput] | None = None
+    attachments: list[CompetitionAttachment] | None = None
 
 
 class AdminCompetitionListItem(BaseModel):
@@ -48,6 +52,7 @@ class AdminCompetitionListItem(BaseModel):
     description: str | None = None
     cover_url: str | None = None
     home_cover_url: str | None = None
+    poster_url: str | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
     registration_deadline: datetime | None = None
@@ -56,6 +61,7 @@ class AdminCompetitionListItem(BaseModel):
     total_enrolled: int = 0
     created_at: datetime
     custom_fields: list[dict] | None = None
+    attachments: list[CompetitionAttachment] = Field(default_factory=list)
 
 
 class AdminCompetitionRegistrationItem(BaseModel):

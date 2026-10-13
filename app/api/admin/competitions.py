@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, File, Path, Query, UploadFile
 from fastapi.responses import PlainTextResponse
 
 from app.middleware.auth import require_permission
@@ -10,6 +10,7 @@ from app.schemas.admin_competition import (
 )
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.services.admin_competition import AdminCompetitionService
+from app.services.pdf_attachment import render_pdf_attachment
 
 router = APIRouter(prefix="/competitions", tags=["管理后台-竞赛管理"])
 
@@ -36,6 +37,29 @@ async def list_competitions(
     result = await AdminCompetitionService().list_competitions(
         keyword, page, page_size
     )
+    return success(data=result)
+
+
+@router.post("/attachment-upload",
+    response_model=APIResponse,
+    summary="上传赛事附件 PDF（转页图）",
+    description="""
+管理后台 **竞赛管理** 表单使用。
+
+**使用场景**: 上传在线查阅附件（如盖章邀请函、赛事大纲）。服务端把每页渲染成图片，
+PDF 原件存私有目录、不经 /media 暴露；小程序端只能查看页图，拿不到原文件
+
+**限制**: 仅 .pdf，≤20MB，≤30 页
+
+**权限**: competition:write
+    """,
+)
+async def upload_competition_attachment(
+    file: UploadFile = File(...),
+    _admin=Depends(require_permission("competition:write")),
+) -> APIResponse:
+    content = await file.read()
+    result = render_pdf_attachment(content, file.filename or "附件.pdf")
     return success(data=result)
 
 

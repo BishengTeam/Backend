@@ -13,6 +13,8 @@ from app.domain.certification.src.index import (
 from app.port.exceptions import BusinessException, NotFoundException
 from app.schemas.competition_form import validate_field_values
 from app.schemas.competition import (
+    CompetitionAttachment,
+    CompetitionDetail,
     CompetitionMyRegistrationItem,
     CompetitionListItem,
     CompetitionSignupRequest,
@@ -88,6 +90,31 @@ class CompetitionService:
                 )
                 for c in competitions
             ]
+
+    async def get_event_detail(self, event_id: int) -> CompetitionDetail:
+        """赛事详情（含海报长图与在线查阅附件；未发布按不存在处理）"""
+        async with get_db_ctx() as db:
+            competition = await db.get(Competition, event_id)
+            if competition is None or not competition.is_active:
+                raise NotFoundException("赛事")
+            return CompetitionDetail(
+                id=competition.id,
+                name=competition.name,
+                description=competition.description,
+                cover_url=competition.cover_url,
+                poster_url=competition.poster_url,
+                start_time=competition.start_time,
+                end_time=competition.end_time,
+                registration_deadline=competition.registration_deadline,
+                is_active=competition.is_active,
+                custom_fields=competition.custom_fields,
+                attachments=[
+                    CompetitionAttachment.model_validate(a)
+                    for a in (competition.attachments or [])
+                ],
+                tracks=await _track_briefs(db, competition.id),
+                created_at=competition.created_at,
+            )
 
     async def signup(self, user_id: int, data: CompetitionSignupRequest) -> CompetitionReg:
         async with get_db_ctx() as db:

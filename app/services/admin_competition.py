@@ -130,9 +130,9 @@ class AdminCompetitionService:
                         **{
                             k: getattr(c, k)
                             for k in (
-                                "id", "name", "description", "cover_url", "home_cover_url", "start_time",
+                                "id", "name", "description", "cover_url", "home_cover_url", "poster_url", "start_time",
                                 "end_time", "registration_deadline", "is_active",
-                                "custom_fields", "created_at",
+                                "custom_fields", "attachments", "created_at",
                             )
                         },
                         tracks=tracks,
@@ -151,6 +151,7 @@ class AdminCompetitionService:
                     description=data.description,
                     cover_url=data.cover_url,
                     home_cover_url=data.home_cover_url,
+                    poster_url=data.poster_url,
                     start_time=data.start_time,
                     end_time=data.end_time,
                     registration_deadline=data.registration_deadline,
@@ -158,6 +159,9 @@ class AdminCompetitionService:
                     custom_fields=validate_custom_fields(
                         data.custom_fields if hasattr(data, "custom_fields") else None
                     ),
+                    attachments=[
+                        a.model_dump() for a in data.attachments
+                    ] if data.attachments is not None else [],
                 )
                 db.add(competition)
                 await db.flush()
@@ -176,9 +180,9 @@ class AdminCompetitionService:
                 **{
                     k: getattr(competition, k)
                     for k in (
-                        "id", "name", "description", "cover_url", "home_cover_url", "start_time",
+                        "id", "name", "description", "cover_url", "home_cover_url", "poster_url", "start_time",
                         "end_time", "registration_deadline", "is_active", "custom_fields",
-                        "created_at",
+                        "attachments", "created_at",
                     )
                 },
                 tracks=tracks,
@@ -242,9 +246,9 @@ class AdminCompetitionService:
                 **{
                     k: getattr(competition, k)
                     for k in (
-                        "id", "name", "description", "cover_url", "home_cover_url", "start_time",
+                        "id", "name", "description", "cover_url", "home_cover_url", "poster_url", "start_time",
                         "end_time", "registration_deadline", "is_active", "custom_fields",
-                        "created_at",
+                        "attachments", "created_at",
                     )
                 },
                 tracks=tracks,

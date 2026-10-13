@@ -23,4 +23,6 @@ pypinyin==0.55.0
 oss2>=2.19,<3
 openpyxl>=3.1,<4
 pillow>=11,<12
+# 赛事附件 PDF 转页图（BSD/Apache 双许可的 pdfium 绑定，避免 AGPL 传染）
+pypdfium2>=4,<7
 tzdata; sys_platform == "win32"

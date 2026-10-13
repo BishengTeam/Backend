@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Path
 
 from app.middleware.auth import get_current_user
 from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, success
 from app.schemas.competition import (
+    CompetitionDetail,
     CompetitionListItem,
     CompetitionMyRegistrationItem,
     CompetitionRegistrationUpdateRequest,
@@ -99,3 +100,23 @@ async def update_my_registration(
         current_user.id, registration_id, body
     )
     return success(data=CompetitionRegResponse.model_validate(result))
+
+
+@router.get("/{competition_id}",
+    response_model=APIResponse[CompetitionDetail],
+    summary="赛事详情",
+    description="""
+小程序 **赛事详情** 页面使用。
+
+**使用场景**: 获取单场赛事完整信息（海报长图、在线查阅附件、赛道与报名余量）
+
+**说明**: 列表接口不携带附件页图，详情页必须走本接口；未发布赛事按不存在处理
+
+**认证**: 无需登录
+    """,
+)
+async def get_competition_detail(
+    competition_id: int = Path(..., ge=1, description="赛事 ID"),
+) -> APIResponse[CompetitionDetail]:
+    result = await CompetitionService().get_event_detail(competition_id)
+    return success(data=result)
