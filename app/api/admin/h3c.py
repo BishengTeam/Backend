@@ -60,6 +60,7 @@ async def create_batch(
     **admin_error_contract("40001", "40100", "40101", "50000"),
 )
 async def list_batches(
+    keyword: str | None = Query(None, max_length=64),
     status: str | None = Query(None),
     certification_code: str | None = Query(None),
     page: int = Query(1, ge=1),
@@ -68,6 +69,7 @@ async def list_batches(
 ) -> APIResponse[PaginatedData[H3cExamBatchResponse]]:
     return success(
         data=await H3cAdminBatchService().list_batches(
+            keyword=keyword,
             status=status,
             certification_code=certification_code,
             page=page,

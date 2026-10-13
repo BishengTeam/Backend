@@ -179,6 +179,8 @@ class H3cAdminBatchService:
                         setattr(batch, field, value)
                 if plan.apply_start and plan.apply_end and plan.apply_start >= plan.apply_end:
                     raise BusinessException("报名开始时间必须早于截止时间")
+                if plan.exam_date and plan.apply_end and plan.exam_date < plan.apply_end:
+                    raise BusinessException("考试时间不能早于报名截止时间")
                 if "capacity" in payload and payload["capacity"] != plan.capacity:
                     inventory = await db.scalar(
                         select(Inventory)
@@ -332,6 +334,7 @@ class H3cAdminBatchService:
     async def list_batches(
         self,
         *,
+        keyword: str | None = None,
         status: str | None = None,
         certification_code: str | None = None,
         page: int = 1,
@@ -339,6 +342,8 @@ class H3cAdminBatchService:
     ) -> PaginatedData[H3cExamBatchResponse]:
         async with get_db_ctx() as db:
             stmt = select(H3cExamBatch).join(Plan, Plan.id == H3cExamBatch.plan_id)
+            if keyword:
+                stmt = stmt.where(Plan.name.ilike(f"%{keyword.strip()}%"))
             if status:
                 stmt = stmt.where(Plan.status == status)
             if certification_code:
@@ -386,6 +391,13 @@ class H3cAdminBatchService:
                     or not plan.exam_date
                 ):
                     raise BusinessException("发布前必须配置报名时间、截止时间和考试时间")
+                if require_window:
+                    if plan.apply_start >= plan.apply_end:
+                        raise BusinessException("报名开始时间必须早于截止时间")
+                    if plan.exam_date < plan.apply_end:
+                        raise BusinessException("考试时间不能早于报名截止时间")
+                    if plan.apply_end <= _now():
+                        raise BusinessException("报名截止时间必须晚于当前时间")
                 now = _now()
                 plan.status = target
                 if target == "published":
