@@ -275,6 +275,61 @@ async def test_uncertain_refund_preserves_processing_for_reconciliation(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_provider_rejection_records_exact_error_and_moves_registration_to_retry():
+    refund = NS(status='approved', registration_id=3, retry_count=7055)
+    reg = NS(status='refund_processing', close_reason='refund_authorized')
+    service = NispRefundService(NS(refund=AsyncMock(
+        side_effect=WechatPayAPIError('NOT_ENOUGH', 403)
+    )))
+    service._lock_refund_chain = AsyncMock(return_value=(refund, NS(), reg))
+
+    with pytest.raises(ConflictException, match='自动对账'):
+        await service._submit(_PreparedRefund(1, 2, 'trade', 'refund', 100, 100))
+
+    assert refund.status == 'failed'
+    assert refund.last_error == 'WechatPayAPIError:NOT_ENOUGH/HTTP 403'
+    assert refund.retry_count == 7056
+    assert reg.status == 'pending_refund_confirmation'
+    assert reg.close_reason == 'refund_retry_scheduled'
+
+
+@pytest.mark.asyncio
+async def test_worker_honors_refund_backoff(monkeypatch):
+    from app.services import nisp_worker
+
+    due = NS(
+        id=12,
+        status='failed',
+        updated_at=NOW - timedelta(hours=2),
+        retry_count=0,
+    )
+    not_due = NS(
+        id=13,
+        status='failed',
+        updated_at=NOW - timedelta(seconds=1),
+        retry_count=0,
+    )
+    db = session(monkeypatch, 'app.services.nisp_worker')
+    db.scalars.return_value = NS(all=lambda: [due, not_due])
+    reconcile = AsyncMock()
+    monkeypatch.setattr(nisp_worker.settings, 'WECHAT_PAY_ENABLED', False)
+    monkeypatch.setattr(
+        nisp_worker.NispRegistrationService,
+        'process_resubmission_timeouts',
+        AsyncMock(),
+    )
+    monkeypatch.setattr(nisp_worker.NispRefundService, 'reconcile', reconcile)
+    monkeypatch.setattr(
+        nisp_worker.asyncio,
+        'sleep',
+        AsyncMock(side_effect=asyncio.CancelledError),
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await nisp_worker.nisp_lifecycle_worker_loop()
+    reconcile.assert_awaited_once_with(12)
+
+
+@pytest.mark.asyncio
 async def test_callback_success_is_not_overwritten_by_submission_error(monkeypatch):
     refund = NS(status='approved', registration_id=3, retry_count=0)
     reg = NS(status='pending_refund_confirmation')
@@ -326,7 +381,12 @@ async def test_worker_recovers_zero_refunds_when_wechat_is_disabled(monkeypatch)
     from app.services import nisp_worker
 
     db = session(monkeypatch, 'app.services.nisp_worker')
-    db.scalars.return_value = NS(all=lambda: [12])
+    db.scalars.return_value = NS(all=lambda: [NS(
+        id=12,
+        status='failed',
+        updated_at=NOW - timedelta(hours=2),
+        retry_count=0,
+    )])
     deadlines = AsyncMock()
     reconcile = AsyncMock()
     monkeypatch.setattr(nisp_worker.settings, 'WECHAT_PAY_ENABLED', False)

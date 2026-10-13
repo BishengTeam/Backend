@@ -21,6 +21,7 @@ from app.integrations.wechat_pay import (
 )
 from app.port.config import settings
 from app.port.exceptions import ConflictException, NotFoundException
+from app.services.refund_recovery import format_refund_error, refund_retry_delay
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +46,6 @@ class PaymentRefundService:
     @staticmethod
     def _now() -> datetime:
         return datetime.now(timezone.utc)
-
-    @staticmethod
-    def _retry_delay(retry_count: int) -> int:
-        delays = [
-            int(value)
-            for value in settings.WECHAT_PAY_REFUND_RETRY_DELAYS_SECONDS.split(",")
-            if value.strip()
-        ]
-        return delays[min(retry_count, len(delays) - 1)]
 
     @classmethod
     async def schedule_late_payment_refund(
@@ -150,7 +142,7 @@ class PaymentRefundService:
             task.status = "processing"
             task.processing_at = task.processing_at or self._now()
             task.next_attempt_at = self._now() + timedelta(
-                seconds=self._retry_delay(task.retry_count)
+                seconds=refund_retry_delay(task.retry_count)
             )
             await db.commit()
             return _TaskPayload(
@@ -210,7 +202,7 @@ class PaymentRefundService:
         except (WechatPayResultUnknownError, WechatPayAPIError) as exc:
             await self._record_attempt(
                 payload.task_id,
-                error=f"{type(exc).__name__}:{exc}",
+                error=format_refund_error(exc),
                 result_unknown=isinstance(exc, WechatPayResultUnknownError)
                 or (
                     isinstance(exc, WechatPayAPIError) and exc.status_code >= 500
@@ -244,7 +236,7 @@ class PaymentRefundService:
             task.status = "processing"
             task.processing_at = task.processing_at or self._now()
             task.next_attempt_at = self._now() + timedelta(
-                seconds=self._retry_delay(task.retry_count)
+                seconds=refund_retry_delay(task.retry_count)
             )
             await db.commit()
             return True
@@ -273,7 +265,7 @@ class PaymentRefundService:
             elif provider.status == "PROCESSING":
                 task.status = "processing"
                 task.next_attempt_at = self._now() + timedelta(
-                    seconds=self._retry_delay(task.retry_count)
+                    seconds=refund_retry_delay(task.retry_count)
                 )
             elif provider.status in {"ABNORMAL", "CLOSED"}:
                 task.status = "manual_review"
@@ -282,7 +274,7 @@ class PaymentRefundService:
             else:
                 task.status = "failed"
                 task.next_attempt_at = self._now() + timedelta(
-                    seconds=self._retry_delay(task.retry_count)
+                    seconds=refund_retry_delay(task.retry_count)
                 )
             await db.commit()
             await db.refresh(task)
@@ -325,7 +317,7 @@ class PaymentRefundService:
             task.last_error = error[:2000]
             task.status = "processing" if result_unknown else "failed"
             task.next_attempt_at = self._now() + timedelta(
-                seconds=self._retry_delay(task.retry_count)
+                seconds=refund_retry_delay(task.retry_count)
             )
             if task.retry_count >= settings.WECHAT_PAY_LATE_REFUND_MAX_QUERY_ATTEMPTS:
                 task.status = "manual_review"

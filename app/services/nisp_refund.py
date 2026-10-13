@@ -9,10 +9,19 @@ from sqlalchemy import select
 from app.adapter.database import get_db_ctx
 from app.domain.nisp.src import NispRefundRequest, NispRegistration
 from app.domain.order.src.index import Order, apply_order_status_transition
-from app.integrations.wechat_pay import WechatPayClient, WechatPayRefund, WechatPayAPIError
+from app.integrations.wechat_pay import (
+    WechatPayClient,
+    WechatPayRefund,
+    WechatPayAPIError,
+    WechatPayResultUnknownError,
+)
 from app.port.exceptions import ConflictException, NotFoundException
 from app.schemas.nisp import NispRefundResponse
 from app.port.config import settings
+from app.services.refund_recovery import (
+    format_refund_error,
+    provider_refund_is_missing,
+)
 
 
 def _now() -> datetime:
@@ -179,18 +188,17 @@ class NispRefundService:
                 refund_amount=prepared.amount_cents,
                 notify_url=settings.WECHAT_PAY_REFUND_NOTIFY_URL,
             )
+        except WechatPayResultUnknownError as exc:
+            await self._record_failure(
+                prepared.refund_id, exc, result_unknown=True
+            )
+            raise ConflictException("微信退款结果暂未确认，系统将自动对账") from exc
         except Exception as exc:
-            async with get_db_ctx() as db:
-                refund, _order, _registration = await self._lock_refund_chain(
-                    db, prepared.refund_id
-                )
-                if refund is not None and refund.status != "succeeded":
-                    # A transport failure does not prove WeChat rejected the
-                    # refund. Keep the merchant number and reconcile it.
-                    refund.status = "failed" if isinstance(exc, WechatPayAPIError) else "processing"
-                    refund.last_error = type(exc).__name__
-                    refund.retry_count += 1
-                    await db.commit()
+            await self._record_failure(
+                prepared.refund_id,
+                exc,
+                result_unknown=not isinstance(exc, WechatPayAPIError),
+            )
             raise ConflictException("微信退款结果暂未确认，系统将自动对账") from exc
 
         result = WechatPayRefund.from_payload(raw)
@@ -233,7 +241,12 @@ class NispRefundService:
         try:
             raw = await self.wechat_pay.query_refund(out_refund_no=refund.out_refund_no)
         except WechatPayAPIError as exc:
-            if exc.api_code not in {"RESOURCE_NOT_EXISTS", "REFUND_NOT_EXIST"}:
+            if not provider_refund_is_missing(exc):
+                await self._record_failure(
+                    refund_id,
+                    exc,
+                    result_unknown=exc.status_code >= 500,
+                )
                 raise
             # Confirmed locally but never accepted remotely (including a crash
             # before submission): retry the same idempotent merchant number.
@@ -314,6 +327,9 @@ class NispRefundService:
             elif status in {"ABNORMAL", "CLOSED"}:
                 refund.status = "failed"
                 refund.last_error = f"provider status: {status}"
+                if registration is not None:
+                    registration.status = "pending_refund_confirmation"
+                    registration.close_reason = "refund_retry_scheduled"
             elif status == "PROCESSING":
                 refund.status = "processing"
                 if registration is not None:
@@ -322,6 +338,30 @@ class NispRefundService:
             await db.commit()
             await db.refresh(refund)
             return self._response(refund)
+
+    async def _record_failure(
+        self,
+        refund_id: int,
+        exc: Exception,
+        *,
+        result_unknown: bool,
+    ) -> None:
+        async with get_db_ctx() as db:
+            refund, _order, registration = await self._lock_refund_chain(
+                db, refund_id
+            )
+            if refund.status == "succeeded":
+                return
+            refund.status = "processing" if result_unknown else "failed"
+            refund.last_error = format_refund_error(exc)[:2000]
+            refund.retry_count += 1
+            if registration is not None:
+                if result_unknown:
+                    registration.status = "refund_processing"
+                else:
+                    registration.status = "pending_refund_confirmation"
+                registration.close_reason = "refund_retry_scheduled"
+            await db.commit()
 
     @staticmethod
     def _response(refund: NispRefundRequest) -> NispRefundResponse:

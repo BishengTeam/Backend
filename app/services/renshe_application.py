@@ -401,7 +401,10 @@ class RensheApplicationService:
                                 amount_cents=refund.amount_cents,
                                 requested_at=refund.requested_at,
                                 due_at=refund.due_at,
+                                out_refund_no=refund.out_refund_no,
                                 succeeded_at=refund.succeeded_at,
+                                last_error=refund.last_error,
+                                retry_count=refund.retry_count,
                             )
                             if refund is not None
                             else None
@@ -465,6 +468,8 @@ class RensheApplicationService:
                 current_order_status=order.status if order else None,
                 current_refund_id=refund.id if refund else None,
                 current_refund_status=refund.status if refund else None,
+                current_refund_last_error=refund.last_error if refund else None,
+                current_refund_retry_count=refund.retry_count if refund else None,
                 latest_rejection_stage=rejection.stage if rejection else None,
                 latest_rejection_reason=rejection.reason if rejection else None,
                 required_changes=rejection.required_changes if rejection else None,

@@ -33,6 +33,7 @@ from app.schemas.renshe import (
     RensheRefundDecision,
     RensheRefundResponse,
 )
+from app.services.refund_recovery import format_refund_error
 from app.utils.audit import redact_sensitive_text
 
 
@@ -289,6 +290,17 @@ class RensheRefundService:
         if status == "requested" and request_kind in SYSTEM_REFUND_KINDS:
             return await self.submit_system_refund(refund_id)
         if status == "approved":
+            self.wechat_pay.ensure_refund_configured()
+            prepared = await self._prepare_submission(
+                refund_id=refund_id,
+                actor_type="system",
+                actor_id=None,
+                system_only=False,
+            )
+            if isinstance(prepared, RensheRefundResponse):
+                return prepared
+            return await self._submit_prepared(prepared)
+        if status == "failed":
             self.wechat_pay.ensure_refund_configured()
             prepared = await self._prepare_submission(
                 refund_id=refund_id,
@@ -833,7 +845,7 @@ class RensheRefundService:
     @staticmethod
     def _safe_error(exc: Exception) -> str:
         return redact_sensitive_text(
-            f"{type(exc).__name__}: {str(exc)[:1000]}"
+            format_refund_error(exc)[:1000]
         ) or type(exc).__name__
 
     @staticmethod

@@ -26,6 +26,7 @@ from app.port.exceptions import BusinessException, ConflictException, NotFoundEx
 from app.schemas.nisp import (
     NispOrderCreate,
     NispRegistrationResponse,
+    NispRegistrationRefundSummary,
     NispReviewResponse,
     NispReviewDecisionRequest,
     NispResubmitRequest,
@@ -877,6 +878,18 @@ class NispRegistrationService:
         from app.domain.order.src.index import Order
 
         order = await db.get(Order, registration.order_id)
+        batch = await db.get(NispExamBatch, registration.batch_id)
+        active_refund = await db.scalar(
+            select(NispRefundRequest)
+            .where(
+                NispRefundRequest.registration_id == registration.id,
+                NispRefundRequest.status.in_(
+                    ("requested", "approved", "processing", "failed")
+                ),
+            )
+            .order_by(NispRefundRequest.id.desc())
+            .limit(1)
+        )
         latest_review = await db.scalar(
             select(NispReview)
             .where(NispReview.registration_id == registration.id)
@@ -953,6 +966,14 @@ class NispRegistrationService:
             order_id=registration.order_id,
             level=registration.level,
             status=registration.status,
+            consultation_group_qrcode_url=(
+                batch.consultation_group_qrcode_url if batch is not None else None
+            ),
+            active_refund=(
+                NispRegistrationRefundSummary.model_validate(active_refund)
+                if active_refund is not None
+                else None
+            ),
             candidate_snapshot=registration.candidate_snapshot,
             order_status=order.status if order else "",
             price_cents=order.price if order else 0,

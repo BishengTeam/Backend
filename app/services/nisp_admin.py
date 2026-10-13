@@ -310,6 +310,7 @@ class NispAdminService:
             training_address=batch.training_address,
             training_start=batch.training_start,
             training_end=batch.training_end,
+            consultation_group_qrcode_url=batch.consultation_group_qrcode_url,
             level1_price_cents=batch.level1_price_cents,
             level2_price_cents=batch.level2_price_cents,
             payment_timeout_minutes=batch.payment_timeout_minutes,

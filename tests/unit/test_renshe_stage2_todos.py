@@ -144,7 +144,10 @@ def _refund(
         status=status,
         requested_at=now,
         due_at=now + timedelta(days=3),
+        out_refund_no=None,
         succeeded_at=now if status == "succeeded" else None,
+        last_error=None,
+        retry_count=0,
     )
 
 

@@ -39,6 +39,7 @@ class NispExamBatchBase(BaseModel):
     resubmission_window_hours: int = Field(default=72, ge=1, le=720)
     max_resubmissions: int = Field(default=2, ge=0, le=10)
     max_material_bytes: int = Field(default=10485760, ge=1, le=20971520)
+    consultation_group_qrcode_url: str | None = Field(None, max_length=512)
 
 
 class NispExamBatchCreate(NispExamBatchBase):
@@ -53,6 +54,7 @@ class NispExamBatchUpdate(BaseModel):
     training_end: datetime | None = None
     level1_price_cents: int | None = Field(None, ge=0)
     level2_price_cents: int | None = Field(None, ge=0)
+    consultation_group_qrcode_url: str | None = Field(None, max_length=512)
 
 
 class NispExamBatchResponse(BaseModel):
@@ -72,6 +74,7 @@ class NispExamBatchResponse(BaseModel):
     training_address: str | None
     training_start: datetime | None
     training_end: datetime | None
+    consultation_group_qrcode_url: str | None
     level1_price_cents: int
     level2_price_cents: int
     payment_timeout_minutes: int
@@ -141,6 +144,8 @@ class NispRegistrationResponse(BaseModel):
     order_id: int
     level: NispLevel
     status: NispRegistrationStatus
+    consultation_group_qrcode_url: str | None = None
+    active_refund: "NispRegistrationRefundSummary | None" = None
     candidate_snapshot: dict
     order_status: str
     price_cents: int
@@ -162,6 +167,18 @@ class NispRegistrationResponse(BaseModel):
     final_review_block_reason: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class NispRegistrationRefundSummary(BaseModel):
+    id: int
+    status: str
+    out_refund_no: str | None
+    processing_at: datetime | None
+    succeeded_at: datetime | None
+    last_error: str | None
+    retry_count: int
+
+    model_config = {"from_attributes": True}
 
 
 class NispReviewResponse(BaseModel):

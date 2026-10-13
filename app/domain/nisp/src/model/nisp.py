@@ -97,6 +97,7 @@ class NispExamBatch(Base, TimestampMixin):
     training_address: Mapped[str | None] = mapped_column(String(256))
     training_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     training_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consultation_group_qrcode_url: Mapped[str | None] = mapped_column(String(512))
     level1_price_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     level2_price_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     payment_timeout_minutes: Mapped[int] = mapped_column(

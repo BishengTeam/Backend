@@ -8,12 +8,13 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, or_, select
 
 from app.adapter.database import get_db_ctx
 from app.domain.renshe.src.index import RensheRefundRequest
 from app.port.config import settings
 from app.services.renshe_refund import RensheRefundService, SYSTEM_REFUND_KINDS
+from app.services.refund_recovery import refund_retry_is_due
 
 
 logger = logging.getLogger(__name__)
@@ -67,17 +68,31 @@ class RensheRefundReconciliationService:
                 RensheRefundRequest.status == "processing",
                 RensheRefundRequest.updated_at <= query_cutoff,
             ),
+            and_(
+                RensheRefundRequest.status == "failed",
+                RensheRefundRequest.out_refund_no.is_not(None),
+                RensheRefundRequest.updated_at <= query_cutoff,
+            ),
         )
 
     async def pending_count(self) -> int:
         async with get_db_ctx() as db:
-            return int(
-                await db.scalar(
-                    select(func.count())
-                    .select_from(RensheRefundRequest)
-                    .where(self._eligible_condition(datetime.now(timezone.utc)))
+            now = datetime.now(timezone.utc)
+            rows = (
+                await db.scalars(
+                    select(RensheRefundRequest)
+                    .where(self._eligible_condition(now))
+                    .order_by(RensheRefundRequest.id.asc())
                 )
-                or 0
+            ).all()
+            return sum(
+                row.status != "failed"
+                or refund_retry_is_due(
+                    last_attempt_at=row.updated_at,
+                    retry_count=row.retry_count,
+                    now=now,
+                )
+                for row in rows
             )
 
     async def reconcile_batch(
@@ -91,10 +106,10 @@ class RensheRefundReconciliationService:
             raise ValueError("refund reconciliation limit must be between 1 and 500")
         now = datetime.now(timezone.utc)
         async with get_db_ctx() as db:
-            refund_ids = list(
+            candidates = list(
                 (
                     await db.scalars(
-                        select(RensheRefundRequest.id)
+                        select(RensheRefundRequest)
                         .where(
                             RensheRefundRequest.id > after_id,
                             self._eligible_condition(now),
@@ -104,8 +119,18 @@ class RensheRefundReconciliationService:
                     )
                 ).all()
             )
+            refund_ids = [
+                row.id
+                for row in candidates
+                if row.status != "failed"
+                or refund_retry_is_due(
+                    last_attempt_at=row.updated_at,
+                    retry_count=row.retry_count,
+                    now=now,
+                )
+            ]
 
-        result = RensheRefundReconciliationBatch(scanned=len(refund_ids))
+        result = RensheRefundReconciliationBatch(scanned=len(candidates))
         for refund_id in refund_ids:
             try:
                 before_status = await self._status(refund_id)
@@ -123,7 +148,7 @@ class RensheRefundReconciliationService:
                     type(exc).__name__,
                 )
         result.next_after_id = (
-            refund_ids[-1] if len(refund_ids) == batch_limit else 0
+            candidates[-1].id if len(candidates) == batch_limit else 0
         )
         return result
 

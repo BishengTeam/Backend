@@ -117,6 +117,8 @@ class RensheApplicationDetailResponse(RensheApplicationResponse):
     current_order_status: str | None = None
     current_refund_id: int | None = None
     current_refund_status: str | None = None
+    current_refund_last_error: str | None = None
+    current_refund_retry_count: int | None = None
     latest_rejection_stage: Literal["initial", "external"] | None = None
     latest_rejection_reason: str | None = None
     required_changes: list[str] | None = None
@@ -153,7 +155,10 @@ class RensheApplicationRefundSummary(BaseModel):
     amount_cents: int = Field(..., ge=0)
     requested_at: datetime
     due_at: datetime
+    out_refund_no: str | None = None
     succeeded_at: datetime | None = None
+    last_error: str | None = None
+    retry_count: int = 0
 
 
 class RensheApplicationListItem(RensheApplicationResponse):

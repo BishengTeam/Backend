@@ -45,6 +45,7 @@ from app.schemas.h3c_registration import (
     H3cMaterialUploadResponse,
     H3cOrderCreate,
     H3cProfileDefaults,
+    H3cRegistrationRefundSummary,
     H3cRegistrationResponse,
     H3cResubmissionCreate,
     H3cReviewDecision,
@@ -1215,6 +1216,17 @@ class H3cRegistrationService:
     ) -> H3cRegistrationResponse:
         order = await db.get(Order, registration.order_id)
         plan = await db.get(Plan, registration.plan_id)
+        active_refund = await db.scalar(
+            select(H3cRefundRequest)
+            .where(
+                H3cRefundRequest.registration_id == registration.id,
+                H3cRefundRequest.status.in_(
+                    ("requested", "approved", "processing", "failed")
+                ),
+            )
+            .order_by(H3cRefundRequest.id.desc())
+            .limit(1)
+        )
         materials = (
             await db.execute(
                 select(H3cMaterial)
@@ -1313,6 +1325,11 @@ class H3cRegistrationService:
             order_id=registration.order_id,
             registration_type=registration.registration_type,
             status=registration.status,
+            active_refund=(
+                H3cRegistrationRefundSummary.model_validate(active_refund)
+                if active_refund is not None
+                else None
+            ),
             candidate_snapshot=registration.candidate_snapshot,
             order_status=order.status if order else "",
             price_cents=order.price if order else 0,

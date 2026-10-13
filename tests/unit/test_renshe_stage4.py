@@ -462,7 +462,12 @@ async def test_provider_refund_id_cannot_be_reused_by_another_request(
 
 @pytest.mark.asyncio
 async def test_refund_worker_isolates_one_item_failure_and_continues(monkeypatch) -> None:
-    selection = _Session(rows=((1, 2, 3),))
+    selection = _Session(rows=([SimpleNamespace(
+        id=index,
+        status="approved",
+        updated_at=datetime.now(timezone.utc) - timedelta(hours=2),
+        retry_count=0,
+    ) for index in range(1, 4)],))
     _install_sessions(monkeypatch, refund_worker_module, (selection,))
     refund_service = SimpleNamespace(
         reconcile_refund=AsyncMock(
@@ -501,6 +506,65 @@ async def test_worker_automatically_submits_batch_generated_refund(monkeypatch) 
 
     assert result.request_kind == "batch_cancel"
     service.submit_system_refund.assert_awaited_once_with(refund.id)
+
+
+@pytest.mark.asyncio
+async def test_failed_refund_is_automatically_retried_by_reconciliation(monkeypatch) -> None:
+    refund = _refund(
+        status="failed",
+        out_refund_no="RSRF0000000000000000000000000001",
+        retry_count=1,
+    )
+    service = RensheRefundService(_wechat())
+    _install_sessions(monkeypatch, refund_module, (_Session(scalars=(refund,)),))
+    prepared = PreparedRensheRefund(
+        refund_id=refund.id,
+        out_refund_no=refund.out_refund_no,
+        out_trade_no="trade",
+        transaction_id="transaction",
+        amount_cents=refund.amount_cents,
+    )
+    submitted = RensheRefundResponse.model_validate(refund)
+    service._prepare_submission = AsyncMock(return_value=prepared)
+    service._submit_prepared = AsyncMock(return_value=submitted)
+
+    result = await service.reconcile_refund(refund.id)
+
+    assert result.status == "failed"
+    service._prepare_submission.assert_awaited_once_with(
+        refund_id=refund.id,
+        actor_type="system",
+        actor_id=None,
+        system_only=False,
+    )
+    service._submit_prepared.assert_awaited_once_with(prepared)
+
+
+@pytest.mark.asyncio
+async def test_failed_renshe_refund_waits_for_backoff(monkeypatch) -> None:
+    due = SimpleNamespace(
+        id=1,
+        status="failed",
+        updated_at=datetime.now(timezone.utc) - timedelta(hours=2),
+        retry_count=0,
+    )
+    not_due = SimpleNamespace(
+        id=2,
+        status="failed",
+        updated_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        retry_count=0,
+    )
+    selection = _Session(rows=([due, not_due],))
+    _install_sessions(monkeypatch, refund_worker_module, (selection,))
+    refund_service = SimpleNamespace(reconcile_refund=AsyncMock())
+    worker = RensheRefundReconciliationService(refund_service)
+    worker._status = AsyncMock(return_value="failed")
+
+    batch = await worker.reconcile_batch(limit=2)
+
+    assert batch.scanned == 2
+    assert batch.synchronized == 1
+    refund_service.reconcile_refund.assert_awaited_once_with(1)
 
 
 @pytest.mark.asyncio

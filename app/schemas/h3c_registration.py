@@ -250,6 +250,7 @@ class H3cRegistrationResponse(BaseModel):
     order_id: int
     registration_type: H3cRegistrationType
     status: H3cRegistrationStatus
+    active_refund: "H3cRegistrationRefundSummary | None" = None
     candidate_snapshot: dict
     order_status: str
     price_cents: int
@@ -273,6 +274,18 @@ class H3cRegistrationResponse(BaseModel):
     final_review_block_reason: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class H3cRegistrationRefundSummary(BaseModel):
+    id: int
+    status: str
+    out_refund_no: str | None
+    processing_at: datetime | None
+    succeeded_at: datetime | None
+    last_error: str | None
+    retry_count: int
+
+    model_config = {"from_attributes": True}
 
 
 class H3cRegistrationVersionResponse(BaseModel):

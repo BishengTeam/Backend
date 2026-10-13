@@ -26,6 +26,11 @@ from app.port.config import settings
 from app.port.exceptions import ConflictException, NotFoundException
 from app.schemas.common import PaginatedData
 from app.schemas.h3c_registration import H3cRefundResponse
+from app.services.refund_recovery import (
+    format_refund_error,
+    provider_refund_is_missing,
+    refund_retry_delay,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,15 +53,6 @@ class H3cRefundService:
     @staticmethod
     def _out_refund_no(refund_id: int) -> str:
         return f"H3RF{refund_id:028d}"
-
-    @staticmethod
-    def _retry_delay(retry_count: int) -> int:
-        delays = [
-            int(value)
-            for value in settings.WECHAT_PAY_REFUND_RETRY_DELAYS_SECONDS.split(",")
-            if value.strip()
-        ]
-        return delays[min(retry_count, len(delays) - 1)]
 
     @staticmethod
     def _response(refund: H3cRefundRequest, *, hide_error: bool = True) -> H3cRefundResponse:
@@ -277,11 +273,7 @@ class H3cRefundService:
                 out_refund_no=prepared.out_refund_no
             )
         except WechatPayAPIError as exc:
-            provider_missing = (
-                exc.status_code == 404
-                or exc.api_code
-                in {"NOT_FOUND", "RESOURCE_NOT_EXISTS", "REFUND_NOT_EXISTS"}
-            )
+            provider_missing = provider_refund_is_missing(exc)
             if provider_missing and prepared.refund_id == refund_id:
                 current = await self._refund_status(refund_id)
                 if current in {"approved", "failed"}:
@@ -380,8 +372,11 @@ class H3cRefundService:
             if refund.status == "succeeded":
                 return
             refund.status = "processing" if result_unknown else "failed"
-            refund.last_error = f"{type(exc).__name__}: {exc}"[:2000]
+            refund.last_error = format_refund_error(exc)[:2000]
             refund.retry_count += 1
+            if not result_unknown:
+                _registration.status = "pending_refund_confirmation"
+                _registration.close_reason = "refund_retry_scheduled"
             await db.commit()
 
 
@@ -414,7 +409,7 @@ async def h3c_refund_reconciliation_worker_loop(
                     if row.updated_at is None
                     or row.updated_at
                     <= now
-                    - timedelta(seconds=active_service._retry_delay(row.retry_count))
+                    - timedelta(seconds=refund_retry_delay(row.retry_count))
                 ]
                 last_refund_id = candidates[-1].id if candidates else 0
             for refund_id in refund_ids:

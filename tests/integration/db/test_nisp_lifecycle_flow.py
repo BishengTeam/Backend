@@ -475,6 +475,11 @@ async def test_nisp_final_review_binds_effective_export_version(context):
     batch, admin_id = await seed(context)
     user_id, payload = await applicant(context, batch)
     service = NispRegistrationService()
+    async with context.factory() as db:
+        stored_batch = await db.get(NispExamBatch, batch.id)
+        assert stored_batch is not None
+        stored_batch.consultation_group_qrcode_url = "/api/media/nisp-consultation-group.png"
+        await db.commit()
     reg = await service.create_order(user_id, payload)
     await service.review(
         admin_id=admin_id,
@@ -516,6 +521,8 @@ async def test_nisp_final_review_binds_effective_export_version(context):
         data=NispFinalReviewRequest(export_item_id=item_id),
     )
     assert finalized.status == 'final_approved'
+    assert finalized.consultation_group_qrcode_url == "/api/media/nisp-consultation-group.png"
+    assert finalized.candidate_snapshot["phone"] == payload.phone
     async with context.factory() as db:
         stored_review = await db.scalar(select(NispFinalReview).where(
             NispFinalReview.registration_id == reg.id
