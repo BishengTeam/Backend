@@ -211,7 +211,10 @@ class PointsVirtualService:
                     UserProfile.nickname.ilike(pattern),
                     User.phone.ilike(pattern),
                 ]
-                if keyword.strip().isdecimal():
+                # User IDs are small integers in normal administration input.
+                # An 11-digit phone number must stay as a string and must not
+                # be sent to asyncpg as an int32 query parameter.
+                if len(keyword.strip()) <= 9 and keyword.strip().isdecimal():
                     keyword_conditions.append(
                         PointsVirtualOrder.user_id == int(keyword.strip())
                     )
