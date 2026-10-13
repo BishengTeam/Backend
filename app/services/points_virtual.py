@@ -235,8 +235,10 @@ class PointsVirtualService:
             ).scalars().all()
             user_ids = [row.user_id for row in rows]
             profiles = (
-                await db.execute(
-                    select(UserProfile).where(UserProfile.user_id.in_(user_ids))
+                (
+                    await db.execute(
+                        select(UserProfile).where(UserProfile.user_id.in_(user_ids))
+                    )
                 )
                 .scalars()
                 .all()
