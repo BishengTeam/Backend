@@ -1,8 +1,8 @@
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import NotFoundException
-from app.domain.content.src.index import Activity, ActivityRegistration
+from app.domain.content.src.index import Activity, ActivityRegistration, ActivityReminder
 from app.schemas.admin_activity import (
     AdminActivityCreate,
     AdminActivityListItem,
@@ -71,13 +71,23 @@ class AdminActivityService:
             await db.refresh(activity)
             return AdminActivityListItem.model_validate(activity)
 
-    async def deactivate(self, activity_id: int) -> None:
+    async def delete(self, activity_id: int) -> None:
         async with get_db_ctx() as db:
-            activity = await db.get(Activity, activity_id)
-            if activity is None:
-                raise NotFoundException("培训活动")
-            activity.is_active = False
-            await db.commit()
+            async with db.begin():
+                activity = await db.get(Activity, activity_id)
+                if activity is None:
+                    raise NotFoundException("培训活动")
+                await db.execute(
+                    delete(ActivityRegistration).where(
+                        ActivityRegistration.activity_id == activity_id
+                    )
+                )
+                await db.execute(
+                    delete(ActivityReminder).where(
+                        ActivityReminder.activity_id == activity_id
+                    )
+                )
+                await db.delete(activity)
 
     async def list_registrations(
         self, activity_id: int, page: int, page_size: int

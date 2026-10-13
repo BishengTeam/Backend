@@ -98,13 +98,13 @@ async def update_activity(
 
 @router.delete("/{activity_id}",
     response_model=APIResponse,
-    summary="下架活动",
+    summary="删除活动",
     description="""
 管理后台 **活动管理** 页面使用。
 
 **页面路径**: `/admin/activity`
 
-**使用场景**: 下架指定活动（软删除）
+**使用场景**: 删除指定活动及其报名、提醒记录
 
 **路径参数**:
 - `activity_id`: 活动 ID
@@ -116,9 +116,9 @@ async def delete_activity(
     activity_id: int = Path(..., description="活动 ID"),
     _admin=Depends(require_permission("activity:write")),
 ):
-    """下架活动"""
-    await AdminActivityService().deactivate(activity_id)
-    return success(message="活动已下架")
+    """删除活动及其关联业务记录"""
+    await AdminActivityService().delete(activity_id)
+    return success(message="活动已删除")
 
 
 @router.get("/{activity_id}/registrations",

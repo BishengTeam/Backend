@@ -142,13 +142,13 @@ async def toggle_zone_status(
 
 @router.delete("/{zone_id}",
     response_model=APIResponse,
-    summary="下架专区内容",
+    summary="删除专区内容",
     description="""
 管理后台 **内容管理** 页面使用。
 
 **页面路径**: `/admin/content`
 
-**使用场景**: 下架指定专区内容（软删除）
+**使用场景**: 删除指定专区内容
 
 **路径参数**:
 - `zone_id`: 专区内容 ID
@@ -160,28 +160,28 @@ async def delete_zone(
     zone_id: int = Path(..., ge=1, description="专区内容 ID"),
     _admin=Depends(require_permission("homepage:write")),
 ):
-    await AdminZoneService().deactivate(zone_id)
-    return success(message="专区内容已下架")
+    await AdminZoneService().delete(zone_id)
+    return success(message="专区内容已删除")
 
 
 @router.post("/batch-delete",
     response_model=APIResponse[int],
-    summary="批量下架专区内容",
+    summary="批量删除专区内容",
     description="""
 管理后台 **内容管理** 页面使用。
 
 **页面路径**: `/admin/content`
 
-**使用场景**: 勾选多条内容后批量下架（软删除）
+**使用场景**: 勾选多条内容后批量删除
 
 **请求体**: ids 列表
 
-**响应**: 实际下架的条目数量
+**响应**: 实际删除的条目数量
     """,
 )
 async def batch_delete_zones(
     body: AdminBatchDeleteRequest,
     _admin=Depends(require_permission("homepage:write")),
 ):
-    count = await AdminZoneService().batch_deactivate(body.ids)
-    return success(data=count, message=f"已下架 {count} 个内容")
+    count = await AdminZoneService().batch_delete(body.ids)
+    return success(data=count, message=f"已删除 {count} 个内容")

@@ -165,7 +165,7 @@ async def test_toggle_zone_status(test_context):
 
 
 # ──────────────────────────────────────────────
-# batch_delete / batch_deactivate / update_sort
+# batch_delete / update_sort
 # ──────────────────────────────────────────────
 
 
@@ -198,7 +198,7 @@ async def test_batch_delete_banners(test_context):
 
 
 async def test_batch_delete_zones(test_context):
-    """创建 3 个 Zone → batch_deactivate → list 验证 is_active 均为 False"""
+    """创建 3 个 Zone → batch_delete → list 验证记录均已删除"""
     from app.schemas.admin_zone import AdminZoneCreate
     from app.services.admin_zone import AdminZoneService
 
@@ -216,19 +216,18 @@ async def test_batch_delete_zones(test_context):
         )
         created_ids.append(z.id)
 
-    deactivated_count = await svc.batch_deactivate(created_ids)
-    assert deactivated_count == 3, (
-        f"Expected 3 deactivated, got {deactivated_count}"
+    deleted_count = await svc.batch_delete(created_ids)
+    assert deleted_count == 3, (
+        f"Expected 3 deleted, got {deleted_count}"
     )
 
     result = await svc.list_zones(
         keyword=None, zone_type="study", page=1, page_size=100
     )
-    zone_map = {z.id: z for z in result.items}
+    zone_ids = {z.id for z in result.items}
     for cid in created_ids:
-        assert cid in zone_map, f"Zone {cid} missing from list"
-        assert zone_map[cid].is_active is False, (
-            f"Zone {cid} is_active expected False, got {zone_map[cid].is_active}"
+        assert cid not in zone_ids, (
+            f"Zone {cid} still present after batch_delete"
         )
 
 

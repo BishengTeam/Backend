@@ -1,8 +1,8 @@
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import NotFoundException
-from app.domain.certification.src.index import Job
+from app.domain.certification.src.index import Job, JobApplication
 from app.schemas.admin_job import AdminJobCreate, AdminJobListItem, AdminJobUpdate
 from app.schemas.common import PaginatedData
 
@@ -50,10 +50,13 @@ class AdminJobService:
             await db.refresh(job)
             return AdminJobListItem.model_validate(job)
 
-    async def deactivate(self, job_id: int) -> None:
+    async def delete(self, job_id: int) -> None:
         async with get_db_ctx() as db:
-            job = await db.get(Job, job_id)
-            if job is None:
-                raise NotFoundException("岗位")
-            job.is_active = False
-            await db.commit()
+            async with db.begin():
+                job = await db.get(Job, job_id)
+                if job is None:
+                    raise NotFoundException("岗位")
+                await db.execute(
+                    delete(JobApplication).where(JobApplication.job_id == job_id)
+                )
+                await db.delete(job)

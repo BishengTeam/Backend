@@ -91,13 +91,13 @@ async def update_job(
 
 @router.delete("/{job_id}",
     response_model=APIResponse,
-    summary="下架岗位",
+    summary="删除岗位",
     description="""
 管理后台 **就业管理** 页面使用。
 
 **页面路径**: `/admin/job`
 
-**使用场景**: 下架指定岗位（软删除）
+**使用场景**: 删除指定岗位及其投递记录
 
 **路径参数**:
 - `job_id`: 岗位 ID
@@ -109,6 +109,6 @@ async def delete_job(
     job_id: int = Path(..., description="岗位 ID"),
     _admin=Depends(require_permission("job:write")),
 ):
-    """下架指定岗位"""
-    await AdminJobService().deactivate(job_id)
-    return success(message="岗位已下架")
+    """删除指定岗位及其投递记录"""
+    await AdminJobService().delete(job_id)
+    return success(message="岗位已删除")

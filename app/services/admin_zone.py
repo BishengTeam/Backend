@@ -1,4 +1,4 @@
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import NotFoundException
@@ -73,24 +73,21 @@ class AdminZoneService:
             await db.refresh(zone)
             return AdminZoneListItem.model_validate(zone)
 
-    async def deactivate(self, zone_id: int) -> None:
+    async def delete(self, zone_id: int) -> None:
         async with get_db_ctx() as db:
             zone = await db.get(Zone, zone_id)
             if zone is None:
                 raise NotFoundException("专区内容")
-            zone.is_active = False
+            await db.delete(zone)
             await db.commit()
 
-    async def batch_deactivate(self, zone_ids: list[int]) -> int:
+    async def batch_delete(self, zone_ids: list[int]) -> int:
         async with get_db_ctx() as db:
             result = await db.execute(
-                select(Zone).where(Zone.id.in_(zone_ids))
+                delete(Zone).where(Zone.id.in_(zone_ids))
             )
-            zones = result.scalars().all()
-            for zone in zones:
-                zone.is_active = False
             await db.commit()
-            return len(zones)
+            return result.rowcount or 0
 
     async def update_sort(self, updates: list[dict]) -> int:
         async with get_db_ctx() as db:
