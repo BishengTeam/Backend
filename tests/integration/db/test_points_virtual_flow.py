@@ -291,7 +291,7 @@ async def test_course_points_redemption_refund_and_redeem(
     assert admin_product.redeemable is True
 
     admin_products = await service.admin_list_products(
-        keyword=prefix,
+        keyword="积分课程",
         status="published",
         product_type="course",
         page=1,
