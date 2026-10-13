@@ -656,8 +656,8 @@ class PointsVirtualService:
         product_ids = [int(row.id) for row in products]
         refunded_counts = (
             {
-                int(row.product_id): int(count)
-                for row, count in (
+                int(result_row[0]): int(result_row[1])
+                for result_row in (
                     await db.execute(
                         select(PointsVirtualOrder.product_id, func.count())
                         .where(
