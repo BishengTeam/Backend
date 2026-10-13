@@ -2,7 +2,8 @@
 
 覆盖：
 1. GET /competition/{id} 详情：海报/附件/赛道透出；未发布或不存在按 NotFound。
-2. 附件 PDF 渲染：格式/大小/页数校验、页图落公开媒体、原件落私有目录。
+2. 附件 PDF 渲染：格式/大小/页数校验、页图落公开媒体、原件落私有存储
+   （本地模式落 uploads/private，OSS 模式 put 私有桶）。
 3. 管理端 schema/更新链路对 poster_url 与 attachments 的透传。
 """
 
@@ -17,6 +18,8 @@ import app.services.admin_competition as admin_competition_module
 import app.services.competition as competition_module
 import app.services.pdf_attachment as pdf_attachment_module
 from app.domain.certification.src.index import Competition, CompetitionTrack
+from app.integrations.competition_storage import CompetitionAttachmentStorage
+from app.port.config import settings
 from app.port.exceptions import BusinessException, NotFoundException
 from app.schemas.admin_competition import AdminCompetitionUpdate
 from app.schemas.competition import CompetitionAttachment, CompetitionDetail
@@ -198,42 +201,75 @@ def _fake_save_bytes(
     monkeypatch.setattr(pdf_attachment_module.UploadService, "save_bytes", _save)
 
 
-def test_render_pdf_rejects_non_pdf() -> None:
+async def test_render_pdf_rejects_non_pdf() -> None:
     with pytest.raises(BusinessException, match="仅支持上传 PDF"):
-        render_pdf_attachment(b"plain text, not a pdf", "x.pdf")
+        await render_pdf_attachment(b"plain text, not a pdf", "x.pdf")
 
 
-def test_render_pdf_rejects_oversize() -> None:
+async def test_render_pdf_rejects_oversize() -> None:
     with pytest.raises(BusinessException, match="20MB"):
-        render_pdf_attachment(b"%PDF-" + b"0" * (pdf_attachment_module.MAX_PDF_SIZE + 1), "x.pdf")
+        await render_pdf_attachment(
+            b"%PDF-" + b"0" * (pdf_attachment_module.MAX_PDF_SIZE + 1), "x.pdf"
+        )
 
 
-def test_render_pdf_rejects_too_many_pages() -> None:
+async def test_render_pdf_rejects_too_many_pages() -> None:
     with pytest.raises(BusinessException, match="最多 30 页"):
-        render_pdf_attachment(
+        await render_pdf_attachment(
             _build_pdf(pdf_attachment_module.MAX_PDF_PAGES + 1), "x.pdf"
         )
 
 
-def test_render_pdf_writes_public_pages_and_private_original(
+async def test_render_pdf_writes_public_pages_and_private_original(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
     urls: list[str] = []
     _fake_save_bytes(monkeypatch, urls)
-    monkeypatch.setattr(
-        pdf_attachment_module.settings, "PRIVATE_UPLOAD_DIR", str(tmp_path)
-    )
+    monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
 
-    result = render_pdf_attachment(_build_pdf(page_count=2), "2026 AI安全竞赛邀请函.pdf")
+    result = await render_pdf_attachment(_build_pdf(page_count=2), "2026 AI安全竞赛邀请函.pdf")
 
     assert result["title"] == "2026 AI安全竞赛邀请函"
     assert result["page_count"] == 2
     assert result["pages"] == ["/api/media/fake1.jpg", "/api/media/fake2.jpg"]
 
-    # 原件只落私有目录，绝不进公开媒体目录
-    private_files = list(tmp_path.iterdir())
+    # 原件只落 uploads/private，绝不进公开媒体目录
+    private_files = list((tmp_path / "private" / "competition-attachments").iterdir())
     assert len(private_files) == 1
     assert private_files[0].read_bytes().startswith(b"%PDF")
+
+
+async def test_render_pdf_puts_original_to_private_oss(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    class _FakeBucket:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, bytes, dict]] = []
+
+        def put_object(self, key: str, data: bytes, headers: dict | None = None):
+            self.calls.append((key, data, headers or {}))
+            return SimpleNamespace(status=200)
+
+    bucket = _FakeBucket()
+    _fake_save_bytes(monkeypatch, [])
+    monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
+    monkeypatch.setattr(settings, "RENSHE_STORAGE_TYPE", "aliyun_oss")
+    monkeypatch.setattr(settings, "ALIYUN_OSS_ENDPOINT", "https://oss.example.com")
+    monkeypatch.setattr(settings, "ALIYUN_OSS_BUCKET", "materials-test")
+    monkeypatch.setattr(settings, "ALIYUN_OSS_ACCESS_KEY_ID", "id")
+    monkeypatch.setattr(settings, "ALIYUN_OSS_ACCESS_KEY_SECRET", "secret")
+    monkeypatch.setattr(CompetitionAttachmentStorage, "_bucket", lambda self: bucket)
+
+    result = await render_pdf_attachment(_build_pdf(page_count=1), "邀请函.pdf")
+
+    assert result["page_count"] == 1
+    assert len(bucket.calls) == 1
+    key, data, headers = bucket.calls[0]
+    assert key.startswith("competition-attachments/") and key.endswith(".pdf")
+    assert data.startswith(b"%PDF")
+    assert headers == {"Content-Type": "application/pdf"}
+    # OSS 模式不落本地盘
+    assert not (tmp_path / "private").exists()
 
 
 # ── 管理端 schema / 更新链路 ─────────────────────────────────

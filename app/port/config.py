@@ -297,8 +297,6 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = []
 
     UPLOAD_DIR: str = "./uploads"
-    # 不经 /media 对外暴露的私有文件（如赛事附件 PDF 原件）
-    PRIVATE_UPLOAD_DIR: str = "./uploads_private"
     STORAGE_TYPE: str = "local"
 
     # Human-resources certification materials. Production is private Aliyun OSS.

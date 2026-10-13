@@ -59,7 +59,7 @@ async def upload_competition_attachment(
     _admin=Depends(require_permission("competition:write")),
 ) -> APIResponse:
     content = await file.read()
-    result = render_pdf_attachment(content, file.filename or "附件.pdf")
+    result = await render_pdf_attachment(content, file.filename or "附件.pdf")
     return success(data=result)
 
 
