@@ -136,6 +136,14 @@ async def validate_nisp_batch_product(
         .with_for_update()
     )
     expected_code = f"NISP-{level}"
+    if product is None and plan.product_type.strip().lower() == "nisp":
+        # Legacy NISP plans used a generic product_type. The batch level
+        # resolves them to the current level-specific certification product.
+        product = await db.scalar(
+            select(CertProduct)
+            .where(CertProduct.code == expected_code)
+            .with_for_update()
+        )
     if product is None or product.type != "nisp" or product.code != expected_code:
         raise BusinessException("NISP 批次必须关联对应级别的上架 NISP 认证产品")
     if require_active and not product.is_active:

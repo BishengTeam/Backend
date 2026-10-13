@@ -198,6 +198,82 @@ async def test_nisp_admin_rejects_wrong_level_product_binding(context):
         ))
 
 
+async def test_legacy_nisp_plan_still_lists_and_supports_order(context, monkeypatch):
+    """Legacy plan.product_type='nisp' resolves through NispExamBatch.level."""
+    from app.api.nisp import list_batches
+
+    @asynccontextmanager
+    async def api_db_ctx():
+        async with context.factory() as db:
+            yield db
+
+    # The endpoint imports get_db_ctx lazily from the database adapter.
+    monkeypatch.setattr('app.adapter.database.get_db_ctx', api_db_ctx)
+
+    async with context.factory() as db:
+        now = datetime.now(timezone.utc)
+        product = CertProduct(
+            type='nisp',
+            code='NISP-2',
+            name='NISP',
+            chinese_name='NISP 二级',
+            is_active=True,
+        )
+        plan = Plan(
+            product_type='nisp',
+            name=uuid4().hex,
+            status='published',
+            capacity=10,
+            apply_start=now - timedelta(days=1),
+            apply_end=now + timedelta(days=1),
+        )
+        db.add_all([product, plan])
+        await db.flush()
+        batch = NispExamBatch(
+            plan_id=plan.id,
+            level='2',
+            level1_price_cents=0,
+            level2_price_cents=0,
+        )
+        db.add(batch)
+        await db.commit()
+
+    response = await list_batches(None)
+    assert response.code == 0
+    assert [item.id for item in response.data] == [batch.id]
+    assert response.data[0].level == '2'
+
+    user_id, payload = await applicant(context, batch)
+    level2_materials = {}
+    async with context.factory() as db:
+        for material_type in ('xuexin_report', 'application_form'):
+            storage_key = f'nisp/materials/{user_id}/{material_type}-{uuid4().hex}.pdf'
+            db.add(
+                NispMaterialFile(
+                    user_id=user_id,
+                    material_type=material_type,
+                    storage_key=storage_key,
+                )
+            )
+            level2_materials[material_type] = storage_key
+        await db.commit()
+    payload = payload.model_copy(update={
+        'level': '2',
+        'gender': '男',
+        'age': 20,
+        'education': '本科',
+        'address': '四川省成都市',
+        'zip_code': '610000',
+        'xuexin_report_key': level2_materials['xuexin_report'],
+        'application_form_key': level2_materials['application_form'],
+    })
+    registration = await NispRegistrationService().create_order(user_id, payload)
+    assert registration.level == '2'
+    async with context.factory() as db:
+        order = await db.get(Order, registration.order_id)
+    assert order.product_type == 'NISP-2'
+
+
 async def test_generic_order_creation_rejects_nisp(context):
     from app.port.exceptions import DedicatedCertificationOrderRequiredException
     from app.schemas.order import OrderCreate

@@ -3,7 +3,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.middleware.auth import get_current_user
 from app.domain.user.src.index import User
@@ -41,12 +41,20 @@ async def list_batches(
         stmt = (
             select(NispExamBatch, Plan)
             .join(Plan, Plan.id == NispExamBatch.plan_id)
-            .join(CertProduct, CertProduct.code == Plan.product_type)
+            .join(
+                CertProduct,
+                CertProduct.code == func.concat("NISP-", NispExamBatch.level),
+            )
             .where(
                 Plan.status == "published",
                 CertProduct.type == "nisp",
                 CertProduct.is_active.is_(True),
-                CertProduct.code == func.concat("NISP-", NispExamBatch.level),
+                # Plans created before NISP was split into NISP-1/NISP-2 use
+                # the legacy product_type "nisp". Their level is authoritative.
+                or_(
+                    Plan.product_type == CertProduct.code,
+                    func.lower(Plan.product_type) == "nisp",
+                ),
             )
             .order_by(Plan.sort_order.desc(), NispExamBatch.id.desc())
         )
