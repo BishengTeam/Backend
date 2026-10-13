@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, Query
 from app.middleware.auth import require_reauthenticated_admin
 
@@ -9,6 +11,7 @@ from app.schemas.points_mall import (
     PointsMallItemUpdate,
 )
 from app.schemas.points_virtual import (
+    PointsVirtualOrderDetailResponse,
     PointsVirtualOrderResponse,
     PointsVirtualProductCreate,
     PointsVirtualProductResponse,
@@ -28,6 +31,11 @@ _virtual_service = PointsVirtualService()
 async def list_virtual_products(
     status: str | None = Query(None),
     product_type: str | None = Query(None),
+    keyword: str | None = Query(None, max_length=128),
+    availability: str | None = Query(
+        None,
+        description="not_started=未开始；ended=已结束；sold_out=已兑完",
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     _admin=Depends(require_permission("points:manage")),
@@ -36,6 +44,8 @@ async def list_virtual_products(
         data=await _virtual_service.admin_list_products(
             status=status,
             product_type=product_type,
+            keyword=keyword,
+            availability=availability,
             page=page,
             page_size=page_size,
         )
@@ -65,12 +75,27 @@ async def update_virtual_product(
 
 
 @router.get(
+    "/virtual-products/{product_id}",
+    response_model=APIResponse[PointsVirtualProductResponse],
+)
+async def get_virtual_product(
+    product_id: int,
+    _admin=Depends(require_permission("points:manage")),
+):
+    return success(data=await _virtual_service.admin_get_product(product_id))
+
+
+@router.get(
     "/virtual-orders",
     response_model=APIResponse[PaginatedData[PointsVirtualOrderResponse]],
 )
 async def list_virtual_orders(
     user_id: int | None = Query(None),
     status: str | None = Query(None),
+    keyword: str | None = Query(None, max_length=128),
+    product_id: int | None = Query(None),
+    created_from: datetime | None = Query(None),
+    created_to: datetime | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     _admin=Depends(require_permission("points:manage")),
@@ -79,10 +104,25 @@ async def list_virtual_orders(
         data=await _virtual_service.admin_list_orders(
             user_id=user_id,
             status=status,
+            keyword=keyword,
+            product_id=product_id,
+            created_from=created_from,
+            created_to=created_to,
             page=page,
             page_size=page_size,
         )
     )
+
+
+@router.get(
+    "/virtual-orders/{order_id}",
+    response_model=APIResponse[PointsVirtualOrderDetailResponse],
+)
+async def get_virtual_order(
+    order_id: int,
+    _admin=Depends(require_permission("points:manage")),
+):
+    return success(data=await _virtual_service.admin_get_order(order_id))
 
 
 @router.post(
@@ -106,11 +146,21 @@ async def refund_virtual_order(
 
 @router.get("/items", response_model=APIResponse[PaginatedData[PointsMallItemResponse]])
 async def list_items(
+    keyword: str | None = Query(None, max_length=128),
+    status: str | None = Query(
+        None,
+        description="active=可兑换；inactive=已下架；expired=已过期；sold_out=已兑完",
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     _admin = Depends(require_permission("points:manage")),
 ) -> APIResponse[PaginatedData[PointsMallItemResponse]]:
-    items, total = await _service.admin_list(page=page, page_size=page_size)
+    items, total = await _service.admin_list(
+        keyword=keyword,
+        status=status,
+        page=page,
+        page_size=page_size,
+    )
     return success(data=PaginatedData(items=items, total=total, page=page, page_size=page_size))
 
 

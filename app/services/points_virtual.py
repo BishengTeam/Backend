@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timedelta, timezone
+from typing import Sequence
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +17,13 @@ from app.domain.points_mall.src import (
     PointsVirtualProduct,
     PointsVirtualRefund,
 )
-from app.domain.user.src.index import PointsHistory, User, UserPoints
+from app.domain.user.src.index import (
+    AdminUser,
+    PointsHistory,
+    User,
+    UserPoints,
+    UserProfile,
+)
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.common import PaginatedData
 from app.schemas.points_virtual import (
@@ -26,6 +33,8 @@ from app.schemas.points_virtual import (
     PointsVirtualProductResponse,
     PointsVirtualProductUpdate,
     PointsVirtualOrderResponse,
+    PointsVirtualOrderDetailResponse,
+    PointsHistoryBriefResponse,
     PointsVirtualRedeemRequest,
     PointsVirtualRedeemResponse,
     PointsVirtualRefundRequest,
@@ -77,7 +86,7 @@ class PointsVirtualService:
                 )
                 db.add(product)
                 await db.flush()
-                return self._product_response(product)
+                return (await self._product_responses(db, [product]))[0]
 
     async def admin_update_product(
         self, product_id: int, data: PointsVirtualProductUpdate
@@ -100,13 +109,15 @@ class PointsVirtualService:
                 if updates:
                     product.version += 1
                 await db.flush()
-                return self._product_response(product)
+                return (await self._product_responses(db, [product]))[0]
 
     async def admin_list_products(
         self,
         *,
         status: str | None = None,
         product_type: str | None = None,
+        keyword: str | None = None,
+        availability: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> PaginatedData[PointsVirtualProductResponse]:
@@ -116,6 +127,28 @@ class PointsVirtualService:
                 base = base.where(PointsVirtualProduct.status == status)
             if product_type:
                 base = base.where(PointsVirtualProduct.product_type == product_type)
+            if keyword:
+                pattern = f"%{keyword.strip()}%"
+                base = base.where(
+                    or_(
+                        PointsVirtualProduct.name.ilike(pattern),
+                        PointsVirtualProduct.content_key.ilike(pattern),
+                    )
+                )
+            now = _now()
+            if availability == "not_started":
+                base = base.where(PointsVirtualProduct.available_from > now)
+            elif availability == "ended":
+                base = base.where(
+                    PointsVirtualProduct.available_to.is_not(None),
+                    PointsVirtualProduct.available_to <= now,
+                )
+            elif availability == "sold_out":
+                base = base.where(
+                    PointsVirtualProduct.stock_limit.is_not(None),
+                    PointsVirtualProduct.total_redeemed
+                    >= PointsVirtualProduct.stock_limit,
+                )
             total = await db.scalar(
                 select(func.count()).select_from(base.subquery())
             ) or 0
@@ -127,28 +160,66 @@ class PointsVirtualService:
                 )
             ).scalars().all()
             return PaginatedData(
-                items=[self._product_response(row) for row in rows],
+                items=await self._product_responses(db, rows),
                 total=int(total),
                 page=page,
                 page_size=page_size,
             )
+
+    async def admin_get_product(
+        self, product_id: int
+    ) -> PointsVirtualProductResponse:
+        async with get_db_ctx() as db:
+            product = await db.get(PointsVirtualProduct, product_id)
+            if product is None:
+                raise NotFoundException("积分商品")
+            return (await self._product_responses(db, [product]))[0]
 
     async def admin_list_orders(
         self,
         *,
         user_id: int | None = None,
         status: str | None = None,
+        keyword: str | None = None,
+        product_id: int | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
         page: int = 1,
         page_size: int = 20,
     ):
         from app.schemas.points_virtual import PointsVirtualOrderResponse
 
         async with get_db_ctx() as db:
-            base = select(PointsVirtualOrder)
+            base = (
+                select(PointsVirtualOrder)
+                .outerjoin(
+                    UserProfile,
+                    UserProfile.user_id == PointsVirtualOrder.user_id,
+                )
+                .outerjoin(User, User.id == PointsVirtualOrder.user_id)
+            )
             if user_id is not None:
                 base = base.where(PointsVirtualOrder.user_id == user_id)
             if status:
                 base = base.where(PointsVirtualOrder.status == status)
+            if product_id is not None:
+                base = base.where(PointsVirtualOrder.product_id == product_id)
+            if keyword:
+                pattern = f"%{keyword.strip()}%"
+                keyword_conditions = [
+                    PointsVirtualOrder.order_no.ilike(pattern),
+                    UserProfile.nickname.ilike(pattern),
+                    User.phone.ilike(pattern),
+                ]
+                if keyword.strip().isdecimal():
+                    keyword_conditions.append(
+                        PointsVirtualOrder.user_id == int(keyword.strip())
+                    )
+                base = base.where(or_(*keyword_conditions))
+            if created_from:
+                base = base.where(PointsVirtualOrder.created_at >= created_from)
+            if created_to:
+                base = base.where(PointsVirtualOrder.created_at < created_to)
             total = await db.scalar(
                 select(func.count()).select_from(base.subquery())
             ) or 0
@@ -159,12 +230,81 @@ class PointsVirtualService:
                     .limit(page_size)
                 )
             ).scalars().all()
+            user_ids = [row.user_id for row in rows]
+            profiles = (
+                await db.execute(
+                    select(UserProfile).where(UserProfile.user_id.in_(user_ids))
+                )
+                .scalars()
+                .all()
+                if user_ids
+                else []
+            )
+            profile_map = {row.user_id: row for row in profiles}
+            users = (
+                await db.execute(
+                    select(User.id, User.phone).where(User.id.in_(user_ids))
+                ).all()
+                if user_ids
+                else []
+            )
+            user_phone_map = {row.id: row.phone for row in users}
+            items = []
+            for row in rows:
+                payload = PointsVirtualOrderResponse.model_validate(row)
+                profile = profile_map.get(row.user_id)
+                payload.user_nickname = profile.nickname if profile else None
+                payload.user_phone = (
+                    self._mask_phone(
+                        profile.phone if profile else user_phone_map.get(row.user_id)
+                    )
+                )
+                items.append(payload)
             return PaginatedData(
-                items=[PointsVirtualOrderResponse.model_validate(row) for row in rows],
+                items=items,
                 total=int(total),
                 page=page,
                 page_size=page_size,
             )
+
+    async def admin_get_order(self, order_id: int) -> PointsVirtualOrderDetailResponse:
+        async with get_db_ctx() as db:
+            order = await db.get(PointsVirtualOrder, order_id)
+            if order is None:
+                raise NotFoundException("积分兑换订单")
+            profile = await db.scalar(
+                select(UserProfile).where(UserProfile.user_id == order.user_id)
+            )
+            user = await db.get(User, order.user_id)
+            payload = PointsVirtualOrderDetailResponse.model_validate(order)
+            payload.user_nickname = profile.nickname if profile else None
+            payload.user_phone = self._mask_phone(
+                profile.phone if profile else user.phone if user else None
+            )
+            payload.spend_history = (
+                PointsHistoryBriefResponse.model_validate(history)
+                if order.points_history_id
+                and (history := await db.get(PointsHistory, order.points_history_id))
+                else None
+            )
+            refund = await db.scalar(
+                select(PointsVirtualRefund).where(
+                    PointsVirtualRefund.order_id == order.id
+                )
+            )
+            if refund is not None:
+                payload.refund = PointsVirtualRefundResponse.model_validate(refund)
+                refund_history = await db.get(
+                    PointsHistory, refund.points_history_id
+                )
+                payload.refund_history = (
+                    PointsHistoryBriefResponse.model_validate(refund_history)
+                    if refund_history
+                    else None
+                )
+                admin = await db.get(AdminUser, refund.refunded_by_admin_id)
+                payload.refunded_by_admin_name = admin.display_name if admin else None
+            return payload
 
     # ── User: catalog and redemption ──
 
@@ -186,7 +326,7 @@ class PointsVirtualService:
                 )
             ).scalars().all()
             return PaginatedData(
-                items=[self._product_response(row) for row in rows],
+                items=await self._product_responses(db, rows),
                 total=int(total),
                 page=page,
                 page_size=page_size,
@@ -217,7 +357,7 @@ class PointsVirtualService:
                 balance=balance,
             )
             return PointsVirtualPrecheckResponse(
-                product=self._product_response(product),
+                product=(await self._product_responses(db, [product]))[0],
                 balance=balance,
                 balance_after=(
                     balance - product.points_price
@@ -482,14 +622,109 @@ class PointsVirtualService:
         }
 
     @staticmethod
-    def _product_response(product: PointsVirtualProduct) -> PointsVirtualProductResponse:
-        payload = PointsVirtualProductResponse.model_validate(product)
-        payload.remaining_stock = (
-            None
-            if product.stock_limit is None
-            else max(0, product.stock_limit - product.total_redeemed)
+    async def _product_responses(
+        db: AsyncSession, products: Sequence[PointsVirtualProduct]
+    ) -> list[PointsVirtualProductResponse]:
+        if not products:
+            return []
+        course_ids = [int(row.course_id) for row in products if row.course_id]
+        library_ids = [int(row.library_id) for row in products if row.library_id]
+        courses = (
+            {
+                int(row.id): row
+                for row in (
+                    await db.execute(
+                        select(Course).where(Course.id.in_(course_ids))
+                    )
+                ).scalars()
+            }
+            if course_ids
+            else {}
         )
-        return payload
+        libraries = (
+            {
+                int(row.id): row
+                for row in (
+                    await db.execute(
+                        select(QuizLibrary).where(QuizLibrary.id.in_(library_ids))
+                    )
+                ).scalars()
+            }
+            if library_ids
+            else {}
+        )
+        product_ids = [int(row.id) for row in products]
+        refunded_counts = (
+            {
+                int(row.product_id): int(count)
+                for row, count in (
+                    await db.execute(
+                        select(PointsVirtualOrder.product_id, func.count())
+                        .where(
+                            PointsVirtualOrder.product_id.in_(product_ids),
+                            PointsVirtualOrder.status == "refunded",
+                        )
+                        .group_by(PointsVirtualOrder.product_id)
+                    )
+                ).all()
+            }
+            if product_ids
+            else {}
+        )
+        now = _now()
+        result = []
+        for product in products:
+            payload = PointsVirtualProductResponse.model_validate(product)
+            snapshot = product.content_snapshot or {}
+            payload.content_name = (
+                snapshot.get("title")
+                if product.product_type == "course"
+                else snapshot.get("name")
+            )
+            payload.remaining_stock = (
+                None
+                if product.stock_limit is None
+                else max(0, product.stock_limit - product.total_redeemed)
+            )
+            payload.refunded_count = refunded_counts.get(product.id, 0)
+            content = (
+                courses.get(product.course_id)
+                if product.product_type == "course"
+                else libraries.get(product.library_id)
+            )
+            content_available = (
+                content.status == "published"
+                and (product.product_type != "course" or content.is_active)
+                if content is not None
+                else False
+            )
+            if product.status == "draft":
+                payload.redeem_block_reason = "草稿"
+            elif product.status == "offline":
+                payload.redeem_block_reason = "已停售"
+            elif product.available_from and now < product.available_from:
+                payload.redeem_block_reason = "未开始"
+            elif product.available_to and now >= product.available_to:
+                payload.redeem_block_reason = "已结束"
+            elif (
+                product.stock_limit is not None
+                and product.total_redeemed >= product.stock_limit
+            ):
+                payload.redeem_block_reason = "已兑完"
+            elif not content_available:
+                payload.redeem_block_reason = "关联内容不可用"
+            else:
+                payload.redeemable = True
+            result.append(payload)
+        return result
+
+    @staticmethod
+    def _mask_phone(phone: str | None) -> str | None:
+        if not phone:
+            return None
+        if len(phone) != 11:
+            return phone
+        return f"{phone[:3]}****{phone[7:]}"
 
     @staticmethod
     def _fingerprint(*, product_id: int, product_version: int) -> str:

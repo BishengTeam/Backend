@@ -284,6 +284,40 @@ async def test_course_points_redemption_refund_and_redeem(
     assert stored_product.total_redeemed == 0
     assert active_libraries == 0
 
+    admin_product = await service.admin_get_product(product.id)
+    assert admin_product.content_name == f"{prefix}-course-0"
+    assert admin_product.refunded_count == 1
+    assert admin_product.remaining_stock == 1
+    assert admin_product.redeemable is True
+
+    admin_products = await service.admin_list_products(
+        keyword=prefix,
+        status="published",
+        product_type="course",
+        page=1,
+        page_size=10,
+    )
+    assert [row.id for row in admin_products.items] == [product.id]
+
+    admin_orders = await service.admin_list_orders(
+        keyword="13900000000",
+        product_id=product.id,
+        status="refunded",
+        page=1,
+        page_size=10,
+    )
+    assert [row.id for row in admin_orders.items] == [first.id]
+    assert admin_orders.items[0].user_id == user_id
+    assert admin_orders.items[0].user_phone == "139****0000"
+
+    order_detail = await service.admin_get_order(first.id)
+    assert order_detail.spend_history is not None
+    assert order_detail.spend_history.amount == -30
+    assert order_detail.refund is not None
+    assert order_detail.refund_history is not None
+    assert order_detail.refund_history.amount == 30
+    assert order_detail.refunded_by_admin_name == f"{prefix}-admin"
+
     await PointsService().grant_points(
         user_id,
         amount=30,

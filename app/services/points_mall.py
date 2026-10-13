@@ -3,7 +3,7 @@
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.adapter.database import get_db_ctx
 from app.domain.points_mall.src import PointsMallItem, PointsMallRedemption
@@ -153,14 +153,57 @@ class PointsMallService:
             await db.refresh(item)
             return self._item_response(item)
 
-    async def admin_list(self, *, page: int = 1, page_size: int = 20) -> tuple[list[PointsMallItemResponse], int]:
+    async def admin_list(
+        self,
+        *,
+        keyword: str | None = None,
+        status: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[PointsMallItemResponse], int]:
         async with get_db_ctx() as db:
+            base = select(PointsMallItem)
+            if keyword:
+                pattern = f"%{keyword.strip()}%"
+                base = base.where(
+                    or_(
+                        PointsMallItem.name.ilike(pattern),
+                        PointsMallItem.scope_value.ilike(pattern),
+                    )
+                )
+            now = _now()
+            if status == "active":
+                base = base.where(
+                    PointsMallItem.is_active.is_(True),
+                    or_(
+                        PointsMallItem.validity_type == "days",
+                        PointsMallItem.valid_until > now,
+                    ),
+                    or_(
+                        PointsMallItem.total_stock == 0,
+                        PointsMallItem.total_redeemed
+                        < PointsMallItem.total_stock,
+                    ),
+                )
+            elif status == "inactive":
+                base = base.where(PointsMallItem.is_active.is_(False))
+            elif status == "expired":
+                base = base.where(
+                    PointsMallItem.validity_type == "fixed_date",
+                    PointsMallItem.valid_until <= now,
+                )
+            elif status == "sold_out":
+                base = base.where(
+                    PointsMallItem.total_stock > 0,
+                    PointsMallItem.total_redeemed
+                    >= PointsMallItem.total_stock,
+                )
             total = await db.scalar(
-                select(func.count()).select_from(PointsMallItem)
+                select(func.count()).select_from(base.subquery())
             ) or 0
             rows = (
                 await db.execute(
-                    select(PointsMallItem)
+                    base
                     .order_by(PointsMallItem.sort_order.desc(), PointsMallItem.id.desc())
                     .offset((page - 1) * page_size)
                     .limit(page_size)

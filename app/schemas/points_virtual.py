@@ -51,6 +51,7 @@ class PointsVirtualProductResponse(BaseModel):
     id: int
     product_type: PointsVirtualProductType
     content_key: str
+    content_name: str | None = None
     course_id: int | None
     library_id: int | None
     name: str
@@ -64,6 +65,9 @@ class PointsVirtualProductResponse(BaseModel):
     available_from: datetime | None
     available_to: datetime | None
     status: PointsVirtualProductStatus
+    redeemable: bool = False
+    redeem_block_reason: str | None = None
+    refunded_count: int = 0
     version: int
     created_at: datetime
     updated_at: datetime
@@ -85,6 +89,7 @@ class PointsVirtualRedeemRequest(BaseModel):
 class PointsVirtualOrderResponse(BaseModel):
     id: int
     order_no: str
+    user_id: int
     product_id: int
     product_type: PointsVirtualProductType
     product_name: str
@@ -99,6 +104,8 @@ class PointsVirtualOrderResponse(BaseModel):
     refunded_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    user_nickname: str | None = None
+    user_phone: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -137,3 +144,23 @@ class PointsVirtualRefundResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class PointsHistoryBriefResponse(BaseModel):
+    id: int
+    action_type: str
+    amount: int
+    balance_after: int
+    description: str | None
+    source_type: str | None
+    source_id: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PointsVirtualOrderDetailResponse(PointsVirtualOrderResponse):
+    spend_history: PointsHistoryBriefResponse | None = None
+    refund_history: PointsHistoryBriefResponse | None = None
+    refund: PointsVirtualRefundResponse | None = None
+    refunded_by_admin_name: str | None = None
