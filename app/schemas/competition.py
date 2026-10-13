@@ -23,6 +23,7 @@ class CompetitionListItem(BaseModel):
     name: str
     description: str | None = None
     cover_url: str | None = None
+    home_cover_url: str | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
     registration_deadline: datetime | None = None

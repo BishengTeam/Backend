@@ -77,6 +77,7 @@ class CompetitionService:
                     name=c.name,
                     description=c.description,
                     cover_url=c.cover_url,
+                    home_cover_url=c.home_cover_url,
                     start_time=c.start_time,
                     end_time=c.end_time,
                     registration_deadline=c.registration_deadline,
