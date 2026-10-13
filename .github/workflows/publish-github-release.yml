@@ -27,6 +27,7 @@ concurrency:
 
 permissions:
   contents: write
+  actions: write
 
 env:
   RELEASE_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
@@ -34,24 +35,9 @@ env:
   ADMIN_REF: ${{ github.event.inputs.admin_ref || 'main' }}
 
 jobs:
-  test-build-release:
+  resolve:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: test
-          POSTGRES_PASSWORD: isolated-test-password
-          POSTGRES_DB: wemini_app_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U test -d wemini_app_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-
+    timeout-minutes: 5
     steps:
       - name: Check out release tooling
         uses: actions/checkout@v5
@@ -79,9 +65,11 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          printf 'tooling_sha=%s\n' "$(git -C tooling rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          printf 'backend_sha=%s\n' "$(git -C Backend rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          printf 'admin_sha=%s\n' "$(git -C Admin rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          {
+            printf 'tooling_sha=%s\n' "$(git -C tooling rev-parse HEAD)"
+            printf 'backend_sha=%s\n' "$(git -C Backend rev-parse HEAD)"
+            printf 'admin_sha=%s\n' "$(git -C Admin rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Validate new release tag
         env:
@@ -96,6 +84,37 @@ jobs:
             exit 1
           fi
 
+    outputs:
+      tooling_sha: ${{ steps.source.outputs.tooling_sha }}
+      backend_sha: ${{ steps.source.outputs.backend_sha }}
+      admin_sha: ${{ steps.source.outputs.admin_sha }}
+
+  backend-test:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: isolated-test-password
+          POSTGRES_DB: wemini_app_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d wemini_app_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Check out target Backend
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.BACKEND_REF }}
+          path: Backend
+          fetch-depth: 1
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -104,7 +123,8 @@ jobs:
           cache-dependency-path: Backend/requirements.txt
 
       - name: Install Backend dependencies
-        run: python -m pip install --disable-pip-version-check -r Backend/requirements.txt
+        working-directory: Backend
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
 
       - name: Run Backend quality and PostgreSQL integration tests
         working-directory: Backend
@@ -149,6 +169,27 @@ jobs:
             Backend/backend-migration.log
             Backend/backend-integration.log
           if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Cancel remaining jobs on test failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
+
+  admin-test:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out target Admin
+        uses: actions/checkout@v5
+        with:
+          repository: BishengTeam/Admin
+          ref: ${{ env.ADMIN_REF }}
+          path: Admin
+          fetch-depth: 1
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -160,72 +201,207 @@ jobs:
       - name: Test and build Admin
         working-directory: Admin
         run: |
+          set -Eeuo pipefail
           npm ci
           npm test -- --no-cache
           npm run build
 
+      - name: Cancel remaining jobs on test failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
+
+  build-backend:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out target Backend
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.BACKEND_REF }}
+          path: Backend
+          fetch-depth: 1
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Backend image into the runner
+      - name: Build Backend image archive
         uses: docker/build-push-action@v6
         with:
           context: Backend
-          load: true
           platforms: linux/amd64
-          tags: wemini-backend:${{ steps.source.outputs.backend_sha }}
+          tags: wemini-backend:${{ needs.resolve.outputs.backend_sha }}
           labels: |
             org.opencontainers.image.source=https://github.com/BishengTeam/Backend
-            org.opencontainers.image.revision=${{ steps.source.outputs.backend_sha }}
+            org.opencontainers.image.revision=${{ needs.resolve.outputs.backend_sha }}
+          outputs: type=docker,dest=/tmp/wemini-backend.tar
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
 
-      - name: Build Admin image into the runner
+      - name: Upload Backend image archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-image
+          path: /tmp/wemini-backend.tar
+          compression-level: 0
+          retention-days: 1
+
+      - name: Cancel remaining jobs on build failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
+
+  build-admin:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out target Admin
+        uses: actions/checkout@v5
+        with:
+          repository: BishengTeam/Admin
+          ref: ${{ env.ADMIN_REF }}
+          path: Admin
+          fetch-depth: 1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Admin image archive
         uses: docker/build-push-action@v6
         with:
           context: Admin
-          load: true
           platforms: linux/amd64
-          tags: wemini-admin:${{ steps.source.outputs.admin_sha }}
+          tags: wemini-admin:${{ needs.resolve.outputs.admin_sha }}
           labels: |
             org.opencontainers.image.source=https://github.com/BishengTeam/Admin
-            org.opencontainers.image.revision=${{ steps.source.outputs.admin_sha }}
+            org.opencontainers.image.revision=${{ needs.resolve.outputs.admin_sha }}
+          outputs: type=docker,dest=/tmp/wemini-admin.tar
           cache-from: type=gha,scope=admin
           cache-to: type=gha,mode=max,scope=admin
 
-      - name: Export and compress image assets
+      - name: Upload Admin image archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-image
+          path: /tmp/wemini-admin.tar
+          compression-level: 0
+          retention-days: 1
+
+      - name: Cancel remaining jobs on build failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
+
+  package-release:
+    needs:
+      - resolve
+      - backend-test
+      - admin-test
+      - build-backend
+      - build-admin
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out release tooling
+        uses: actions/checkout@v5
+        with:
+          path: tooling
+          fetch-depth: 1
+
+      - name: Check out target Backend
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.BACKEND_REF }}
+          path: Backend
+          fetch-depth: 1
+
+      - name: Download Backend image archive
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-image
+          path: images/backend
+
+      - name: Download Admin image archive
+        uses: actions/download-artifact@v4
+        with:
+          name: admin-image
+          path: images/admin
+
+      - name: Install zstd
         shell: bash
         run: |
           set -Eeuo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends zstd
+
+      - name: Load and verify images
+        env:
+          BACKEND_SHA: ${{ needs.resolve.outputs.backend_sha }}
+          ADMIN_SHA: ${{ needs.resolve.outputs.admin_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker load --input images/backend/wemini-backend.tar
+          docker load --input images/admin/wemini-admin.tar
+          docker image inspect "wemini-backend:${BACKEND_SHA}" >/dev/null
+          docker image inspect "wemini-admin:${ADMIN_SHA}" >/dev/null
+
+      - name: Export and compress image assets
+        env:
+          BACKEND_SHA: ${{ needs.resolve.outputs.backend_sha }}
+          ADMIN_SHA: ${{ needs.resolve.outputs.admin_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
           mkdir -p dist
-          docker save 'wemini-backend:${{ steps.source.outputs.backend_sha }}' \
-            | zstd -T0 -6 -o 'dist/wemini-backend-${{ steps.source.outputs.backend_sha }}.tar.zst'
-          docker save 'wemini-admin:${{ steps.source.outputs.admin_sha }}' \
-            | zstd -T0 -6 -o 'dist/wemini-admin-${{ steps.source.outputs.admin_sha }}.tar.zst'
+          docker save "wemini-backend:${BACKEND_SHA}" \
+            | zstd -T0 -6 -o "dist/wemini-backend-${BACKEND_SHA}.tar.zst"
+          docker save "wemini-admin:${ADMIN_SHA}" \
+            | zstd -T0 -6 -o "dist/wemini-admin-${ADMIN_SHA}.tar.zst"
 
       - name: Build deployment bundle and checksums
+        env:
+          TOOLING_SHA: ${{ needs.resolve.outputs.tooling_sha }}
+          BACKEND_SHA: ${{ needs.resolve.outputs.backend_sha }}
+          ADMIN_SHA: ${{ needs.resolve.outputs.admin_sha }}
         shell: bash
         run: |
           set -Eeuo pipefail
           python tooling/scripts/package_github_release.py \
-            --release-tag '${{ env.RELEASE_TAG }}' \
-            --tooling-commit '${{ steps.source.outputs.tooling_sha }}' \
-            --backend-commit '${{ steps.source.outputs.backend_sha }}' \
-            --admin-commit '${{ steps.source.outputs.admin_sha }}' \
-            --backend-archive 'dist/wemini-backend-${{ steps.source.outputs.backend_sha }}.tar.zst' \
-            --admin-archive 'dist/wemini-admin-${{ steps.source.outputs.admin_sha }}.tar.zst' \
+            --release-tag "$RELEASE_TAG" \
+            --tooling-commit "$TOOLING_SHA" \
+            --backend-commit "$BACKEND_SHA" \
+            --admin-commit "$ADMIN_SHA" \
+            --backend-archive "dist/wemini-backend-${BACKEND_SHA}.tar.zst" \
+            --admin-archive "dist/wemini-admin-${ADMIN_SHA}.tar.zst" \
             --runtime-compose Backend/docker-compose.deploy.yml \
             --output-dir dist
 
-      - name: Create draft GitHub Release with all assets
+      - name: Revalidate release tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ env.RELEASE_TAG }}
-          TOOLING_SHA: ${{ steps.source.outputs.tooling_sha }}
-          BACKEND_SHA: ${{ steps.source.outputs.backend_sha }}
-          ADMIN_SHA: ${{ steps.source.outputs.admin_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            printf 'release already exists: %s\n' "$RELEASE_TAG" >&2
+            exit 1
+          fi
+
+      - name: Create stable GitHub Release with all assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOOLING_SHA: ${{ needs.resolve.outputs.tooling_sha }}
+          BACKEND_SHA: ${{ needs.resolve.outputs.backend_sha }}
+          ADMIN_SHA: ${{ needs.resolve.outputs.admin_sha }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -238,23 +414,23 @@ jobs:
           Admin: $ADMIN_SHA
 
           Download all four assets, verify SHA256SUMS, extract the deployment bundle, then run install_release.sh as the deployment user." \
-            --draft \
             "dist/wemini-backend-${BACKEND_SHA}.tar.zst" \
             "dist/wemini-admin-${ADMIN_SHA}.tar.zst" \
             "dist/wemini-deploy-${RELEASE_TAG}.tar.gz" \
             dist/SHA256SUMS
-          gh release edit "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --draft=false
 
       - name: Write release summary
+        env:
+          TOOLING_SHA: ${{ needs.resolve.outputs.tooling_sha }}
+          BACKEND_SHA: ${{ needs.resolve.outputs.backend_sha }}
+          ADMIN_SHA: ${{ needs.resolve.outputs.admin_sha }}
         shell: bash
         run: |
           {
             printf '### GitHub Release published\n\n'
-            printf -- '- Tag: `%s`\n' '${{ env.RELEASE_TAG }}'
-            printf -- '- Release tooling: `%s`\n' '${{ steps.source.outputs.tooling_sha }}'
-            printf -- '- Backend: `%s`\n' '${{ steps.source.outputs.backend_sha }}'
-            printf -- '- Admin: `%s`\n' '${{ steps.source.outputs.admin_sha }}'
-            printf -- '- Assets: Backend image, Admin image, deployment bundle, SHA256SUMS\n'
+            printf -- '- Tag: `%s`\n' "$RELEASE_TAG"
+            printf -- '- Release tooling: `%s`\n' "$TOOLING_SHA"
+            printf -- '- Backend: `%s`\n' "$BACKEND_SHA"
+            printf -- '- Admin: `%s`\n' "$ADMIN_SHA"
+            printf -- '- Parallel jobs: Backend test/build, Admin test/build, package/release\n'
           } >> "$GITHUB_STEP_SUMMARY"
