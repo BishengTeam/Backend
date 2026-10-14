@@ -20,17 +20,21 @@ from app.domain.order.src.index import Order
 from app.domain.plan.src.index import Plan
 from app.domain.renshe.src.index import (
     RensheApplication,
+    RensheApplicationVersion,
     RensheAuditLog,
     RensheCleanupRun,
+    RensheExportItem,
+    RensheExportJob,
     RensheRefundRequest,
 )
-from app.domain.user.src.index import User
+from app.domain.user.src.index import AdminUser, User
 from app.services.renshe_application import RensheApplicationService
 from app.services.renshe_batch import RensheBatchService
 from app.integrations.wechat_pay import WechatPayRefund
 from app.port.config import settings
 from app.services.renshe_audit import RensheAuditQueryService
 from app.services.renshe_refund import RensheRefundService
+from app.services.renshe_review import RensheReviewService
 
 
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
@@ -147,6 +151,89 @@ async def test_audit_persistence_redacts_pii_at_sqlalchemy_boundary(
         "contact_phone": "[REDACTED]",
         "safe_count": 2,
     }
+
+
+async def test_external_review_export_binding_matches_the_current_version(
+    db_session: AsyncSession,
+) -> None:
+    suffix = uuid4().hex[:12]
+    now = datetime.now(timezone.utc)
+    user = User(openid=f"rsh_export_current_{suffix}")
+    admin = AdminUser(
+        username=f"rsh_export_admin_{suffix}",
+        password_hash="integration-only",
+        role="super_admin",
+    )
+    plan = Plan(
+        product_type="RS-ZY",
+        name=f"rsh_export_plan_{suffix}",
+        status="published",
+        capacity=0,
+        price_cents=50000,
+    )
+    db_session.add_all([user, admin, plan])
+    await db_session.flush()
+    application = RensheApplication(
+        user_id=user.id,
+        plan_id=plan.id,
+        status="pending_external_review",
+    )
+    db_session.add(application)
+    await db_session.flush()
+
+    def version(version_no: int) -> RensheApplicationVersion:
+        return RensheApplicationVersion(
+            application_id=application.id,
+            version_no=version_no,
+            submitted_by_user_id=user.id,
+            realname_snapshot={"real_name": "张三"},
+            student_snapshot={"school": "测试学校"},
+            form_data={"contact_phone": "13800138000"},
+            submitted_at=now,
+        )
+
+    first = version(1)
+    db_session.add(first)
+    await db_session.flush()
+    job = RensheExportJob(
+        plan_id=plan.id,
+        generation_no=1,
+        requested_by_admin_id=admin.id,
+        status="succeeded",
+        finished_at=now,
+    )
+    db_session.add(job)
+    await db_session.flush()
+    item = RensheExportItem(
+        job_id=job.id,
+        application_id=application.id,
+        version_id=first.id,
+        status="succeeded",
+    )
+    db_session.add(item)
+    await db_session.flush()
+    application.current_version_id = first.id
+
+    matched = await RensheReviewService._current_successful_export_item(
+        db_session,
+        plan_id=plan.id,
+        application_id=application.id,
+        version_id=first.id,
+    )
+    assert matched is not None
+    assert matched.id == item.id
+
+    second = version(2)
+    db_session.add(second)
+    await db_session.flush()
+    application.current_version_id = second.id
+    stale = await RensheReviewService._current_successful_export_item(
+        db_session,
+        plan_id=plan.id,
+        application_id=application.id,
+        version_id=second.id,
+    )
+    assert stale is None
 
 
 async def test_own_application_list_recovers_only_current_user_records(

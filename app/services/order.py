@@ -38,7 +38,7 @@ class OrderService:
         self.fulfillment = OrderFulfillmentService()
 
     async def create_order(self, user_id: int, data: OrderCreate) -> OrderResponse:
-        if data.product_type == "RS-ZY":
+        if data.product_type.strip().upper() in {"RS-ZY", "RENSHE"}:
             raise BusinessException("人社订单只能通过人社报名提交接口创建")
         async with get_db_ctx() as db:
             async with db.begin():

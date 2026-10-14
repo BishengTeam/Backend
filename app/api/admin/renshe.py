@@ -11,7 +11,10 @@ from app.schemas.renshe import (
     RensheAdminApplicationListItem,
     RensheAuditLogResponse,
     RensheApplicationStatus,
+    RensheBatchExternalReviewRequest,
+    RensheBatchExternalReviewResponse,
     RensheCleanupRunResponse,
+    RensheExportCreate,
     RensheExportJobResponse,
     RensheReviewCorrectionCreate,
     RensheReviewCorrectionResponse,
@@ -94,6 +97,45 @@ async def initial_review(
         data=body,
     )
     return success(data=result)
+
+
+@router.post(
+    "/applications/{application_id}/return-correction",
+    response_model=APIResponse[RensheReviewResponse],
+    summary="打回补正",
+    description=(
+        "用于初审通过后仍发现资料问题的日常处理；保留原审核历史，"
+        "生成新的初审驳回记录，考生补交后重新进入初审。"
+    ),
+)
+async def return_application_for_correction(
+    body: RensheReviewCreate,
+    application_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("user:write")),
+) -> APIResponse[RensheReviewResponse]:
+    result = await RensheReviewService().return_for_correction(
+        reviewer_id=admin.id,
+        application_id=application_id,
+        data=body,
+    )
+    return success(data=result)
+
+
+@router.post(
+    "/external-reviews/batch",
+    response_model=APIResponse[RensheBatchExternalReviewResponse],
+    summary="批量登记外审结果",
+    description="逐人校验当前版本是否已成功导出；部分失败不影响其他人员。",
+)
+async def batch_external_review(
+    body: RensheBatchExternalReviewRequest,
+    admin=Depends(require_permission("user:write")),
+) -> APIResponse[RensheBatchExternalReviewResponse]:
+    result = await RensheReviewService().batch_external_review(
+        reviewer_id=admin.id,
+        data=body,
+    )
+    return success(data=RensheBatchExternalReviewResponse(items=result))
 
 
 @router.post(
@@ -188,11 +230,16 @@ async def decide_refund(
 )
 async def create_export_job(
     plan_id: int = Path(..., ge=1),
+    body: RensheExportCreate | None = None,
     admin=Depends(require_permission("user:write")),
 ) -> APIResponse[RensheExportJobResponse]:
     from app.services.renshe_export import RensheExportService
 
-    result = await RensheExportService().create_job(plan_id=plan_id, admin_id=admin.id)
+    result = await RensheExportService().create_job(
+        plan_id=plan_id,
+        admin_id=admin.id,
+        application_ids=body.application_ids if body else None,
+    )
     return success(data=result, message="导出任务已创建")
 
 

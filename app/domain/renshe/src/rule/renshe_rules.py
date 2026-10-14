@@ -22,9 +22,14 @@ APPLICATION_TRANSITIONS: dict[str, set[str]] = {
     "pending_payment": {"draft", "pending_initial_review", "closed"},
     "pending_initial_review": {"initial_rejected", "pending_external_review", "closed"},
     "initial_rejected": {"pending_initial_review", "closed"},
-    "pending_external_review": {"external_rejected", "external_approved", "closed"},
+    "pending_external_review": {
+        "external_rejected",
+        "external_approved",
+        "initial_rejected",
+        "closed",
+    },
     "external_rejected": {"pending_initial_review", "closed"},
-    "external_approved": {"closed"},
+    "external_approved": {"initial_rejected", "closed"},
     "closed": set(),
 }
 

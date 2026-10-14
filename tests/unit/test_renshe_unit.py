@@ -132,7 +132,9 @@ def test_application_state_machine_accepts_only_frozen_paths():
         ("initial_rejected", "pending_initial_review"),
         ("pending_external_review", "external_rejected"),
         ("pending_external_review", "external_approved"),
+        ("pending_external_review", "initial_rejected"),
         ("external_rejected", "pending_initial_review"),
+        ("external_approved", "initial_rejected"),
         ("external_approved", "closed"),
     )
     for current, target in allowed:
@@ -633,7 +635,7 @@ async def test_admin_application_list_masks_pii_and_applies_new_filters(monkeypa
     assert item.contact_phone_masked == "138****8000"
     assert "11010519491231002X" not in item.model_dump_json()
     assert "13800138000" not in item.model_dump_json()
-    query_sql = str(db.executed[-1])
+    query_sql = "\n".join(str(query) for query in db.executed)
     assert "renshe_application.submitted_at" in query_sql
     assert "renshe_application.draft_data" in query_sql
     assert '"order".status' in query_sql
@@ -1124,3 +1126,29 @@ def test_cleanup_retry_requires_super_admin():
         ).dependant.dependencies
     }
     assert "require_super_admin" in dependency_names
+
+
+def test_external_approval_is_bound_to_current_successful_export():
+    service = (ROOT / "app/services/renshe_review.py").read_text(encoding="utf-8")
+    model = (
+        ROOT / "app/domain/renshe/src/model/renshe.py"
+    ).read_text(encoding="utf-8")
+    migration = (
+        ROOT / "alembic/versions/rsh002_review_export_binding.py"
+    ).read_text(encoding="utf-8")
+
+    assert "_current_successful_export_item" in service
+    assert "当前资料版本尚未成功导出，不能登记外审通过" in service
+    assert "export_item_id=export_item.id if export_item else None" in service
+    assert "ForeignKey(\"renshe_export_item.id\", ondelete=\"SET NULL\")" in model
+    assert "fk_renshe_review_export_item" in migration
+
+
+def test_renshe_review_has_daily_return_correction_and_batch_external_paths():
+    service = (ROOT / "app/services/renshe_review.py").read_text(encoding="utf-8")
+    api = (ROOT / "app/api/admin/renshe.py").read_text(encoding="utf-8")
+
+    assert "async def return_for_correction" in service
+    assert "async def batch_external_review" in service
+    assert '"/applications/{application_id}/return-correction"' in api
+    assert '"/external-reviews/batch"' in api

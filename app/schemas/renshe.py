@@ -184,6 +184,10 @@ class RensheAdminApplicationListItem(BaseModel):
     frozen_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    latest_export_job_id: int | None = None
+    latest_export_generation_no: int | None = None
+    latest_export_finished_at: datetime | None = None
+    current_version_exported: bool = False
 
 
 class RensheReviewCreate(BaseModel):
@@ -212,8 +216,36 @@ class RensheReviewResponse(BaseModel):
     required_changes: list[str] | None = None
     reviewer_id: int
     reviewed_at: datetime
+    export_item_id: int | None = None
 
     model_config = {"from_attributes": True}
+
+
+class RensheExportCreate(BaseModel):
+    application_ids: list[int] | None = Field(None, min_length=0, max_length=1000)
+
+
+class RensheBatchExternalReviewTarget(BaseModel):
+    application_id: int = Field(..., ge=1)
+
+
+class RensheBatchExternalReviewResult(BaseModel):
+    application_id: int
+    success: bool
+    status: Literal["success", "failed"]
+    reason: str | None = None
+    review: RensheReviewResponse | None = None
+
+
+class RensheBatchExternalReviewResponse(BaseModel):
+    items: list[RensheBatchExternalReviewResult] = Field(default_factory=list)
+
+
+class RensheBatchExternalReviewRequest(BaseModel):
+    targets: list[RensheBatchExternalReviewTarget] = Field(..., min_length=1, max_length=100)
+    decision: Literal["approved", "rejected"]
+    reason: str | None = Field(None, max_length=2000)
+    required_changes: list[str] | None = Field(None, max_length=64)
 
 
 class RensheReviewCorrectionCreate(BaseModel):
@@ -362,6 +394,19 @@ class RensheExportJobResponse(BaseModel):
     retry_count: int
     last_error: str | None = None
     volumes: list[RensheExportVolumeResponse] = Field(default_factory=list)
+    items: list["RensheExportItemResponse"] = Field(default_factory=list)
+
+    model_config = {"from_attributes": True}
+
+
+class RensheExportItemResponse(BaseModel):
+    id: int
+    job_id: int
+    application_id: int
+    version_id: int
+    status: Literal["queued", "running", "succeeded", "failed"]
+    estimated_size_bytes: int | None = None
+    last_error: str | None = None
 
     model_config = {"from_attributes": True}
 

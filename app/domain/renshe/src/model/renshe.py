@@ -168,6 +168,7 @@ class RensheReview(Base, TimestampMixin):
             name="ck_renshe_review_rejection_reason",
         ),
         Index("ix_renshe_review_application_stage", "application_id", "stage"),
+        Index("ix_renshe_review_export_item", "export_item_id"),
     )
 
     application_id: Mapped[int] = mapped_column(
@@ -186,6 +187,11 @@ class RensheReview(Base, TimestampMixin):
         Integer, ForeignKey("admin_user.id", ondelete="RESTRICT"), nullable=False
     )
     reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    export_item_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("renshe_export_item.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
 
 class RensheReviewCorrection(Base, TimestampMixin):

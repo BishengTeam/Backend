@@ -216,6 +216,8 @@ class OrderSystemTests(unittest.TestCase):
         ]
 
         self.assertIn("async with db.begin():", create_order_source)
+        self.assertIn('data.product_type.strip().upper() in {"RS-ZY", "RENSHE"}', create_order_source)
+        self.assertIn("人社订单只能通过人社报名提交接口创建", create_order_source)
         self.assertIn("price_tier = resolve_price_tier(identity.user_type)", create_order_source)
         self.assertIn("PriceConfig.user_type == price_tier", create_order_source)
         self.assertLess(

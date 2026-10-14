@@ -45,6 +45,7 @@ from app.port.exceptions import (
 )
 from app.utils.audit import redact_sensitive_text
 from app.schemas.renshe import (
+    RensheExportItemResponse,
     RensheExportJobResponse,
     RensheExportVolumeResponse,
     RensheSignedUrlResponse,
@@ -187,7 +188,13 @@ class RensheExportService:
     def _now() -> datetime:
         return datetime.now(timezone.utc)
 
-    async def create_job(self, *, plan_id: int, admin_id: int) -> RensheExportJobResponse:
+    async def create_job(
+        self,
+        *,
+        plan_id: int,
+        admin_id: int,
+        application_ids: list[int] | None = None,
+    ) -> RensheExportJobResponse:
         async with get_db_ctx() as db:
             plan = await db.scalar(
                 select(Plan).where(Plan.id == plan_id).with_for_update()
@@ -222,6 +229,18 @@ class RensheExportService:
                 return self._job_response(active_job, volumes)
 
             candidates = await self._eligible_candidate_rows(db, plan_id)
+            if application_ids is not None:
+                selected_ids = list(dict.fromkeys(application_ids))
+                if not selected_ids:
+                    raise BusinessException("请选择要导出的报名人员")
+                eligible_ids = {application_id for application_id, _, _ in candidates}
+                invalid_ids = [item for item in selected_ids if item not in eligible_ids]
+                if invalid_ids:
+                    raise BusinessException(
+                        f"所选 {len(invalid_ids)} 名人员当前不可导出，请刷新后重试"
+                    )
+                selected_set = set(selected_ids)
+                candidates = [item for item in candidates if item[0] in selected_set]
             if not candidates:
                 raise BusinessException("当前批次没有可导出的考生")
             generation_no = (
@@ -268,7 +287,14 @@ class RensheExportService:
             )
             await db.commit()
             await db.refresh(job)
-            return self._job_response(job, [])
+            items = (
+                await db.execute(
+                    select(RensheExportItem)
+                    .where(RensheExportItem.job_id == job.id)
+                    .order_by(RensheExportItem.application_id)
+                )
+            ).scalars().all()
+            return self._job_response(job, [], items)
 
     async def get_job(self, job_id: int) -> RensheExportJobResponse:
         async with get_db_ctx() as db:
@@ -282,7 +308,14 @@ class RensheExportService:
                     .order_by(RensheExportVolume.volume_no)
                 )
             ).scalars().all()
-            return self._job_response(job, volumes)
+            items = (
+                await db.execute(
+                    select(RensheExportItem)
+                    .where(RensheExportItem.job_id == job.id)
+                    .order_by(RensheExportItem.application_id)
+                )
+            ).scalars().all()
+            return self._job_response(job, volumes, items)
 
     async def list_jobs(self, plan_id: int) -> list[RensheExportJobResponse]:
         async with get_db_ctx() as db:
@@ -302,10 +335,27 @@ class RensheExportService:
                     .order_by(RensheExportVolume.job_id, RensheExportVolume.volume_no)
                 )
             ).scalars().all()
+            items = (
+                await db.execute(
+                    select(RensheExportItem)
+                    .where(RensheExportItem.job_id.in_([job.id for job in jobs]))
+                    .order_by(RensheExportItem.job_id, RensheExportItem.application_id)
+                )
+            ).scalars().all()
             by_job: dict[int, list[RensheExportVolume]] = {}
             for volume in volumes:
                 by_job.setdefault(volume.job_id, []).append(volume)
-            return [self._job_response(job, by_job.get(job.id, [])) for job in jobs]
+            items_by_job: dict[int, list[RensheExportItem]] = {}
+            for item in items:
+                items_by_job.setdefault(item.job_id, []).append(item)
+            return [
+                self._job_response(
+                    job,
+                    by_job.get(job.id, []),
+                    items_by_job.get(job.id, []),
+                )
+                for job in jobs
+            ]
 
     async def retry_job(self, *, job_id: int, admin_id: int) -> RensheExportJobResponse:
         async with get_db_ctx() as db:
@@ -751,6 +801,18 @@ class RensheExportService:
             await self.storage.delete_many(old_keys)
 
         async with get_db_ctx() as db:
+            selected_application_ids = list(
+                (
+                    await db.execute(
+                        select(RensheExportItem.application_id)
+                        .where(RensheExportItem.job_id == job_id)
+                        .distinct()
+                        .order_by(RensheExportItem.application_id)
+                    )
+                ).scalars().all()
+            )
+
+        async with get_db_ctx() as db:
             job = await db.scalar(
                 select(RensheExportJob)
                 .where(RensheExportJob.id == job_id, RensheExportJob.status == "running")
@@ -768,7 +830,13 @@ class RensheExportService:
             )
             await db.execute(delete(RensheExportVolume).where(RensheExportVolume.job_id == job.id))
             await db.execute(delete(RensheExportItem).where(RensheExportItem.job_id == job.id))
-            eligible = await self._eligible_candidate_rows(db, job.plan_id)
+            all_eligible = await self._eligible_candidate_rows(db, job.plan_id)
+            eligible_by_id = {row[0]: row for row in all_eligible}
+            eligible = [eligible_by_id[item] for item in selected_application_ids if item in eligible_by_id]
+            if selected_application_ids and len(eligible) != len(selected_application_ids):
+                raise BusinessException("所选人员资料状态已变化，请重新创建导出任务")
+            if not selected_application_ids:
+                eligible = all_eligible
             if not eligible:
                 raise BusinessException("当前批次没有可导出的考生")
             for application_id, version_id, estimated_size in eligible:
@@ -1242,7 +1310,9 @@ class RensheExportService:
 
     @staticmethod
     def _job_response(
-        job: RensheExportJob, volumes: Sequence[RensheExportVolume]
+        job: RensheExportJob,
+        volumes: Sequence[RensheExportVolume],
+        items: Sequence[RensheExportItem] = (),
     ) -> RensheExportJobResponse:
         return RensheExportJobResponse(
             id=job.id,
@@ -1274,6 +1344,18 @@ class RensheExportService:
                     ),
                 )
                 for volume in volumes
+            ],
+            items=[
+                RensheExportItemResponse(
+                    id=item.id,
+                    job_id=item.job_id,
+                    application_id=item.application_id,
+                    version_id=item.version_id,
+                    status=item.status,
+                    estimated_size_bytes=item.estimated_size_bytes,
+                    last_error=item.last_error,
+                )
+                for item in items
             ],
         )
 

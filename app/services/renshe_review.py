@@ -9,18 +9,27 @@ from app.domain.renshe.src.index import (
     RensheApplication,
     RensheApplicationVersion,
     RensheAuditLog,
+    RensheExportItem,
+    RensheExportJob,
     RensheMaterial,
     RensheReview,
     RensheReviewCorrection,
 )
 from app.domain.user.src.index import UserRealname
-from app.port.exceptions import ConflictException, NotFoundException, ValidationException
+from app.port.exceptions import (
+    BusinessException,
+    ConflictException,
+    NotFoundException,
+    ValidationException,
+)
 from app.schemas.common import PaginatedData
 from app.schemas.renshe import (
     RensheAdminApplicationDetailResponse,
     RensheAdminApplicationListItem,
     RensheAdminVersionDetailResponse,
     RensheApplicationResponse,
+    RensheBatchExternalReviewRequest,
+    RensheBatchExternalReviewResult,
     RensheMaterialMetadataResponse,
     RensheReviewCorrectionCreate,
     RensheReviewCorrectionResponse,
@@ -119,6 +128,9 @@ class RensheReviewService:
                     .limit(page_size)
                 )
             ).all()
+            export_rows = await self._successful_export_rows(
+                db, [application.id for application, *_ in rows]
+            )
             items = []
             for application, version, order, realname in rows:
                 realname_snapshot = dict(version.realname_snapshot) if version else {}
@@ -129,6 +141,7 @@ class RensheReviewService:
                     id_card = realname.id_card_number
                     candidate_name = realname.real_name
                 phone = form_data.get("contact_phone")
+                export_snapshot = export_rows.get(application.id)
                 items.append(
                     RensheAdminApplicationListItem(
                         id=application.id,
@@ -145,6 +158,18 @@ class RensheReviewService:
                         frozen_at=application.frozen_at,
                         created_at=application.created_at,
                         updated_at=application.updated_at,
+                        latest_export_job_id=export_snapshot["job_id"] if export_snapshot else None,
+                        latest_export_generation_no=(
+                            export_snapshot["generation_no"] if export_snapshot else None
+                        ),
+                        latest_export_finished_at=(
+                            export_snapshot["finished_at"] if export_snapshot else None
+                        ),
+                        current_version_exported=(
+                            export_snapshot["version_id"] == application.current_version_id
+                            if export_snapshot
+                            else False
+                        ),
                     )
                 )
             return PaginatedData[RensheAdminApplicationListItem](
@@ -296,6 +321,17 @@ class RensheReviewService:
             if order is None:
                 raise ConflictException("只有已支付报名可以审核")
 
+            export_item = None
+            if stage == "external":
+                export_item = await self._current_successful_export_item(
+                    db,
+                    plan_id=application.plan_id,
+                    application_id=application.id,
+                    version_id=application.current_version_id,
+                )
+                if data.decision == "approved" and export_item is None:
+                    raise ConflictException("当前资料版本尚未成功导出，不能登记外审通过")
+
             now = self._now()
             review = RensheReview(
                 application_id=application.id,
@@ -306,6 +342,7 @@ class RensheReviewService:
                 required_changes=data.required_changes,
                 reviewer_id=reviewer_id,
                 reviewed_at=now,
+                export_item_id=export_item.id if export_item else None,
             )
             db.add(review)
             try:
@@ -334,6 +371,119 @@ class RensheReviewService:
             await db.commit()
             await db.refresh(review)
             return RensheReviewResponse.model_validate(review)
+
+    async def return_for_correction(
+        self,
+        *,
+        reviewer_id: int,
+        application_id: int,
+        data: RensheReviewCreate,
+    ) -> RensheReviewResponse:
+        if data.decision != "rejected":
+            raise ValidationException("打回补正只能选择驳回")
+        allowed_statuses = {"pending_external_review", "external_approved"}
+        async with get_db_ctx() as db:
+            application = await db.scalar(
+                select(RensheApplication)
+                .where(RensheApplication.id == application_id)
+                .with_for_update()
+            )
+            if application is None:
+                raise NotFoundException("人社报名")
+            if application.frozen_at is not None:
+                raise ConflictException("退款处理中，不能打回补正")
+            if application.status not in allowed_statuses:
+                raise ConflictException("当前报名状态不能打回补正")
+            if application.current_version_id is None:
+                raise ConflictException("报名缺少当前提交版本")
+
+            from_status = application.status
+            now = self._now()
+            review = RensheReview(
+                application_id=application.id,
+                version_id=application.current_version_id,
+                stage="initial",
+                decision="rejected",
+                reason=data.reason,
+                required_changes=data.required_changes,
+                reviewer_id=reviewer_id,
+                reviewed_at=now,
+            )
+            db.add(review)
+            try:
+                assert_application_transition(application.status, "initial_rejected")
+            except ValueError as exc:
+                raise ConflictException("当前报名状态不允许打回补正") from exc
+            application.status = "initial_rejected"
+            application.initial_reviewed_at = now
+            await db.flush()
+            db.add(
+                RensheAuditLog(
+                    actor_type="admin",
+                    actor_id=reviewer_id,
+                    action="review.return_for_correction",
+                    object_type="review",
+                    object_id=review.id,
+                    application_id=application.id,
+                    version_id=application.current_version_id,
+                    result="succeeded",
+                    summary={
+                        "from_status": from_status,
+                        "to_status": "initial_rejected",
+                    },
+                )
+            )
+            await db.commit()
+            await db.refresh(review)
+            return RensheReviewResponse.model_validate(review)
+
+    async def batch_external_review(
+        self,
+        *,
+        reviewer_id: int,
+        data: RensheBatchExternalReviewRequest,
+    ) -> list[RensheBatchExternalReviewResult]:
+        if data.decision == "rejected" and (
+            not data.reason or not data.reason.strip() or not data.required_changes
+        ):
+            raise ValidationException("外审驳回必须填写原因和待修改项")
+        review_data = RensheReviewCreate(
+            decision=data.decision,
+            reason=data.reason,
+            required_changes=data.required_changes,
+        )
+        results: list[RensheBatchExternalReviewResult] = []
+        for target in data.targets:
+            try:
+                review = await self.review(
+                    reviewer_id=reviewer_id,
+                    application_id=target.application_id,
+                    stage="external",
+                    data=review_data,
+                )
+                results.append(
+                    RensheBatchExternalReviewResult(
+                        application_id=target.application_id,
+                        success=True,
+                        status="success",
+                        review=review,
+                    )
+                )
+            except (
+                BusinessException,
+                ConflictException,
+                NotFoundException,
+                ValidationException,
+            ) as exc:
+                results.append(
+                    RensheBatchExternalReviewResult(
+                        application_id=target.application_id,
+                        success=False,
+                        status="failed",
+                        reason=str(exc),
+                    )
+                )
+        return results
 
     async def correct_review(
         self,
@@ -420,3 +570,65 @@ class RensheReviewService:
             await db.commit()
             await db.refresh(correction)
             return RensheReviewCorrectionResponse.model_validate(correction)
+
+    @staticmethod
+    async def _successful_export_rows(
+        db, application_ids: list[int]
+    ) -> dict[int, dict[str, object]]:
+        if not application_ids:
+            return {}
+        rows = (
+            await db.execute(
+                select(
+                    RensheExportItem.application_id,
+                    RensheExportItem.version_id,
+                    RensheExportJob.id.label("job_id"),
+                    RensheExportJob.generation_no,
+                    RensheExportJob.finished_at,
+                )
+                .join(RensheExportJob, RensheExportJob.id == RensheExportItem.job_id)
+                .where(
+                    RensheExportItem.application_id.in_(application_ids),
+                    RensheExportItem.status == "succeeded",
+                    RensheExportJob.status == "succeeded",
+                )
+                .order_by(
+                    RensheExportItem.application_id,
+                    RensheExportJob.generation_no.desc(),
+                    RensheExportItem.id.desc(),
+                )
+            )
+        ).all()
+        snapshots: dict[int, dict[str, object]] = {}
+        for row in rows:
+            app_id = int(row.application_id)
+            if app_id not in snapshots:
+                snapshots[app_id] = {
+                    "version_id": row.version_id,
+                    "job_id": row.job_id,
+                    "generation_no": row.generation_no,
+                    "finished_at": row.finished_at,
+                }
+        return snapshots
+
+    @staticmethod
+    async def _current_successful_export_item(
+        db,
+        *,
+        plan_id: int,
+        application_id: int,
+        version_id: int,
+    ) -> RensheExportItem | None:
+        return await db.scalar(
+            select(RensheExportItem)
+            .join(RensheExportJob, RensheExportJob.id == RensheExportItem.job_id)
+            .where(
+                RensheExportJob.plan_id == plan_id,
+                RensheExportItem.application_id == application_id,
+                RensheExportItem.version_id == version_id,
+                RensheExportItem.status == "succeeded",
+                RensheExportJob.status == "succeeded",
+            )
+            .order_by(RensheExportJob.generation_no.desc(), RensheExportItem.id.desc())
+            .limit(1)
+        )
