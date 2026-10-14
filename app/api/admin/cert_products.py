@@ -1,18 +1,22 @@
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, File, Path, Query, UploadFile
 
 from app.middleware.auth import require_permission
+from app.middleware.auth import require_super_admin
 from app.schemas.admin_cert_product import (
     CertType,
     CertProductCreate,
+    CertProductCatalogImportResponse,
     CertProductCatalogResponse,
     CertProductResponse,
     CertProductStats,
     CertProductUpdate,
 )
 from app.schemas.common import APIResponse, PaginatedData, success
+from app.port.exceptions import BusinessException
 from app.services.admin_cert_product import AdminCertProductService
 
 router = APIRouter(prefix="/cert-products", tags=["管理后台-认证产品"])
+MAX_PRICE_SHEET_BYTES = 10 * 1024 * 1024 + 1
 
 
 @router.get(
@@ -39,6 +43,35 @@ async def list_catalog(
     """获取认证产品目录"""
     result = await AdminCertProductService().list_catalog(type)
     return success(data=result)
+
+
+@router.post(
+    "/catalog/import",
+    response_model=APIResponse[CertProductCatalogImportResponse],
+    summary="导入 H3C 厂商价格表",
+    description=(
+        "仅超级管理员可上传厂商价格表 xlsx。系统会更新受控产品目录，"
+        "并同步原价/网院优惠券两个标准价格档；不会自动创建认证产品。"
+    ),
+)
+async def import_catalog(
+    file: UploadFile = File(..., description="H3C 厂商价格表 xlsx"),
+    _admin=Depends(require_permission("content:write")),
+    _super_admin=Depends(require_super_admin),
+) -> APIResponse[CertProductCatalogImportResponse]:
+    filename = file.filename or "价格表.xlsx"
+    if not filename.lower().endswith(".xlsx"):
+        raise BusinessException("价格表仅支持 xlsx 文件")
+    content = await file.read(MAX_PRICE_SHEET_BYTES)
+    if len(content) >= MAX_PRICE_SHEET_BYTES:
+        raise BusinessException("价格表不能超过 10MB")
+    if not content:
+        raise BusinessException("价格表文件为空")
+    result = await AdminCertProductService().import_h3c_catalog(
+        content=content,
+        source=filename[-128:],
+    )
+    return success(data=result, message="价格表目录已更新")
 
 
 @router.get(

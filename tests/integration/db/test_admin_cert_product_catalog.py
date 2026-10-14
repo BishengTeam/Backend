@@ -144,6 +144,76 @@ async def test_create_from_catalog_links_and_validates(catalog_context) -> None:
         )
 
 
+async def test_import_price_sheet_upserts_catalog_and_prices(
+    catalog_context,
+    session_factory,
+) -> None:
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from app.models.cert_product_catalog import CertProductCatalog
+    from app.domain.order.src.index import PriceConfig
+    from app.services.admin_cert_product import AdminCertProductService
+    from sqlalchemy import select
+
+    code = f"GB0T{uuid4().hex[:6].upper()}"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "新华三考试详情"
+    worksheet.append([])
+    worksheet.append([
+        None, None, "导入测试认证", None, code, "原价", 1200,
+        1, "无", 60, 50, 1000, 600, 3, None, "导入测试",
+    ])
+    worksheet.append([None, None, None, None, None, "网院优惠券", 500])
+    content = BytesIO()
+    workbook.save(content)
+    content.seek(0)
+
+    service = AdminCertProductService()
+    first = await service.import_h3c_catalog(
+        content=content.read(), source="import-test.xlsx"
+    )
+    assert first.imported_count == 1
+    assert first.created_count == 1
+    assert first.price_upserted_count == 2
+
+    content.seek(0)
+    second = await service.import_h3c_catalog(
+        content=content.read(), source="import-test.xlsx"
+    )
+    assert second.created_count == 0
+    assert second.updated_count == 1
+    assert second.price_upserted_count == 0
+
+    async with session_factory() as db:
+        catalog = await db.scalar(
+            select(CertProductCatalog).where(CertProductCatalog.code == code)
+        )
+        assert catalog is not None
+        assert catalog.pass_score == 600
+        assert catalog.source == "import-test.xlsx"
+        prices = (
+            await db.execute(
+                select(PriceConfig).where(PriceConfig.product_type == code)
+            )
+        ).scalars().all()
+        assert {row.user_type: row.price for row in prices} == {
+            "normal": 120000,
+            "student": 50000,
+        }
+        catalog_items = await service.list_catalog("h3c")
+        imported = [item for item in catalog_items if item.code == code]
+        assert {item.user_type: item.price_cents for item in imported[0].prices} == {
+            "normal": 120000,
+            "student": 50000,
+        }
+        await db.delete(catalog)
+        for row in prices:
+            await db.delete(row)
+        await db.commit()
+
+
 def test_import_script_parses_price_sheet() -> None:
     """导入脚本应能解析真实价格表并识别目标编码"""
     import sys

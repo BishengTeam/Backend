@@ -1,4 +1,6 @@
 from sqlalchemy import Integer as SAInteger, func, select
+from io import BytesIO
+from openpyxl import load_workbook
 
 from app.adapter.database import get_db_ctx
 from app.domain.order.src.index import Order, PriceConfig
@@ -7,6 +9,7 @@ from app.models.cert_product import CertProduct
 from app.models.cert_product_catalog import CertProductCatalog
 from app.port.exceptions import BusinessException, NotFoundException
 from app.schemas.admin_cert_product import (
+    CertProductCatalogImportResponse,
     CertProductCreate,
     CertProductPrice,
     CertProductResponse,
@@ -24,9 +27,136 @@ TYPE_LABELS: dict[str, str] = {
 }
 
 PRICE_USER_TYPES = ("student", "normal")
+H3C_PRICE_SHEET_NAME = "新华三考试详情"
+
+
+def _to_int(value):
+    if value is None or value == "":
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_h3c_price_sheet(content: bytes) -> list[dict]:
+    """Parse the controlled H3C catalog rows from the vendor price workbook."""
+    try:
+        workbook = load_workbook(BytesIO(content), data_only=True, read_only=True)
+        if H3C_PRICE_SHEET_NAME not in workbook.sheetnames:
+            raise BusinessException("价格表缺少「新华三考试详情」工作表")
+        worksheet = workbook[H3C_PRICE_SHEET_NAME]
+        parsed: dict[str, dict] = {}
+        current: dict | None = None
+        for row in worksheet.iter_rows(values_only=True):
+            if len(row) < 14:
+                continue
+            subject = str(row[2]).strip() if row[2] else ""
+            code = str(row[4]).strip() if row[4] else ""
+            price_kind = str(row[5]).strip() if row[5] else ""
+            price_yuan = _to_int(row[6])
+            if code and code.startswith("GB"):
+                current = {
+                    "code": code,
+                    "name": subject or code,
+                    "duration_minutes": _to_int(row[9]),
+                    "question_count": _to_int(row[10]),
+                    "total_score": _to_int(row[11]),
+                    "pass_score": _to_int(row[12]),
+                    "cert_validity_years": _to_int(row[13]),
+                    "retake_count": _to_int(row[7]),
+                    "prerequisite": str(row[8]).strip() if row[8] else None,
+                    "remark": str(row[15]).strip() if len(row) > 15 and row[15] else None,
+                    "normal_price_yuan": price_yuan,
+                    "student_price_yuan": None,
+                }
+                parsed[code] = current
+            elif current is not None and price_kind == "网院优惠券" and price_yuan is not None:
+                current["student_price_yuan"] = price_yuan
+        workbook.close()
+    except BusinessException:
+        raise
+    except Exception as exc:
+        raise BusinessException("价格表格式无法解析，请上传厂商提供的 xlsx 文件") from exc
+    if not parsed:
+        raise BusinessException("价格表中没有可导入的 H3C 产品目录")
+    return list(parsed.values())
 
 
 class AdminCertProductService:
+    async def import_h3c_catalog(
+        self, *, content: bytes, source: str
+    ) -> CertProductCatalogImportResponse:
+        rows = parse_h3c_price_sheet(content)
+        created = updated = price_upserted = 0
+        async with get_db_ctx() as db:
+            async with db.begin():
+                for row in rows:
+                    catalog = await db.scalar(
+                        select(CertProductCatalog).where(
+                            CertProductCatalog.type == "h3c",
+                            CertProductCatalog.code == row["code"],
+                        )
+                    )
+                    if catalog is None:
+                        catalog = CertProductCatalog(
+                            type="h3c",
+                            code=row["code"],
+                            name=row["name"],
+                        )
+                        db.add(catalog)
+                        created += 1
+                    else:
+                        updated += 1
+
+                    catalog.name = row["name"]
+                    catalog.duration_minutes = row["duration_minutes"]
+                    catalog.question_count = row["question_count"]
+                    catalog.total_score = row["total_score"]
+                    catalog.pass_score = row["pass_score"]
+                    catalog.cert_validity_years = row["cert_validity_years"]
+                    catalog.retake_count = row["retake_count"]
+                    catalog.prerequisite = row["prerequisite"]
+                    catalog.remark = row["remark"]
+                    catalog.source = source
+                    await db.flush()
+
+                    price_rows = [("normal", row["normal_price_yuan"])]
+                    if row["student_price_yuan"] is not None:
+                        price_rows.append(("student", row["student_price_yuan"]))
+                    for user_type, yuan in price_rows:
+                        if yuan is None:
+                            continue
+                        price = await db.scalar(
+                            select(PriceConfig).where(
+                                PriceConfig.product_type == row["code"],
+                                PriceConfig.user_type == user_type,
+                            )
+                        )
+                        cents = int(yuan) * 100
+                        if price is None:
+                            db.add(
+                                PriceConfig(
+                                    product_type=row["code"],
+                                    user_type=user_type,
+                                    price=cents,
+                                    is_active=True,
+                                )
+                            )
+                            price_upserted += 1
+                        elif price.price != cents or not price.is_active:
+                            price.price = cents
+                            price.is_active = True
+                            price_upserted += 1
+
+        return CertProductCatalogImportResponse(
+            imported_count=len(rows),
+            created_count=created,
+            updated_count=updated,
+            price_upserted_count=price_upserted,
+            source=source,
+        )
+
     async def list_catalog(
         self, type: str | None
     ) -> list[CertProductCatalogResponse]:
@@ -39,10 +169,14 @@ class AdminCertProductService:
             used_codes = {
                 row[0] for row in (await db.execute(select(CertProduct.code))).all()
             }
+            prices = await self._load_active_prices(db, [row.code for row in rows])
             return [
                 CertProductCatalogResponse.model_validate(
                     row
-                ).model_copy(update={"instantiated": row.code in used_codes})
+                ).model_copy(update={
+                    "instantiated": row.code in used_codes,
+                    "prices": prices.get(row.code, []),
+                })
                 for row in rows
             ]
 

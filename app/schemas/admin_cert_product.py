@@ -45,8 +45,17 @@ class CertProductCatalogResponse(BaseModel):
     remark: str | None
     source: str | None
     instantiated: bool = False
+    prices: list[CertProductPrice] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
+
+
+class CertProductCatalogImportResponse(BaseModel):
+    imported_count: int = Field(..., ge=0)
+    created_count: int = Field(..., ge=0)
+    updated_count: int = Field(..., ge=0)
+    price_upserted_count: int = Field(..., ge=0)
+    source: str = Field(..., max_length=128)
 
 
 class CertProductCreate(BaseModel):
