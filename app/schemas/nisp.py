@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.schemas.consultation_group import ConsultationGroupUserResponse
+
 NispLevel = Literal["1", "2"]
 NispRegistrationStatus = Literal[
     "pending_payment",
@@ -202,6 +204,7 @@ class NispRegistrationResponse(BaseModel):
     level: NispLevel
     status: NispRegistrationStatus
     consultation_group_qrcode_url: str | None = None
+    consultation_group: ConsultationGroupUserResponse | None = None
     active_refund: "NispRegistrationRefundSummary | None" = None
     candidate_snapshot: dict
     order_status: str

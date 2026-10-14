@@ -37,6 +37,7 @@ from app.schemas.renshe import (
     RensheVersionSummary,
 )
 from app.services.agreement_template import ensure_accepted
+from app.services.consultation_group import ConsultationGroupService
 from app.services.plan_enrollment import CAPACITY_OCCUPYING_ORDER_STATUSES, PlanEnrollmentService
 from app.utils.payment import generate_out_trade_no
 from app.utils.pii import identity_hash
@@ -430,6 +431,7 @@ class RensheApplicationService:
             )
             if application is None:
                 raise NotFoundException("人社报名")
+            plan = await db.get(Plan, application.plan_id)
             versions = (
                 await db.execute(
                     select(RensheApplicationVersion)
@@ -473,6 +475,15 @@ class RensheApplicationService:
                 latest_rejection_stage=rejection.stage if rejection else None,
                 latest_rejection_reason=rejection.reason if rejection else None,
                 required_changes=rejection.required_changes if rejection else None,
+                consultation_group=(
+                    await ConsultationGroupService.get_user_group(
+                        db,
+                        plan=plan,
+                        registration_status=application.status,
+                    )
+                    if plan is not None
+                    else None
+                ),
             )
 
     async def cancel_pending_payment(self, user_id: int, application_id: int) -> None:

@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.schemas.consultation_group import ConsultationGroupUserResponse
+
 
 H3cRegistrationType = Literal["coupon", "student", "full"]
 H3cExportRegistrationType = Literal["coupon", "student", "full", "mixed"]
@@ -252,6 +254,7 @@ class H3cRegistrationResponse(BaseModel):
     order_id: int
     registration_type: H3cRegistrationType
     status: H3cRegistrationStatus
+    consultation_group: ConsultationGroupUserResponse | None = None
     active_refund: "H3cRegistrationRefundSummary | None" = None
     candidate_snapshot: dict
     order_status: str

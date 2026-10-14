@@ -6,6 +6,7 @@ from app.api.admin.agreement_templates import router as agreement_templates_rout
 from app.api.admin.auth import router as auth_router
 from app.api.admin.banners import router as banners_router
 from app.api.admin.cert_products import router as cert_products_router
+from app.api.admin.consultation_groups import router as consultation_groups_router
 from app.api.admin.competition import router as competition_legacy_router
 from app.api.admin.competitions import router as competitions_router
 from app.api.admin.coupons import router as coupons_router
@@ -40,6 +41,7 @@ router.include_router(activities_router)
 router.include_router(auth_router)
 router.include_router(banners_router)
 router.include_router(cert_products_router)
+router.include_router(consultation_groups_router)
 router.include_router(users_router)
 router.include_router(orders_router)
 router.include_router(points_mall_router)

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.order import OrderStatus
 from app.schemas.plan import PlanStatus
+from app.schemas.consultation_group import ConsultationGroupUserResponse
 
 
 RensheApplicationStatus = Literal[
@@ -122,6 +123,7 @@ class RensheApplicationDetailResponse(RensheApplicationResponse):
     latest_rejection_stage: Literal["initial", "external"] | None = None
     latest_rejection_reason: str | None = None
     required_changes: list[str] | None = None
+    consultation_group: ConsultationGroupUserResponse | None = None
 
 
 class RensheApplicationPlanSummary(BaseModel):

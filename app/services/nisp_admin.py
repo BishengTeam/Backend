@@ -10,6 +10,7 @@ from app.domain.plan.src.index import Plan
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.domain.order.src.index import Order, apply_order_status_transition
 from app.models.cert_product import CertProduct
+from app.models.consultation_group import CertConsultationGroup
 from app.services.nisp_lifecycle import occupied_count, request_refund
 from app.services.points_mall import release_order_coupon
 from app.services.certification_identity import validate_nisp_batch_product
@@ -106,6 +107,11 @@ class NispAdminService:
                 )
                 db.add(batch)
                 await db.flush()
+                await self._sync_legacy_qrcode(
+                    db,
+                    plan_id=plan.id,
+                    qrcode_url=data.consultation_group_qrcode_url,
+                )
                 return await self._response(db, batch)
 
     async def create_batch(self, data: NispExamBatchCreate) -> NispExamBatchResponse:
@@ -122,6 +128,12 @@ class NispAdminService:
             db.add(batch)
             await db.commit()
             await db.refresh(batch)
+            await self._sync_legacy_qrcode(
+                db,
+                plan_id=batch.plan_id,
+                qrcode_url=data.consultation_group_qrcode_url,
+            )
+            await db.commit()
             return await self._response(db, batch)
 
     async def get_batch(self, batch_id: int) -> NispExamBatchResponse:
@@ -175,7 +187,7 @@ class NispAdminService:
 
                 batch_fields = {
                     "training_org", "training_teacher", "training_address",
-                    "training_start", "training_end", "consultation_group_qrcode_url",
+                    "training_start", "training_end",
                     "payment_timeout_minutes", "resubmission_window_hours",
                     "max_resubmissions",
                 }
@@ -184,6 +196,16 @@ class NispAdminService:
                     if field in {"training_start", "training_end"}:
                         value = _utc(value)
                     setattr(batch, field, value)
+
+                if "consultation_group_qrcode_url" in payload:
+                    batch.consultation_group_qrcode_url = payload[
+                        "consultation_group_qrcode_url"
+                    ]
+                    await self._sync_legacy_qrcode(
+                        db,
+                        plan_id=plan.id,
+                        qrcode_url=payload["consultation_group_qrcode_url"],
+                    )
 
                 if "price_cents" in payload:
                     plan.price_cents = payload["price_cents"]
@@ -438,6 +460,25 @@ class NispAdminService:
         return batch, plan
 
     @staticmethod
+    async def _sync_legacy_qrcode(db, *, plan_id: int, qrcode_url: str | None) -> None:
+        """Keep legacy NISP clients compatible with the shared configuration."""
+        row = await db.get(CertConsultationGroup, plan_id, with_for_update=True)
+        cleaned = (qrcode_url or "").strip() or None
+        if cleaned is None:
+            if row is not None:
+                await db.delete(row)
+            return
+        if row is None:
+            db.add(CertConsultationGroup(
+                plan_id=plan_id,
+                qrcode_url=cleaned,
+                version=1,
+            ))
+        else:
+            row.qrcode_url = cleaned
+            row.version += 1
+
+    @staticmethod
     def _validate_schedule(
         plan: Plan,
         *,
@@ -466,6 +507,7 @@ class NispAdminService:
                 .group_by(NispRegistration.status)
             )
         ).all()
+        consultation = await db.get(CertConsultationGroup, batch.plan_id)
         return NispExamBatchResponse(
             id=batch.id,
             plan_id=batch.plan_id,
@@ -483,7 +525,9 @@ class NispAdminService:
             training_address=batch.training_address,
             training_start=batch.training_start,
             training_end=batch.training_end,
-            consultation_group_qrcode_url=batch.consultation_group_qrcode_url,
+            consultation_group_qrcode_url=(
+                consultation.qrcode_url if consultation is not None else None
+            ),
             level1_price_cents=batch.level1_price_cents,
             level2_price_cents=batch.level2_price_cents,
             payment_timeout_minutes=batch.payment_timeout_minutes,

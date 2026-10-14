@@ -107,6 +107,7 @@ from app.models.deployment_acceptance import (
 
 from app.models.cert_product import CertProduct
 from app.models.cert_product_catalog import CertProductCatalog
+from app.models.consultation_group import CertConsultationGroup
 from app.domain.points_mall.src import (
     PointsMallItem,
     PointsMallRedemption,
@@ -126,6 +127,7 @@ __all__ = [
     "Agreement",
     "Certification",
     "CertProductCatalog",
+    "CertConsultationGroup",
     "Collection",
     "CompetitionReg",
     "Conversation",

@@ -56,6 +56,7 @@ from app.schemas.h3c_registration import (
     H3cRegistrationVersionResponse,
 )
 from app.services.agreement_template import ensure_accepted
+from app.services.consultation_group import ConsultationGroupService
 from app.services.certification_identity import (
     assert_submitted_identity,
     lock_verified_identity,
@@ -1216,6 +1217,15 @@ class H3cRegistrationService:
     ) -> H3cRegistrationResponse:
         order = await db.get(Order, registration.order_id)
         plan = await db.get(Plan, registration.plan_id)
+        consultation_group = (
+            await ConsultationGroupService.get_user_group(
+                db,
+                plan=plan,
+                registration_status=registration.status,
+            )
+            if plan is not None
+            else None
+        )
         active_refund = await db.scalar(
             select(H3cRefundRequest)
             .where(
@@ -1325,6 +1335,7 @@ class H3cRegistrationService:
             order_id=registration.order_id,
             registration_type=registration.registration_type,
             status=registration.status,
+            consultation_group=consultation_group,
             active_refund=(
                 H3cRegistrationRefundSummary.model_validate(active_refund)
                 if active_refund is not None

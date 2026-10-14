@@ -40,6 +40,7 @@ NISP_CORRECTABLE_FIELDS = {
     "gender", "age", "education", "address", "zip_code",
 }
 from app.services.points_mall import release_order_coupon
+from app.services.consultation_group import ConsultationGroupService
 from app.services.certification_identity import (
     assert_submitted_identity,
     lock_verified_identity,
@@ -879,6 +880,26 @@ class NispRegistrationService:
 
         order = await db.get(Order, registration.order_id)
         batch = await db.get(NispExamBatch, registration.batch_id)
+        plan = await db.get(Plan, registration.plan_id)
+        consultation_group = (
+            await ConsultationGroupService.get_user_group(
+                db,
+                plan=plan,
+                registration_status=registration.status,
+            )
+            if plan is not None
+            else None
+        )
+        legacy_consultation_group = (
+            ConsultationGroupService.legacy_nisp_group(
+                batch=batch,
+                plan=plan,
+                registration_status=registration.status,
+            )
+            if consultation_group is None and batch is not None and plan is not None
+            else None
+        )
+        visible_consultation_group = consultation_group or legacy_consultation_group
         active_refund = await db.scalar(
             select(NispRefundRequest)
             .where(
@@ -967,8 +988,11 @@ class NispRegistrationService:
             level=registration.level,
             status=registration.status,
             consultation_group_qrcode_url=(
-                batch.consultation_group_qrcode_url if batch is not None else None
+                visible_consultation_group.qrcode_url
+                if visible_consultation_group is not None
+                else None
             ),
+            consultation_group=visible_consultation_group,
             active_refund=(
                 NispRegistrationRefundSummary.model_validate(active_refund)
                 if active_refund is not None
