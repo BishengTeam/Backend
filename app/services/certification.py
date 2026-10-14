@@ -34,6 +34,7 @@ def cert_product_response(cert_product: CertProduct) -> CertificationResponse:
         vendor=CERT_PRODUCT_VENDOR_MAP.get(cert_product.type, cert_product.type),
         requires_xuexin=False,
         pay_first=True,
+        home_cover_url=cert_product.home_cover_url,
     )
 
 

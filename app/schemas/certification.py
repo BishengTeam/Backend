@@ -15,6 +15,8 @@ class CertificationResponse(BaseModel):
     vendor: Vendor
     requires_xuexin: bool
     pay_first: bool = Field(..., description="是否先支付后填写报名表")
+    # 首页认证专区通栏大图（1404×640）；空则小程序回退厂商渐变占位
+    home_cover_url: str | None = None
 
     model_config = {"from_attributes": True}
 

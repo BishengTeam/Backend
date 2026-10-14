@@ -16,5 +16,7 @@ class CertProduct(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     chinese_name: Mapped[str] = mapped_column(String(128), nullable=False)
     description: Mapped[str | None] = mapped_column(String(512))
+    # 首页认证专区通栏大图（1404×640）；空则小程序回退厂商渐变占位
+    home_cover_url: Mapped[str | None] = mapped_column(String(512))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")

@@ -19,6 +19,8 @@ class CertProductResponse(BaseModel):
     name: str
     chinese_name: str
     description: str | None
+    # 首页认证专区通栏大图（1404×640）
+    home_cover_url: str | None
     is_active: bool
     sort_order: int
     prices: list[CertProductPrice] = Field(default_factory=list)
@@ -54,6 +56,7 @@ class CertProductCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=64, description="英文名")
     chinese_name: str = Field(..., min_length=1, max_length=128, description="中文名")
     description: str | None = Field(None, max_length=512)
+    home_cover_url: str | None = Field(None, max_length=512, description="首页认证专区通栏大图（1404×640）")
     is_active: bool = Field(True)
     sort_order: int = Field(0, ge=0)
     prices: list[CertProductPrice] = Field(default_factory=list)
@@ -64,6 +67,7 @@ class CertProductUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=64)
     chinese_name: str | None = Field(None, min_length=1, max_length=128)
     description: str | None = Field(None, max_length=512)
+    home_cover_url: str | None = Field(None, max_length=512, description="首页认证专区通栏大图（1404×640）")
     is_active: bool | None = None
     sort_order: int | None = Field(None, ge=0)
     prices: list[CertProductPrice] | None = None

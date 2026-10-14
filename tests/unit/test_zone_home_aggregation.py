@@ -142,6 +142,7 @@ async def test_active_cert_product_keeps_public_zone_contract(
         code="H3CNE",
         name="H3CNE",
         chinese_name="H3C网络工程师",
+        home_cover_url="/api/media/cert-h3cne-cover",
     )
     session = _FakeSession({CertProduct: [cert_product]})
     _patch_db(monkeypatch, session)
@@ -157,6 +158,7 @@ async def test_active_cert_product_keeps_public_zone_contract(
             vendor="H3C",
             requires_xuexin=False,
             pay_first=True,
+            home_cover_url="/api/media/cert-h3cne-cover",
         )
     ]
 

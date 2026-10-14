@@ -109,6 +109,7 @@ class AdminCertProductService:
                     name=data.name,
                     chinese_name=data.chinese_name,
                     description=data.description,
+                    home_cover_url=data.home_cover_url,
                     is_active=data.is_active,
                     sort_order=data.sort_order,
                 )
