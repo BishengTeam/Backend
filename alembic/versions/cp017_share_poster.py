@@ -1,7 +1,7 @@
 """share poster table for mini-program share page
 
 Revision ID: cp017_share_poster
-Revises: cp016_drop_competition_home_cover
+Revises: cp016_drop_comp_home_cover
 """
 from collections.abc import Sequence
 
@@ -10,7 +10,7 @@ from alembic import op
 
 
 revision: str = 'cp017_share_poster'
-down_revision: str | Sequence[str] = 'cp016_drop_competition_home_cover'
+down_revision: str | Sequence[str] = 'cp016_drop_comp_home_cover'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

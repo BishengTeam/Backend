@@ -58,6 +58,12 @@ def static_check() -> dict[str, object]:
         raise RuntimeError(f"expected exactly one Alembic head, found: {heads}")
     if stamp_files:
         raise RuntimeError("deployment scripts must not stamp migrations: " + ", ".join(stamp_files))
+    long_revisions = sorted(revision for revision in revisions if len(revision) > 32)
+    if long_revisions:
+        raise RuntimeError(
+            "Alembic revision IDs must fit the 32-character alembic_version column: "
+            + ", ".join(long_revisions)
+        )
     return {"heads": heads, "revision_count": len(revisions), "stamp_files": stamp_files}
 
 
