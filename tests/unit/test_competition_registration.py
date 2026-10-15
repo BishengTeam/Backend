@@ -142,7 +142,6 @@ def _make_competition(**overrides: Any) -> SimpleNamespace:
         name="测试比赛",
         description="desc",
         cover_url=None,
-        home_cover_url=None,
         poster_url=None,
         attachments=[],
         start_time=now - timedelta(days=1),

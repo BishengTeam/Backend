@@ -15,8 +15,6 @@ class Competition(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     cover_url: Mapped[str | None] = mapped_column(String(512))
-    # 首页竞赛专区瀑布流竖版封面（686×680，约 1:1）；空则回退 cover_url
-    home_cover_url: Mapped[str | None] = mapped_column(String(512))
     # 详情页长图海报（完整展示不裁切）；空则详情页回退 cover_url
     poster_url: Mapped[str | None] = mapped_column(String(512))
     # 在线查阅附件（PDF 转页图）：[{"title": str, "pages": ["/api/media/..."]}]

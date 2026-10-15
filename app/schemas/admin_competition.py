@@ -20,7 +20,6 @@ class AdminCompetitionCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     description: str | None = None
     cover_url: str | None = Field(None, max_length=512)
-    home_cover_url: str | None = Field(None, max_length=512)
     poster_url: str | None = Field(None, max_length=512)
     start_time: datetime | None = None
     end_time: datetime | None = None
@@ -35,7 +34,6 @@ class AdminCompetitionUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=128)
     description: str | None = None
     cover_url: str | None = Field(None, max_length=512)
-    home_cover_url: str | None = Field(None, max_length=512)
     poster_url: str | None = Field(None, max_length=512)
     start_time: datetime | None = None
     end_time: datetime | None = None
@@ -51,7 +49,6 @@ class AdminCompetitionListItem(BaseModel):
     name: str
     description: str | None = None
     cover_url: str | None = None
-    home_cover_url: str | None = None
     poster_url: str | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None

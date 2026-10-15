@@ -130,7 +130,7 @@ class AdminCompetitionService:
                         **{
                             k: getattr(c, k)
                             for k in (
-                                "id", "name", "description", "cover_url", "home_cover_url", "poster_url", "start_time",
+                                "id", "name", "description", "cover_url", "poster_url", "start_time",
                                 "end_time", "registration_deadline", "is_active",
                                 "custom_fields", "attachments", "created_at",
                             )
@@ -150,7 +150,6 @@ class AdminCompetitionService:
                     name=data.name,
                     description=data.description,
                     cover_url=data.cover_url,
-                    home_cover_url=data.home_cover_url,
                     poster_url=data.poster_url,
                     start_time=data.start_time,
                     end_time=data.end_time,
@@ -180,7 +179,7 @@ class AdminCompetitionService:
                 **{
                     k: getattr(competition, k)
                     for k in (
-                        "id", "name", "description", "cover_url", "home_cover_url", "poster_url", "start_time",
+                        "id", "name", "description", "cover_url", "poster_url", "start_time",
                         "end_time", "registration_deadline", "is_active", "custom_fields",
                         "attachments", "created_at",
                     )
@@ -246,7 +245,7 @@ class AdminCompetitionService:
                 **{
                     k: getattr(competition, k)
                     for k in (
-                        "id", "name", "description", "cover_url", "home_cover_url", "poster_url", "start_time",
+                        "id", "name", "description", "cover_url", "poster_url", "start_time",
                         "end_time", "registration_deadline", "is_active", "custom_fields",
                         "attachments", "created_at",
                     )
