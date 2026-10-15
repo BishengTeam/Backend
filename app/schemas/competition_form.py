@@ -19,6 +19,10 @@ TEXT_FIELDS = {"text", "textarea"}
 # Fields with built-in validation
 VALIDATED_FIELDS = {"phone", "email", "idcard"}
 
+# 固定字段（顶层 school/real_name/phone）的别名键：小程序端按配置位置渲染固定项，
+# 提交值走顶层字段，不进 custom_field_values；校验时视为已满足。
+FIXED_FIELD_ALIAS_KEYS = {"name", "school", "phone_number", "phone"}
+
 # Preset fields admins can quickly add
 PRESET_FIELDS: list[dict] = [
     {"key": "student_id", "label": "学号", "type": "text", "required": True, "placeholder": "请输入学号", "max_length": 20},
@@ -108,6 +112,9 @@ def validate_field_values(
     validated = {}
     for field in fields:
         key = field["key"]
+        # 固定字段别名键：由顶层 school/real_name/phone 承载，跳过校验与存储
+        if key in FIXED_FIELD_ALIAS_KEYS:
+            continue
         field_type = field["type"]
         required = field.get("required", False)
         value = values.get(key)
