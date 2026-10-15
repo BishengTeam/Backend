@@ -16,6 +16,7 @@ class PaginatedData(BaseModel, Generic[T]):
     total: int
     page: int
     page_size: int
+    status_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class PaginatedResponse(APIResponse[PaginatedData[T]], Generic[T]):

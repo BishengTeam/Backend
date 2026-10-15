@@ -6,18 +6,20 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 
 from app.adapter.database import get_db_ctx
 from app.domain.order.src.index import Order, apply_order_status_transition
 from app.domain.plan.src.index import Plan
 from app.domain.renshe.src.index import (
+    RensheApplicationVersion,
     RensheApplication,
     RensheAuditLog,
     RensheCleanupRun,
     RensheRefundRequest,
     add_business_days,
 )
+from app.models.cert_product import CertProduct
 from app.integrations.wechat_pay import (
     WECHAT_PAY_CURRENCY,
     WechatPayAPIError,
@@ -215,27 +217,119 @@ class RensheRefundService:
     async def list_refunds(
         self,
         *,
+        application_id: int | None = None,
+        plan_id: int | None = None,
+        keyword: str | None = None,
+        reason_code: str | None = None,
+        request_kind: str | None = None,
+        requested_at_start: datetime | None = None,
+        requested_at_end: datetime | None = None,
+        group: str | None = None,
         status: str | None,
         page: int,
         page_size: int,
     ) -> PaginatedData[RensheRefundResponse]:
         async with get_db_ctx() as db:
-            base = select(RensheRefundRequest)
+            base = (
+                select(
+                    RensheRefundRequest,
+                    RensheApplication,
+                    Plan,
+                    Order,
+                    CertProduct,
+                    RensheApplicationVersion,
+                )
+                .join(RensheApplication, RensheApplication.id == RensheRefundRequest.application_id)
+                .join(Plan, Plan.id == RensheApplication.plan_id)
+                .join(Order, Order.id == RensheRefundRequest.order_id)
+                .outerjoin(CertProduct, CertProduct.code == Plan.product_type)
+                .outerjoin(
+                    RensheApplicationVersion,
+                    RensheApplicationVersion.id == RensheApplication.current_version_id,
+                )
+            )
+            if application_id is not None:
+                base = base.where(RensheApplication.id == application_id)
+            if plan_id is not None:
+                base = base.where(RensheApplication.plan_id == plan_id)
+            if reason_code:
+                base = base.where(RensheRefundRequest.reason_code.ilike(f"%{reason_code.strip()}%"))
+            if request_kind:
+                base = base.where(RensheRefundRequest.request_kind == request_kind)
+            if requested_at_start is not None:
+                base = base.where(RensheRefundRequest.requested_at >= requested_at_start)
+            if requested_at_end is not None:
+                base = base.where(RensheRefundRequest.requested_at <= requested_at_end)
+            if keyword and keyword.strip():
+                pattern = f"%{keyword.strip()}%"
+                version_name = (
+                    select(RensheApplicationVersion.realname_snapshot["real_name"].as_string())
+                    .where(
+                        RensheApplicationVersion.id == RensheApplication.current_version_id
+                    )
+                    .scalar_subquery()
+                )
+                base = base.where(or_(
+                    version_name.ilike(pattern),
+                    Order.out_trade_no.ilike(pattern),
+                    RensheRefundRequest.out_refund_no.ilike(pattern),
+                ))
+            # Group badges need counts across all statuses for the same
+            # non-status filters, so materialize them before status filtering.
+            stats_subquery = (
+                base.with_only_columns(
+                    RensheRefundRequest.id.label("refund_id"),
+                    RensheRefundRequest.status.label("refund_status"),
+                )
+                .subquery()
+            )
+            count_rows = (
+                await db.execute(
+                    select(stats_subquery.c.refund_status, func.count())
+                    .group_by(stats_subquery.c.refund_status)
+                )
+            ).all()
+
             if status:
                 base = base.where(RensheRefundRequest.status == status)
-            total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
+            elif group == "pending":
+                base = base.where(RensheRefundRequest.status == "requested")
+            elif group == "processing":
+                base = base.where(RensheRefundRequest.status.in_(("approved", "processing")))
+            elif group == "abnormal":
+                base = base.where(RensheRefundRequest.status == "failed")
+
+            subquery = base.subquery()
+            total = await db.scalar(select(func.count()).select_from(subquery)) or 0
             rows = (
                 await db.execute(
-                    base.order_by(RensheRefundRequest.due_at, RensheRefundRequest.id)
+                    base.order_by(
+                        RensheRefundRequest.requested_at.asc(), RensheRefundRequest.id.asc()
+                    )
                     .offset((page - 1) * page_size)
                     .limit(page_size)
                 )
-            ).scalars().all()
+            ).all()
+            items: list[RensheRefundResponse] = []
+            for refund, application, plan, order, product, version in rows:
+                response = RensheRefundResponse.model_validate(refund)
+                response.out_trade_no = order.out_trade_no
+                response.candidate_name = (
+                    version.realname_snapshot.get("real_name")
+                    if version is not None and version.realname_snapshot
+                    else None
+                )
+                response.registration_no = f"RS-{application.id}"
+                response.batch_id = plan.id
+                response.batch_name = plan.name
+                response.product_label = product.chinese_name if product is not None else "人社认证"
+                items.append(response)
             return PaginatedData[RensheRefundResponse](
-                items=[RensheRefundResponse.model_validate(row) for row in rows],
+                items=items,
                 total=total,
                 page=page,
                 page_size=page_size,
+                status_counts={status_value: int(count) for status_value, count in count_rows},
             )
 
     async def decide(

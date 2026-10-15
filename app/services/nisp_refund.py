@@ -4,11 +4,13 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from app.adapter.database import get_db_ctx
 from app.domain.nisp.src import NispRefundRequest, NispRegistration
+from app.domain.plan.src.index import Plan
 from app.domain.order.src.index import Order, apply_order_status_transition
+from app.models.cert_product import CertProduct
 from app.integrations.wechat_pay import (
     WechatPayClient,
     WechatPayRefund,
@@ -73,26 +75,109 @@ class NispRefundService:
     async def list_refunds(
         self,
         *,
+        registration_id: int | None = None,
+        batch_id: int | None = None,
+        keyword: str | None = None,
+        reason_code: str | None = None,
+        request_kind: str | None = None,
+        requested_at_start: datetime | None = None,
+        requested_at_end: datetime | None = None,
+        group: str | None = None,
         status: str | None = None,
         page: int = 1,
         page_size: int = 20,
-    ) -> tuple[list[NispRefundResponse], int]:
-        from sqlalchemy import func
+    ):
+        from app.schemas.common import PaginatedData
+
         async with get_db_ctx() as db:
-            base = select(NispRefundRequest)
+            base = (
+                select(NispRefundRequest, NispRegistration, Plan, Order, CertProduct)
+                .join(NispRegistration, NispRegistration.id == NispRefundRequest.registration_id)
+                .join(Plan, Plan.id == NispRegistration.plan_id)
+                .join(Order, Order.id == NispRefundRequest.order_id)
+                .outerjoin(CertProduct, CertProduct.code == Plan.product_type)
+            )
+            if registration_id is not None:
+                base = base.where(NispRegistration.id == registration_id)
+            if batch_id is not None:
+                base = base.where(NispRegistration.batch_id == batch_id)
+            if reason_code:
+                base = base.where(NispRefundRequest.reason_code.ilike(f"%{reason_code.strip()}%"))
+            if request_kind:
+                base = base.where(NispRefundRequest.request_kind == request_kind)
+            if requested_at_start is not None:
+                base = base.where(NispRefundRequest.requested_at >= requested_at_start)
+            if requested_at_end is not None:
+                base = base.where(NispRefundRequest.requested_at <= requested_at_end)
+            if keyword and keyword.strip():
+                pattern = f"%{keyword.strip()}%"
+                base = base.where(or_(
+                    NispRegistration.candidate_snapshot["name"].as_string().ilike(pattern),
+                    NispRegistration.registration_no.ilike(pattern),
+                    Order.out_trade_no.ilike(pattern),
+                    NispRefundRequest.out_refund_no.ilike(pattern),
+                ))
+            # Keep group statistics independent of the active group/status so
+            # every tab can display the filtered total for its own scope.
+            stats_subquery = (
+                base.with_only_columns(
+                    NispRefundRequest.id.label("refund_id"),
+                    NispRefundRequest.status.label("refund_status"),
+                )
+                .subquery()
+            )
+            count_rows = (
+                await db.execute(
+                    select(stats_subquery.c.refund_status, func.count())
+                    .group_by(stats_subquery.c.refund_status)
+                )
+            ).all()
+
             if status:
                 base = base.where(NispRefundRequest.status == status)
-            total = await db.scalar(
-                select(func.count()).select_from(base.subquery())
-            ) or 0
+            elif group == "pending":
+                base = base.where(NispRefundRequest.status == "requested")
+            elif group == "processing":
+                base = base.where(NispRefundRequest.status.in_(("approved", "processing")))
+            elif group == "abnormal":
+                base = base.where(NispRefundRequest.status == "failed")
+
+            subquery = base.subquery()
+            total = await db.scalar(select(func.count()).select_from(subquery)) or 0
             rows = (
                 await db.execute(
-                    base.order_by(NispRefundRequest.id.desc())
+                    base.order_by(
+                        NispRefundRequest.requested_at.asc(), NispRefundRequest.id.asc()
+                    )
                     .offset((page - 1) * page_size)
                     .limit(page_size)
                 )
-            ).scalars().all()
-            return [self._response(r) for r in rows], total
+            ).all()
+            items: list[NispRefundResponse] = []
+            for refund, registration, plan, order, product in rows:
+                response = self._response(refund)
+                response.out_trade_no = order.out_trade_no
+                response.candidate_name = (
+                    registration.candidate_snapshot.get("name")
+                    if registration.candidate_snapshot
+                    else None
+                )
+                response.registration_no = registration.registration_no
+                response.batch_id = registration.batch_id
+                response.batch_name = plan.name
+                response.product_label = (
+                    f"{product.chinese_name} · {'一级' if registration.level == '1' else '二级'}"
+                    if product is not None
+                    else f"NISP · {'一级' if registration.level == '1' else '二级'}"
+                )
+                items.append(response)
+            return PaginatedData(
+                items=items,
+                total=int(total),
+                page=page,
+                page_size=page_size,
+                status_counts={status_value: int(count) for status_value, count in count_rows},
+            )
 
     async def confirm(
         self,

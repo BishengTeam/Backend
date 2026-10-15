@@ -532,6 +532,7 @@ class NispRefundResponse(BaseModel):
     id: int
     registration_id: int
     order_id: int
+    out_trade_no: str | None = None
     request_kind: str
     reason_code: str
     reason_detail: str | None
@@ -546,6 +547,11 @@ class NispRefundResponse(BaseModel):
     succeeded_at: datetime | None
     last_error: str | None
     retry_count: int
+    candidate_name: str | None = None
+    registration_no: str | None = None
+    batch_id: int | None = None
+    batch_name: str | None = None
+    product_label: str | None = None
 
     model_config = {"from_attributes": True}
 

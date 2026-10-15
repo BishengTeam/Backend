@@ -440,11 +440,13 @@ class H3cRefundResponse(BaseModel):
     id: int
     registration_id: int
     order_id: int
+    out_trade_no: str | None = None
     request_kind: str
     reason_code: str
     reason_detail: str | None
     amount_cents: int
     status: str
+    requested_at: datetime
     approved_by_admin_id: int | None
     approved_at: datetime | None
     exam_date: datetime | None = None
@@ -454,6 +456,11 @@ class H3cRefundResponse(BaseModel):
     succeeded_at: datetime | None
     last_error: str | None = None
     created_at: datetime
+    candidate_name: str | None = None
+    registration_no: str | None = None
+    batch_id: int | None = None
+    batch_name: str | None = None
+    product_label: str | None = None
 
     model_config = {"from_attributes": True}
 

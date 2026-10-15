@@ -305,6 +305,7 @@ class RensheRefundResponse(BaseModel):
     id: int
     application_id: int
     order_id: int
+    out_trade_no: str | None = None
     user_id: int
     request_kind: str
     reason_code: str
@@ -322,6 +323,11 @@ class RensheRefundResponse(BaseModel):
     succeeded_at: datetime | None = None
     last_error: str | None = None
     retry_count: int
+    candidate_name: str | None = None
+    registration_no: str | None = None
+    batch_id: int | None = None
+    batch_name: str | None = None
+    product_label: str | None = None
 
     model_config = {"from_attributes": True}
 

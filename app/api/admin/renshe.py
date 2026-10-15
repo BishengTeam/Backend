@@ -181,6 +181,14 @@ async def correct_review(
     summary="退款申请工作台",
 )
 async def list_refunds(
+    application_id: int | None = Query(None, ge=1),
+    plan_id: int | None = Query(None, ge=1),
+    keyword: str | None = Query(None, max_length=64),
+    reason_code: str | None = Query(None, max_length=64),
+    request_kind: str | None = Query(None, max_length=24),
+    requested_at_start: datetime | None = Query(None),
+    requested_at_end: datetime | None = Query(None),
+    group: str | None = Query(None, pattern="^(pending|processing|abnormal)$"),
     status: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -189,6 +197,14 @@ async def list_refunds(
     from app.services.renshe_refund import RensheRefundService
 
     result = await RensheRefundService().list_refunds(
+        application_id=application_id,
+        plan_id=plan_id,
+        keyword=keyword,
+        reason_code=reason_code,
+        request_kind=request_kind,
+        requested_at_start=requested_at_start,
+        requested_at_end=requested_at_end,
+        group=group,
         status=status,
         page=page,
         page_size=page_size,

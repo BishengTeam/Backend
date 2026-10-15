@@ -95,7 +95,7 @@ async def test_h3c_refund_success_is_never_downgraded(monkeypatch):
     refund = NS(
         id=1, registration_id=1, order_id=1, user_id=1,
         request_kind="review_failed", reason_code="review", amount_cents=100,
-        status="succeeded", requested_at=None, reason_detail=None, approved_by_admin_id=None, approved_at=None, processing_at=None, succeeded_at=None, created_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc), out_refund_no="H3RF" + "1".zfill(28),
+        status="succeeded", requested_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc), reason_detail=None, approved_by_admin_id=None, approved_at=None, processing_at=None, succeeded_at=None, created_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc), out_refund_no="H3RF" + "1".zfill(28),
         wechat_refund_id="refund-1",
     )
     order = Order(id=1, user_id=1, order_kind="certification", product_type="H3C-NE",

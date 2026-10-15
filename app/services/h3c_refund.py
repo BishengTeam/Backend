@@ -6,15 +6,17 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.adapter.database import get_db_ctx
 from app.domain.h3c.src.index import H3cRefundRequest, H3cRegistration
+from app.domain.plan.src.index import Plan
 from app.domain.order.src.index import (
     Order,
     apply_order_status_transition,
     refund_inventory_sale,
 )
+from app.models.cert_product import CertProduct
 from app.integrations.wechat_pay import (
     WECHAT_PAY_CURRENCY,
     WechatPayAPIError,
@@ -97,27 +99,103 @@ class H3cRefundService:
     async def list_refunds(
         self,
         *,
+        registration_id: int | None = None,
+        batch_id: int | None = None,
+        keyword: str | None = None,
+        reason_code: str | None = None,
+        request_kind: str | None = None,
+        requested_at_start: datetime | None = None,
+        requested_at_end: datetime | None = None,
+        group: str | None = None,
         status: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> PaginatedData[H3cRefundResponse]:
         async with get_db_ctx() as db:
-            stmt = select(H3cRefundRequest)
+            stmt = (
+                select(H3cRefundRequest, H3cRegistration, Plan, Order, CertProduct)
+                .join(H3cRegistration, H3cRegistration.id == H3cRefundRequest.registration_id)
+                .join(Plan, Plan.id == H3cRegistration.plan_id)
+                .join(Order, Order.id == H3cRefundRequest.order_id)
+                .outerjoin(CertProduct, CertProduct.code == Plan.product_type)
+            )
+            if registration_id is not None:
+                stmt = stmt.where(H3cRegistration.id == registration_id)
+            if batch_id is not None:
+                stmt = stmt.where(H3cRegistration.batch_id == batch_id)
+            if reason_code:
+                stmt = stmt.where(H3cRefundRequest.reason_code.ilike(f"%{reason_code.strip()}%"))
+            if request_kind:
+                stmt = stmt.where(H3cRefundRequest.request_kind == request_kind)
+            if requested_at_start is not None:
+                stmt = stmt.where(H3cRefundRequest.requested_at >= requested_at_start)
+            if requested_at_end is not None:
+                stmt = stmt.where(H3cRefundRequest.requested_at <= requested_at_end)
+            if keyword and keyword.strip():
+                pattern = f"%{keyword.strip()}%"
+                stmt = stmt.where(or_(
+                    H3cRegistration.candidate_snapshot["candidate_name"]
+                        .as_string()
+                        .ilike(pattern),
+                    H3cRegistration.registration_no.ilike(pattern),
+                    Order.out_trade_no.ilike(pattern),
+                    H3cRefundRequest.out_refund_no.ilike(pattern),
+                ))
+            # Counts describe every status group under the same non-status
+            # filters, so tab badges do not disappear when a group is selected.
+            stats_subquery = (
+                stmt.with_only_columns(
+                    H3cRefundRequest.id.label("refund_id"),
+                    H3cRefundRequest.status.label("refund_status"),
+                )
+                .subquery()
+            )
+            count_rows = (
+                await db.execute(
+                    select(stats_subquery.c.refund_status, func.count())
+                    .group_by(stats_subquery.c.refund_status)
+                )
+            ).all()
+
             if status:
                 stmt = stmt.where(H3cRefundRequest.status == status)
+            elif group == "pending":
+                stmt = stmt.where(H3cRefundRequest.status == "requested")
+            elif group == "processing":
+                stmt = stmt.where(H3cRefundRequest.status.in_(("approved", "processing")))
+            elif group == "abnormal":
+                stmt = stmt.where(H3cRefundRequest.status == "failed")
+
             total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
             rows = (
                 await db.execute(
-                    stmt.order_by(H3cRefundRequest.id.desc())
+                    stmt.order_by(
+                        H3cRefundRequest.requested_at.asc(), H3cRefundRequest.id.asc()
+                    )
                     .offset((page - 1) * page_size)
                     .limit(page_size)
                 )
-            ).scalars().all()
+            ).all()
+            items: list[H3cRefundResponse] = []
+            for refund, registration, plan, order, product in rows:
+                response = self._response(refund, hide_error=False)
+                response.out_trade_no = order.out_trade_no
+                response.candidate_name = (
+                    registration.candidate_snapshot.get("candidate_name")
+                    if registration.candidate_snapshot
+                    else None
+                )
+                response.registration_no = registration.registration_no
+                response.batch_id = registration.batch_id
+                response.batch_name = plan.name
+                response.product_label = product.chinese_name or plan.product_type
+                items.append(response)
             return PaginatedData(
-                items=[self._response(row, hide_error=False) for row in rows],
+                items=items,
                 total=int(total),
                 page=page,
                 page_size=page_size,
+                status_counts={status_value: int(count) for status_value, count in count_rows},
             )
 
     async def confirm(
