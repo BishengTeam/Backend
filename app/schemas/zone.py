@@ -36,6 +36,15 @@ class BannerBrief(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PopupBrief(BaseModel):
+    id: int
+    image_url: str
+    jump_link: str | None = None
+    sort: int
+
+    model_config = {"from_attributes": True}
+
+
 class ZoneBrief(BaseModel):
     id: int
     zone_type: str
@@ -73,3 +82,5 @@ class ZoneSectionData(BaseModel):
 class HomeAggregationResponse(BaseModel):
     banners: list[BannerBrief] = Field(default_factory=list)
     zones: dict[str, ZoneSectionData] = Field(default_factory=dict)
+    # 登录后弹窗海报：时间窗内 sort 最小的一条，无则 None
+    popup: PopupBrief | None = None

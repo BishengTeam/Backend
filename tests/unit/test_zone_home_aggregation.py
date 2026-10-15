@@ -18,6 +18,7 @@ import app.services.zone as zone_module
 from app.domain.certification.src.index import Course
 from app.domain.content.src.index import Zone
 from app.domain.content.src.model.banner import Banner
+from app.domain.content.src.model.popup import Popup
 from app.models.cert_product import CertProduct
 from app.schemas.certification import CertificationResponse
 from app.schemas.course import CourseListResponse
@@ -34,6 +35,9 @@ class _FakeResult:
 
     def all(self) -> list[Any]:
         return self._rows
+
+    def first(self) -> Any | None:
+        return self._rows[0] if self._rows else None
 
 
 class _FakeSession:
@@ -168,3 +172,36 @@ def test_entity_schemas_support_from_attributes() -> None:
 
     for field_name, (_model, schema, _flag) in zone_module._ENTITY_QUERIES.items():
         assert schema.model_config.get("from_attributes") is True, field_name
+
+
+@pytest.mark.asyncio
+async def test_popup_returns_configured_poster(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """时间窗内的 popup 行必须以单条 PopupBrief 出现在聚合响应里。"""
+
+    popup_row = SimpleNamespace(
+        id=3, image_url="poster.jpg", jump_link="/pages/activity-zone/index", sort=0
+    )
+    session = _FakeSession({Popup: [popup_row]})
+    _patch_db(monkeypatch, session)
+
+    result = await ZoneService().get_home_aggregation()
+
+    assert result.popup is not None
+    assert result.popup.image_url == "poster.jpg"
+    assert result.popup.jump_link == "/pages/activity-zone/index"
+
+
+@pytest.mark.asyncio
+async def test_popup_absent_yields_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """没有配置弹窗时 popup 字段必须为 None，而不是报错或空对象。"""
+
+    session = _FakeSession({})
+    _patch_db(monkeypatch, session)
+
+    result = await ZoneService().get_home_aggregation()
+
+    assert result.popup is None

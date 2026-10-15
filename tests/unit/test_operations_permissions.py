@@ -1,7 +1,7 @@
 """运营模块权限细分与投递下线的静态契约测试。
 
 运营中心重构（2026-08）后：
-- zones/banners → homepage:*
+- zones/banners/popups → homepage:*
 - jobs → job:*
 - training → training:*
 - activities → activity:*
@@ -80,6 +80,13 @@ def test_zones_use_homepage_permissions() -> None:
 
 def test_banners_use_homepage_permissions() -> None:
     routes = _parse_routes("app/api/admin/banners.py")
+    assert routes and all(
+        r.permission in {"homepage:list", "homepage:write"} for r in routes
+    )
+
+
+def test_popups_use_homepage_permissions() -> None:
+    routes = _parse_routes("app/api/admin/popups.py")
     assert routes and all(
         r.permission in {"homepage:list", "homepage:write"} for r in routes
     )

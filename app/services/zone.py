@@ -7,6 +7,7 @@ from app.domain.content.src.index import Activity, Training, Zone
 from app.domain.certification.src.index import Competition, Course, Job
 from app.models.cert_product import CertProduct
 from app.domain.content.src.model.banner import Banner
+from app.domain.content.src.model.popup import Popup
 from app.schemas.activity import ActivityResponse
 from app.schemas.admin_training import AdminTrainingListItem
 from app.schemas.competition import CompetitionListItem
@@ -14,6 +15,7 @@ from app.schemas.job import JobResponse
 from app.schemas.zone import (
     BannerBrief,
     HomeAggregationResponse,
+    PopupBrief,
     ZONE_ENTITY_MAP,
     ZoneBrief,
     ZoneSectionData,
@@ -64,6 +66,20 @@ class ZoneService:
             banners = [
                 BannerBrief.model_validate(b) for b in banner_result.scalars().all()
             ]
+
+            # ── Popup（登录后弹窗海报，取时间窗内 sort 最小的一条）──
+            popup_stmt = (
+                select(Popup)
+                .where(
+                    Popup.is_active == True,
+                    (Popup.start_time == None) | (Popup.start_time <= now),
+                    (Popup.end_time == None) | (Popup.end_time >= now),
+                )
+                .order_by(Popup.sort, Popup.id.desc())
+                .limit(1)
+            )
+            popup_row = (await db.execute(popup_stmt)).scalars().first()
+            popup = PopupBrief.model_validate(popup_row) if popup_row else None
 
             # ── Zone cards ───────────────────────────────────────
             zones: dict[str, list[ZoneBrief]] = {}
@@ -136,4 +152,6 @@ class ZoneService:
                 if any(section_kwargs.values()):
                     zone_sections[ztype] = ZoneSectionData(**section_kwargs)
 
-            return HomeAggregationResponse(banners=banners, zones=zone_sections)
+            return HomeAggregationResponse(
+                banners=banners, zones=zone_sections, popup=popup
+            )

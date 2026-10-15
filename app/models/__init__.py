@@ -1,7 +1,7 @@
 from app.domain.content.src.index import (
     Activity, ActivityRegistration, ActivityReminder,
     Agreement, Ticket, Zone,
-    DocumentResource,
+    DocumentResource, Popup,
 )
 from app.domain.certification.src.index import (
     Certification,
@@ -157,6 +157,7 @@ __all__ = [
     "PointsVirtualOrder",
     "PointsVirtualProduct",
     "PointsVirtualRefund",
+    "Popup",
     "Plan",
     "PointsHistory",
     "PriceConfig",
