@@ -19,6 +19,7 @@ from app.api.admin.documents import router as documents_router
 from app.api.admin.orders import router as orders_router
 from app.api.admin.points_mall import router as points_mall_router
 from app.api.admin.popups import router as popups_router
+from app.api.admin.share_posters import router as share_posters_router
 from app.api.admin.nisp import router as nisp_router
 from app.api.admin.plans import router as plans_router
 from app.api.admin.reviews import router as reviews_router
@@ -60,6 +61,7 @@ router.include_router(quiz_review_router)
 router.include_router(renshe_router)
 router.include_router(zones_router)
 router.include_router(popups_router)
+router.include_router(share_posters_router)
 router.include_router(coupons_router)
 router.include_router(deployment_acceptance_router)
 router.include_router(agreements_router)

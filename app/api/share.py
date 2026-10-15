@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Path
 from app.middleware.auth import get_current_user
 from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, success
-from app.schemas.share import ShareCreateRequest, ShareCreateResponse, ShareResponse
+from app.schemas.share import ShareCreateRequest, ShareCreateResponse, SharePosterResponse, ShareResponse
 from app.services.share import ShareService
 
 router = APIRouter(prefix="/share", tags=["系统"])
@@ -31,6 +31,29 @@ async def create_share(
     """生成分享链接"""
     result = await ShareService().create_share(current_user.id, body)
     return success(data=result)
+
+
+@router.get("/poster",
+    response_model=APIResponse[SharePosterResponse],
+    summary="获取分享海报",
+    description="""
+小程序 **分享好友** 页使用。
+
+**使用场景**: 分享页加载时获取后台配置的推广海报，全屏预览/长按保存到相册；
+未配置时 `image_url` 为 null（前端入口置灰）。
+
+**响应**: 海报图片 URL（可为 null）
+
+**认证**: 需登录
+
+> 注意：本路由必须注册在 `/{code}` 之前，否则 "poster" 会被当作分享码解析。
+    """,
+)
+async def get_share_poster(
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[SharePosterResponse]:
+    """获取当前启用的分享海报"""
+    return success(data=await ShareService().get_active_poster())
 
 
 @router.get("/{code}",

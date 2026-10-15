@@ -92,6 +92,13 @@ def test_popups_use_homepage_permissions() -> None:
     )
 
 
+def test_share_posters_use_homepage_permissions() -> None:
+    routes = _parse_routes("app/api/admin/share_posters.py")
+    assert routes and all(
+        r.permission in {"homepage:list", "homepage:write"} for r in routes
+    )
+
+
 def test_jobs_use_job_permissions() -> None:
     routes = _parse_routes("app/api/admin/jobs.py")
     assert all(r.permission in {"job:list", "job:write"} for r in routes)

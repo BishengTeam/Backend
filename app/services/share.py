@@ -5,7 +5,8 @@ from sqlalchemy import select
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import NotFoundException
 from app.domain.community.src.index import Share
-from app.schemas.share import ShareCreateRequest, ShareCreateResponse, ShareResponse
+from app.domain.content.src.index import SharePoster
+from app.schemas.share import ShareCreateRequest, ShareCreateResponse, SharePosterResponse, ShareResponse
 
 
 class ShareService:
@@ -38,3 +39,16 @@ class ShareService:
             await db.commit()
             await db.refresh(share)
             return ShareResponse.model_validate(share)
+
+    async def get_active_poster(self) -> SharePosterResponse:
+        """分享好友页海报：取最新一条启用中的分享海报，未配置返回 null"""
+        async with get_db_ctx() as db:
+            poster = (
+                await db.execute(
+                    select(SharePoster)
+                    .where(SharePoster.is_active == True)  # noqa: E712
+                    .order_by(SharePoster.id.desc())
+                    .limit(1)
+                )
+            ).scalars().first()
+            return SharePosterResponse(image_url=poster.image_url if poster else None)

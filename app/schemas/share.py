@@ -21,3 +21,7 @@ class ShareResponse(BaseModel):
 class ShareCreateResponse(BaseModel):
     code: str
     share_url: str
+
+
+class SharePosterResponse(BaseModel):
+    image_url: str | None = Field(None, description="分享海报图片 URL，未配置为 null")
