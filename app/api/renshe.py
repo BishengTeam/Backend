@@ -32,6 +32,7 @@ async def list_projects(current_user: User = Depends(get_current_user)):
     projects = await RensheProjectService().list_projects(public=True)
     return success(data=[{"id": item.id, "name": item.chinese_name, "description": item.description,
                           "home_cover_url": item.home_cover_url, "occupation_name": item.config.occupation_name,
+                          "occupation_code": item.config.occupation_code,
                           "skill_level": item.config.skill_level} for item in projects])
 
 
