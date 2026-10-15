@@ -6,7 +6,7 @@ Revises: cp014_merge_cert_heads
 
 import logging
 
-from alembic import context, op
+from alembic import op
 import sqlalchemy as sa
 
 revision = "rsh003_project_versions"
@@ -132,10 +132,11 @@ def upgrade():
         ),
     )
     db = op.get_bind()
-    # Offline SQL generation starts from an empty database and Alembic's mock
-    # connection cannot return result rows. Schema changes above are emitted;
-    # the data reconciliation only runs against a live database.
-    if context.is_offline_mode():
+    # 离线 --sql 静态生成阶段没有可用连接，数据回填仅在真实升级时执行
+    if op.get_context().as_sql:
+        logging.getLogger("alembic.runtime.migration").warning(
+            "offline SQL generation: skip rsh003 data backfill"
+        )
         return
     product = (
         db.execute(
