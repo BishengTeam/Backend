@@ -28,6 +28,7 @@ from app.domain.renshe.src.index import (
     RensheRefundRequest,
 )
 from app.domain.user.src.index import AdminUser, User
+from app.models.cert_product import CertProduct
 from app.services.renshe_application import RensheApplicationService
 from app.services.renshe_batch import RensheBatchService
 from app.integrations.wechat_pay import WechatPayRefund
@@ -243,6 +244,13 @@ async def test_own_application_list_recovers_only_current_user_records(
     suffix = uuid4().hex[:12]
     current_user = User(openid=f"rsh_list_current_{suffix}")
     other_user = User(openid=f"rsh_list_other_{suffix}")
+    cert_product = CertProduct(
+        type="renshe",
+        code="RS-ZY",
+        name="rs_zy",
+        chinese_name="人社职业技能等级认定",
+        is_active=True,
+    )
     plan = Plan(
         product_type="RS-ZY",
         name=f"rsh_list_plan_{suffix}",
@@ -250,7 +258,7 @@ async def test_own_application_list_recovers_only_current_user_records(
         capacity=0,
         price_cents=50000,
     )
-    db_session.add_all([current_user, other_user, plan])
+    db_session.add_all([current_user, other_user, cert_product, plan])
     await db_session.flush()
 
     pending = RensheApplication(
