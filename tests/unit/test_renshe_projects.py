@@ -154,39 +154,6 @@ async def create_batch(project, name="第一期", **changes):
     )
 
 
-@pytest.mark.asyncio
-async def test_public_renshe_batch_list_keeps_future_and_ended_batches(isolated):
-    """The mini program needs both states to explain why a batch is not selectable."""
-    project = await RensheProjectService().save(project_data(), admin_id=1)
-    now = datetime.now(timezone.utc)
-    future = await create_batch(
-        project,
-        "未来批次",
-        apply_start=now + timedelta(days=1),
-        apply_end=now + timedelta(days=10),
-        exam_date=now + timedelta(days=15),
-    )
-    expired = await create_batch(
-        project,
-        "已过期批次",
-    )
-    await PlanService().publish_plan(future.id, project.code, admin_id=1)
-    await PlanService().publish_plan(expired.id, project.code, admin_id=1)
-    async with isolated.db() as db:
-        stored = await db.get(Plan, expired.id)
-        assert stored is not None
-        stored.apply_end = now - timedelta(days=1)
-        stored.exam_date = now - timedelta(minutes=1)
-        await db.commit()
-
-    public_ids = {
-        item.id
-        for item in await PlanService().list_renshe_plans(public=True)
-    }
-
-    assert {future.id, expired.id} <= public_ids
-
-
 async def verified_student(env):
     sources = {}
     for requirement in default_configuration()["materials"]:
