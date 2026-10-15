@@ -653,6 +653,23 @@ class AdminQuizAuditLogResponse(QuizContractModel):
     error_summary: str | None = None
     created_at: datetime
 
+    @field_validator("changed_fields", mode="before")
+    @classmethod
+    def normalize_legacy_changed_fields(
+        cls,
+        value: dict[str, JsonValue] | None,
+    ) -> dict[str, AdminQuizAuditFieldChange] | None:
+        """Adapt pre-contract audit rows whose field value was a scalar."""
+        if value is None:
+            return None
+        normalized: dict[str, AdminQuizAuditFieldChange] = {}
+        for field, change in value.items():
+            if isinstance(change, dict) and ("before" in change or "after" in change):
+                normalized[field] = AdminQuizAuditFieldChange(**change)
+            else:
+                normalized[field] = AdminQuizAuditFieldChange(before=None, after=change)
+        return normalized
+
 
 # ── Fixed hierarchy V2 ──
 

@@ -653,3 +653,33 @@ async def test_audit_request_id_and_time_filters(quiz_http_env) -> None:
     )
     assert invalid_range.status_code == 422
     assert invalid_range.json()["code"] == 40001
+
+    async with env.factory() as db:
+        db.add(
+            QuizAdminAuditLog(
+                actor_type="admin",
+                admin_id=env.admin.id,
+                action=f"{env.prefix}_legacy_update",
+                object_type="quiz_library",
+                object_id=1,
+                result="succeeded",
+                changed_fields={"cover_url": "[REDACTED]"},
+            )
+        )
+        await db.commit()
+
+    legacy = await env.client.get(
+        "/admin/quiz/audit-logs",
+        headers=env.headers,
+    )
+    assert legacy.status_code == 200, legacy.text
+    legacy_items = legacy.json()["data"]["items"]
+    legacy_row = next(
+        item
+        for item in legacy_items
+        if item["action"] == f"{env.prefix}_legacy_update"
+    )
+    assert legacy_row["changed_fields"]["cover_url"] == {
+        "before": None,
+        "after": "[REDACTED]",
+    }
