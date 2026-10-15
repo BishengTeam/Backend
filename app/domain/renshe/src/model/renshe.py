@@ -100,6 +100,7 @@ class RensheApplicationVersion(Base, TimestampMixin):
         index=True,
     )
     version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    project_config_id: Mapped[int | None] = mapped_column(ForeignKey("renshe_project_config.id", ondelete="RESTRICT"), nullable=True)
     submitted_by_user_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("user.id", ondelete="RESTRICT"), nullable=False
     )
@@ -308,6 +309,7 @@ class RensheExportJob(Base, TimestampMixin):
         Integer, ForeignKey("plan.id", ondelete="RESTRICT"), nullable=False
     )
     generation_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    project_config_id: Mapped[int | None] = mapped_column(ForeignKey("renshe_project_config.id", ondelete="RESTRICT"), nullable=True)
     requested_by_admin_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("admin_user.id", ondelete="RESTRICT"), nullable=False
     )

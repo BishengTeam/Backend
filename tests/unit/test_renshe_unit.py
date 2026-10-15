@@ -251,10 +251,10 @@ async def test_profile_edits_lock_all_open_applications_before_state_check():
 async def test_submission_locks_user_plan_orders_then_application():
     application = RensheApplication(id=41, user_id=7, plan_id=11, status="draft")
     plan = Plan(id=11, product_type="RS-ZY")
-    closed_order = SimpleNamespace(id=60, status="closed")
-    paid_order = SimpleNamespace(id=61, status="paid")
+    closed_order = SimpleNamespace(id=60, status="closed", plan_id=11, user_id=7, product_type="RS-ZY")
+    paid_order = SimpleNamespace(id=61, status="paid", plan_id=11, user_id=7, product_type="RS-ZY")
     db = _FakeDb(
-        scalars=(11, SimpleNamespace(id=7), plan, application),
+        scalars=(11, SimpleNamespace(id=7), plan, SimpleNamespace(type='renshe', id=1), application),
         rows=([closed_order, paid_order],),
     )
 
@@ -272,10 +272,10 @@ async def test_submission_locks_user_plan_orders_then_application():
     assert "FOR UPDATE" not in statements[0]
     assert 'FROM "user"' in statements[1] and "FOR UPDATE" in statements[1]
     assert "FROM plan" in statements[2] and "FOR UPDATE" in statements[2]
-    assert 'FROM "order"' in statements[3] and "FOR UPDATE" in statements[3]
-    assert "ORDER BY \"order\".id" in statements[3]
-    assert "FROM renshe_application" in statements[4]
-    assert "FOR UPDATE" in statements[4]
+    assert 'FROM "order"' in statements[4] and "FOR UPDATE" in statements[4]
+    assert "ORDER BY \"order\".id" in statements[4]
+    assert "FROM renshe_application" in statements[5]
+    assert "FOR UPDATE" in statements[5]
 
 
 @pytest.mark.asyncio
@@ -427,9 +427,10 @@ async def test_requesting_refund_immediately_pauses_scheduled_cleanup(monkeypatc
         frozen_at=None,
         freeze_reason=None,
     )
-    order = SimpleNamespace(id=61, price=50000, status="paid")
+    order = SimpleNamespace(id=61, price=50000, status="paid", plan_id=11, product_type='RS-ZY')
     cleanup_run = SimpleNamespace(id=71, status="scheduled")
     db = _FakeDb(scalars=(order, application, cleanup_run, None, None))
+    db.get = AsyncMock(return_value=Plan(id=11, product_type='RS-ZY'))
     monkeypatch.setattr("app.services.renshe_refund.get_db_ctx", _db_context(db))
     monkeypatch.setattr(RensheRefundService, "_now", staticmethod(lambda: now))
 
@@ -468,7 +469,7 @@ async def test_refund_is_rejected_while_batch_cleanup_is_running(monkeypatch):
         frozen_at=None,
         freeze_reason=None,
     )
-    order = SimpleNamespace(id=61, price=50000, status="paid")
+    order = SimpleNamespace(id=61, price=50000, status="paid", plan_id=11, product_type='RS-ZY')
     db = _FakeDb(
         scalars=(
             order,
@@ -476,6 +477,7 @@ async def test_refund_is_rejected_while_batch_cleanup_is_running(monkeypatch):
             SimpleNamespace(id=88, status="running"),
         )
     )
+    db.get = AsyncMock(return_value=Plan(id=11, product_type='RS-ZY'))
     monkeypatch.setattr("app.services.renshe_refund.get_db_ctx", _db_context(db))
 
     with pytest.raises(ConflictException, match="正在清理"):
@@ -558,7 +560,9 @@ def test_export_row_uses_frozen_student_mapping_and_leaves_work_fields_blank():
         },
         materials=(),
     )
-    row = build_registration_row(candidate, Plan(product_type="RS-ZY", name="批次"))
+    from app.services.renshe_project import default_configuration
+    config = default_configuration()
+    row = build_registration_row(candidate, Plan(product_type="RS-ZY", name="批次", exam_type="新考", application_type="学历型", **{key: config[key] for key in ('occupation_name', 'occupation_code', 'skill_level')}))
     assert len(row) == 25
     assert row[5] == "院校学生"
     assert row[6] == "大学本科"
@@ -775,7 +779,7 @@ async def test_export_retry_locks_plan_before_job(monkeypatch):
         retry_count=0,
         last_error="failed",
     )
-    db = _FakeDb(scalars=(11, plan, None, job))
+    db = _FakeDb(scalars=(11, plan, None, None, job))
     monkeypatch.setattr("app.services.renshe_export.get_db_ctx", _db_context(db))
     monkeypatch.setattr(RensheExportService, "_now", staticmethod(lambda: now))
     service = RensheExportService()
@@ -790,9 +794,10 @@ async def test_export_retry_locks_plan_before_job(monkeypatch):
     assert "renshe_export_job.plan_id" in statements[0]
     assert "FOR UPDATE" not in statements[0]
     assert "FROM plan" in statements[1] and "FOR UPDATE" in statements[1]
-    assert "renshe_cleanup_run.status" in statements[2]
-    assert "FROM renshe_export_job" in statements[3]
-    assert "FOR UPDATE" in statements[3]
+    assert "FROM cert_product" in statements[2]
+    assert "renshe_cleanup_run.status" in statements[3]
+    assert "FROM renshe_export_job" in statements[4]
+    assert "FOR UPDATE" in statements[4]
 
 
 @pytest.mark.asyncio

@@ -78,6 +78,8 @@ async def resolve_dedicated_certification_vendor(
         select(CertProduct).where(CertProduct.code == product_type)
     )
     if product is not None:
+        if product.type == "renshe":
+            raise BusinessException("人社订单只能通过人社报名提交接口创建")
         if product.type == "h3c":
             return "H3C"
         if product.type == "nisp":

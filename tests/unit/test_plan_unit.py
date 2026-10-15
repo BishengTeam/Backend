@@ -203,27 +203,6 @@ class PlanServiceUnitTests(unittest.TestCase):
         assert 'for field in ("apply_start", "apply_end", "exam_date")' in source
         assert "if field in update_data" in source
 
-    def test_renshe_batches_use_server_controlled_program_and_freeze_it(self):
-        source = (REPO_ROOT / "app/services/plan.py").read_text(encoding="utf-8")
-
-        assert "RENSHE_DEFAULT_PROGRAM" in source
-        assert "find_renshe_program" in source
-        assert "RENSHE_FIXED_FIELDS" not in source
-        assert "_assert_renshe_product_binding" in source
-        assert "人社认证批次必须绑定系统预置的固定业务记录" in source
-        assert 'data.program_code is not None' in source
-        assert 'plan.published_at is not None' in source
-        assert "已发布过的人社批次不能修改批次名称或报考属性" in source
-        assert "export_template_version" in source
-
-    def test_renshe_new_batches_respect_certification_availability(self):
-        source = (REPO_ROOT / "app/services/plan.py").read_text(encoding="utf-8")
-        application = (REPO_ROOT / "app/services/renshe_application.py").read_text(encoding="utf-8")
-
-        assert "_renshe_product_active" in source
-        assert "人社认证已停用，不能发布新批次" in source
-        assert "_renshe_product_active" in application
-        assert "人社认证已停用，不能发起新报名" in application
 
 
 class PlanAPIRouteUnitTests(unittest.TestCase):

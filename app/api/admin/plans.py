@@ -183,7 +183,7 @@ async def close_registration(
     ),
 )
 async def preview_plan_impact(
-    code: str = Path(..., description="认证产品代码，当前仅支持 RS-ZY"),
+    code: str = Path(..., description="人社报考项目的系统标识"),
     plan_id: int = Path(..., ge=1, description="批次 ID"),
     action: PlanImpactAction = Query(..., description="危险操作：cancel 或 finalize"),
     admin=Depends(require_permission("user:write")),

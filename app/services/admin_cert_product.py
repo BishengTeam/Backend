@@ -234,7 +234,7 @@ class AdminCertProductService:
     async def create(self, data: CertProductCreate) -> CertProductResponse:
         """创建认证产品"""
         if data.type == "renshe":
-            raise BusinessException("人社认证使用固定认证设置，不支持新增产品")
+            raise BusinessException("请使用人社报考项目接口创建项目，系统自动维护内部标识")
         async with get_db_ctx() as db:
             async with db.begin():
                 if data.catalog_id is not None:
@@ -281,6 +281,8 @@ class AdminCertProductService:
                 product = await self._get_or_404(db, code)
                 update_data = data.model_dump(exclude_unset=True)
                 if product.type == "renshe":
+                    if "is_active" in update_data:
+                        raise BusinessException("请在报考项目中调整配置状态")
                     forbidden = set(update_data) - RENSHE_DISPLAY_EDITABLE_FIELDS
                     if forbidden:
                         raise BusinessException(
@@ -302,6 +304,8 @@ class AdminCertProductService:
         async with get_db_ctx() as db:
             product = await self._get_or_404(db, code)
             product.is_active = False
+            if product.type == "renshe":
+                product.renshe_status = "disabled"
             await db.commit()
 
     async def get_stats(self) -> list[CertProductStats]:
@@ -321,22 +325,26 @@ class AdminCertProductService:
             # 活跃批次数（plan status='published'）按 product_type 分组
             batch_agg = (
                 select(
-                    Plan.product_type,
+                    CertProduct.type,
                     func.count().label("active_batch_count"),
                 )
+                .select_from(Plan)
+                .join(CertProduct, CertProduct.code == Plan.product_type)
                 .where(Plan.status == "published")
-                .group_by(Plan.product_type)
+                .group_by(CertProduct.type)
                 .subquery()
             )
 
             # 报名总数（order status in paid/completed）按 product_type 分组
             enrolled_agg = (
                 select(
-                    Order.product_type,
+                    CertProduct.type,
                     func.count().label("total_enrolled"),
                 )
+                .select_from(Order)
+                .join(CertProduct, CertProduct.code == Order.product_type)
                 .where(Order.status.in_(["paid", "completed"]))
-                .group_by(Order.product_type)
+                .group_by(CertProduct.type)
                 .subquery()
             )
 
@@ -348,8 +356,8 @@ class AdminCertProductService:
                     func.coalesce(batch_agg.c.active_batch_count, 0).label("active_batch_count"),
                     func.coalesce(enrolled_agg.c.total_enrolled, 0).label("total_enrolled"),
                 )
-                .outerjoin(batch_agg, product_agg.c.type == batch_agg.c.product_type)
-                .outerjoin(enrolled_agg, product_agg.c.type == enrolled_agg.c.product_type)
+                .outerjoin(batch_agg, product_agg.c.type == batch_agg.c.type)
+                .outerjoin(enrolled_agg, product_agg.c.type == enrolled_agg.c.type)
             )
 
             result = await db.execute(stmt)

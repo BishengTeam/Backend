@@ -106,6 +106,7 @@ from app.models.deployment_acceptance import (
 )
 
 from app.models.cert_product import CertProduct
+from app.models.renshe_project import RensheProjectConfig
 from app.models.cert_product_catalog import CertProductCatalog
 from app.models.consultation_group import CertConsultationGroup
 from app.domain.points_mall.src import (

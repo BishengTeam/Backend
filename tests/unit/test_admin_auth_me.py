@@ -80,4 +80,6 @@ class TestRolePermissions:
             "nisp:export",
             "nisp:refund",
             "nisp:final_review",
+            "renshe:review",
+            "renshe:export",
         }

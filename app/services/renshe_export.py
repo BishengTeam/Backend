@@ -32,7 +32,6 @@ from app.domain.renshe.src.index import (
     RensheExportJob,
     RensheExportVolume,
     RensheMaterial,
-    find_renshe_program,
 )
 from app.integrations.renshe_storage import RensheObjectStorage
 from app.integrations.renshe_storage import assert_owned_source_key
@@ -51,6 +50,7 @@ from app.schemas.renshe import (
     RensheExportVolumeResponse,
     RensheSignedUrlResponse,
 )
+from app.services.renshe_project import batch_configuration, is_renshe_plan, TEMPLATES
 
 
 logger = logging.getLogger(__name__)
@@ -148,19 +148,14 @@ def partition_export_candidates(
 def build_registration_row(candidate: ExportCandidate, plan: Plan) -> list[object | None]:
     """Map one immutable submission snapshot to the official 25 columns."""
 
-    program = find_renshe_program(
-        occupation_name=plan.occupation_name,
-        occupation_code=plan.occupation_code,
-        skill_level=plan.skill_level,
-        exam_type=plan.exam_type,
-        application_type=plan.application_type,
-    )
-    if program is None:
-        raise ValueError("批次报考信息不受支持，不能生成官方报名表")
+    try:
+        config = batch_configuration(plan)
+    except ConflictException as exc:
+        raise ValueError("批次报考信息不受支持，不能生成报名表") from exc
     realname = candidate.realname_snapshot
     student = candidate.student_snapshot
     form = candidate.form_data
-    return [
+    values = [
         realname.get("real_name"),
         realname.get("gender"),
         realname.get("birth_date"),
@@ -174,19 +169,24 @@ def build_registration_row(candidate: ExportCandidate, plan: Plan) -> list[objec
         form.get("mailing_address"),
         None,
         "应届毕业生",
-        program.occupation_name,
-        program.export_skill_level,
+        config["occupation_name"],
+        config["export_skill_level"],
         None,
         None,
         student.get("enrollment_date"),
         None,
-        program.occupation_code,
+        config["occupation_code"],
         APPLICATION_CONDITION,
-        program.application_type,
-        program.exam_type,
+        plan.application_type,
+        plan.exam_type,
         None,
         form.get("email"),
     ]
+    standard = TEMPLATES["renshe_registration_v1"]["columns"]
+    fields = dict(zip(standard, values))
+    fields.update(school=student.get("school"), major=student.get("major"))
+    columns = TEMPLATES[config["export_template"]]["columns"]
+    return [fields[config["field_mapping"].get(str(i), key)] for i, key in enumerate(columns, 1)]
 
 
 class RensheExportService:
@@ -208,18 +208,14 @@ class RensheExportService:
             plan = await db.scalar(
                 select(Plan).where(Plan.id == plan_id).with_for_update()
             )
-            if plan is None or plan.product_type != "RS-ZY":
+            if not await is_renshe_plan(db, plan):
                 raise NotFoundException("人社报名批次")
             if plan.status not in {"published", "registration_closed", "finalized"}:
                 raise ConflictException("当前批次状态不能导出")
-            if find_renshe_program(
-                occupation_name=plan.occupation_name,
-                occupation_code=plan.occupation_code,
-                skill_level=plan.skill_level,
-                exam_type=plan.exam_type,
-                application_type=plan.application_type,
-            ) is None:
-                raise ConflictException("批次报考信息不受支持，不能创建导出任务")
+            if plan.renshe_config_id is None:
+                raise ConflictException("批次尚未确认项目配置，请核实历史归属后再导出")
+            batch_configuration(plan)
+            self._template_paths()
             await self._assert_export_window_open(db, plan)
 
             # A double click or two browser tabs must not enqueue unbounded
@@ -260,6 +256,7 @@ class RensheExportService:
                 candidates = [item for item in candidates if item[0] in selected_set]
             if not candidates:
                 raise BusinessException("当前批次没有可导出的考生")
+            await self._preflight(db, plan, candidates)
             generation_no = (
                 await db.scalar(
                     select(func.max(RensheExportJob.generation_no)).where(
@@ -270,6 +267,7 @@ class RensheExportService:
             ) + 1
             job = RensheExportJob(
                 plan_id=plan_id,
+                project_config_id=plan.renshe_config_id,
                 generation_no=generation_no,
                 requested_by_admin_id=admin_id,
                 status="queued",
@@ -334,6 +332,35 @@ class RensheExportService:
             ).scalars().all()
             return self._job_response(job, volumes, items)
 
+    @staticmethod
+    async def _preflight(db, plan: Plan, candidates: list[tuple[int, int, int]]) -> None:
+        config = batch_configuration(plan)
+        versions = (await db.execute(select(RensheApplicationVersion).where(
+            RensheApplicationVersion.id.in_([row[1] for row in candidates])))).scalars().all()
+        by_id = {version.id: version for version in versions}
+        materials = (await db.execute(select(RensheMaterial).where(
+            RensheMaterial.version_id.in_(list(by_id)), RensheMaterial.is_deleted.is_(False)))).scalars().all()
+        for application_id, version_id, _ in candidates:
+            version = by_id.get(version_id)
+            if version is None or version.application_id != application_id:
+                raise ConflictException("导出版本归属不一致")
+            if version.project_config_id != plan.renshe_config_id:
+                raise ConflictException("导出报名与批次项目配置版本不一致")
+            owned = {item.kind: item for item in materials if item.version_id == version_id and item.application_id == application_id}
+            for requirement in config["materials"]:
+                material = owned.get(requirement["kind"])
+                if requirement["required"] and material is None:
+                    raise ConflictException(f"报名 {application_id} 缺少材料：{requirement['name']}")
+                if material is not None and material.extension not in requirement["extensions"]:
+                    raise ConflictException(f"报名 {application_id} 材料格式与固定配置不一致")
+            candidate = ExportCandidate(application_id, version_id, 0, version.realname_snapshot, version.student_snapshot, version.form_data, ())
+            columns = TEMPLATES[config["export_template"]]["columns"]
+            values = build_registration_row(candidate, plan)
+            missing = [config["field_mapping"].get(str(i), key) for i, (key, value) in enumerate(zip(columns, values), 1)
+                       if config["field_mapping"].get(str(i), key) != "blank" and (value is None or value == "")]
+            if missing:
+                raise ConflictException(f"报名 {application_id} 导出字段缺失：{', '.join(missing)}")
+
     async def list_jobs(self, plan_id: int) -> list[RensheExportJobResponse]:
         async with get_db_ctx() as db:
             jobs = (
@@ -384,7 +411,7 @@ class RensheExportService:
             plan = await db.scalar(
                 select(Plan).where(Plan.id == plan_id).with_for_update()
             )
-            if plan is None or plan.product_type != "RS-ZY":
+            if not await is_renshe_plan(db, plan):
                 raise NotFoundException("人社报名批次")
             await self._assert_export_window_open(db, plan)
             job = await db.scalar(
@@ -817,59 +844,16 @@ class RensheExportService:
         if old_keys:
             await self.storage.delete_many(old_keys)
 
+        # Items keep the exact application/material version selected at request
+        # time, including retries. Never rebuild them from current submissions.
         async with get_db_ctx() as db:
-            selected_application_ids = list(
-                (
-                    await db.execute(
-                        select(RensheExportItem.application_id)
-                        .where(RensheExportItem.job_id == job_id)
-                        .distinct()
-                        .order_by(RensheExportItem.application_id)
-                    )
-                ).scalars().all()
-            )
-
-        async with get_db_ctx() as db:
-            job = await db.scalar(
-                select(RensheExportJob)
-                .where(RensheExportJob.id == job_id, RensheExportJob.status == "running")
-                .with_for_update()
-            )
+            job = await db.scalar(select(RensheExportJob).where(
+                RensheExportJob.id == job_id, RensheExportJob.status == "running").with_for_update())
             if job is None:
                 raise ConflictException("导出任务未处于运行状态")
-            plan = await db.get(Plan, job.plan_id)
-            if plan is None:
-                raise NotFoundException("人社报名批次")
-            await db.execute(
-                update(RensheExportItem)
-                .where(RensheExportItem.job_id == job.id)
-                .values(volume_id=None)
-            )
-            await db.execute(delete(RensheExportVolume).where(RensheExportVolume.job_id == job.id))
-            await db.execute(delete(RensheExportItem).where(RensheExportItem.job_id == job.id))
-            all_eligible = await self._eligible_candidate_rows(db, job.plan_id)
-            eligible_by_id = {row[0]: row for row in all_eligible}
-            eligible = [eligible_by_id[item] for item in selected_application_ids if item in eligible_by_id]
-            if selected_application_ids and len(eligible) != len(selected_application_ids):
-                raise BusinessException("所选人员资料状态已变化，请重新创建导出任务")
-            if not selected_application_ids:
-                eligible = all_eligible
-            if not eligible:
-                raise BusinessException("当前批次没有可导出的考生")
-            for application_id, version_id, estimated_size in eligible:
-                db.add(
-                    RensheExportItem(
-                        job_id=job.id,
-                        application_id=application_id,
-                        version_id=version_id,
-                        status="queued",
-                        estimated_size_bytes=estimated_size,
-                    )
-                )
-            job.candidate_total = len(eligible)
-            job.candidate_processed = 0
-            job.volume_count = 0
-            job.heartbeat_at = self._now()
+            await db.execute(update(RensheExportItem).where(RensheExportItem.job_id == job_id).values(volume_id=None))
+            await db.execute(delete(RensheExportVolume).where(RensheExportVolume.job_id == job_id))
+            job.candidate_processed, job.volume_count, job.heartbeat_at = 0, 0, self._now()
             await db.commit()
 
         plan, candidates = await self._load_candidates(job_id)
@@ -992,7 +976,9 @@ class RensheExportService:
                         if actual_size != material.size_bytes or actual_sha256 != material.sha256:
                             raise ConflictException("导出材料完整性校验失败")
                         export_name = MATERIAL_EXPORT_NAMES[material.kind]
-                        archive_name = f"材料/{id_card}/{id_card}_{export_name}"
+                        config = batch_configuration(plan)
+                        archive_name = (f"材料/{id_card}/{id_card}_{export_name}" if config["attachment_layout"] == "by_candidate"
+                                        else f"材料/{material.kind}/{id_card}_{export_name}")
                         await asyncio.to_thread(archive.write, local_path, archive_name)
                         await asyncio.to_thread(local_path.unlink)
             finally:
@@ -1017,13 +1003,23 @@ class RensheExportService:
             from openpyxl import load_workbook
         except ImportError as exc:
             raise ThirdPartyException("缺少 Excel 模板处理依赖 openpyxl") from exc
-        workbook = load_workbook(template_path)
+        config = batch_configuration(plan)
+        if config["export_template"] == "renshe_roster_v1":
+            from openpyxl import Workbook
+            workbook = Workbook()
+            worksheet = workbook.active
+            worksheet.title = "Sheet1"
+            worksheet.append(["姓名", "身份证号", "联系电话", "职业／工种", "技能等级", "考试类型", "申报类型", "学校", "专业", "电子邮箱", "通讯地址"])
+        else:
+            workbook = load_workbook(template_path)
         try:
             worksheet = workbook["Sheet1"]
             for row_no, candidate in enumerate(candidates, start=2):
                 values = build_registration_row(candidate, plan)
                 for column_no, value in enumerate(values, start=1):
-                    worksheet.cell(row=row_no, column=column_no, value=value)
+                    cell = worksheet.cell(row=row_no, column=column_no, value=value)
+                    if isinstance(value, str):
+                        cell.data_type = "s"
             workbook.save(output_path)
         finally:
             workbook.close()
@@ -1036,6 +1032,8 @@ class RensheExportService:
             plan = await db.get(Plan, job.plan_id)
             if plan is None:
                 raise NotFoundException("人社报名批次")
+            if job.project_config_id != plan.renshe_config_id:
+                raise ConflictException("导出任务与批次配置版本不一致")
             rows = (
                 await db.execute(
                     select(RensheExportItem, RensheApplicationVersion)
@@ -1062,11 +1060,16 @@ class RensheExportService:
             for material in materials:
                 by_version.setdefault(material.version_id, []).append(material)
             candidates: list[ExportCandidate] = []
-            expected_kinds = set(MATERIAL_SPECS)
+            config = batch_configuration(plan)
+            expected_kinds = {item["kind"] for item in config["materials"] if item["required"]}
+            allowed_kinds = {item["kind"] for item in config["materials"]}
             for item, version in rows:
                 version_materials = by_version.get(version.id, [])
-                if {material.kind for material in version_materials} != expected_kinds:
+                actual = {material.kind for material in version_materials}
+                if not expected_kinds <= actual or not actual <= allowed_kinds:
                     raise ConflictException("导出版本材料不完整")
+                if version.application_id != item.application_id or (version.project_config_id is not None and version.project_config_id != plan.renshe_config_id):
+                    raise ConflictException("导出人员、材料或项目配置版本归属不一致")
                 if not version.realname_snapshot or not version.student_snapshot:
                     raise ConflictException("导出版本敏感快照已清理")
                 candidates.append(
@@ -1278,6 +1281,8 @@ class RensheExportService:
         paid_exists = exists(
             select(Order.id).where(
                 Order.application_id == RensheApplication.id,
+                Order.plan_id == RensheApplication.plan_id,
+                Order.user_id == RensheApplication.user_id,
                 Order.status.in_(("paid", "completed")),
             )
         )
@@ -1313,6 +1318,18 @@ class RensheExportService:
         work = template_dir / WORK_HISTORY_TEMPLATE_NAME
         if not registration.is_file() or not work.is_file():
             raise ThirdPartyException("人社 Excel 模板未配置或不存在")
+        try:
+            from openpyxl import load_workbook
+            workbook = load_workbook(registration, read_only=True)
+            try:
+                if "Sheet1" not in workbook.sheetnames or workbook['Sheet1'].max_column != 25:
+                    raise ValueError("报名信息模板须包含 Sheet1 及 25 列")
+            finally:
+                workbook.close()
+            workbook = load_workbook(work, read_only=True)
+            workbook.close()
+        except Exception as exc:
+            raise ThirdPartyException("人社 Excel 模板与已适配格式不匹配") from exc
         return registration, work
 
     @staticmethod

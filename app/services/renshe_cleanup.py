@@ -30,6 +30,7 @@ from app.port.exceptions import ConflictException, NotFoundException
 from app.schemas.renshe import RensheCleanupRunResponse
 from app.services.renshe_source import delete_unreferenced_source_keys
 from app.utils.audit import redact_sensitive_text
+from app.services.renshe_project import is_renshe_plan
 
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ class RensheCleanupService:
     async def list_runs(self, plan_id: int) -> list[RensheCleanupRunResponse]:
         async with get_db_ctx() as db:
             plan = await db.get(Plan, plan_id)
-            if plan is None or plan.product_type != "RS-ZY":
+            if not await is_renshe_plan(db, plan):
                 raise NotFoundException("人社报名批次")
             rows = (
                 await db.execute(

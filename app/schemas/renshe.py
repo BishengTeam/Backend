@@ -57,7 +57,7 @@ class RensheVerificationMaterialResponse(BaseModel):
 
 
 class RensheDraftUpsert(BaseModel):
-    plan_id: int = Field(..., ge=1, description="RS-ZY 批次 ID")
+    plan_id: int = Field(..., ge=1, description="人社报考批次 ID")
     contact_phone: str = Field(..., description="报名联系电话")
     mailing_address: str = Field(..., min_length=1, max_length=256, description="通讯地址")
     email: str = Field(..., min_length=3, max_length=128, description="电子邮箱")
@@ -124,6 +124,10 @@ class RensheApplicationSubmitResponse(BaseModel):
 class RensheApplicationPlanSummary(BaseModel):
     id: int
     name: str
+    product_type: str | None = None
+    project_name: str | None = None
+    renshe_config_id: int | None = None
+    renshe_config: dict | None = None
     status: PlanStatus
     apply_start: datetime | None = None
     apply_end: datetime | None = None

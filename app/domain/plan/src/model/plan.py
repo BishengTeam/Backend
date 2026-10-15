@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Index, Integer, String, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.adapter.database import Base, TimestampMixin
@@ -22,6 +22,9 @@ class Plan(Base, TimestampMixin):
     )
 
     product_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    renshe_config_id: Mapped[int | None] = mapped_column(ForeignKey("renshe_project_config.id", ondelete="RESTRICT"), nullable=True)
+    renshe_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    project_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     apply_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     apply_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

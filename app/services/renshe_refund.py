@@ -124,6 +124,9 @@ class RensheRefundService:
                 raise ConflictException("复审已通过，仅可按例外原因申请退款")
             if order is None:
                 raise ConflictException("报名没有可退款的已支付订单")
+            plan = await db.get(Plan, application.plan_id)
+            if plan is None or order.plan_id != plan.id or order.product_type != plan.product_type:
+                raise ConflictException("退款订单与报名项目或批次归属不一致")
             cleanup_run = await db.scalar(
                 select(RensheCleanupRun)
                 .where(
@@ -322,7 +325,7 @@ class RensheRefundService:
                 response.registration_no = f"RS-{application.id}"
                 response.batch_id = plan.id
                 response.batch_name = plan.name
-                response.product_label = product.chinese_name if product is not None else "人社认证"
+                response.product_label = plan.project_name or (product.chinese_name if product is not None else "人社认证")
                 items.append(response)
             return PaginatedData[RensheRefundResponse](
                 items=items,

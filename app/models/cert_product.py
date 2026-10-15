@@ -9,6 +9,7 @@ class CertProduct(Base, TimestampMixin):
     __tablename__ = "cert_product"
 
     type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    renshe_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     catalog_id: Mapped[int | None] = mapped_column(
         ForeignKey("cert_product_catalog.id", ondelete="SET NULL"), nullable=True
     )

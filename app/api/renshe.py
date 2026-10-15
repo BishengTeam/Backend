@@ -25,6 +25,22 @@ router = APIRouter(prefix="/renshe", tags=["人社报名"])
 MAX_MATERIAL_READ_BYTES = 20 * 1024 * 1024 + 1
 
 
+@router.get("/projects")
+async def list_projects(current_user: User = Depends(get_current_user)):
+    from app.services.renshe_project import RensheProjectService
+    # Public responses contain only business data; no internal code or mappings.
+    projects = await RensheProjectService().list_projects(public=True)
+    return success(data=[{"id": item.id, "name": item.chinese_name, "description": item.description,
+                          "home_cover_url": item.home_cover_url, "occupation_name": item.config.occupation_name,
+                          "skill_level": item.config.skill_level} for item in projects])
+
+
+@router.get("/batches")
+async def list_batches(project_id: int | None = Query(None, ge=1), current_user: User = Depends(get_current_user)):
+    from app.services.plan import PlanService
+    return success(data=await PlanService().list_renshe_plans(public=True, project_id=project_id))
+
+
 def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 

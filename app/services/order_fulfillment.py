@@ -44,13 +44,20 @@ class OrderFulfillmentService:
     ) -> RensheApplication | None:
         if order.application_id is None:
             return None
-        return (
+        application = (
             await db.execute(
                 select(RensheApplication)
                 .where(RensheApplication.id == order.application_id)
                 .with_for_update()
             )
         ).scalar_one_or_none()
+        if application is not None:
+            from app.domain.plan.src.index import Plan
+            from app.port.exceptions import ConflictException
+            plan = await db.get(Plan, application.plan_id)
+            if plan is None or application.user_id != order.user_id or application.plan_id != order.plan_id or plan.product_type != order.product_type:
+                raise ConflictException("人社订单与报名项目、批次或用户归属不一致")
+        return application
 
     async def _grant_quiz_entitlements(
         self,

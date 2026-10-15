@@ -33,6 +33,9 @@ class PlanCreate(BaseModel):
         max_length=64,
         description="人社受控报考组合编码；其他认证类型不能传该字段",
     )
+    project_config_id: int | None = Field(None, ge=1)
+    exam_type: str | None = Field(None, max_length=16)
+    application_type: str | None = Field(None, max_length=16)
 
     @field_validator("name")
     @classmethod
@@ -57,6 +60,10 @@ class PlanUpdate(BaseModel):
     contact_phone: str | None = Field(None, max_length=20)
     sort_order: int | None = Field(None, ge=0)
     program_code: str | None = Field(None, min_length=1, max_length=64)
+    project_code: str | None = Field(None, max_length=32)
+    project_config_id: int | None = Field(None, ge=1)
+    exam_type: str | None = Field(None, max_length=16)
+    application_type: str | None = Field(None, max_length=16)
 
     @field_validator("name")
     @classmethod
@@ -73,6 +80,9 @@ class PlanResponse(BaseModel):
     """批次响应"""
     id: int
     product_type: str
+    project_name: str | None = None
+    renshe_config_id: int | None = None
+    renshe_config: dict | None = None
     name: str
     apply_start: datetime | None = None
     apply_end: datetime | None = None

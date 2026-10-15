@@ -10,8 +10,6 @@ from app.domain.order.src.index import Order, apply_order_status_transition
 from app.domain.plan.src.index import Plan
 from app.domain.renshe.src.index import (
     EDUCATION_LEVELS,
-    MATERIAL_SPECS,
-    RENSHE_PRODUCT_CODE,
     RENSHE_ORDER_EXPIRE_MINUTES,
     RensheApplication,
     RensheApplicationVersion,
@@ -20,7 +18,6 @@ from app.domain.renshe.src.index import (
     RensheRefundRequest,
     RensheReview,
     assert_application_transition,
-    find_renshe_program,
 )
 from app.models.cert_product import CertProduct
 from app.domain.user.src.index import User, UserRealname, UserStudent
@@ -42,6 +39,7 @@ from app.schemas.renshe import (
 from app.services.agreement_template import ensure_accepted
 from app.services.consultation_group import ConsultationGroupService
 from app.services.plan_enrollment import CAPACITY_OCCUPYING_ORDER_STATUSES, PlanEnrollmentService
+from app.services.renshe_project import batch_configuration, is_renshe_plan, default_configuration
 from app.utils.payment import generate_out_trade_no
 from app.utils.pii import identity_hash
 
@@ -60,26 +58,7 @@ class RensheApplicationService:
 
     @staticmethod
     def _assert_supported_program(plan: Plan) -> None:
-        program = find_renshe_program(
-            occupation_name=plan.occupation_name,
-            occupation_code=plan.occupation_code,
-            skill_level=plan.skill_level,
-            exam_type=plan.exam_type,
-            application_type=plan.application_type,
-        )
-        if program is None:
-            raise ConflictException("批次报考信息不受支持，请联系管理员核实")
-
-    @staticmethod
-    async def _renshe_product_active(db) -> bool:
-        return bool(
-            await db.scalar(
-                select(CertProduct.is_active).where(
-                    CertProduct.code == RENSHE_PRODUCT_CODE,
-                    CertProduct.type == "renshe",
-                )
-            )
-        )
+        batch_configuration(plan)
 
     async def save_draft(
         self, user_id: int, data: RensheDraftUpsert
@@ -89,7 +68,7 @@ class RensheApplicationService:
             plan = await db.scalar(
                 select(Plan).where(Plan.id == data.plan_id).with_for_update()
             )
-            if plan is None or plan.product_type != "RS-ZY":
+            if not await is_renshe_plan(db, plan):
                 raise NotFoundException("人社报名批次")
             self._assert_supported_program(plan)
 
@@ -102,8 +81,8 @@ class RensheApplicationService:
                 )
                 .with_for_update()
             )
-            if application is None and not await self._renshe_product_active(db):
-                raise BusinessException("人社认证已停用，不能发起新报名")
+            if plan.renshe_config_id is None:
+                raise ConflictException("批次尚未确认项目配置，请联系管理员核实历史归属")
             PlanEnrollmentService.validate_application_window(plan)
             if application is None:
                 application = RensheApplication(
@@ -117,7 +96,7 @@ class RensheApplicationService:
                 raise ConflictException("当前报名状态不可编辑")
             if application.frozen_at is not None:
                 raise ConflictException("退款处理中，报名已冻结")
-            await self._verified_profiles(db, user_id)
+            await self._verified_profiles(db, user_id, plan)
 
             application.draft_data = data.model_dump(mode="json")
             db.add(
@@ -145,11 +124,8 @@ class RensheApplicationService:
                 if application.status not in EDITABLE_APPLICATION_STATUSES:
                     raise ConflictException("当前报名状态不可提交")
                 self._assert_supported_program(plan)
-                if (
-                    application.status == "draft"
-                    and not await self._renshe_product_active(db)
-                ):
-                    raise BusinessException("人社认证已停用，不能发起新报名")
+                if plan.renshe_config_id is None:
+                    raise ConflictException("批次尚未确认项目配置，请联系管理员核实历史归属")
                 if application.frozen_at is not None:
                     raise ConflictException("退款处理中，报名已冻结")
                 if not application.draft_data:
@@ -162,7 +138,7 @@ class RensheApplicationService:
                 )
 
                 PlanEnrollmentService.validate_application_window(plan)
-                realname, student = await self._verified_profiles(db, user_id)
+                realname, student = await self._verified_profiles(db, user_id, plan)
 
                 if application.status != "draft" and paid_order is None:
                     raise ConflictException("驳回重提缺少原已支付订单")
@@ -180,6 +156,7 @@ class RensheApplicationService:
                 version = RensheApplicationVersion(
                     application_id=application.id,
                     version_no=version_no,
+                    project_config_id=plan.renshe_config_id,
                     submitted_by_user_id=user_id,
                     realname_snapshot=self._realname_snapshot(realname),
                     student_snapshot=self._student_snapshot(student),
@@ -190,7 +167,11 @@ class RensheApplicationService:
                 await db.flush()
 
                 source_materials = self._material_sources(realname, student)
-                for kind in MATERIAL_SPECS:
+                config = batch_configuration(plan)
+                for requirement in config["materials"]:
+                    kind = requirement["kind"]
+                    if not source_materials.get(kind) and not requirement["required"]:
+                        continue
                     copied = await self.storage.copy_version_material(
                         user_id=user_id,
                         plan_id=plan.id,
@@ -200,6 +181,8 @@ class RensheApplicationService:
                         source_key=source_materials[kind],
                     )
                     copied_keys.append(copied.storage_key)
+                    if copied.extension not in requirement["extensions"]:
+                        raise BusinessException(f"{requirement['name']}文件格式不符合本批次要求")
                     db.add(
                         RensheMaterial(
                             application_id=application.id,
@@ -230,7 +213,7 @@ class RensheApplicationService:
                     order = Order(
                         user_id=user_id,
                         order_kind="certification",
-                        product_type="RS-ZY",
+                        product_type=plan.product_type,
                         plan_id=plan.id,
                         application_id=application.id,
                         candidate_name=realname.real_name,
@@ -240,7 +223,7 @@ class RensheApplicationService:
                         status="pending",
                         out_trade_no=generate_out_trade_no("RS"),
                         expires_at=now + timedelta(minutes=RENSHE_ORDER_EXPIRE_MINUTES),
-                        extra_data={"application_version_id": version.id},
+                        extra_data={"application_version_id": version.id, "business_type": "renshe", "project_name": plan.project_name, "project_config_id": plan.renshe_config_id},
                     )
                     db.add(order)
                     await db.flush()
@@ -294,7 +277,7 @@ class RensheApplicationService:
 
         await self._lock_active_user(db, user_id)
         plan = await db.scalar(select(Plan).where(Plan.id == plan_id).with_for_update())
-        if plan is None or plan.product_type != "RS-ZY":
+        if not await is_renshe_plan(db, plan):
             raise NotFoundException("人社报名批次")
 
         orders = (
@@ -317,6 +300,8 @@ class RensheApplicationService:
             raise NotFoundException("人社报名")
         if application.plan_id != plan.id:
             raise ConflictException("报名归属批次已变化，请重试")
+        if any(order.plan_id != plan.id or order.user_id != user_id or order.product_type != plan.product_type for order in orders):
+            raise ConflictException("报名与订单的项目、批次或用户归属不一致")
 
         paid_order = next(
             (
@@ -342,7 +327,7 @@ class RensheApplicationService:
         async with get_db_ctx() as db:
             filters = [
                 RensheApplication.user_id == user_id,
-                Plan.product_type == "RS-ZY",
+                Plan.product_type.in_(select(CertProduct.code).where(CertProduct.type == "renshe")),
             ]
             if plan_id is not None:
                 filters.append(RensheApplication.plan_id == plan_id)
@@ -581,7 +566,8 @@ class RensheApplicationService:
         return user
 
     @staticmethod
-    async def _verified_profiles(db, user_id: int) -> tuple[UserRealname, UserStudent]:
+    async def _verified_profiles(db, user_id: int, plan: Plan | None = None) -> tuple[UserRealname, UserStudent]:
+        config = batch_configuration(plan) if plan else default_configuration()
         realname = await db.scalar(
             select(UserRealname).where(
                 UserRealname.user_id == user_id,
@@ -635,12 +621,15 @@ class RensheApplicationService:
             student.school,
             student.major,
             student.enrollment_date,
-            student.student_card_oss,
-            student.enrollment_pdf_oss,
-            student.degree_cert_oss,
         )
         if not all(required_student) or student.education not in EDUCATION_LEVELS:
             raise BusinessException("已通过的学生信息不完整，请重新提交审核")
+        if student.education not in config["education_levels"]:
+            raise BusinessException("当前学历不符合本批次报考要求")
+        sources = RensheApplicationService._material_sources(realname, student)
+        for requirement in config["materials"]:
+            if requirement["required"] and not sources.get(requirement["kind"]):
+                raise BusinessException(f"缺少本批次必填材料：{requirement['name']}")
         return realname, student
 
     @staticmethod

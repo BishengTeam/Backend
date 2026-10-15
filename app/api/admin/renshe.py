@@ -2,6 +2,8 @@ from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Path, Query, Request
+from app.schemas.renshe_project import RensheProjectWrite, RensheProjectResponse
+from app.services.renshe_project import RensheProjectService
 
 from app.middleware.auth import require_permission, require_super_admin
 from app.middleware.rate_limit import limiter
@@ -31,6 +33,38 @@ from app.services.renshe_review import RensheReviewService
 
 
 router = APIRouter(prefix="/cert-products/renshe", tags=["管理后台-人社报名"])
+
+
+@router.get("/project-capabilities", response_model=APIResponse[dict])
+async def project_capabilities(_admin=Depends(require_permission("content:read"))):
+    return success(data=RensheProjectService.capabilities())
+
+
+@router.get("/projects", response_model=APIResponse[list[RensheProjectResponse]])
+async def list_projects(_admin=Depends(require_permission("content:list"))):
+    return success(data=await RensheProjectService().list_projects())
+
+
+@router.post("/projects", response_model=APIResponse[RensheProjectResponse])
+async def create_project(body: RensheProjectWrite, admin=Depends(require_permission("content:write"))):
+    return success(data=await RensheProjectService().save(body, admin_id=admin.id))
+
+
+@router.put("/projects/{project_id}", response_model=APIResponse[RensheProjectResponse])
+async def update_project(project_id: int, body: RensheProjectWrite, admin=Depends(require_permission("content:write"))):
+    return success(data=await RensheProjectService().save(body, product_id=project_id, admin_id=admin.id))
+
+
+@router.delete("/projects/{project_id}")
+async def delete_project(project_id: int, admin=Depends(require_permission("content:write"))):
+    await RensheProjectService().delete(project_id, admin_id=admin.id)
+    return success(message="草稿项目已删除")
+
+
+@router.get("/batches")
+async def list_renshe_batches(_admin=Depends(require_permission("user:list"))):
+    from app.services.plan import PlanService
+    return success(data=await PlanService().list_renshe_plans())
 
 
 def _client_ip(request: Request) -> str | None:
@@ -113,7 +147,7 @@ async def get_application(
 async def initial_review(
     body: RensheReviewCreate,
     application_id: int = Path(..., ge=1),
-    admin=Depends(require_permission("user:write")),
+    admin=Depends(require_permission("renshe:review")),
 ) -> APIResponse[RensheReviewResponse]:
     result = await RensheReviewService().review(
         reviewer_id=admin.id,
@@ -136,7 +170,7 @@ async def initial_review(
 async def return_application_for_correction(
     body: RensheReviewCreate,
     application_id: int = Path(..., ge=1),
-    admin=Depends(require_permission("user:write")),
+    admin=Depends(require_permission("renshe:review")),
 ) -> APIResponse[RensheReviewResponse]:
     result = await RensheReviewService().return_for_correction(
         reviewer_id=admin.id,
@@ -154,7 +188,7 @@ async def return_application_for_correction(
 )
 async def batch_external_review(
     body: RensheBatchExternalReviewRequest,
-    admin=Depends(require_permission("user:write")),
+    admin=Depends(require_permission("renshe:review")),
 ) -> APIResponse[RensheBatchExternalReviewResponse]:
     result = await RensheReviewService().batch_external_review(
         reviewer_id=admin.id,
@@ -171,7 +205,7 @@ async def batch_external_review(
 async def external_review(
     body: RensheReviewCreate,
     application_id: int = Path(..., ge=1),
-    admin=Depends(require_permission("user:write")),
+    admin=Depends(require_permission("renshe:review")),
 ) -> APIResponse[RensheReviewResponse]:
     result = await RensheReviewService().review(
         reviewer_id=admin.id,
@@ -272,7 +306,7 @@ async def decide_refund(
 async def create_export_job(
     plan_id: int = Path(..., ge=1),
     body: RensheExportCreate | None = None,
-    admin=Depends(require_permission("user:write")),
+    admin=Depends(require_permission("renshe:export")),
 ) -> APIResponse[RensheExportJobResponse]:
     from app.services.renshe_export import RensheExportService
 
@@ -319,7 +353,7 @@ async def get_export_job(
 )
 async def retry_export_job(
     job_id: int = Path(..., ge=1),
-    admin=Depends(require_permission("user:write")),
+    admin=Depends(require_permission("renshe:export")),
 ) -> APIResponse[RensheExportJobResponse]:
     from app.services.renshe_export import RensheExportService
 
@@ -384,7 +418,7 @@ async def get_verification_material_signed_url(
 async def get_export_volume_signed_url(
     request: Request,
     volume_id: int = Path(..., ge=1),
-    admin=Depends(require_permission("user:write")),
+    admin=Depends(require_permission("renshe:export")),
 ) -> APIResponse[RensheSignedUrlResponse]:
     from app.services.renshe_export import RensheExportService
 
