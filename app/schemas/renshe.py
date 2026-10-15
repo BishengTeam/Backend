@@ -38,6 +38,15 @@ RensheRefundStatus = Literal[
 RensheAuditResult = Literal["succeeded", "failed"]
 
 
+class RensheProgramResponse(BaseModel):
+    program_code: str
+    occupation_name: str
+    occupation_code: str
+    skill_level: str
+    exam_type: str
+    application_type: str
+
+
 class RensheVerificationMaterialResponse(BaseModel):
     kind: RensheMaterialKind
     storage_key: str
@@ -112,7 +121,26 @@ class RensheApplicationSubmitResponse(BaseModel):
     payment_required: bool
 
 
+class RensheApplicationPlanSummary(BaseModel):
+    id: int
+    name: str
+    status: PlanStatus
+    apply_start: datetime | None = None
+    apply_end: datetime | None = None
+    exam_date: datetime | None = None
+    exam_location: str | None = None
+    price_cents: int = Field(..., ge=0)
+    occupation_name: str
+    occupation_code: str
+    skill_level: str
+    exam_type: str
+    application_type: str
+
+    model_config = {"from_attributes": True}
+
+
 class RensheApplicationDetailResponse(RensheApplicationResponse):
+    plan: RensheApplicationPlanSummary
     versions: list[RensheVersionSummary] = Field(default_factory=list)
     current_order_id: int | None = None
     current_order_status: str | None = None
@@ -125,18 +153,6 @@ class RensheApplicationDetailResponse(RensheApplicationResponse):
     required_changes: list[str] | None = None
     consultation_group: ConsultationGroupUserResponse | None = None
 
-
-class RensheApplicationPlanSummary(BaseModel):
-    id: int
-    name: str
-    status: PlanStatus
-    apply_start: datetime | None = None
-    apply_end: datetime | None = None
-    exam_date: datetime | None = None
-    exam_location: str | None = None
-    price_cents: int = Field(..., ge=0)
-
-    model_config = {"from_attributes": True}
 
 
 class RensheApplicationOrderSummary(BaseModel):
@@ -362,6 +378,7 @@ class RensheAdminVersionDetailResponse(BaseModel):
 
 
 class RensheAdminApplicationDetailResponse(RensheApplicationResponse):
+    plan: RensheApplicationPlanSummary
     versions: list[RensheAdminVersionDetailResponse] = Field(default_factory=list)
     current_order_id: int | None = None
     current_order_status: str | None = None

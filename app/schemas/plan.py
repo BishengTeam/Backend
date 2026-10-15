@@ -27,6 +27,12 @@ class PlanCreate(BaseModel):
     contact_name: str | None = Field(None, max_length=64, description="联系人")
     contact_phone: str | None = Field(None, max_length=20, description="联系电话")
     sort_order: int = Field(0, ge=0, description="排序值")
+    program_code: str | None = Field(
+        None,
+        min_length=1,
+        max_length=64,
+        description="人社受控报考组合编码；其他认证类型不能传该字段",
+    )
 
     @field_validator("name")
     @classmethod
@@ -50,6 +56,7 @@ class PlanUpdate(BaseModel):
     contact_name: str | None = Field(None, max_length=64)
     contact_phone: str | None = Field(None, max_length=20)
     sort_order: int | None = Field(None, ge=0)
+    program_code: str | None = Field(None, min_length=1, max_length=64)
 
     @field_validator("name")
     @classmethod
@@ -71,11 +78,11 @@ class PlanResponse(BaseModel):
     apply_end: datetime | None = None
     exam_date: datetime | None = None
     capacity: int = 0
-    occupation_name: str = "信息安全管理员"
-    occupation_code: str = "4-04-04-02-网络与信息安全管理员-信息安全管理员-中级工"
-    skill_level: str = "中级工"
-    exam_type: str = "新考"
-    application_type: str = "学历型"
+    occupation_name: str
+    occupation_code: str
+    skill_level: str
+    exam_type: str
+    application_type: str
     price_cents: int = 50000
     exam_location: str | None = None
     description: str | None = None

@@ -53,6 +53,71 @@ class MaterialSpec:
     magic: tuple[bytes, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class RensheProgram:
+    """A server-controlled admission program attached to one batch.
+
+    The display level and official workbook level intentionally differ.  They
+    are kept in one immutable definition so pages and exports cannot drift.
+    """
+
+    program_code: str
+    occupation_name: str
+    occupation_code: str
+    skill_level: str
+    export_skill_level: str
+    exam_type: str
+    application_type: str
+    qualification_rule: str
+    material_profile: str
+    export_template_version: str
+
+
+RENSHE_PROGRAMS: tuple[RensheProgram, ...] = (
+    RensheProgram(
+        program_code="info-security-administrator-level4-degree",
+        occupation_name="信息安全管理员",
+        occupation_code=(
+            "4-04-04-02-网络与信息安全管理员-信息安全管理员-中级工"
+        ),
+        skill_level="中级工",
+        export_skill_level="四级",
+        exam_type="新考",
+        application_type="学历型",
+        qualification_rule="related_major_current_graduating_student",
+        material_profile="student_six_materials",
+        export_template_version="renshe_registration_v1",
+    ),
+)
+RENSHE_DEFAULT_PROGRAM = RENSHE_PROGRAMS[0]
+
+
+def find_renshe_program(
+    *,
+    program_code: str | None = None,
+    occupation_name: str | None = None,
+    occupation_code: str | None = None,
+    skill_level: str | None = None,
+    exam_type: str | None = None,
+    application_type: str | None = None,
+) -> RensheProgram | None:
+    for program in RENSHE_PROGRAMS:
+        if program_code is not None and program.program_code != program_code:
+            continue
+        if occupation_name is not None and program.occupation_name != occupation_name:
+            continue
+        if occupation_code is not None and program.occupation_code != occupation_code:
+            continue
+        if skill_level is not None and program.skill_level != skill_level:
+            continue
+        if exam_type is not None and program.exam_type != exam_type:
+            continue
+        if application_type is not None and program.application_type != application_type:
+            continue
+        return program
+    return None
+
+
 JPEG_SPEC = MaterialSpec(
     extensions=frozenset({".jpg", ".jpeg"}),
     content_types=frozenset({"image/jpeg", "image/pjpeg"}),

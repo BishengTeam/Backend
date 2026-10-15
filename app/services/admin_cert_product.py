@@ -28,6 +28,13 @@ TYPE_LABELS: dict[str, str] = {
 
 PRICE_USER_TYPES = ("student", "normal")
 H3C_PRICE_SHEET_NAME = "新华三考试详情"
+RENSHE_DISPLAY_EDITABLE_FIELDS = {
+    "chinese_name",
+    "description",
+    "home_cover_url",
+    "is_active",
+    "sort_order",
+}
 
 
 def _to_int(value):
@@ -226,6 +233,8 @@ class AdminCertProductService:
 
     async def create(self, data: CertProductCreate) -> CertProductResponse:
         """创建认证产品"""
+        if data.type == "renshe":
+            raise BusinessException("人社认证使用固定认证设置，不支持新增产品")
         async with get_db_ctx() as db:
             async with db.begin():
                 if data.catalog_id is not None:
@@ -271,6 +280,12 @@ class AdminCertProductService:
             async with db.begin():
                 product = await self._get_or_404(db, code)
                 update_data = data.model_dump(exclude_unset=True)
+                if product.type == "renshe":
+                    forbidden = set(update_data) - RENSHE_DISPLAY_EDITABLE_FIELDS
+                    if forbidden:
+                        raise BusinessException(
+                            "人社认证仅允许修改展示名称、介绍、封面和启用状态"
+                        )
                 update_data.pop("prices", None)
                 for field, value in update_data.items():
                     setattr(product, field, value)

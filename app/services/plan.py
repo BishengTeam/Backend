@@ -9,6 +9,12 @@ from app.domain.nisp.src.index import NispExamBatch
 from app.domain.order.src.index import Order
 from app.domain.plan.src.index import Plan
 from app.domain.renshe.src.index import RensheApplication, RensheAuditLog
+from app.domain.renshe.src.index import (
+    RENSHE_DEFAULT_PROGRAM,
+    RENSHE_PRODUCT_CODE,
+    find_renshe_program,
+)
+from app.models.cert_product import CertProduct
 from app.port.config import settings
 from app.port.exceptions import BusinessException, NotFoundException, ValidationException
 from app.schemas.plan import (
@@ -22,13 +28,6 @@ from app.services.plan_enrollment import CAPACITY_OCCUPYING_ORDER_STATUSES
 from app.services.renshe_batch import RensheBatchService
 
 
-RENSHE_FIXED_FIELDS = {
-    "occupation_name": "信息安全管理员",
-    "occupation_code": "4-04-04-02-网络与信息安全管理员-信息安全管理员-中级工",
-    "skill_level": "中级工",
-    "exam_type": "新考",
-    "application_type": "学历型",
-}
 PUBLISHED_RENSHE_EDITABLE_FIELDS = {
     "apply_start",
     "apply_end",
@@ -41,8 +40,6 @@ PUBLISHED_RENSHE_EDITABLE_FIELDS = {
     "contact_phone",
     "sort_order",
 }
-
-
 class PlanService:
     @staticmethod
     def _normalize_datetime(value: datetime | None) -> datetime | None:
@@ -107,6 +104,38 @@ class PlanService:
         if plan.price_cents < 1:
             raise ValidationException("人社批次价格必须大于 0 分")
 
+    @staticmethod
+    def _required_renshe_program(plan: Plan):
+        program = find_renshe_program(
+            occupation_name=plan.occupation_name,
+            occupation_code=plan.occupation_code,
+            skill_level=plan.skill_level,
+            exam_type=plan.exam_type,
+            application_type=plan.application_type,
+        )
+        if program is None:
+            raise ValidationException("批次报考信息不受支持，请重新创建批次")
+        return program
+
+    @staticmethod
+    async def _assert_renshe_product_binding(db, product_type: str) -> None:
+        product = await db.scalar(
+            select(CertProduct).where(CertProduct.code == product_type)
+        )
+        if product is not None and product.type == "renshe" and product.code != RENSHE_PRODUCT_CODE:
+            raise BusinessException("人社认证批次必须绑定系统预置的固定业务记录")
+
+    @staticmethod
+    async def _renshe_product_active(db) -> bool:
+        return bool(
+            await db.scalar(
+                select(CertProduct.is_active).where(
+                    CertProduct.code == RENSHE_PRODUCT_CODE,
+                    CertProduct.type == "renshe",
+                )
+            )
+        )
+
     async def list_plans(self, product_type: str) -> list[PlanResponse]:
         async with get_db_ctx() as db:
             rows = (
@@ -132,6 +161,15 @@ class PlanService:
             exam_date=data.exam_date,
         )
         async with get_db_ctx() as db:
+            await self._assert_renshe_product_binding(db, product_type)
+            program = RENSHE_DEFAULT_PROGRAM
+            if product_type == RENSHE_PRODUCT_CODE:
+                if data.program_code is not None:
+                    program = find_renshe_program(program_code=data.program_code)
+                    if program is None:
+                        raise ValidationException("不支持的人社报考组合")
+            elif data.program_code is not None:
+                raise ValidationException("仅人社批次可以指定报考组合")
             existing = await db.scalar(
                 select(Plan).where(
                     Plan.product_type == product_type,
@@ -154,7 +192,17 @@ class PlanService:
                 contact_phone=data.contact_phone,
                 sort_order=data.sort_order,
                 status="draft",
-                **RENSHE_FIXED_FIELDS,
+                **(
+                    {
+                        "occupation_name": program.occupation_name,
+                        "occupation_code": program.occupation_code,
+                        "skill_level": program.skill_level,
+                        "exam_type": program.exam_type,
+                        "application_type": program.application_type,
+                    }
+                    if product_type == RENSHE_PRODUCT_CODE
+                    else {}
+                ),
             )
             db.add(plan)
             await db.flush()
@@ -180,12 +228,28 @@ class PlanService:
         async with get_db_ctx() as db:
             plan = await self._get_plan(db, plan_id, product_type, for_update=True)
             update_data = data.model_dump(exclude_unset=True)
-            if plan.status == "published" and plan.product_type == "RS-ZY":
+            if plan.product_type == RENSHE_PRODUCT_CODE and plan.published_at is not None:
                 forbidden = set(update_data) - PUBLISHED_RENSHE_EDITABLE_FIELDS
                 if forbidden:
-                    raise BusinessException("已发布人社批次不能修改批次名称或固定职业字段")
+                    raise BusinessException("已发布过的人社批次不能修改批次名称或报考属性")
             elif plan.status != "draft":
                 raise BusinessException("当前批次状态不可编辑")
+
+            if plan.product_type == RENSHE_PRODUCT_CODE and "program_code" in update_data:
+                program = find_renshe_program(program_code=update_data["program_code"])
+                if program is None:
+                    raise ValidationException("不支持的人社报考组合")
+                for field, value in (
+                    ("occupation_name", program.occupation_name),
+                    ("occupation_code", program.occupation_code),
+                    ("skill_level", program.skill_level),
+                    ("exam_type", program.exam_type),
+                    ("application_type", program.application_type),
+                ):
+                    update_data[field] = value
+                update_data.pop("program_code")
+            elif "program_code" in update_data:
+                raise ValidationException("仅人社批次可以指定报考组合")
 
             if "name" in update_data:
                 if update_data["name"] is None:
@@ -244,6 +308,11 @@ class PlanService:
             plan = await self._get_plan(db, plan_id, product_type, for_update=True)
             if plan.status != "draft":
                 raise BusinessException("仅草稿状态的批次可发布")
+            program = None
+            if plan.product_type == RENSHE_PRODUCT_CODE:
+                program = self._required_renshe_program(plan)
+                if not await self._renshe_product_active(db):
+                    raise BusinessException("人社认证已停用，不能发布新批次")
             self._validate_schedule(
                 apply_start=plan.apply_start,
                 apply_end=plan.apply_end,
@@ -259,7 +328,16 @@ class PlanService:
                 plan=plan,
                 admin_id=admin_id,
                 action="batch.publish",
-                summary={},
+                summary=(
+                    {
+                        "program_code": program.program_code,
+                        "qualification_rule": program.qualification_rule,
+                        "material_profile": program.material_profile,
+                        "export_template_version": program.export_template_version,
+                    }
+                    if program is not None
+                    else {}
+                ),
             )
             await db.commit()
             await db.refresh(plan)
@@ -389,6 +467,8 @@ class PlanService:
 
     async def list_published_plans(self, product_type: str) -> list[PlanResponse]:
         async with get_db_ctx() as db:
+            if product_type == RENSHE_PRODUCT_CODE and not await self._renshe_product_active(db):
+                return []
             now = datetime.now(timezone.utc)
             rows = (
                 await db.execute(

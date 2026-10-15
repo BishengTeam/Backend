@@ -4,6 +4,7 @@ from sqlalchemy import func, or_, select
 
 from app.adapter.database import get_db_ctx
 from app.domain.order.src.index import Order
+from app.domain.plan.src.index import Plan
 from app.domain.renshe.src.index import (
     assert_application_transition,
     RensheApplication,
@@ -28,6 +29,7 @@ from app.schemas.renshe import (
     RensheAdminApplicationListItem,
     RensheAdminVersionDetailResponse,
     RensheApplicationResponse,
+    RensheApplicationPlanSummary,
     RensheBatchExternalReviewRequest,
     RensheBatchExternalReviewResult,
     RensheMaterialMetadataResponse,
@@ -235,8 +237,10 @@ class RensheReviewService:
                 .order_by(Order.id.desc())
                 .limit(1)
             )
+            plan = await db.get(Plan, application.plan_id)
             payload = RensheAdminApplicationDetailResponse(
                 **RensheApplicationResponse.model_validate(application).model_dump(),
+                plan=RensheApplicationPlanSummary.model_validate(plan),
                 versions=[
                     RensheAdminVersionDetailResponse(
                         id=version.id,

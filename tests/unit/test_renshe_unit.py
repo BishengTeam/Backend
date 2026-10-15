@@ -572,6 +572,7 @@ def test_export_row_uses_frozen_student_mapping_and_leaves_work_fields_blank():
 
 def test_export_and_private_download_routes_are_registered():
     required = {
+        ("GET", "/admin/cert-products/renshe/programs"),
         ("POST", "/admin/cert-products/renshe/plans/{plan_id}/exports"),
         ("GET", "/admin/cert-products/renshe/plans/{plan_id}/exports"),
         ("GET", "/admin/cert-products/renshe/exports/{job_id}"),
@@ -591,6 +592,27 @@ def test_export_and_private_download_routes_are_registered():
         for method in (getattr(route, "methods", None) or set())
     }
     assert required <= registered
+
+
+def test_registration_export_rejects_unsupported_programs():
+    candidate = ExportCandidate(
+        application_id=1,
+        version_id=1,
+        estimated_size_bytes=1,
+        realname_snapshot={},
+        student_snapshot={},
+        form_data={},
+        materials=(),
+    )
+    plan = Plan(product_type="RS-ZY", name="批次")
+    plan.skill_level = "三级"
+
+    try:
+        build_registration_row(candidate, plan)
+    except ValueError as exc:
+        assert "不受支持" in str(exc)
+    else:
+        raise AssertionError("unsupported Renshe programs must not be exported")
 
 
 @pytest.mark.asyncio

@@ -32,6 +32,7 @@ from app.domain.renshe.src.index import (
     RensheExportJob,
     RensheExportVolume,
     RensheMaterial,
+    find_renshe_program,
 )
 from app.integrations.renshe_storage import RensheObjectStorage
 from app.integrations.renshe_storage import assert_owned_source_key
@@ -147,6 +148,15 @@ def partition_export_candidates(
 def build_registration_row(candidate: ExportCandidate, plan: Plan) -> list[object | None]:
     """Map one immutable submission snapshot to the official 25 columns."""
 
+    program = find_renshe_program(
+        occupation_name=plan.occupation_name,
+        occupation_code=plan.occupation_code,
+        skill_level=plan.skill_level,
+        exam_type=plan.exam_type,
+        application_type=plan.application_type,
+    )
+    if program is None:
+        raise ValueError("批次报考信息不受支持，不能生成官方报名表")
     realname = candidate.realname_snapshot
     student = candidate.student_snapshot
     form = candidate.form_data
@@ -164,17 +174,16 @@ def build_registration_row(candidate: ExportCandidate, plan: Plan) -> list[objec
         form.get("mailing_address"),
         None,
         "应届毕业生",
-        plan.occupation_name or "信息安全管理员",
-        "四级",
+        program.occupation_name,
+        program.export_skill_level,
         None,
         None,
         student.get("enrollment_date"),
         None,
-        plan.occupation_code
-        or "4-04-04-02-网络与信息安全管理员-信息安全管理员-中级工",
+        program.occupation_code,
         APPLICATION_CONDITION,
-        plan.application_type or "学历型",
-        plan.exam_type or "新考",
+        program.application_type,
+        program.exam_type,
         None,
         form.get("email"),
     ]
@@ -203,6 +212,14 @@ class RensheExportService:
                 raise NotFoundException("人社报名批次")
             if plan.status not in {"published", "registration_closed", "finalized"}:
                 raise ConflictException("当前批次状态不能导出")
+            if find_renshe_program(
+                occupation_name=plan.occupation_name,
+                occupation_code=plan.occupation_code,
+                skill_level=plan.skill_level,
+                exam_type=plan.exam_type,
+                application_type=plan.application_type,
+            ) is None:
+                raise ConflictException("批次报考信息不受支持，不能创建导出任务")
             await self._assert_export_window_open(db, plan)
 
             # A double click or two browser tabs must not enqueue unbounded

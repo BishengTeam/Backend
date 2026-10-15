@@ -35,6 +35,13 @@ class AdminCertProductTypeTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             CertProductCreate(**_payload("unknown"))
 
+    def test_renshe_is_a_fixed_certification_setting_not_product_catalog(self):
+        from pathlib import Path
+
+        source = Path("app/services/admin_cert_product.py").read_text(encoding="utf-8")
+        assert "人社认证使用固定认证设置，不支持新增产品" in source
+        assert "人社认证仅允许修改展示名称、介绍、封面和启用状态" in source
+
     def test_stats_and_api_copy_include_new_vendor_types(self):
         service_source = (
             REPO_ROOT / "app/services/admin_cert_product.py"

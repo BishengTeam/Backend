@@ -103,6 +103,13 @@ def _plan(*, plan_id: int = 7, status: str = "published"):
         apply_end=now + timedelta(days=2),
         exam_date=now + timedelta(days=10),
         exam_location="成都市测试中心",
+        occupation_name="信息安全管理员",
+        occupation_code=(
+            "4-04-04-02-网络与信息安全管理员-信息安全管理员-中级工"
+        ),
+        skill_level="中级工",
+        exam_type="新考",
+        application_type="学历型",
         price_cents=50000,
     )
 

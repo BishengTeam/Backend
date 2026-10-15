@@ -22,9 +22,11 @@ from app.schemas.renshe import (
     RensheReviewResponse,
     RensheRefundDecision,
     RensheRefundResponse,
+    RensheProgramResponse,
     RensheSignedUrlResponse,
     RensheMaterialKind,
 )
+from app.domain.renshe.src.index import RENSHE_PROGRAMS
 from app.services.renshe_review import RensheReviewService
 
 
@@ -33,6 +35,29 @@ router = APIRouter(prefix="/cert-products/renshe", tags=["管理后台-人社报
 
 def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
+
+
+@router.get(
+    "/programs",
+    response_model=APIResponse[list[RensheProgramResponse]],
+    summary="当前支持的人社报考组合",
+)
+async def list_programs(
+    _admin=Depends(require_permission("user:write")),
+) -> APIResponse[list[RensheProgramResponse]]:
+    return success(
+        data=[
+            RensheProgramResponse(
+                program_code=program.program_code,
+                occupation_name=program.occupation_name,
+                occupation_code=program.occupation_code,
+                skill_level=program.skill_level,
+                exam_type=program.exam_type,
+                application_type=program.application_type,
+            )
+            for program in RENSHE_PROGRAMS
+        ]
+    )
 
 
 @router.get(
