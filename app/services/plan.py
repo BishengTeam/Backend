@@ -145,9 +145,10 @@ class PlanService:
             if project_id is not None:
                 stmt = stmt.where(CertProduct.id == project_id)
             if public:
-                now = datetime.now(timezone.utc)
-                # Stopping a project does not silently close published batches.
-                stmt = stmt.where(Plan.status == "published", Plan.apply_start <= now, Plan.apply_end >= now)
+                # Keep future and ended published batches so the mini program can
+                # explain "not started" / "registration ended" instead of hiding
+                # them. Runtime submission still validates the actual window.
+                stmt = stmt.where(Plan.status.in_(("published", "registration_closed")))
             rows = (await db.execute(stmt.order_by(Plan.sort_order.desc(), Plan.id.desc()))).scalars().all()
             if public:
                 rows = [row for row in rows if row.renshe_config_id is not None]
