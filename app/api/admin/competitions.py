@@ -6,6 +6,7 @@ from app.schemas.admin_competition import (
     AdminCompetitionCreate,
     AdminCompetitionListItem,
     AdminCompetitionRegistrationItem,
+    AdminCompetitionSchoolStatItem,
     AdminCompetitionUpdate,
 )
 from app.schemas.common import APIResponse, PaginatedData, success
@@ -118,6 +119,26 @@ async def list_registrations(
     result = await AdminCompetitionService().list_registrations(
         competition_id, track_id, page, page_size
     )
+    return success(data=result)
+
+
+@router.get("/{competition_id}/registrations/school-stats",
+    response_model=APIResponse[list[AdminCompetitionSchoolStatItem]],
+    summary="按学校聚合报名统计",
+    description="""
+管理后台 **竞赛管理 → 报名名单** 页面使用。
+
+**使用场景**: 按学校分组统计报名人数（人数降序）；传 track_id 只统计该赛道
+
+**权限**: competition:list
+    """,
+)
+async def get_school_stats(
+    competition_id: int = Path(..., ge=1, description="赛事 ID"),
+    track_id: int | None = Query(None, ge=1, description="赛道 ID 筛选"),
+    _admin=Depends(require_permission("competition:list")),
+) -> APIResponse[list[AdminCompetitionSchoolStatItem]]:
+    result = await AdminCompetitionService().school_stats(competition_id, track_id)
     return success(data=result)
 
 

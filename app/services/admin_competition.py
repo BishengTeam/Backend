@@ -14,6 +14,7 @@ from app.schemas.admin_competition import (
     AdminCompetitionCreate,
     AdminCompetitionListItem,
     AdminCompetitionRegistrationItem,
+    AdminCompetitionSchoolStatItem,
     AdminCompetitionUpdate,
 )
 from app.schemas.common import PaginatedData
@@ -327,3 +328,39 @@ class AdminCompetitionService:
                 page=page,
                 page_size=page_size,
             )
+
+    async def school_stats(
+        self,
+        competition_id: int,
+        track_id: int | None,
+    ) -> list[AdminCompetitionSchoolStatItem]:
+        """按学校聚合赛事报名人数（可按赛道过滤），人数降序。"""
+        async with get_db_ctx() as db:
+            competition = await db.get(Competition, competition_id)
+            if competition is None:
+                raise NotFoundException("赛事")
+            base = (
+                select(
+                    CompetitionReg.school,
+                    func.count().label("registration_count"),
+                )
+                .join(
+                    CompetitionTrack,
+                    CompetitionReg.track_id == CompetitionTrack.id,
+                )
+                .where(CompetitionTrack.competition_id == competition_id)
+            )
+            if track_id is not None:
+                base = base.where(CompetitionReg.track_id == track_id)
+            rows = (
+                await db.execute(
+                    base.group_by(CompetitionReg.school)
+                    .order_by(func.count().desc(), CompetitionReg.school.asc())
+                )
+            ).all()
+            return [
+                AdminCompetitionSchoolStatItem(
+                    school=row.school or "", count=int(row.registration_count)
+                )
+                for row in rows
+            ]

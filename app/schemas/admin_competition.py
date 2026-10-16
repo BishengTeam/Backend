@@ -74,3 +74,8 @@ class AdminCompetitionRegistrationItem(BaseModel):
     created_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+
+class AdminCompetitionSchoolStatItem(BaseModel):
+    school: str
+    count: int
