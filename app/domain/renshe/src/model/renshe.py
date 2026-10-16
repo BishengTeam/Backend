@@ -74,6 +74,7 @@ class RensheApplication(Base, TimestampMixin):
         String(32), nullable=False, default="draft", server_default="draft", index=True
     )
     draft_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    correction_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     initial_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     external_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -116,7 +117,8 @@ class RensheMaterial(Base, TimestampMixin):
     __table_args__ = (
         CheckConstraint(
             "kind IN ('id_card_front', 'id_card_back', 'portrait', "
-            "'student_card', 'xuexin_registration', 'education_proof')",
+            "'student_card', 'xuexin_registration', 'education_proof', "
+            "'registration_portrait', 'graduation_certificate', 'education_report', 'commitment_letter')",
             name="ck_renshe_material_kind",
         ),
         CheckConstraint("size_bytes > 0", name="ck_renshe_material_size_positive"),
@@ -184,6 +186,8 @@ class RensheReview(Base, TimestampMixin):
     decision: Mapped[str] = mapped_column(String(16), nullable=False)
     reason: Mapped[str | None] = mapped_column(Text)
     required_changes: Mapped[list | None] = mapped_column(JSON)
+    correction_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    checklist: Mapped[dict | None] = mapped_column(JSON)
     reviewer_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("admin_user.id", ondelete="RESTRICT"), nullable=False
     )

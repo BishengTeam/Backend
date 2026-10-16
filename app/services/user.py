@@ -41,6 +41,7 @@ from app.services.agreement_template import ensure_accepted
 from app.services.renshe_source import (
     delete_unreferenced_source_keys,
     profile_source_keys,
+    draft_source_keys,
 )
 from pypinyin import lazy_pinyin
 
@@ -779,6 +780,8 @@ class UserService:
                 )
             ).scalars().all()
             for application in drafts:
+                source_keys_to_reclaim.update(draft_source_keys(application.draft_data))
+                application.draft_data = None
                 application.status = "closed"
                 application.closed_at = now
                 application.close_reason = "account_deleted"

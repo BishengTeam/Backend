@@ -82,6 +82,8 @@ async def isolated(monkeypatch, tmp_path):
         async with factory() as session:
             yield session
 
+    monkeypatch.setattr("app.adapter.database.get_db_ctx", context)
+
     for module in (
         "renshe_project",
         "plan",
@@ -94,6 +96,10 @@ async def isolated(monkeypatch, tmp_path):
         "admin_cert_product",
     ):
         monkeypatch.setattr(f"app.services.{module}.get_db_ctx", context)
+    # These tests exercise persisted, pre-rollout project policies. Seed their
+    # old availability without weakening the production publication gate.
+    from app.services.renshe_graduated import activation_errors, is_graduated
+    monkeypatch.setattr("app.services.renshe_project.activation_errors", lambda config: activation_errors(config) if is_graduated(config) else [])
     monkeypatch.setattr("app.services.renshe_application.ensure_accepted", AsyncMock())
     monkeypatch.setattr(
         "app.services.h3c_registration.H3cRegistrationService.on_order_paid",
@@ -154,6 +160,15 @@ async def create_batch(project, name="第一期", **changes):
     )
 
 
+async def publish_historical_batch(env, batch):
+    """Represent a batch published before the new admission rule existed."""
+    async with env.db() as db:
+        plan = await db.get(Plan, batch.id)
+        plan.status = "published"
+        plan.published_at = datetime.now(timezone.utc)
+        await db.commit()
+
+
 async def verified_student(env):
     sources = {}
     for requirement in default_configuration()["materials"]:
@@ -200,6 +215,12 @@ async def verified_student(env):
 
 
 async def enroll(env, batch):
+    from app.domain.renshe.src.index import RensheApplication
+    # A persisted pre-rollout application may continue under its frozen rule;
+    # creating a new legacy application after rollout is deliberately blocked.
+    async with env.db() as db:
+        db.add(RensheApplication(user_id=1, plan_id=batch.id, status="draft"))
+        await db.commit()
     service = RensheApplicationService(env.storage)
     draft = await service.save_draft(
         1,
@@ -256,7 +277,11 @@ async def test_two_projects_complete_separate_admission_exports_external_review_
         await create_batch(project, "第二期")
     batches = [await create_batch(project) for project in (first, second)]
     for batch in batches:
-        await PlanService().publish_plan(batch.id, batch.product_type, admin_id=1)
+        await publish_historical_batch(env, batch)
+        with pytest.raises(ConflictException, match="本期新报名"):
+            await RensheApplicationService(env.storage).save_draft(1, RensheDraftUpsert(
+                plan_id=batch.id, contact_phone="13800138000", email="test@example.com", mailing_address="地址"
+            ))
     submissions = [await enroll(env, batch) for batch in batches]
     from app.services.admin_cert_product import AdminCertProductService
 
@@ -352,7 +377,7 @@ async def test_version_freeze_explicit_draft_upgrade_disable_and_immutable_rows(
     first = await service.save(project_data(), admin_id=1)
     published = await create_batch(first)
     draft = await create_batch(first, "草稿")
-    await PlanService().publish_plan(published.id, first.code, admin_id=1)
+    await publish_historical_batch(isolated, published)
     config = first.config.model_dump()
     config["attachment_layout"] = "by_material"
     second = await service.save(
@@ -456,11 +481,11 @@ async def test_export_keeps_requested_material_version_after_resubmission_and_re
     await verified_student(isolated)
     project = await RensheProjectService().save(project_data(), admin_id=1)
     batch = await create_batch(project)
-    await PlanService().publish_plan(batch.id, project.code, admin_id=1)
+    await publish_historical_batch(isolated, batch)
     submission = await enroll(isolated, batch)
     exports = RensheExportService(isolated.storage)
     other = await create_batch(project, "其他批次")
-    await PlanService().publish_plan(other.id, project.code, admin_id=1)
+    await publish_historical_batch(isolated, other)
     with pytest.raises(BusinessException):
         await exports.create_job(
             plan_id=other.id, admin_id=1, application_ids=[submission.application.id]
@@ -530,8 +555,12 @@ async def test_generated_project_cannot_use_generic_order_or_wrong_education(iso
             1, OrderCreate(order_kind="certification", product_type=project.code)
         )
     batch = await create_batch(project)
-    await PlanService().publish_plan(batch.id, project.code, admin_id=1)
+    await publish_historical_batch(isolated, batch)
     await verified_student(isolated)
+    from app.domain.renshe.src.index import RensheApplication
+    async with isolated.db() as db:
+        db.add(RensheApplication(user_id=1, plan_id=batch.id, status="draft"))
+        await db.commit()
     with pytest.raises(BusinessException, match="学历不符合"):
         await RensheApplicationService(isolated.storage).save_draft(
             1,

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, File, Path, Query, Request, UploadFile
+from fastapi.responses import FileResponse
 
 from app.domain.user.src.index import User
 from app.integrations.renshe_storage import RensheObjectStorage
@@ -12,6 +13,7 @@ from app.schemas.renshe import (
     RensheApplicationSubmitResponse,
     RensheDraftUpsert,
     RensheMaterialKind,
+    RensheApplicationMaterialKind,
     RensheRefundCreate,
     RensheRefundResponse,
     RensheSignedUrlResponse,
@@ -33,7 +35,13 @@ async def list_projects(current_user: User = Depends(get_current_user)):
     return success(data=[{"id": item.id, "name": item.chinese_name, "description": item.description,
                           "home_cover_url": item.home_cover_url, "occupation_name": item.config.occupation_name,
                           "occupation_code": item.config.occupation_code,
-                          "skill_level": item.config.skill_level} for item in projects])
+                          "skill_level": item.config.skill_level,
+                          "qualification_rule": item.config.qualification_rule,
+                          "application_types": item.config.application_types,
+                          "education_levels": item.config.education_levels,
+                          "institution_types": item.config.institution_types,
+                          "materials": [material.model_dump() for material in item.config.materials],
+                          "admission_notice": "本期仅接受已取得毕业证、本专业或相关专业申请人；学历及专业以报名初审为准。无法提供学历备案表请联系管理员。" if item.config.qualification_rule == "related_major_graduated_degree_v1" else "历史项目仅办理已有报名。本期新报名请选择已毕业学历型批次。"} for item in projects])
 
 
 @router.get("/batches")
@@ -44,6 +52,38 @@ async def list_batches(project_id: int | None = Query(None, ge=1), current_user:
 
 def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
+
+
+@router.post("/batches/{plan_id}/materials/{kind}")
+async def upload_application_material(
+    plan_id: int = Path(..., ge=1),
+    kind: RensheApplicationMaterialKind = Path(...),
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    result = await RensheApplicationService().upload_application_material(
+        current_user.id, plan_id, kind, filename=file.filename or "material",
+        content_type=file.content_type, content=await file.read(500 * 1024 + 1 if kind == "registration_portrait" else MAX_MATERIAL_READ_BYTES),
+    )
+    return success(data=result)
+
+
+@router.get("/batches/{plan_id}/commitment-template")
+async def download_commitment_template(plan_id: int = Path(..., ge=1), current_user: User = Depends(get_current_user)):
+    from app.adapter.database import get_db_ctx
+    from app.domain.plan.src.index import Plan
+    from app.services.renshe_project import batch_configuration, is_renshe_plan
+    from app.services.renshe_graduated import is_graduated, template_path
+    from app.port.exceptions import NotFoundException
+    async with get_db_ctx() as db:
+        plan = await db.get(Plan, plan_id)
+        if not await is_renshe_plan(db, plan):
+            raise NotFoundException("人社批次")
+        config = batch_configuration(plan)
+        if not is_graduated(config) or plan.status == "draft":
+            raise NotFoundException("承诺书模板")
+        path = template_path(config["reporting_policy"])
+    return FileResponse(path, filename=path.name)
 
 
 @router.post(
@@ -125,7 +165,7 @@ async def get_own_verification_material_signed_url(
     "/applications/draft",
     response_model=APIResponse[RensheApplicationResponse],
     summary="新建或保存人社报名草稿",
-    description="仅实名认证和学生信息均已人工通过的微信登录用户可用。",
+    description="依据批次冻结配置校验本人实名与报名条件；学历型报名独立审核毕业学历。",
 )
 async def save_application_draft(
     body: RensheDraftUpsert,

@@ -22,7 +22,6 @@ from app.domain.order.src.index import Order
 from app.domain.plan.src.index import Plan
 from app.domain.renshe.src.index import (
     EXPORTABLE_APPLICATION_STATUSES,
-    MATERIAL_SPECS,
     MAX_EXPORT_VOLUME_BYTES,
     RensheApplication,
     RensheApplicationVersion,
@@ -51,6 +50,7 @@ from app.schemas.renshe import (
     RensheSignedUrlResponse,
 )
 from app.services.renshe_project import batch_configuration, is_renshe_plan, TEMPLATES
+from app.services.renshe_graduated import is_graduated, INSTITUTION_TYPES
 
 
 logger = logging.getLogger(__name__)
@@ -92,6 +92,7 @@ class ExportMaterial:
     storage_key: str
     size_bytes: int
     sha256: str
+    extension: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +130,7 @@ def partition_export_candidates(
     for application_id, estimated_size in candidates:
         candidate_size = (
             max(0, estimated_size)
-            + (len(MATERIAL_SPECS) * EXPORT_ENTRY_OVERHEAD_BYTES)
+            + (6 * EXPORT_ENTRY_OVERHEAD_BYTES)
             + max(0, per_candidate_overhead_bytes)
         )
         if candidate_size + fixed_overhead_bytes > max_volume_bytes:
@@ -155,28 +156,32 @@ def build_registration_row(candidate: ExportCandidate, plan: Plan) -> list[objec
     realname = candidate.realname_snapshot
     student = candidate.student_snapshot
     form = candidate.form_data
+    graduated = is_graduated(config)
+    if graduated:
+        student = form["education_info"]
+    reporting = config.get("reporting_policy", {}).get("export_values", {})
     values = [
         realname.get("real_name"),
         realname.get("gender"),
         realname.get("birth_date"),
         "居民身份证",
         realname.get("id_card_number"),
-        "院校学生",
+        reporting.get("candidate_source") if graduated else "院校学生",
         EDUCATION_LABELS.get(student.get("education"), student.get("education")),
         realname.get("ethnicity"),
         realname.get("political_status"),
         form.get("contact_phone"),
         form.get("mailing_address"),
         None,
-        "应届毕业生",
+        reporting.get("student_status") if graduated else "应届毕业生",
         config["occupation_name"],
         config["export_skill_level"],
         None,
         None,
-        student.get("enrollment_date"),
+        None if graduated else student.get("enrollment_date"),
         None,
         config["occupation_code"],
-        APPLICATION_CONDITION,
+        reporting.get("application_condition") if graduated else APPLICATION_CONDITION,
         plan.application_type,
         plan.exam_type,
         None,
@@ -357,7 +362,7 @@ class RensheExportService:
             columns = TEMPLATES[config["export_template"]]["columns"]
             values = build_registration_row(candidate, plan)
             missing = [config["field_mapping"].get(str(i), key) for i, (key, value) in enumerate(zip(columns, values), 1)
-                       if config["field_mapping"].get(str(i), key) != "blank" and (value is None or value == "")]
+                       if config["field_mapping"].get(str(i), key) not in ({"blank", "enrollment_date", "gender", "birth_date", "ethnicity", "political_status"} if is_graduated(config) else {"blank"}) and (value is None or value == "")]
             if missing:
                 raise ConflictException(f"报名 {application_id} 导出字段缺失：{', '.join(missing)}")
 
@@ -975,8 +980,11 @@ class RensheExportService:
                         )
                         if actual_size != material.size_bytes or actual_sha256 != material.sha256:
                             raise ConflictException("导出材料完整性校验失败")
-                        export_name = MATERIAL_EXPORT_NAMES[material.kind]
                         config = batch_configuration(plan)
+                        extension = material.extension or Path(material.storage_key).suffix.lower()
+                        label = (config["reporting_policy"]["attachment_names"][material.kind] if is_graduated(config)
+                                 else Path(MATERIAL_EXPORT_NAMES[material.kind]).stem)
+                        export_name = label + extension
                         archive_name = (f"材料/{id_card}/{id_card}_{export_name}" if config["attachment_layout"] == "by_candidate"
                                         else f"材料/{material.kind}/{id_card}_{export_name}")
                         await asyncio.to_thread(archive.write, local_path, archive_name)
@@ -1020,6 +1028,23 @@ class RensheExportService:
                     cell = worksheet.cell(row=row_no, column=column_no, value=value)
                     if isinstance(value, str):
                         cell.data_type = "s"
+            if is_graduated(config):
+                # The official 25-column template has an enrollment-date column,
+                # so graduation data lives on its own sheet, never in that column.
+                name = "毕业学历信息"
+                if name in workbook.sheetnames:
+                    del workbook[name]
+                details = workbook.create_sheet(name)
+                details.append(["姓名", "身份证号", "毕业院校", "院校类型", "学历层次", "所学专业", "毕业日期", "毕业证书编号", "报名版本"])
+                for candidate in candidates:
+                    info = candidate.form_data["education_info"]
+                    details.append([candidate.realname_snapshot["real_name"], candidate.realname_snapshot["id_card_number"],
+                                    info["school"], INSTITUTION_TYPES[info["institution_type"]], EDUCATION_LABELS[info["education"]],
+                                    info["major"], info["graduation_date"], info["certificate_number"], candidate.version_id])
+                for row in details.iter_rows():
+                    for cell in row:
+                        if isinstance(cell.value, str):
+                            cell.data_type = "s"
             workbook.save(output_path)
         finally:
             workbook.close()
@@ -1070,7 +1095,7 @@ class RensheExportService:
                     raise ConflictException("导出版本材料不完整")
                 if version.application_id != item.application_id or (version.project_config_id is not None and version.project_config_id != plan.renshe_config_id):
                     raise ConflictException("导出人员、材料或项目配置版本归属不一致")
-                if not version.realname_snapshot or not version.student_snapshot:
+                if not version.realname_snapshot or (not version.student_snapshot and not (is_graduated(config) and version.form_data.get("education_info"))):
                     raise ConflictException("导出版本敏感快照已清理")
                 candidates.append(
                     ExportCandidate(
@@ -1087,6 +1112,7 @@ class RensheExportService:
                                 storage_key=material.storage_key,
                                 size_bytes=material.size_bytes,
                                 sha256=material.sha256,
+                                extension=material.extension,
                             )
                             for material in version_materials
                         ),

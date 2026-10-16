@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Path, Query, Request
+from fastapi import APIRouter, Depends, File, Path, Query, Request, UploadFile
+from fastapi.responses import FileResponse
 from app.schemas.renshe_project import RensheProjectWrite, RensheProjectResponse
 from app.services.renshe_project import RensheProjectService
 
@@ -38,6 +39,31 @@ router = APIRouter(prefix="/cert-products/renshe", tags=["管理后台-人社报
 @router.get("/project-capabilities", response_model=APIResponse[dict])
 async def project_capabilities(_admin=Depends(require_permission("content:read"))):
     return success(data=RensheProjectService.capabilities())
+
+
+@router.post("/commitment-templates")
+async def upload_commitment_template(file: UploadFile = File(...), admin=Depends(require_permission("content:write"))):
+    from app.services.renshe_graduated import save_template
+    from app.services.renshe_audit import record_best_effort_audit
+    template = save_template(file.filename or "template", await file.read(10 * 1024 * 1024 + 1))
+    await record_best_effort_audit(actor_type="admin", actor_id=admin.id, action="commitment_template.upload",
+                                 object_type="commitment_template", object_id=0, result="succeeded", summary={"sha256": template["sha256"]})
+    return success(data=template)
+
+
+@router.get("/commitment-templates/{filename}")
+async def download_commitment_template(filename: str, _admin=Depends(require_permission("content:read"))):
+    import hashlib
+    import re
+    from pathlib import Path as FilePath
+    from app.port.config import settings
+    from app.port.exceptions import NotFoundException
+    if not re.fullmatch(r"commitment_[a-f0-9]{64}\.(pdf|docx)", filename):
+        raise NotFoundException("承诺书模板")
+    path = FilePath(settings.RENSHE_TEMPLATE_DIR).resolve() / filename
+    if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != filename[11:75]:
+        raise NotFoundException("承诺书模板")
+    return FileResponse(path, filename=filename)
 
 
 @router.get("/projects", response_model=APIResponse[list[RensheProjectResponse]])

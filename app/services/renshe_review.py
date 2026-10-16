@@ -337,6 +337,12 @@ class RensheReviewService:
                     raise ConflictException("当前资料版本尚未成功导出，不能登记外审通过")
 
             now = self._now()
+            from app.services.renshe_project import batch_configuration
+            from app.services.renshe_graduated import is_graduated, validate_review
+            plan = await db.get(Plan, application.plan_id)
+            if is_graduated(batch_configuration(plan)):
+                validate_review(data, stage=stage, now=now, version_id=application.current_version_id)
+            application.correction_due_at = data.correction_due_at if data.decision == "rejected" else None
             review = RensheReview(
                 application_id=application.id,
                 version_id=application.current_version_id,
@@ -344,6 +350,8 @@ class RensheReviewService:
                 decision=data.decision,
                 reason=data.reason,
                 required_changes=data.required_changes,
+                correction_due_at=data.correction_due_at if data.decision == "rejected" else None,
+                checklist=data.checklist,
                 reviewer_id=reviewer_id,
                 reviewed_at=now,
                 export_item_id=export_item.id if export_item else None,
@@ -403,6 +411,12 @@ class RensheReviewService:
 
             from_status = application.status
             now = self._now()
+            from app.services.renshe_project import batch_configuration
+            from app.services.renshe_graduated import is_graduated, validate_review
+            plan = await db.get(Plan, application.plan_id)
+            if is_graduated(batch_configuration(plan)):
+                validate_review(data, stage="initial", now=now, version_id=application.current_version_id)
+            application.correction_due_at = data.correction_due_at
             review = RensheReview(
                 application_id=application.id,
                 version_id=application.current_version_id,
@@ -410,6 +424,7 @@ class RensheReviewService:
                 decision="rejected",
                 reason=data.reason,
                 required_changes=data.required_changes,
+                correction_due_at=data.correction_due_at,
                 reviewer_id=reviewer_id,
                 reviewed_at=now,
             )
@@ -455,6 +470,7 @@ class RensheReviewService:
             decision=data.decision,
             reason=data.reason,
             required_changes=data.required_changes,
+            correction_due_at=data.correction_due_at,
         )
         results: list[RensheBatchExternalReviewResult] = []
         for target in data.targets:
@@ -463,7 +479,7 @@ class RensheReviewService:
                     reviewer_id=reviewer_id,
                     application_id=target.application_id,
                     stage="external",
-                    data=review_data,
+                    data=review_data.model_copy(update={"expected_version_id": target.version_id}),
                 )
                 results.append(
                     RensheBatchExternalReviewResult(
@@ -515,6 +531,10 @@ class RensheReviewService:
                 raise ConflictException("退款处理中，不能更正审核结果")
             if application.current_version_id != review.version_id:
                 raise ConflictException("该审核版本已被后续重提替代，不能更正")
+            from app.services.renshe_project import batch_configuration
+            from app.services.renshe_graduated import is_graduated
+            if is_graduated(batch_configuration(await db.get(Plan, application.plan_id))):
+                raise ConflictException("已毕业学历型请使用打回补正和逐项重新初审，以保留完整核验与期限记录")
 
             latest_correction = await db.scalar(
                 select(RensheReviewCorrection)

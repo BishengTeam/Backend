@@ -28,7 +28,7 @@ from app.integrations.renshe_storage import RensheObjectStorage
 from app.port.config import settings
 from app.port.exceptions import ConflictException, NotFoundException
 from app.schemas.renshe import RensheCleanupRunResponse
-from app.services.renshe_source import delete_unreferenced_source_keys
+from app.services.renshe_source import delete_unreferenced_source_keys, draft_source_keys
 from app.utils.audit import redact_sensitive_text
 from app.services.renshe_project import is_renshe_plan
 
@@ -306,6 +306,15 @@ class RensheCleanupService:
                 if row.source_storage_key
             ]
             material_ids = [row.id for row in material_rows]
+            # Include uploads saved before the first submitted version. Remove
+            # these while their draft references are still available on retries.
+            drafts = (await db.execute(select(RensheApplication.draft_data).where(
+                RensheApplication.id.in_(application_ids)))).scalars().all() if application_ids else []
+            draft_keys = set().union(*(draft_source_keys(data) for data in drafts)) if drafts else set()
+
+        # Uploaded draft files are application-specific; submitted copies have
+        # independent version-owned object keys. This retirement is idempotent.
+        await self.storage.delete_many(sorted(draft_keys))
 
         await self.storage.delete_many(storage_keys)
 

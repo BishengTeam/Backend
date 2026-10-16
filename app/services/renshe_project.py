@@ -27,6 +27,10 @@ from app.schemas.renshe_project import (
     RensheProjectResponse,
     RensheProjectWrite,
 )
+from app.services.renshe_graduated import (
+    RULE, INSTITUTION_TYPES, MATERIALS as GRADUATED_MATERIALS, REVIEW_CHECKS,
+    is_graduated, policy_errors, activation_errors,
+)
 
 MATERIAL_NAMES = {
     "id_card_front": "身份证正面",
@@ -35,6 +39,7 @@ MATERIAL_NAMES = {
     "student_card": "学生证",
     "xuexin_registration": "学信网电子注册表",
     "education_proof": "学历证明",
+    **GRADUATED_MATERIALS,
 }
 FORM_FIELDS = ["contact_phone", "mailing_address", "email"]
 EXPORT_COLUMNS = [
@@ -78,6 +83,10 @@ ROSTER_COLUMNS = [
     "mailing_address",
 ]
 TEMPLATES = {
+    "renshe_graduated_v1": {
+        "label": "已毕业学历型报名信息（25列，需甲方确认报送口径）",
+        "columns": EXPORT_COLUMNS,
+    },
     "renshe_registration_v1": {
         "label": "职业技能等级报名信息（25 列）",
         "columns": EXPORT_COLUMNS,
@@ -105,7 +114,7 @@ def default_configuration() -> dict:
         "exam_types": [program["exam_type"]],
         "application_types": [program["application_type"]],
         "education_levels": sorted(EDUCATION_LEVELS),
-        "form_fields": FORM_FIELDS,
+        "form_fields": list(FORM_FIELDS),
         "materials": [
             {
                 "kind": kind,
@@ -114,12 +123,29 @@ def default_configuration() -> dict:
                 "extensions": sorted(spec.extensions),
                 "max_count": 1,
             }
-            for kind, spec in MATERIAL_SPECS.items()
+            for kind, spec in MATERIAL_SPECS.items() if kind in {
+                "id_card_front", "id_card_back", "portrait", "student_card", "xuexin_registration", "education_proof"
+            }
         ],
         "export_template": "renshe_registration_v1",
         "field_mapping": {},
         "attachment_layout": "by_candidate",
     }
+
+
+def graduated_configuration() -> dict:
+    config = default_configuration()
+    config.update(
+        qualification_rule=RULE,
+        institution_types=list(INSTITUTION_TYPES),
+        reporting_policy={},
+        materials=[{
+            "kind": kind, "name": name, "required": True,
+            "extensions": sorted(MATERIAL_SPECS[kind].extensions), "max_count": 1,
+        } for kind, name in GRADUATED_MATERIALS.items()],
+        export_template="renshe_graduated_v1",
+    )
+    return config
 
 
 def configuration_errors(config: dict) -> list[str]:
@@ -139,8 +165,20 @@ def configuration_errors(config: dict) -> list[str]:
         errors.append("考试类型需要适配；当前支持新考、补考")
     if config.get("application_types") != ["学历型"]:
         errors.append("申报类型需要适配；当前支持学历型")
-    if config.get("qualification_rule") != "related_major_current_graduating_student":
-        errors.append("资格规则需要适配；当前支持相关专业在读应届学生（人工审核）")
+    graduated = is_graduated(config)
+    if not graduated and config.get("qualification_rule") != "related_major_current_graduating_student":
+        errors.append("资格规则尚未适配")
+    if graduated:
+        program = RENSHE_DEFAULT_PROGRAM
+        if any(config.get(key) != getattr(program, key) for key in (
+            "occupation_name", "occupation_code", "skill_level", "export_skill_level"
+        )):
+            errors.append("本期只支持信息安全管理员、四级／中级工")
+        if not config.get("institution_types") or not set(config["institution_types"]) <= set(INSTITUTION_TYPES):
+            errors.append("请选择本期支持的院校类型")
+        errors.extend(policy_errors(config.get("reporting_policy", {})))
+        if config.get("export_template") != "renshe_graduated_v1" or config.get("field_mapping"):
+            errors.append("已毕业学历型须使用专用导出器，字段由甲方确认口径控制")
     levels = config.get("education_levels", [])
     if not levels or not set(levels) <= EDUCATION_LEVELS:
         errors.append("请选择已支持的学历范围")
@@ -159,7 +197,11 @@ def configuration_errors(config: dict) -> list[str]:
             or not set(item["extensions"]) <= spec.extensions
         ):
             errors.append(f"材料「{item['name']}」的类型、格式或数量需要适配")
-    for kind in ("id_card_front", "id_card_back", "portrait"):
+    if graduated and set(kinds) != set(GRADUATED_MATERIALS):
+        errors.append("已毕业学历型必须使用身份证、报名照片、毕业证、学历备案表及承诺书材料清单")
+    if not graduated and not set(kinds) <= {"id_card_front", "id_card_back", "portrait", "student_card", "xuexin_registration", "education_proof"}:
+        errors.append("历史学生规则仅支持原六类材料")
+    for kind in (GRADUATED_MATERIALS if graduated else ("id_card_front", "id_card_back", "portrait")):
         if not any(item["kind"] == kind and item["required"] for item in materials):
             errors.append(f"{MATERIAL_NAMES[kind]}为必填材料")
     template = TEMPLATES.get(config.get("export_template"))
@@ -255,13 +297,16 @@ class RensheProjectService:
     @staticmethod
     def capabilities() -> dict:
         return {
-            "default_config": default_configuration(),
+            "default_config": graduated_configuration(),
             "templates": TEMPLATES,
             "material_names": MATERIAL_NAMES,
             "form_fields": FORM_FIELDS,
             "qualification_rules": {
-                "related_major_current_graduating_student": "相关专业在读应届学生（人工审核专业及应届资格）"
+                RULE: "已取得毕业证的本专业或相关专业（学历型，人工核验）",
+                "related_major_current_graduating_student": "历史规则：在读应届学生（仅保留历史批次）",
             },
+            "institution_types": INSTITUTION_TYPES,
+            "review_checks": REVIEW_CHECKS,
         }
 
     @staticmethod
@@ -321,6 +366,9 @@ class RensheProjectService:
         self, data: RensheProjectWrite, *, product_id: int | None = None, admin_id: int
     ) -> RensheProjectResponse:
         config = data.config.model_dump()
+        if not is_graduated(config):
+            config.pop("institution_types", None)
+            config.pop("reporting_policy", None)
         errors = configuration_errors(config)
         if data.status == "available" and errors:
             raise BusinessException("项目配置不可用：" + "；".join(errors))
@@ -345,6 +393,10 @@ class RensheProjectService:
                 db.add(product)
                 await db.flush()
             latest = await self.latest(db, product.id)
+            if data.status == "available" and (latest is None or latest.config != config or product.renshe_status != "available"):
+                activation = activation_errors(config)
+                if activation:
+                    raise BusinessException("；".join(activation))
             changed_fields = [
                 key
                 for key, value in config.items()
@@ -471,6 +523,8 @@ class RensheProjectService:
         if version is None or version.product_id != product.id:
             raise BusinessException("项目配置版本归属不一致")
         errors = configuration_errors(version.config)
+        if getattr(plan, "renshe_config_id", None) != version.id:
+            errors.extend(activation_errors(version.config))
         if errors:
             raise BusinessException("项目配置不可用：" + "；".join(errors))
         config = version.config

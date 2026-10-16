@@ -1,8 +1,8 @@
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.schemas.order import OrderStatus
 from app.schemas.plan import PlanStatus
@@ -26,6 +26,13 @@ RensheMaterialKind = Literal[
     "student_card",
     "xuexin_registration",
     "education_proof",
+]
+RensheApplicationMaterialKind = Literal[
+    "registration_portrait", "graduation_certificate", "education_report", "commitment_letter"
+]
+RensheAllMaterialKind = Literal[
+    "id_card_front", "id_card_back", "portrait", "student_card", "xuexin_registration", "education_proof",
+    "registration_portrait", "graduation_certificate", "education_report", "commitment_letter",
 ]
 RensheRefundStatus = Literal[
     "requested",
@@ -56,11 +63,32 @@ class RensheVerificationMaterialResponse(BaseModel):
     sha256: str
 
 
+class RensheGraduatedEducation(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    graduated: Literal[True]
+    school: str = Field(..., min_length=1, max_length=128)
+    institution_type: Literal["technical", "vocational", "general_higher"]
+    education: Literal["secondary_vocational", "associate", "bachelor", "master", "doctorate"]
+    major: str = Field(..., min_length=1, max_length=128)
+    graduation_date: date
+    certificate_number: str = Field(..., min_length=1, max_length=128)
+
+    @field_validator("graduation_date")
+    @classmethod
+    def validate_graduation_date(cls, value: date) -> date:
+        from app.services.renshe_graduated import china_today
+        if value > china_today() or value.year < 1900:
+            raise ValueError("毕业日期应为1900年至今天，且已取得毕业证")
+        return value
+
+
 class RensheDraftUpsert(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     plan_id: int = Field(..., ge=1, description="人社报考批次 ID")
     contact_phone: str = Field(..., description="报名联系电话")
     mailing_address: str = Field(..., min_length=1, max_length=256, description="通讯地址")
     email: str = Field(..., min_length=3, max_length=128, description="电子邮箱")
+    education_info: RensheGraduatedEducation | None = None
 
     @field_validator("contact_phone")
     @classmethod
@@ -101,6 +129,7 @@ class RensheApplicationResponse(BaseModel):
     current_version_id: int | None = None
     status: RensheApplicationStatus
     draft_data: dict | None = None
+    correction_due_at: datetime | None = None
     submitted_at: datetime | None = None
     frozen_at: datetime | None = None
     freeze_reason: str | None = None
@@ -213,9 +242,12 @@ class RensheAdminApplicationListItem(BaseModel):
 
 
 class RensheReviewCreate(BaseModel):
+    expected_version_id: int | None = Field(None, ge=1)
     decision: Literal["approved", "rejected"]
     reason: str | None = Field(None, max_length=2000)
     required_changes: list[str] | None = Field(None, max_length=64)
+    correction_due_at: datetime | None = None
+    checklist: dict[str, bool] | None = None
 
     @model_validator(mode="after")
     def require_rejection_details(self) -> "RensheReviewCreate":
@@ -236,6 +268,8 @@ class RensheReviewResponse(BaseModel):
     decision: Literal["approved", "rejected"]
     reason: str | None = None
     required_changes: list[str] | None = None
+    correction_due_at: datetime | None = None
+    checklist: dict[str, bool] | None = None
     reviewer_id: int
     reviewed_at: datetime
     export_item_id: int | None = None
@@ -249,6 +283,7 @@ class RensheExportCreate(BaseModel):
 
 class RensheBatchExternalReviewTarget(BaseModel):
     application_id: int = Field(..., ge=1)
+    version_id: int | None = Field(None, ge=1)
 
 
 class RensheBatchExternalReviewResult(BaseModel):
@@ -268,6 +303,7 @@ class RensheBatchExternalReviewRequest(BaseModel):
     decision: Literal["approved", "rejected"]
     reason: str | None = Field(None, max_length=2000)
     required_changes: list[str] | None = Field(None, max_length=64)
+    correction_due_at: datetime | None = None
 
 
 class RensheReviewCorrectionCreate(BaseModel):
@@ -356,7 +392,7 @@ class RensheMaterialMetadataResponse(BaseModel):
     id: int
     application_id: int
     version_id: int
-    kind: RensheMaterialKind
+    kind: RensheAllMaterialKind
     original_filename: str
     content_type: str
     size_bytes: int

@@ -309,6 +309,10 @@ class PlanService:
             program = None
             if await is_renshe_plan(db, plan):
                 program = self._required_renshe_program(plan)
+                from app.services.renshe_graduated import activation_errors
+                activation = activation_errors(program)
+                if activation:
+                    raise BusinessException("；".join(activation))
                 from app.services.renshe_export import RensheExportService
                 RensheExportService._template_paths()
                 if not await self._renshe_product_active(db, plan.product_type):

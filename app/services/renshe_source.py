@@ -22,7 +22,7 @@ from collections.abc import Iterable
 
 from sqlalchemy import or_, select
 
-from app.domain.renshe.src.index import RensheMaterial
+from app.domain.renshe.src.index import RensheApplication, RensheMaterial
 from app.domain.user.src.index import UserRealname, UserStudent
 from app.integrations.renshe_storage import RensheObjectStorage
 
@@ -40,6 +40,11 @@ STUDENT_SOURCE_FIELDS = (
     "degree_cert_oss",
 )
 DELETED_SOURCE_SENTINEL = "deleted"
+
+
+def draft_source_keys(data: dict | None) -> set[str]:
+    return {item["storage_key"] for item in (data or {}).get("materials", {}).values()
+            if isinstance(item, dict) and isinstance(item.get("storage_key"), str)}
 
 
 def profile_source_keys(
@@ -117,6 +122,9 @@ async def find_unreferenced_source_keys(
     if ignored_ids:
         material_stmt = material_stmt.where(~RensheMaterial.id.in_(ignored_ids))
     material_references = (await db.execute(material_stmt)).scalars().all()
+    drafts = (await db.execute(select(RensheApplication.draft_data).where(RensheApplication.draft_data.is_not(None)))).scalars().all()
+    for draft in drafts:
+        profile_references.update(draft_source_keys(draft) & keys)
     referenced = profile_references | {
         value for value in material_references if value in keys
     }

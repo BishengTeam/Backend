@@ -138,6 +138,10 @@ MATERIAL_SPECS: dict[str, MaterialSpec] = {
     "student_card": JPEG_SPEC,
     "xuexin_registration": PDF_SPEC,
     "education_proof": JPEG_SPEC,
+    "registration_portrait": MaterialSpec(JPEG_SPEC.extensions, JPEG_SPEC.content_types, 500 * 1024, JPEG_SPEC.magic),
+    "graduation_certificate": MaterialSpec(JPEG_SPEC.extensions | PDF_SPEC.extensions, JPEG_SPEC.content_types | PDF_SPEC.content_types, PDF_SPEC.max_bytes, JPEG_SPEC.magic + PDF_SPEC.magic),
+    "education_report": PDF_SPEC,
+    "commitment_letter": MaterialSpec(JPEG_SPEC.extensions | PDF_SPEC.extensions, JPEG_SPEC.content_types | PDF_SPEC.content_types, PDF_SPEC.max_bytes, JPEG_SPEC.magic + PDF_SPEC.magic),
 }
 
 
@@ -189,13 +193,15 @@ def validate_material(
     extension = Path(filename).suffix.lower()
     if extension not in spec.extensions:
         raise ValueError("材料文件扩展名不符合要求")
+    # Mixed image/PDF slots must still match the declared extension and MIME.
+    format_spec = PDF_SPEC if extension == ".pdf" else JPEG_SPEC
     normalized_content_type = (content_type or "").split(";", 1)[0].strip().lower()
-    if normalized_content_type not in spec.content_types:
+    if normalized_content_type not in spec.content_types or normalized_content_type not in format_spec.content_types:
         raise ValueError("材料 MIME 类型不符合要求")
     if size_bytes <= 0:
         raise ValueError("材料文件不能为空")
-    if size_bytes > spec.max_bytes:
+    if size_bytes > min(spec.max_bytes, format_spec.max_bytes):
         raise ValueError("材料文件超过大小限制")
-    if not any(header.startswith(prefix) for prefix in spec.magic):
+    if not any(header.startswith(prefix) for prefix in format_spec.magic):
         raise ValueError("材料文件头不符合声明类型")
     return extension

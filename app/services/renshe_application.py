@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
@@ -40,6 +41,7 @@ from app.services.agreement_template import ensure_accepted
 from app.services.consultation_group import ConsultationGroupService
 from app.services.plan_enrollment import CAPACITY_OCCUPYING_ORDER_STATUSES, PlanEnrollmentService
 from app.services.renshe_project import batch_configuration, is_renshe_plan, default_configuration
+from app.services.renshe_graduated import is_graduated, validate_education
 from app.utils.payment import generate_out_trade_no
 from app.utils.pii import identity_hash
 
@@ -58,7 +60,10 @@ class RensheApplicationService:
 
     @staticmethod
     def _assert_supported_program(plan: Plan) -> None:
-        batch_configuration(plan)
+        config = batch_configuration(plan)
+        if is_graduated(config):
+            from app.services.renshe_graduated import template_path
+            template_path(config["reporting_policy"])
 
     async def save_draft(
         self, user_id: int, data: RensheDraftUpsert
@@ -83,7 +88,9 @@ class RensheApplicationService:
             )
             if plan.renshe_config_id is None:
                 raise ConflictException("批次尚未确认项目配置，请联系管理员核实历史归属")
-            PlanEnrollmentService.validate_application_window(plan)
+            if application is None and not is_graduated(batch_configuration(plan)):
+                raise ConflictException("本期新报名仅开放已毕业学历型批次；历史报名请从我的报名继续办理")
+            self._validate_edit_window(plan, application, paid_order=await self._paid_correction_order(db, application))
             if application is None:
                 application = RensheApplication(
                     user_id=user_id,
@@ -98,7 +105,11 @@ class RensheApplicationService:
                 raise ConflictException("退款处理中，报名已冻结")
             await self._verified_profiles(db, user_id, plan)
 
-            application.draft_data = data.model_dump(mode="json")
+            values = data.model_dump(mode="json", exclude_none=True)
+            if is_graduated(batch_configuration(plan)):
+                values["education_info"] = validate_education(values.get("education_info"), batch_configuration(plan))
+                values["materials"] = (application.draft_data or {}).get("materials", {})
+            application.draft_data = values
             db.add(
                 self._audit(
                     user_id,
@@ -137,8 +148,16 @@ class RensheApplicationService:
                     message="请先阅读并同意认证报名信息处理授权协议",
                 )
 
-                PlanEnrollmentService.validate_application_window(plan)
+                self._validate_edit_window(plan, application, paid_order=paid_order)
                 realname, student = await self._verified_profiles(db, user_id, plan)
+                config = batch_configuration(plan)
+                graduated = is_graduated(config)
+                if graduated:
+                    try:
+                        RensheDraftUpsert.model_validate({key: value for key, value in application.draft_data.items() if key != "materials"})
+                    except ValueError as exc:
+                        raise BusinessException("请先完整填写学历信息和联系方式并保存") from exc
+                    validate_education(application.draft_data.get("education_info"), config)
 
                 if application.status != "draft" and paid_order is None:
                     raise ConflictException("驳回重提缺少原已支付订单")
@@ -159,19 +178,24 @@ class RensheApplicationService:
                     project_config_id=plan.renshe_config_id,
                     submitted_by_user_id=user_id,
                     realname_snapshot=self._realname_snapshot(realname),
-                    student_snapshot=self._student_snapshot(student),
+                    student_snapshot={} if graduated else self._student_snapshot(student),
                     form_data=dict(application.draft_data),
                     submitted_at=now,
                 )
                 db.add(version)
                 await db.flush()
 
-                source_materials = self._material_sources(realname, student)
-                config = batch_configuration(plan)
+                source_materials = ({
+                    "id_card_front": realname.id_card_front_oss,
+                    "id_card_back": realname.id_card_back_oss,
+                    **{kind: metadata["storage_key"] for kind, metadata in application.draft_data.get("materials", {}).items()},
+                } if graduated else self._material_sources(realname, student))
                 for requirement in config["materials"]:
                     kind = requirement["kind"]
                     if not source_materials.get(kind) and not requirement["required"]:
                         continue
+                    if not source_materials.get(kind):
+                        raise BusinessException(f"请上传{requirement['name']}")
                     copied = await self.storage.copy_version_material(
                         user_id=user_id,
                         plan_id=plan.id,
@@ -181,6 +205,9 @@ class RensheApplicationService:
                         source_key=source_materials[kind],
                     )
                     copied_keys.append(copied.storage_key)
+                    metadata = application.draft_data.get("materials", {}).get(kind) if graduated else None
+                    if metadata and (copied.sha256 != metadata.get("sha256") or copied.size_bytes != metadata.get("size_bytes")):
+                        raise ConflictException(f"{requirement['name']}内容已变化，请重新上传后提交")
                     if copied.extension not in requirement["extensions"]:
                         raise BusinessException(f"{requirement['name']}文件格式不符合本批次要求")
                     db.add(
@@ -190,7 +217,7 @@ class RensheApplicationService:
                             kind=copied.kind,
                             source_storage_key=copied.source_storage_key,
                             storage_key=copied.storage_key,
-                            original_filename=copied.original_filename,
+                            original_filename=(application.draft_data.get("materials", {}).get(kind, {}).get("original_filename") or copied.original_filename),
                             extension=copied.extension,
                             content_type=copied.content_type,
                             size_bytes=copied.size_bytes,
@@ -200,6 +227,7 @@ class RensheApplicationService:
 
                 application.current_version_id = version.id
                 application.submitted_at = now
+                application.correction_due_at = None
 
                 if paid_order is not None:
                     assert_application_transition(application.status, "pending_initial_review")
@@ -312,6 +340,78 @@ class RensheApplicationService:
             None,
         )
         return application, plan, paid_order
+
+    @classmethod
+    def _validate_edit_window(cls, plan, application, *, paid_order=None):
+        config = batch_configuration(plan)
+        if (is_graduated(config) and application is not None
+                and application.status in {"initial_rejected", "external_rejected"}):
+            if plan.status not in {"published", "registration_closed"} or application.closed_at is not None:
+                raise ConflictException("批次或报名已关闭，不能补正")
+            deadline = application.correction_due_at
+            if deadline is None or PlanEnrollmentService._as_utc(deadline) < cls._now():
+                raise ConflictException("补正期限已过或尚未设置，请联系管理员")
+            if paid_order is None:
+                raise ConflictException("补正缺少原已支付订单，请联系管理员")
+            return
+        PlanEnrollmentService.validate_application_window(plan)
+
+    @staticmethod
+    async def _paid_correction_order(db, application):
+        if application is None or application.status not in {"initial_rejected", "external_rejected"}:
+            return None
+        return await db.scalar(select(Order).where(
+            Order.application_id == application.id, Order.plan_id == application.plan_id,
+            Order.user_id == application.user_id, Order.status.in_(("paid", "completed"))).limit(1))
+
+    async def upload_application_material(self, user_id: int, plan_id: int, kind: str, *, filename: str, content_type: str | None, content: bytes) -> dict:
+        from app.services.renshe_graduated import MATERIALS
+        from app.services.renshe_source import delete_unreferenced_source_keys
+        stored = None
+        old_key = None
+        committed = False
+        try:
+            async with get_db_ctx() as db:
+                await self._lock_active_user(db, user_id)
+                plan = await db.scalar(select(Plan).where(Plan.id == plan_id).with_for_update())
+                if not await is_renshe_plan(db, plan):
+                    raise NotFoundException("人社批次")
+                config = batch_configuration(plan)
+                if not is_graduated(config) or kind not in set(MATERIALS) - {"id_card_front", "id_card_back"}:
+                    raise BusinessException("当前批次不支持该报名材料上传")
+                application = await db.scalar(select(RensheApplication).where(
+                    RensheApplication.user_id == user_id, RensheApplication.plan_id == plan_id,
+                    RensheApplication.status != "closed").with_for_update())
+                self._validate_edit_window(plan, application, paid_order=await self._paid_correction_order(db, application))
+                if application is None:
+                    application = RensheApplication(user_id=user_id, plan_id=plan_id, status="draft", draft_data={})
+                    db.add(application)
+                    await db.flush()
+                if application.status not in EDITABLE_APPLICATION_STATUSES or application.frozen_at is not None:
+                    raise ConflictException("当前报名不可修改材料")
+                await self._verified_profiles(db, user_id, plan)
+                stored = await self.storage.save_source(user_id=user_id, kind=kind, filename=filename, content_type=content_type, data=content)
+                requirement = next(item for item in config["materials"] if item["kind"] == kind)
+                if stored.extension not in requirement["extensions"]:
+                    raise BusinessException("文件格式不符合本批次要求")
+                values = dict(application.draft_data or {})
+                materials = dict(values.get("materials", {}))
+                old_key = materials.get(kind, {}).get("storage_key")
+                metadata = asdict(stored)
+                metadata.pop("source_storage_key", None)
+                materials[kind] = metadata
+                values["materials"] = materials
+                application.draft_data = values
+                db.add(self._audit(user_id, "application.material.upload", application, {"kind": kind, "size_bytes": stored.size_bytes}))
+                await db.commit()
+                committed = True
+                result = {"application_id": application.id, **metadata}
+        finally:
+            if stored is not None and not committed:
+                await self.storage.delete_many([stored.storage_key])
+        if old_key:
+            await delete_unreferenced_source_keys(self.storage, [old_key])
+        return result
 
     async def list_applications(
         self,
@@ -566,13 +666,13 @@ class RensheApplicationService:
         return user
 
     @staticmethod
-    async def _verified_profiles(db, user_id: int, plan: Plan | None = None) -> tuple[UserRealname, UserStudent]:
+    async def _verified_profiles(db, user_id: int, plan: Plan | None = None) -> tuple[UserRealname, UserStudent | None]:
         config = batch_configuration(plan) if plan else default_configuration()
         realname = await db.scalar(
             select(UserRealname).where(
                 UserRealname.user_id == user_id,
                 UserRealname.status == "verified",
-                UserRealname.user_type == "student",
+                *([] if is_graduated(config) else [UserRealname.user_type == "student"]),
             )
         )
         if realname is None:
@@ -582,9 +682,7 @@ class RensheApplicationService:
             realname.id_card_number,
             realname.id_card_front_oss,
             realname.id_card_back_oss,
-            realname.avatar_oss,
-            realname.ethnicity,
-            realname.political_status,
+            *([] if is_graduated(config) else [realname.avatar_oss, realname.ethnicity, realname.political_status]),
         )
         if not all(required_realname):
             raise BusinessException("已通过的实名认证资料不完整，请重新提交审核")
@@ -607,6 +705,8 @@ class RensheApplicationService:
             raise BusinessException("该身份证号已绑定其他有效账号")
         realname.id_card_hash = digest
         realname.active_id_card_hash = digest
+        if is_graduated(config):
+            return realname, None
 
         student = await db.scalar(
             select(UserStudent).where(
@@ -656,7 +756,7 @@ class RensheApplicationService:
             "birth_date": realname.birth_date,
             "ethnicity": realname.ethnicity,
             "political_status": realname.political_status,
-            "user_type": "student",
+            "user_type": realname.user_type,
         }
 
     @staticmethod
