@@ -44,6 +44,45 @@ MATERIAL_NAMES = {
     **GRADUATED_MATERIALS,
 }
 FORM_FIELDS = ["contact_phone", "mailing_address", "email"]
+
+
+def admission_requirements() -> dict:
+    """The single read-only admission contract served to Admin."""
+    config = graduated_configuration()
+    return {
+        "scope": {
+            "occupation_name": config["occupation_name"],
+            "occupation_code": config["occupation_code"],
+            "skill_level": config["skill_level"],
+            "export_skill_level": config["export_skill_level"],
+            "application_types": config["application_types"],
+            "exam_types": config["exam_types"],
+            "qualification_rule": config["qualification_rule"],
+        },
+        "form_sections": ["本人实名信息", "毕业学历信息", "联系信息", "报送模板要求的其他实际信息"],
+        "education_options": [
+            {"value": value, "label": label}
+            for value, label in EDUCATIONS.items()
+        ],
+        "institution_types": [
+            {"value": value, "label": label}
+            for value, label in INSTITUTION_TYPES.items()
+        ],
+        "materials": [
+            {
+                **item,
+                "max_size_bytes": MATERIAL_SPECS[item["kind"]].max_bytes,
+            }
+            for item in config["materials"]
+        ],
+        "notes": [
+            "文化程度选项全部展示，用于考生如实填报；是否符合本期资格仍由毕业证、院校类型、专业和初审共同判断。",
+            "新批次使用当前代码规则；已发布批次继续使用创建时冻结的报名要求。",
+            "材料格式、大小、数量和必填性由服务端强制校验。",
+        ],
+    }
+
+
 def default_configuration() -> dict:
     program = asdict(RENSHE_DEFAULT_PROGRAM)
     return {
@@ -239,6 +278,7 @@ class RensheProjectService:
             "institution_types": INSTITUTION_TYPES,
             "review_checks": REVIEW_CHECKS,
             "reporting_contract": {"education_labels": EDUCATIONS, "occupations": OCCUPATIONS, "ethnicities": ETHNICITIES, "political_statuses": POLITICS, "application_condition": DEGREE_CONDITION},
+            "admission_requirements": admission_requirements(),
             "export_instructions": export_instructions(),
         }
 
@@ -298,18 +338,33 @@ class RensheProjectService:
     async def save(
         self, data: RensheProjectWrite, *, product_id: int | None = None, admin_id: int
     ) -> RensheProjectResponse:
-        config = data.config.model_dump()
+        incoming = data.config.model_dump() if data.config is not None else {}
         from app.services.renshe_graduated import commitment_policy
-        config["commitment_template"] = commitment_policy(config)["commitment_template"]
-        config.update(export_template="renshe_graduated_v1" if is_graduated(config) else "renshe_registration_v1", field_mapping={}, attachment_layout="flat")
-        if is_graduated(config):
+        if data.config is None:
+            # Metadata-only saves select the current code-owned admission
+            # contract. An existing commitment file is preserved below.
+            config = graduated_configuration()
+            config["commitment_template"] = None
             config["reporting_policy"] = default_policy()
-        if not is_graduated(config):
-            config.pop("institution_types", None)
-            config.pop("reporting_policy", None)
-        errors = configuration_errors(config)
-        if data.status == "available" and errors:
-            raise BusinessException("项目配置不可用：" + "；".join(errors))
+        else:
+            # Full payloads remain compatible with persisted versions. The
+            # current Admin sends the backend's default config for every save.
+            config = incoming
+            config["commitment_template"] = commitment_policy(config)["commitment_template"]
+            config.update(
+                export_template=(
+                    "renshe_graduated_v1"
+                    if is_graduated(config)
+                    else "renshe_registration_v1"
+                ),
+                field_mapping={},
+                attachment_layout="flat",
+            )
+            if is_graduated(config):
+                config["reporting_policy"] = default_policy()
+            else:
+                config.pop("institution_types", None)
+                config.pop("reporting_policy", None)
         async with get_db_ctx() as db:
             product = None
             if product_id is not None:
@@ -329,8 +384,14 @@ class RensheProjectService:
                     chinese_name=data.chinese_name,
                 )
                 db.add(product)
-                await db.flush()
+            await db.flush()
             latest = await self.latest(db, product.id)
+            # A metadata-only save must not clear an existing commitment file.
+            if data.config is None and latest is not None:
+                config["commitment_template"] = latest.config.get("commitment_template")
+            errors = configuration_errors(config)
+            if data.status == "available" and errors:
+                raise BusinessException("项目配置不可用：" + "；".join(errors))
             admission_changed = latest is None or any(latest.config.get(key) != config.get(key) for key in ("qualification_rule", "occupation_name", "occupation_code", "skill_level", "education_levels", "institution_types", "materials", "exam_types", "application_types"))
             if data.status == "available" and (is_graduated(config) or admission_changed or product.renshe_status != "available"):
                 activation = activation_errors(config)

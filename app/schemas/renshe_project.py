@@ -40,7 +40,9 @@ class RensheProjectWrite(BaseModel):
     description: str | None = Field(None, max_length=512)
     home_cover_url: str | None = Field(None, max_length=512)
     status: Literal["draft", "available", "disabled"] = "draft"
-    config: RensheProjectConfiguration
+    # Rule and material definitions are code-owned. Admins send only the
+    # commitment file (if any); omitting this object selects the current rules.
+    config: RensheProjectConfiguration | None = None
     expected_version: int | None = Field(None, ge=1)
 
     @field_validator("chinese_name")

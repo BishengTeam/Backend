@@ -25,6 +25,7 @@ from app.services.renshe_export_definition import (
 )
 from app.services.renshe_graduated import REVIEW_CHECKS, save_template
 from app.services.renshe_project import RensheProjectService
+from app.services.renshe_project import graduated_configuration
 from app.services.renshe_review import RensheReviewService
 from tests.unit.test_renshe_graduated import graduated_batch, draft_payload, uploads
 from tests.unit.test_renshe_projects import isolated as _isolated, project_data
@@ -152,14 +153,17 @@ async def test_rule_upgrade_rejects_queued_task_but_preserves_completed_download
 
 
 @pytest.mark.asyncio
-async def test_legacy_project_can_set_commitment_without_changing_admission(
+async def test_legacy_project_save_uses_current_rules_and_preserves_frozen_batch(
     isolated, monkeypatch
 ):
-    project = await RensheProjectService().save(project_data(), admin_id=1)
+    project = await RensheProjectService().save(
+        RensheProjectWrite(chinese_name="信息安全中级", status="draft"),
+        admin_id=1,
+    )
     monkeypatch.setattr(
         settings, "RENSHE_TEMPLATE_DIR", str(isolated.root / "templates")
     )
-    config = project.config.model_dump()
+    config = graduated_configuration()
     template = save_template("确认承诺书.pdf", b"%PDF-1.4\nfixture")
     config["commitment_template"] = template
     updated = await RensheProjectService().save(
@@ -173,5 +177,17 @@ async def test_legacy_project_can_set_commitment_without_changing_admission(
         admin_id=1,
     )
     assert updated.config.commitment_template == template
-    assert updated.config.qualification_rule == project.config.qualification_rule
-    assert updated.config.education_levels == project.config.education_levels
+    expected = graduated_configuration()
+    assert updated.config.qualification_rule == expected["qualification_rule"]
+    assert updated.config.education_levels == expected["education_levels"]
+    assert [item.model_dump() for item in updated.config.materials] == expected["materials"]
+    minimal = await RensheProjectService().save(
+        RensheProjectWrite(
+            chinese_name=project.chinese_name,
+            status="available",
+            expected_version=updated.version,
+        ),
+        product_id=project.id,
+        admin_id=1,
+    )
+    assert minimal.config.commitment_template == template
