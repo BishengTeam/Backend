@@ -62,6 +62,65 @@ class AdminStatisticsService:
 
             conversion_rate = round(paid_orders / total_orders * 100, 2) if total_orders > 0 else 0
 
+            closed_orders = (
+                await db.execute(
+                    select(func.count()).select_from(Order).where(
+                        Order.status == "closed"
+                    )
+                )
+            ).scalar() or 0
+
+            refunded_orders = (
+                await db.execute(
+                    select(func.count()).select_from(Order).where(
+                        Order.status == "refunded"
+                    )
+                )
+            ).scalar() or 0
+
+            # 支付成功率：终态订单（已支付/已完成/已退款/已关闭）中支付成功的占比。
+            # 订单表无 prepay 发起落库标记，pending 视为未完成支付，不计入分母。
+            terminal_payment_orders = paid_orders + closed_orders + refunded_orders
+            payment_success_rate = (
+                round(paid_orders / terminal_payment_orders * 100, 2)
+                if terminal_payment_orders > 0
+                else 0
+            )
+
+            # ── AI 客服指标 ──
+            from app.domain.community.src.index import Conversation
+            from app.domain.content.src.index import Ticket
+
+            conversations_total = (
+                await db.execute(select(func.count()).select_from(Conversation))
+            ).scalar() or 0
+
+            conversations_30d = (
+                await db.execute(
+                    select(func.count()).select_from(Conversation).where(
+                        Conversation.created_at >= thirty_days_ago
+                    )
+                )
+            ).scalar() or 0
+
+            tickets_total = (
+                await db.execute(select(func.count()).select_from(Ticket))
+            ).scalar() or 0
+
+            tickets_waiting_manual = (
+                await db.execute(
+                    select(func.count()).select_from(Ticket).where(
+                        Ticket.status == "waiting_manual"
+                    )
+                )
+            ).scalar() or 0
+
+            manual_transfer_rate = (
+                round(tickets_waiting_manual / tickets_total * 100, 2)
+                if tickets_total > 0
+                else 0
+            )
+
         # ── Quiz module stats ──
         from app.domain.community.src.index import QuizQuestion, QuizLibrary, QuizPracticeAttempt
 
@@ -270,6 +329,14 @@ class AdminStatisticsService:
             "revenue_fen": revenue,
             "recent_revenue_30d_fen": recent_revenue,
             "conversion_rate": conversion_rate,
+            # 支付质量
+            "payment_success_rate": payment_success_rate,
+            # AI 客服
+            "ai_conversations_total": conversations_total,
+            "ai_conversations_30d": conversations_30d,
+            "tickets_total": tickets_total,
+            "tickets_waiting_manual": tickets_waiting_manual,
+            "manual_transfer_rate": manual_transfer_rate,
             # Quiz
             "quiz_questions_total": quiz_questions_total,
             "quiz_libraries_total": quiz_libraries_total,

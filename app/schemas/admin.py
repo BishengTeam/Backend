@@ -48,6 +48,18 @@ class AdminReauthResponse(BaseModel):
     reauth_token: str = Field(..., repr=False)
     expires_in: int = 600
 
+class DashboardTrendPoint(BaseModel):
+    """看板趋势图单点"""
+    date: str
+    value: int
+
+
+class DashboardPieItem(BaseModel):
+    """看板饼图单项"""
+    name: str | None = None
+    value: int
+
+
 class DashboardResponse(BaseModel):
     """管理后台数据看板响应"""
     total_users: int
@@ -57,6 +69,37 @@ class DashboardResponse(BaseModel):
     revenue_fen: int
     recent_revenue_30d_fen: int
     conversion_rate: float
+    # 支付质量
+    payment_success_rate: float = 0
+    # AI 客服
+    ai_conversations_total: int = 0
+    ai_conversations_30d: int = 0
+    tickets_total: int = 0
+    tickets_waiting_manual: int = 0
+    manual_transfer_rate: float = 0
+    # Quiz
+    quiz_questions_total: int = 0
+    quiz_libraries_total: int = 0
+    quiz_attempts_today: int = 0
+    quiz_attempts_30d: int = 0
+    # Certification
+    h3c_pending_review: int = 0
+    h3c_approved: int = 0
+    nisp_pending_review: int = 0
+    nisp_approved: int = 0
+    # Course
+    courses_total: int = 0
+    # Competition
+    competitions_active: int = 0
+    competition_registrations: int = 0
+    # Classroom
+    classrooms_active: int = 0
+    # Trends & distributions
+    revenue_trend: list[DashboardTrendPoint] = Field(default_factory=list)
+    user_trend: list[DashboardTrendPoint] = Field(default_factory=list)
+    quiz_trend: list[DashboardTrendPoint] = Field(default_factory=list)
+    order_type_distribution: list[DashboardPieItem] = Field(default_factory=list)
+    cert_status: dict[str, dict[str, int]] = Field(default_factory=dict)
 
     model_config = {"from_attributes": True}
 
