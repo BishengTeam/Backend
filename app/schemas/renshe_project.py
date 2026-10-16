@@ -31,6 +31,7 @@ class RensheProjectConfiguration(BaseModel):
     attachment_layout: str = Field("by_candidate", max_length=64)
     institution_types: list[str] = Field(default_factory=list, max_length=3)
     reporting_policy: dict = Field(default_factory=dict)
+    commitment_template: dict | None = None
 
 
 class RensheProjectWrite(BaseModel):

@@ -87,7 +87,7 @@ def draft_payload(batch, **changes):
         email="graduate@example.com",
         mailing_address="毕业报名地址",
         reporting_config_id=batch.renshe_config_id,
-        reporting_info={"occupation_status": "失业人员", "ethnicity": "汉族", "political_status": "群众", "has_work_experience": False, "enrollment_date": "2019-09-01", "occupation_years": 0},
+        reporting_info={"occupation_status": "失业人员", "ethnicity": "汉族", "political_status": "群众", "has_work_experience": True, "work_start_date": "2022-09-21", "occupation_years": 0},
         education_info={
             "graduated": True,
             "school": "测试大学",
@@ -264,7 +264,7 @@ async def test_graduate_without_student_identity_full_revision_review_and_export
     workbook = load_workbook(target)
     assert workbook["Sheet1"].cell(2, 6).value == "社会人员"
     assert workbook["Sheet1"].cell(2, 13).value == "失业人员"
-    assert workbook["Sheet1"].cell(2, 18).value == "2019-09-01"
+    assert workbook["Sheet1"].cell(2, 18).value == "2022-9-21"
     assert workbook["Sheet1"].cell(2, 19).value == 0
     assert workbook["Sheet1"].cell(2, 21).value == DEGREE_CONDITION
     assert_template(workbook)

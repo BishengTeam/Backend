@@ -1,7 +1,7 @@
 """Project capabilities and frozen batch admission policy.
 
-Only this module interprets configuration. Historical batches never consult the
-current project version. RS-ZY is a legacy fallback, not a business classifier.
+Admission stays frozen on each batch. Exports use the current code contract;
+commitment downloads use the project's current uploaded file.
 """
 
 from dataclasses import asdict
@@ -31,7 +31,7 @@ from app.services.renshe_graduated import (
     RULE, INSTITUTION_TYPES, MATERIALS as GRADUATED_MATERIALS, REVIEW_CHECKS,
     LEGACY_MATERIALS, is_graduated, policy_errors, activation_errors,
 )
-from app.services.renshe_reporting import EDUCATIONS, OCCUPATIONS, ETHNICITIES, POLITICS, DEGREE_CONDITION, is_v2, default_policy
+from app.services.renshe_reporting import EDUCATIONS, OCCUPATIONS, ETHNICITIES, POLITICS, DEGREE_CONDITION, HEADERS, default_policy
 
 MATERIAL_NAMES = {
     "id_card_front": "身份证正面",
@@ -40,65 +40,10 @@ MATERIAL_NAMES = {
     "student_card": "学生证",
     "xuexin_registration": "学信网电子注册表",
     "education_proof": "学历证明",
+    **LEGACY_MATERIALS,
     **GRADUATED_MATERIALS,
 }
 FORM_FIELDS = ["contact_phone", "mailing_address", "email"]
-EXPORT_COLUMNS = [
-    "real_name",
-    "gender",
-    "birth_date",
-    "id_type",
-    "id_card_number",
-    "candidate_source",
-    "education",
-    "ethnicity",
-    "political_status",
-    "contact_phone",
-    "mailing_address",
-    "blank",
-    "student_status",
-    "occupation_name",
-    "export_skill_level",
-    "blank",
-    "blank",
-    "enrollment_date",
-    "blank",
-    "occupation_code",
-    "application_condition",
-    "application_type",
-    "exam_type",
-    "blank",
-    "email",
-]
-ROSTER_COLUMNS = [
-    "real_name",
-    "id_card_number",
-    "contact_phone",
-    "occupation_name",
-    "export_skill_level",
-    "exam_type",
-    "application_type",
-    "school",
-    "major",
-    "email",
-    "mailing_address",
-]
-TEMPLATES = {
-    "renshe_graduated_v1": {
-        "label": "已毕业学历型报名信息（25列，需甲方确认报送口径）",
-        "columns": EXPORT_COLUMNS,
-    },
-    "renshe_registration_v1": {
-        "label": "职业技能等级报名信息（25 列）",
-        "columns": EXPORT_COLUMNS,
-    },
-    "renshe_roster_v1": {
-        "label": "内部报名汇总（系统模板，11 列）",
-        "columns": ROSTER_COLUMNS,
-    },
-}
-
-
 def default_configuration() -> dict:
     program = asdict(RENSHE_DEFAULT_PROGRAM)
     return {
@@ -179,11 +124,10 @@ def configuration_errors(config: dict) -> list[str]:
             errors.append("本期只支持信息安全管理员、四级／中级工")
         if not config.get("institution_types") or not set(config["institution_types"]) <= set(INSTITUTION_TYPES):
             errors.append("请选择本期支持的院校类型")
-        errors.extend(policy_errors(config.get("reporting_policy", {})))
-        if config.get("export_template") != "renshe_graduated_v1" or config.get("field_mapping"):
-            errors.append("已毕业学历型须使用专用导出器，字段由甲方确认口径控制")
+        from app.services.renshe_graduated import commitment_policy
+        errors.extend(policy_errors(commitment_policy(config)))
     levels = config.get("education_levels", [])
-    if not levels or not set(levels) <= (set(EDUCATIONS) if graduated and is_v2(config.get("reporting_policy", {})) else EDUCATION_LEVELS):
+    if not levels or not set(levels) <= (set(EDUCATIONS) if graduated else EDUCATION_LEVELS):
         errors.append("请选择已支持的学历范围")
     if set(config.get("form_fields", [])) != set(FORM_FIELDS):
         errors.append("报名字段需要适配；当前必须包含联系电话、通讯地址和邮箱")
@@ -214,32 +158,6 @@ def configuration_errors(config: dict) -> list[str]:
     ):
         if not any(item["kind"] == kind and item["required"] for item in materials):
             errors.append(f"{MATERIAL_NAMES[kind]}为必填材料")
-    template = TEMPLATES.get(config.get("export_template"))
-    if template is None:
-        errors.append("导出模板需要适配")
-    else:
-        mapping = config.get("field_mapping", {})
-        if any(
-            key not in {str(i) for i in range(1, len(template["columns"]) + 1)}
-            or value not in set(EXPORT_COLUMNS + ROSTER_COLUMNS)
-            for key, value in mapping.items()
-        ):
-            errors.append("导出字段映射需要适配")
-        # Required report identity must never be mapped away by an accidental override.
-        columns = [
-            mapping.get(str(i), value) for i, value in enumerate(template["columns"], 1)
-        ]
-        if not {
-            "real_name",
-            "id_card_number",
-            "occupation_name",
-            "export_skill_level",
-        } <= set(columns):
-            errors.append("导出映射必须保留姓名、身份证、职业和等级")
-    if config.get("attachment_layout") not in (
-        {"flat"} if standard_graduated else {"by_candidate", "by_material"}
-    ):
-        errors.append("附件目录规则需要适配")
     return errors
 
 
@@ -308,9 +226,10 @@ async def is_renshe_plan(db, plan: Plan | None) -> bool:
 class RensheProjectService:
     @staticmethod
     def capabilities() -> dict:
+        from app.services.renshe_export_definition import export_instructions
         return {
             "default_config": graduated_configuration(),
-            "templates": TEMPLATES,
+            "templates": {"current": {"label": "当前固定25列报名信息模板", "columns": HEADERS}},
             "material_names": MATERIAL_NAMES,
             "form_fields": FORM_FIELDS,
             "qualification_rules": {
@@ -320,6 +239,7 @@ class RensheProjectService:
             "institution_types": INSTITUTION_TYPES,
             "review_checks": REVIEW_CHECKS,
             "reporting_contract": {"education_labels": EDUCATIONS, "occupations": OCCUPATIONS, "ethnicities": ETHNICITIES, "political_statuses": POLITICS, "application_condition": DEGREE_CONDITION},
+            "export_instructions": export_instructions(),
         }
 
     @staticmethod
@@ -379,16 +299,14 @@ class RensheProjectService:
         self, data: RensheProjectWrite, *, product_id: int | None = None, admin_id: int
     ) -> RensheProjectResponse:
         config = data.config.model_dump()
+        from app.services.renshe_graduated import commitment_policy
+        config["commitment_template"] = commitment_policy(config)["commitment_template"]
+        config.update(export_template="renshe_graduated_v1" if is_graduated(config) else "renshe_registration_v1", field_mapping={}, attachment_layout="flat")
+        if is_graduated(config):
+            config["reporting_policy"] = default_policy()
         if not is_graduated(config):
             config.pop("institution_types", None)
             config.pop("reporting_policy", None)
-        elif is_v2(config.get("reporting_policy", {})) and {
-            item.get("kind") for item in config.get("materials", [])
-        } == set(GRADUATED_MATERIALS):
-            config["attachment_layout"] = "flat"
-            policy = config.get("reporting_policy") or {}
-            policy.pop("attachment_names", None)
-            config["reporting_policy"] = policy
         errors = configuration_errors(config)
         if data.status == "available" and errors:
             raise BusinessException("项目配置不可用：" + "；".join(errors))
@@ -413,7 +331,8 @@ class RensheProjectService:
                 db.add(product)
                 await db.flush()
             latest = await self.latest(db, product.id)
-            if data.status == "available" and (latest is None or latest.config != config or product.renshe_status != "available"):
+            admission_changed = latest is None or any(latest.config.get(key) != config.get(key) for key in ("qualification_rule", "occupation_name", "occupation_code", "skill_level", "education_levels", "institution_types", "materials", "exam_types", "application_types"))
+            if data.status == "available" and (is_graduated(config) or admission_changed or product.renshe_status != "available"):
                 activation = activation_errors(config)
                 if activation:
                     raise BusinessException("；".join(activation))

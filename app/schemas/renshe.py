@@ -115,7 +115,7 @@ class RensheDraftUpsert(BaseModel):
     email: str = Field(..., min_length=3, max_length=128, description="电子邮箱")
     education_info: RensheGraduatedEducation | None = None
     reporting_info: RensheReportingInfo | None = None
-    reporting_config_id: int | None = Field(None, ge=1)
+    reporting_config_id: int | None = Field(None, ge=1, deprecated=True, description="兼容旧客户端；当前报送规则由代码固定，此字段不参与选择")
 
     @field_validator("contact_phone")
     @classmethod

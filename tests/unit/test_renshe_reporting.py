@@ -1,6 +1,5 @@
 """The real reporting workbook and immutable reporting revision boundaries."""
 
-from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -20,7 +19,6 @@ from app.services.renshe_application import RensheApplicationService
 from app.services.renshe_export import ExportCandidate, build_registration_row
 from app.services.renshe_graduated import (
     REVIEW_CHECKS,
-    policy_errors,
     validate_education,
 )
 from app.services.renshe_project import RensheProjectService
@@ -28,14 +26,11 @@ from app.services.renshe_reporting import (
     DEGREE_CONDITION,
     EDUCATIONS,
     ETHNICITIES,
-    HEADERS,
     assert_template,
-    default_policy,
     public_options,
     report_date,
     resolve_contract,
     validate_reporting,
-    validate_snapshot,
 )
 from app.services.renshe_review import RensheReviewService
 from tests.unit.test_renshe_graduated import draft_payload, graduated_batch, uploads
@@ -44,25 +39,13 @@ from tests.unit.test_renshe_projects import isolated as _isolated
 isolated = _isolated
 
 
-def policy(**rules):
-    result = default_policy()
-    result["employment_reporting"] = {
-        "confirmed": True,
-        "date_rule": "work_or_enrollment",
-        "years_rule": "required",
-        "allow_zero_years": True,
-        **rules,
-    }
-    return result
-
-
 def info(**changes):
     return {
-        "occupation_status": "失业人员",
+        "occupation_status": "职工",
         "ethnicity": "汉族",
         "political_status": "群众",
-        "has_work_experience": False,
-        "enrollment_date": "2019-09-01",
+        "has_work_experience": True,
+        "work_start_date": "2022-09-21",
         "occupation_years": 0,
         **changes,
     }
@@ -102,75 +85,59 @@ def test_actual_client_workbook_structure_dictionaries_and_condition():
         {"ethnicity": ""},
         {"political_status": ""},
         {"has_work_experience": "false"},
-        {"has_work_experience": True},
+        {"work_start_date": None},
         {"occupation_years": None},
         {"occupation_years": -1},
-        {"occupation_years": 2},
         {"occupation_years": "0.001"},
-        {"enrollment_date": "2999-01-01"},
-        {"enrollment_date": None},
-        {"work_start_date": "2020-01-01"},
+        {"work_start_date": "2999-01-01"},
+        {"has_work_experience": False},
+        {
+            "has_work_experience": False,
+            "work_start_date": None,
+            "enrollment_date": "2019-09-01",
+        },
     ],
 )
 def test_reporting_rejects_missing_or_fabricated_fields(changes):
     with pytest.raises(BusinessException):
-        validate_reporting(info(**changes), policy())
+        validate_reporting(info(**changes), {})
 
 
-def test_zero_optional_columns_and_exact_date_source_are_explicit():
-    result = validate_reporting(info(), policy())
+def test_current_work_date_and_years_cannot_be_changed_by_product_policy():
+    result = validate_reporting(
+        info(),
+        {
+            "employment_reporting": {
+                "date_rule": "enrollment_only",
+                "years_rule": "optional",
+                "allow_zero_years": False,
+            }
+        },
+    )
     assert float(result["occupation_years"]) == 0
-    assert report_date(result, policy()["employment_reporting"]) == "2019-09-01"
-    with pytest.raises(BusinessException, match="零年限"):
-        validate_reporting(info(), policy(allow_zero_years=False))
-    assert (
-        validate_reporting(
-            info(enrollment_date=None, occupation_years=None),
-            policy(date_rule="optional", years_rule="optional"),
-        )["occupation_years"]
-        is None
-    )
-    worker = info(
-        has_work_experience=True, work_start_date="2020-02-01", occupation_years="3.25"
-    )
-    assert (
-        report_date(
-            validate_reporting(worker, policy()), policy()["employment_reporting"]
-        )
-        == "2020-02-01"
-    )
-    enrollment = policy(date_rule="enrollment_only")
-    assert (
-        report_date(
-            validate_reporting(worker, enrollment), enrollment["employment_reporting"]
-        )
-        == "2019-09-01"
-    )
-    with pytest.raises(BusinessException, match="毕业日期不能替代"):
-        validate_reporting(info(), policy(date_rule="work_only"))
-    with pytest.raises(ConflictException, match="尚未确认"):
-        validate_reporting(info(), policy(confirmed=False))
+    assert report_date(result, {"date_rule": "enrollment_only"}) == "2022-9-21"
+    with pytest.raises(BusinessException, match="参加工作日期"):
+        validate_reporting(info(work_start_date=None, enrollment_date="2019-09-01"), {})
+    assert report_date(info(work_start_date="2022-01-02")) == "2022-1-2"
 
 
 @pytest.mark.asyncio
-async def test_rows_preserve_all_25_positions_and_frozen_reporting_policy(
+async def test_fixed_rows_ignore_old_export_mapping_and_keep_actual_data(
     isolated, monkeypatch
 ):
-    project, batch = await graduated_batch(isolated, monkeypatch)
+    _, batch = await graduated_batch(isolated, monkeypatch)
     service = RensheApplicationService(isolated.storage)
-    async with isolated.db() as db:
-        realname = await db.scalar(select(UserRealname))
-        realname.ethnicity, realname.political_status = None, None
-        await db.commit()
-    reporting = info(
-        occupation_status="职工",
-        has_work_experience=True,
-        work_start_date="2020-02-01",
-        occupation_years="3.25",
-        work_unit="真实工作单位",
-        social_insurance_unit="真实参保单位",
+    saved = await service.save_draft(
+        1,
+        draft_payload(
+            batch,
+            reporting_info=info(
+                occupation_years="3.25",
+                work_unit="真实单位",
+                social_insurance_unit="真实参保单位",
+            ),
+        ),
     )
-    saved = await service.save_draft(1, draft_payload(batch, reporting_info=reporting))
     async with isolated.db() as db:
         plan = await db.get(Plan, batch.id)
         realname = await db.scalar(select(UserRealname))
@@ -183,32 +150,24 @@ async def test_rows_preserve_all_25_positions_and_frozen_reporting_policy(
             saved.draft_data,
             (),
         )
+        plan.renshe_config = {
+            **plan.renshe_config,
+            "field_mapping": {"1": "email"},
+            "export_template": "renshe_roster_v1",
+            "attachment_layout": "by_material",
+        }
         values = build_registration_row(candidate, plan)
-        assert len(values) == len(HEADERS) == 25
-        assert values[11] == "真实工作单位" and values[23] == "真实参保单位"
-        assert (
-            values[12] == "职工" and values[17] == "2020-02-01" and values[18] == 3.25
-        )
-        assert values[20] == DEGREE_CONDITION and values[15:17] == [None, None]
-        assert values[7:9] == ["汉族", "群众"]
-        missing = deepcopy(saved.draft_data)
-        missing["reporting_info"].pop("ethnicity")
-        with pytest.raises(ConflictException, match="民族"):
-            build_registration_row(
-                ExportCandidate(
-                    saved.id, 1, 0, candidate.realname_snapshot, {}, missing, ()
-                ),
-                plan,
-            )
-        config = deepcopy(plan.renshe_config)
-        original = await resolve_contract(db, plan)
+        assert len(values) == 25 and values[0] == "张三"
+        assert values[11:13] == ["真实单位", "职工"]
+        assert values[17:19] == ["2022-9-21", 3.25]
+        assert values[23] == "真实参保单位" and values[20] == DEGREE_CONDITION
         for code, label in EDUCATIONS.items():
             education = {
                 **saved.draft_data["education_info"],
                 "education": code,
                 "institution_type": "vocational",
             }
-            validate_education(education, config)
+            validate_education(education, plan.renshe_config)
             row = build_registration_row(
                 ExportCandidate(
                     saved.id,
@@ -224,20 +183,28 @@ async def test_rows_preserve_all_25_positions_and_frozen_reporting_policy(
             assert row[6] == label
         validate_education(
             {**saved.draft_data["education_info"], "education": "higher_vocational"},
-            config,
+            plan.renshe_config,
         )
         with pytest.raises(BusinessException, match="专科及以上"):
             validate_education(
                 {**saved.draft_data["education_info"], "education": "technical_school"},
-                config,
+                plan.renshe_config,
             )
-        corrupted = deepcopy(saved.draft_data)
-        corrupted["reporting_contract"]["policy"]["employment_reporting"][
-            "allow_zero_years"
-        ] = False
-        with pytest.raises(ConflictException, match="不一致"):
-            await validate_snapshot(db, plan, corrupted)
-    config["reporting_policy"]["employment_reporting"]["date_rule"] = "enrollment_only"
+
+
+@pytest.mark.asyncio
+async def test_project_enable_requires_only_business_fields_and_commitment_file(
+    isolated, monkeypatch
+):
+    project, _ = await graduated_batch(isolated, monkeypatch)
+    config = project.config.model_dump(
+        exclude={
+            "field_mapping",
+            "export_template",
+            "attachment_layout",
+            "reporting_policy",
+        }
+    )
     updated = await RensheProjectService().save(
         RensheProjectWrite(
             chinese_name=project.chinese_name,
@@ -248,35 +215,18 @@ async def test_rows_preserve_all_25_positions_and_frozen_reporting_policy(
         product_id=project.id,
         admin_id=1,
     )
-    async with isolated.db() as db:
-        plan = await db.get(Plan, batch.id)
-        assert (await resolve_contract(db, plan))["config_id"] == original["config_id"]
-        with pytest.raises(ConflictException, match="不能更换"):
-            await resolve_contract(db, plan, updated.config_id)
-    with pytest.raises(ConflictException, match="配置已变化"):
-        await service.save_draft(
-            1, draft_payload(batch, reporting_config_id=updated.config_id)
-        )
-
-
-@pytest.mark.asyncio
-async def test_unconfirmed_reporting_cannot_activate_and_full_dictionary_text_is_required(
-    isolated, monkeypatch
-):
-    project, _ = await graduated_batch(isolated, monkeypatch)
-    config = project.config.model_dump()
-    assert not policy_errors(config["reporting_policy"])
-    config["reporting_policy"]["export_values"]["application_condition"] = (
-        "已取得本专业毕业证书"
+    assert updated.validation_errors == []
+    assert (
+        updated.config.field_mapping == {}
+        and updated.config.attachment_layout == "flat"
     )
-    assert policy_errors(config["reporting_policy"])
-    config = project.config.model_dump()
-    config["reporting_policy"]["employment_reporting"]["confirmed"] = False
-    with pytest.raises(BusinessException, match="R、S"):
+    assert updated.config.reporting_policy == {"contract_version": 2}
+    config["commitment_template"] = None
+    with pytest.raises(BusinessException, match="承诺书"):
         await RensheProjectService().save(
             RensheProjectWrite(
                 chinese_name=project.chinese_name,
-                expected_version=project.version,
+                expected_version=updated.version,
                 status="available",
                 config=config,
             ),
@@ -293,7 +243,7 @@ async def test_old_paid_snapshot_adopts_new_reporting_without_rewriting_order_or
     legacy = project.config.model_dump()
     legacy["education_levels"] = ["bachelor"]
     legacy["reporting_policy"].pop("contract_version")
-    legacy["reporting_policy"].pop("employment_reporting")
+    legacy["reporting_policy"].pop("employment_reporting", None)
     legacy["reporting_policy"]["export_values"] = {
         "candidate_source": "社会人员",
         "student_status": "已毕业",
@@ -407,7 +357,9 @@ async def test_old_paid_snapshot_adopts_new_reporting_without_rewriting_order_or
         assert old.form_data == old_form and old.project_config_id == legacy_config_id
         new = await db.get(RensheApplicationVersion, result.version.id)
         assert new.project_config_id == legacy_config_id
-        assert new.form_data["reporting_contract"]["config_id"] == updated.config_id
+        assert (
+            new.form_data["commitment_template"] == updated.config.commitment_template
+        )
         assert (await db.get(Plan, batch.id)).renshe_config == legacy
     await review.review(
         reviewer_id=1,

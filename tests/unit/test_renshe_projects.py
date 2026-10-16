@@ -229,6 +229,7 @@ async def enroll(env, batch):
             contact_phone="13800138000",
             mailing_address="测试地址",
             email="test@example.com",
+            reporting_info={"occupation_status": "职工", "ethnicity": "汉族", "political_status": "群众", "has_work_experience": True, "work_start_date": "2022-09-21", "occupation_years": 0},
         ),
     )
     submission = await service.submit(1, draft.id)
@@ -261,11 +262,7 @@ async def test_two_projects_complete_separate_admission_exports_external_review_
     first = await service.save(project_data(), admin_id=1)
     second = await service.save(
         project_data(
-            "网络安全高级测试项目",
-            occupation_name="网络与信息安全管理员",
-            occupation_code="4-04-04-02",
-            skill_level="高级工",
-            export_skill_level="三级",
+            "信息安全第二项目",
             export_template="renshe_roster_v1",
             attachment_layout="by_material",
         ),
@@ -318,12 +315,12 @@ async def test_two_projects_complete_separate_admission_exports_external_review_
             if index == 0:
                 assert values[13:15] == ["信息安全管理员", "四级"]
                 assert any(
-                    name.startswith("材料/110105") for name in archive.namelist()
+                    name.startswith("110105") for name in archive.namelist()
                 )
             else:
-                assert values[3:5] == ["网络与信息安全管理员", "三级"]
+                assert values[13:15] == ["信息安全管理员", "四级"]
                 assert any(
-                    name.startswith("材料/id_card_front/")
+                    name.startswith("110105")
                     for name in archive.namelist()
                 )
             workbook.close()
@@ -379,7 +376,7 @@ async def test_version_freeze_explicit_draft_upgrade_disable_and_immutable_rows(
     draft = await create_batch(first, "草稿")
     await publish_historical_batch(isolated, published)
     config = first.config.model_dump()
-    config["attachment_layout"] = "by_material"
+    config["education_levels"] = ["bachelor"]
     second = await service.save(
         RensheProjectWrite(
             chinese_name="新展示名称",
@@ -397,7 +394,7 @@ async def test_version_freeze_explicit_draft_upgrade_disable_and_immutable_rows(
     updated = await PlanService().update_plan(
         draft.id, PlanUpdate(project_config_id=second.config_id), first.code, admin_id=1
     )
-    assert updated.renshe_config["attachment_layout"] == "by_material"
+    assert updated.renshe_config["education_levels"] == ["bachelor"]
     for payload in (
         PlanUpdate(project_config_id=second.config_id),
         PlanUpdate(exam_type="补考"),
@@ -437,7 +434,7 @@ async def test_version_freeze_explicit_draft_upgrade_disable_and_immutable_rows(
 async def test_draft_capability_gate_cross_project_forgery_and_deletion(isolated):
     service = RensheProjectService()
     data = project_data()
-    data.config.export_template = "unadapted-upload.xlsx"
+    data.config.education_levels = []
     data.status = "draft"
     draft = await service.save(data, admin_id=1)
     assert draft.validation_errors
@@ -506,6 +503,7 @@ async def test_export_keeps_requested_material_version_after_resubmission_and_re
             contact_phone="13800138000",
             mailing_address="新地址",
             email="new@example.com",
+            reporting_info={"occupation_status": "职工", "ethnicity": "汉族", "political_status": "群众", "has_work_experience": True, "work_start_date": "2022-09-21", "occupation_years": 0},
         ),
     )
     newer = await service.submit(1, submission.application.id)
@@ -580,11 +578,8 @@ async def test_generated_project_cannot_use_generic_order_or_wrong_education(iso
         {"exam_types": ["未知类型"]},
         {"application_types": ["工作经历型"]},
         {"form_fields": ["email"]},
-        {"field_mapping": {"1": "secret"}},
-        {"export_template": "upload.xlsx"},
         {"materials": []},
         {"education_levels": []},
-        {"attachment_layout": "../escape"},
     ],
 )
 def test_unadapted_capabilities_are_never_available(change):

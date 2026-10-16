@@ -98,42 +98,13 @@ def is_v2(policy: dict) -> bool:
 
 
 def default_policy() -> dict:
-    return {
-        "contract_version": CONTRACT_VERSION,
-        "version": "registration-v2",
-        "confirmed_by_client": False,
-        "export_values": {
-            "candidate_source": "社会人员",
-            "application_condition": DEGREE_CONDITION,
-        },
-        "employment_reporting": {
-            "confirmed": False,
-            "date_rule": None,
-            "years_rule": None,
-            "allow_zero_years": None,
-        },
-    }
-
-
-def employment_policy_errors(policy: dict) -> list[str]:
-    rules = policy.get("employment_reporting")
-    if (
-        not isinstance(rules, dict)
-        or rules.get("confirmed") is not True
-        or rules.get("date_rule")
-        not in {"work_only", "enrollment_only", "work_or_enrollment", "optional"}
-        or rules.get("years_rule") not in {"required", "optional"}
-        or not isinstance(rules.get("allow_zero_years"), bool)
-    ):
-        return ["请确认学历型R、S列的日期规则、年限必填规则及零年限是否可报送"]
-    return []
+    # Kept for old JSON readers; export settings are maintained in code.
+    return {"contract_version": CONTRACT_VERSION}
 
 
 def validate_reporting(info: dict | None, policy: dict) -> dict:
     from app.schemas.renshe import RensheReportingInfo
 
-    if not is_v2(policy) or employment_policy_errors(policy):
-        raise ConflictException("学历型报送口径尚未确认，请联系管理员")
     try:
         model = RensheReportingInfo.model_validate(info or {})
     except ValueError as exc:
@@ -155,7 +126,9 @@ def validate_reporting(info: dict | None, policy: dict) -> dict:
         Decimal(0),
     ):
         raise BusinessException("未参加过工作时职业年限不能大于零")
-    rules = policy["employment_reporting"]
+    from app.services.renshe_export_definition import employment_rules
+
+    rules = employment_rules()
     report_date(model.model_dump(mode="json"), rules)
     if rules["years_rule"] == "required" and model.occupation_years is None:
         raise BusinessException(
@@ -168,105 +141,76 @@ def validate_reporting(info: dict | None, policy: dict) -> dict:
     return model.model_dump(mode="json")
 
 
-def report_date(info: dict, rules: dict) -> str | None:
-    work, enrollment = info.get("work_start_date"), info.get("enrollment_date")
-    value = {
-        "work_only": work,
-        "enrollment_only": enrollment,
-        "work_or_enrollment": work or enrollment,
-        "optional": work or enrollment,
-    }.get(rules["date_rule"])
-    if value is None and rules["date_rule"] != "optional":
-        raise BusinessException(
-            "请按本批次报送口径填写参加工作日期或入学日期；毕业日期不能替代"
-        )
-    return value
+def report_date(info: dict, rules: dict | None = None) -> str:
+    from app.services.renshe_export_definition import work_date
+
+    return work_date(info)
 
 
 async def resolve_contract(db, plan, config_id: int | None = None) -> dict:
-    """An old application can explicitly adopt a confirmed reporting revision.
-
-    Admission, price, plan and orders stay bound to the original batch. Only
-    reporting data is snapshotted when the applicant saves a new submission.
-    """
+    """Use the current project commitment file; preserve batch admission."""
     from app.models.cert_product import CertProduct
     from app.models.renshe_project import RensheProjectConfig
-    from app.services.renshe_graduated import is_graduated, template_path
-    from app.services.renshe_project import batch_configuration, configuration_errors
+    from app.services.renshe_graduated import (
+        is_graduated,
+        template_path,
+        commitment_policy,
+    )
+    from app.services.renshe_project import batch_configuration
 
     frozen = batch_configuration(plan)
     if not is_graduated(frozen):
-        raise ConflictException("历史学生批次使用原报名规则")
+        return {
+            "config_id": plan.renshe_config_id,
+            "config": {**frozen, "reporting_policy": {"commitment_template": None}},
+        }
     product = await db.scalar(
         select(CertProduct).where(
             CertProduct.code == plan.product_type, CertProduct.type == "renshe"
         )
     )
     if product is None:
-        raise ConflictException("报送配置缺少项目归属")
-    if config_id is not None:
-        row = await db.get(RensheProjectConfig, config_id)
-    elif is_v2(frozen.get("reporting_policy", {})):
-        row = await db.get(RensheProjectConfig, plan.renshe_config_id)
-    else:
-        row = await db.scalar(
-            select(RensheProjectConfig)
-            .where(RensheProjectConfig.product_id == product.id)
-            .order_by(RensheProjectConfig.version.desc())
-            .limit(1)
-        )
-    if row is None or row.product_id != product.id:
-        raise ConflictException("报送配置不属于本批次项目")
-    if is_v2(frozen.get("reporting_policy", {})) and row.id != plan.renshe_config_id:
-        raise ConflictException("不能更换已冻结批次的报送口径")
-    config = row.config
-    if (
-        not is_graduated(config)
-        or not is_v2(config.get("reporting_policy", {}))
-        or configuration_errors(config)
-        or any(
-            config.get(key) != frozen.get(key)
-            for key in (
-                "occupation_name",
-                "occupation_code",
-                "skill_level",
-                "export_skill_level",
-            )
-        )
-    ):
-        raise ConflictException(
-            "项目尚未确认新的模板报送口径，请联系管理员；历史报名资料已保留"
-        )
-    template_path(config["reporting_policy"])
-    return {"config_id": row.id, "config": config}
+        raise ConflictException("承诺书配置缺少项目归属")
+    row = await db.scalar(
+        select(RensheProjectConfig)
+        .where(RensheProjectConfig.product_id == product.id)
+        .order_by(RensheProjectConfig.version.desc())
+        .limit(1)
+    )
+    if row is None:
+        raise ConflictException("项目尚未上传承诺书模板，请联系管理员")
+    policy = commitment_policy(row.config)
+    template_path(policy)
+    return {"config_id": row.id, "config": {**row.config, "reporting_policy": policy}}
 
 
 def public_options(contract: dict, frozen: dict) -> dict:
+    from app.services.renshe_export_definition import employment_rules
+
     config = education_config(frozen)
     policy = contract["config"]["reporting_policy"]
     return {
         "config_id": contract["config_id"],
-        "version": policy["version"],
         "education_levels": config["education_levels"],
         "education_labels": EDUCATIONS,
-        "institution_types": config["institution_types"],
+        "institution_types": config.get("institution_types", []),
         "occupations": OCCUPATIONS,
         "ethnicities": ETHNICITIES,
         "political_statuses": POLITICS,
         "candidate_source": "社会人员",
         "application_condition": DEGREE_CONDITION,
-        "employment_reporting": policy["employment_reporting"],
+        "employment_reporting": employment_rules(),
         "commitment_template": policy["commitment_template"],
     }
 
 
 def validate_row(values: list, info: dict, policy: dict) -> None:
     """Always run before new jobs, including historical versions being retried."""
-    required = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 19, 20, 21, 22]
+    required = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 19, 20, 21, 22, 24]
     missing = [
         HEADERS[index]
         for index in required
-        if values[index] is None or values[index] == ""
+        if values[index] is None or (isinstance(values[index], str) and not values[index].strip())
     ]
     if missing:
         raise ConflictException("模板必填字段缺失：" + "、".join(missing))
@@ -293,16 +237,11 @@ def validate_row(values: list, info: dict, policy: dict) -> None:
 
 
 async def validate_snapshot(db, plan, form: dict) -> dict:
-    snapshot = form.get("reporting_contract", {})
-    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("config_id"), int):
+    # Current exports read material snapshots, never historical export policies.
+    if not isinstance(form.get("reporting_info"), dict):
         raise ConflictException("该报名版本缺少模板填报信息，请补正后重新初审并导出")
-    resolved = await resolve_contract(db, plan, snapshot["config_id"])
-    if (
-        snapshot.get("policy") != resolved["config"]["reporting_policy"]
-        or snapshot.get("attachment_layout") != resolved["config"]["attachment_layout"]
-    ):
-        raise ConflictException("报名版本的报送口径与确认版本不一致")
-    return snapshot["policy"]
+    validate_reporting(form["reporting_info"], {})
+    return {}
 
 
 def assert_template(workbook) -> None:

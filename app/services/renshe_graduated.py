@@ -1,7 +1,7 @@
 """Versioned admission for already graduated, level-four applicants.
 
-Templates are uploaded by administrators and frozen by content hash. A batch
-uses the reporting policy saved with its immutable project configuration.
+Commitment files are uploaded by administrators and stored by content hash.
+Reporting columns, dates and filenames are maintained in the current code.
 """
 
 import hashlib
@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from app.port.config import settings
 from app.port.exceptions import BusinessException, ConflictException
-from app.services.renshe_reporting import is_v2, employment_policy_errors, DEGREE_CONDITION, REPORT_FIELDS
+from app.services.renshe_reporting import REPORT_FIELDS
 
 RULE = "related_major_graduated_degree_v1"
 INSTITUTION_TYPES = {
@@ -39,17 +39,6 @@ LEGACY_MATERIALS = {
     "education_report": "学信网学历备案表（在线验证有效期设置为6个月）",
     "commitment_letter": "承诺书（本人亲笔签名并按手印）",
 }
-EXPORT_FILE_NAMES = {
-    "id_card_front": "证件正面",
-    "id_card_back": "证件背面",
-    "portrait": "二寸免冠照片",
-    "social_security_proof": "社保证明",
-    "xuexin_registration": "学信网电子注册表",
-    "education_proof": "学历证明",
-    "vocational_qualification_certificate": "职业资格证书",
-    "professional_title_certificate": "职称证书",
-    "commitment_letter": "承诺书",
-}
 REVIEW_CHECKS = {
     "identity": "实名信息与全部佐证材料属于同一人",
     "graduated": "已取得毕业证，不使用在读替代材料",
@@ -69,10 +58,6 @@ def policy_errors(policy: dict) -> list[str]:
     if not isinstance(policy, dict):
         return ["报送口径配置格式无效"]
     errors = []
-    if policy.get("confirmed_by_client") is not True:
-        errors.append("请确认承诺书模板和附件报送口径已获甲方确认")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", str(policy.get("version", ""))):
-        errors.append("请选择甲方确认的报送口径版本")
     template = policy.get("commitment_template", {})
     if not isinstance(template, dict):
         template = {}
@@ -85,43 +70,11 @@ def policy_errors(policy: dict) -> list[str]:
         or not re.fullmatch(r"[a-f0-9]{64}", str(template.get("sha256", "")))
     ):
         errors.append("缺少甲方确认的承诺书模板及校验值")
-    labels = policy.get("attachment_names", {})
-    if not isinstance(labels, dict):
-        labels = {}
-    if labels:
-        # Historical versions froze their labels. New standard versions omit
-        # this field and use code-owned names instead.
-        if (
-            set(labels) != set(LEGACY_MATERIALS)
-            or len(set(str(value) for value in labels.values())) != len(LEGACY_MATERIALS)
-            or any(
-                not isinstance(value, str)
-                or not re.fullmatch(r"[\w\u4e00-\u9fff -]{1,64}", value)
-                for value in labels.values()
-            )
-        ):
-            errors.append("历史版本附件命名配置无效")
-    values = policy.get("export_values", {})
-    if not isinstance(values, dict):
-        values = {}
-    if is_v2(policy):
-        if values != {"candidate_source": "社会人员", "application_condition": DEGREE_CONDITION}:
-            errors.append("考生来源与申报条件须使用模板原字典，不能自由改写")
-        errors.extend(employment_policy_errors(policy))
-    elif set(values) != {
-        "candidate_source",
-        "student_status",
-        "application_condition",
-    } or any(
-        not isinstance(value, str)
-        or not value.strip()
-        or len(value) > 256
-        or "院校学生" in value
-        or "应届" in value
-        for value in values.values()
-    ):
-        errors.append("请确认已毕业学历型的报送身份、毕业状态及申报条件值")
     return errors
+
+
+def commitment_policy(config: dict) -> dict:
+    return {"commitment_template": config.get("commitment_template") or config.get("reporting_policy", {}).get("commitment_template")}
 
 
 def template_path(policy: dict) -> Path:
@@ -142,12 +95,10 @@ def activation_errors(config: dict) -> list[str]:
         return [
             "新开放批次仅支持信息安全管理员四级／中级工、已毕业学历型；历史批次保持原规则"
         ]
-    if not is_v2(config.get("reporting_policy", {})):
-        return ["新批次须使用模板填报第二版，确认R、S列口径；旧批次仅办理历史报名"]
     if {item.get("kind") for item in config.get("materials", [])} != set(MATERIALS):
         return ["新批次必须使用甲方标准九类材料清单"]
     try:
-        template_path(config.get("reporting_policy", {}))
+        template_path(commitment_policy(config))
     except ConflictException as exc:
         return [exc.message]
     return []

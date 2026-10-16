@@ -65,6 +65,7 @@ EXPECTED_PATHS: dict[str, set[str]] = {
     "/admin/cert-products/renshe/materials/{material_id}/signed-url": {"get"},
     "/admin/cert-products/renshe/programs": {"get"},
     "/admin/cert-products/renshe/project-capabilities": {"get"},
+    "/admin/cert-products/renshe/export-template": {"get"},
     "/admin/cert-products/renshe/projects": {"get", "post"},
     "/admin/cert-products/renshe/projects/{project_id}": {"put", "delete"},
     "/admin/cert-products/renshe/plans/{plan_id}/cleanup-runs": {"get"},

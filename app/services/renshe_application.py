@@ -61,10 +61,7 @@ class RensheApplicationService:
 
     @staticmethod
     def _assert_supported_program(plan: Plan) -> None:
-        config = batch_configuration(plan)
-        if is_graduated(config):
-            from app.services.renshe_graduated import template_path
-            template_path(config["reporting_policy"])
+        batch_configuration(plan)
 
     async def save_draft(
         self, user_id: int, data: RensheDraftUpsert
@@ -92,7 +89,7 @@ class RensheApplicationService:
             if application is None and not is_graduated(batch_configuration(plan)):
                 raise ConflictException("本期新报名仅开放已毕业学历型批次；历史报名请从我的报名继续办理")
             if application is None and not is_v2(batch_configuration(plan).get("reporting_policy", {})):
-                raise ConflictException("旧报送规则批次不再新建报名，请选择模板填报第二版批次")
+                raise ConflictException("历史批次仅办理已有报名，新报名请选择当前批次")
             self._validate_edit_window(plan, application, paid_order=await self._paid_correction_order(db, application))
             if application is None:
                 application = RensheApplication(
@@ -110,15 +107,14 @@ class RensheApplicationService:
 
             values = data.model_dump(mode="json", exclude_none=True)
             if is_graduated(batch_configuration(plan)):
-                if data.reporting_config_id is None:
-                    raise BusinessException("请先加载并确认本批次的模板填报口径")
                 contract = await resolve_contract(db, plan)
-                if data.reporting_config_id != contract["config_id"]:
-                    raise ConflictException("报送配置已变化或不属于当前批次，请重新加载核对")
                 values["education_info"] = validate_education(values.get("education_info"), education_config(batch_configuration(plan)))
                 values["reporting_info"] = validate_reporting(values.get("reporting_info"), contract["config"]["reporting_policy"])
-                values["reporting_contract"] = {"config_id": contract["config_id"], "policy": contract["config"]["reporting_policy"], "attachment_layout": contract["config"]["attachment_layout"]}
+                values.pop("reporting_config_id", None)
+                values["commitment_template"] = contract["config"]["reporting_policy"]["commitment_template"]
                 values["materials"] = (application.draft_data or {}).get("materials", {})
+            else:
+                values["reporting_info"] = validate_reporting(values.get("reporting_info"), {})
             application.draft_data = values
             db.add(
                 self._audit(
@@ -162,9 +158,10 @@ class RensheApplicationService:
                 realname, student = await self._verified_profiles(db, user_id, plan)
                 config = batch_configuration(plan)
                 graduated = is_graduated(config)
+                await validate_snapshot(db, plan, application.draft_data)
                 if graduated:
                     try:
-                        RensheDraftUpsert.model_validate({key: value for key, value in application.draft_data.items() if key not in {"materials", "reporting_contract"}})
+                        RensheDraftUpsert.model_validate({key: value for key, value in application.draft_data.items() if key not in {"materials", "reporting_contract", "commitment_template"}})
                     except ValueError as exc:
                         raise BusinessException("请先完整填写学历信息和联系方式并保存") from exc
                     policy = await validate_snapshot(db, plan, application.draft_data)
@@ -400,7 +397,7 @@ class RensheApplicationService:
                 self._validate_edit_window(plan, application, paid_order=await self._paid_correction_order(db, application))
                 if application is None:
                     if not is_v2(config.get("reporting_policy", {})):
-                        raise ConflictException("旧报送规则批次不再新建报名，请选择模板填报第二版批次")
+                        raise ConflictException("历史批次仅办理已有报名，新报名请选择当前批次")
                     application = RensheApplication(user_id=user_id, plan_id=plan_id, status="draft", draft_data={})
                     db.add(application)
                     await db.flush()

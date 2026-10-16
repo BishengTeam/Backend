@@ -536,7 +536,7 @@ def test_export_partition_never_splits_a_candidate_and_respects_estimates():
         )
 
 
-def test_export_row_uses_frozen_student_mapping_and_leaves_work_fields_blank():
+def test_export_row_uses_material_snapshot_and_current_fixed_columns():
     candidate = ExportCandidate(
         application_id=1,
         version_id=2,
@@ -557,6 +557,7 @@ def test_export_row_uses_frozen_student_mapping_and_leaves_work_fields_blank():
             "contact_phone": "13800138000",
             "mailing_address": "成都市",
             "email": "student@example.com",
+            "reporting_info": {"occupation_status": "职工", "ethnicity": "汉族", "political_status": "群众", "has_work_experience": True, "work_start_date": "2022-09-21", "occupation_years": 0},
         },
         materials=(),
     )
@@ -564,13 +565,14 @@ def test_export_row_uses_frozen_student_mapping_and_leaves_work_fields_blank():
     config = default_configuration()
     row = build_registration_row(candidate, Plan(product_type="RS-ZY", name="批次", exam_type="新考", application_type="学历型", **{key: config[key] for key in ('occupation_name', 'occupation_code', 'skill_level')}))
     assert len(row) == 25
-    assert row[5] == "院校学生"
+    assert row[5] == "社会人员"
     assert row[6] == "大学本科"
-    assert row[12] == "应届毕业生"
+    assert row[12] == "职工"
     assert row[14] == "四级"
-    assert row[20] == "相关专业的在读应届学生"
+    from app.services.renshe_reporting import DEGREE_CONDITION
+    assert row[20] == DEGREE_CONDITION
     assert row[11] is None
-    assert row[18] is None
+    assert row[17:19] == ["2022-9-21", 0]
     assert row[21:23] == ["学历型", "新考"]
 
 
@@ -613,8 +615,8 @@ def test_registration_export_rejects_unsupported_programs():
 
     try:
         build_registration_row(candidate, plan)
-    except ValueError as exc:
-        assert "不受支持" in str(exc)
+    except ConflictException as exc:
+        assert "批次" in str(exc)
     else:
         raise AssertionError("unsupported Renshe programs must not be exported")
 
@@ -769,6 +771,7 @@ async def test_export_retry_locks_plan_before_job(monkeypatch):
     )
     job = SimpleNamespace(
         id=71,
+        definition_fingerprint="test-current",
         plan_id=11,
         status="failed",
         candidate_processed=3,
@@ -784,6 +787,8 @@ async def test_export_retry_locks_plan_before_job(monkeypatch):
     monkeypatch.setattr(RensheExportService, "_now", staticmethod(lambda: now))
     service = RensheExportService()
     service.get_job = AsyncMock(return_value="retried")
+    monkeypatch.setattr("app.services.renshe_export.definition_fingerprint", lambda *args: "test-current")
+    monkeypatch.setattr(service, "_template_paths", lambda: (None, None))
 
     result = await service.retry_job(job_id=71, admin_id=5)
 

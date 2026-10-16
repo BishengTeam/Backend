@@ -49,43 +49,20 @@ from app.schemas.renshe import (
     RensheExportVolumeResponse,
     RensheSignedUrlResponse,
 )
-from app.services.renshe_project import batch_configuration, is_renshe_plan, TEMPLATES
-from app.services.renshe_graduated import EXPORT_FILE_NAMES, MATERIALS, is_graduated
-from app.services.renshe_reporting import EDUCATIONS, DEGREE_CONDITION, report_date, validate_row, validate_snapshot, assert_template
+from app.services.renshe_project import batch_configuration, is_renshe_plan
+from app.services.renshe_graduated import is_graduated
+from app.services.renshe_reporting import EDUCATIONS, DEGREE_CONDITION, report_date, validate_row, validate_snapshot, assert_template, validate_reporting
+from app.services.renshe_export_definition import material_archive_path, definition_fingerprint, archive_download_name, REGISTRATION_TEMPLATE_NAME, WORK_HISTORY_TEMPLATE_NAME
 
 
 logger = logging.getLogger(__name__)
 
-REGISTRATION_TEMPLATE_NAME = "报名信息.xlsx"
-WORK_HISTORY_TEMPLATE_NAME = "工作经历.xlsx"
 EXPORT_FIXED_OVERHEAD_BYTES = 4 * 1024 * 1024
 EXPORT_ENTRY_OVERHEAD_BYTES = 1024
 # Workbook rows and ZIP directory entries are small compared with materials,
 # but reserving a bounded amount per candidate keeps the 10 GiB partition
 # decision conservative even when a batch is close to the ceiling.
 EXPORT_CANDIDATE_OVERHEAD_BYTES = 64 * 1024
-# The first release accepts only related-major current graduating students.
-# Qualification is intentionally a human-review decision; this value is the
-# frozen label written to the official workbook, not an automated eligibility
-# predicate.
-APPLICATION_CONDITION = "相关专业的在读应届学生"
-EDUCATION_LABELS = {
-    "secondary_vocational": "中专",
-    "associate": "大专",
-    "bachelor": "大学本科",
-    "master": "硕士",
-    "doctorate": "博士",
-}
-MATERIAL_EXPORT_NAMES = {
-    "id_card_front": "证件正面.jpg",
-    "id_card_back": "证件背面.jpg",
-    "portrait": "二寸免冠照片.jpg",
-    "student_card": "学生证.jpg",
-    "xuexin_registration": "学信网电子注册表.pdf",
-    "education_proof": "学历证明.jpg",
-}
-
-
 @dataclass(frozen=True, slots=True)
 class ExportMaterial:
     id: int
@@ -148,58 +125,23 @@ def partition_export_candidates(
 
 
 def build_registration_row(candidate: ExportCandidate, plan: Plan) -> list[object | None]:
-    """Map one immutable submission snapshot to the official 25 columns."""
-
-    try:
-        config = batch_configuration(plan)
-    except ConflictException as exc:
-        raise ValueError("批次报考信息不受支持，不能生成报名表") from exc
-    realname = candidate.realname_snapshot
-    student = candidate.student_snapshot
-    form = candidate.form_data
-    graduated = is_graduated(config)
-    if graduated:
-        student = form["education_info"]
-        snapshot = form.get("reporting_contract", {})
-        if not snapshot.get("policy") or not form.get("reporting_info"):
-            raise ConflictException("该报名版本缺少模板填报信息，请补正后重新初审并导出")
-        policy = snapshot["policy"]
-        info = form["reporting_info"]
-    values = [
-        realname.get("real_name"),
-        realname.get("gender"),
-        realname.get("birth_date"),
-        "居民身份证",
-        realname.get("id_card_number"),
-        "社会人员" if graduated else "院校学生",
-        (EDUCATIONS if graduated else EDUCATION_LABELS).get(student.get("education"), student.get("education")),
-        info.get("ethnicity") if graduated else realname.get("ethnicity"),
-        info.get("political_status") if graduated else realname.get("political_status"),
-        form.get("contact_phone"),
-        form.get("mailing_address"),
-        info.get("work_unit") if graduated else None,
-        info.get("occupation_status") if graduated else "应届毕业生",
-        config["occupation_name"],
-        config["export_skill_level"],
-        None,
-        None,
-        report_date(info, policy["employment_reporting"]) if graduated else student.get("enrollment_date"),
-        float(info["occupation_years"]) if graduated and info.get("occupation_years") is not None else None,
-        config["occupation_code"],
-        DEGREE_CONDITION if graduated else APPLICATION_CONDITION,
-        plan.application_type,
-        plan.exam_type,
-        info.get("social_insurance_unit") if graduated else None,
-        form.get("email"),
-    ]
-    if graduated:
-        validate_row(values, info, policy)
-        return values
-    standard = TEMPLATES["renshe_registration_v1"]["columns"]
-    fields = dict(zip(standard, values))
-    fields.update(school=student.get("school"), major=student.get("major"))
-    columns = TEMPLATES[config["export_template"]]["columns"]
-    return [fields[config["field_mapping"].get(str(i), key)] for i, key in enumerate(columns, 1)]
+    """The current 25 columns always read the selected material version."""
+    from app.services.renshe_reporting import OCCUPATION_CODE
+    config = batch_configuration(plan)
+    if config["occupation_name"] != "信息安全管理员" or config["export_skill_level"] != "四级":
+        raise BusinessException("当前导出仅支持信息安全管理员四级／中级工")
+    realname, form = candidate.realname_snapshot, candidate.form_data
+    education = form.get("education_info") or candidate.student_snapshot
+    info = form.get("reporting_info") or {}
+    validate_reporting(info, {})
+    values = [realname.get("real_name"), realname.get("gender"), realname.get("birth_date"),
+              "居民身份证", realname.get("id_card_number"), "社会人员",
+              EDUCATIONS.get(education.get("education")), info.get("ethnicity"), info.get("political_status"),
+              form.get("contact_phone"), form.get("mailing_address"), info.get("work_unit"), info.get("occupation_status"),
+              config["occupation_name"], "四级", None, None, report_date(info), float(info["occupation_years"]),
+              OCCUPATION_CODE, DEGREE_CONDITION, "学历型", plan.exam_type, info.get("social_insurance_unit"), form.get("email")]
+    validate_row(values, info, {})
+    return values
 
 
 class RensheExportService:
@@ -228,7 +170,7 @@ class RensheExportService:
             if plan.renshe_config_id is None:
                 raise ConflictException("批次尚未确认项目配置，请核实历史归属后再导出")
             batch_configuration(plan)
-            self._template_paths()
+            current_templates = self._template_paths()
             await self._assert_export_window_open(db, plan)
 
             # A double click or two browser tabs must not enqueue unbounded
@@ -245,6 +187,8 @@ class RensheExportService:
                 .limit(1)
             )
             if active_job is not None:
+                if active_job.definition_fingerprint != definition_fingerprint(*current_templates):
+                    raise ConflictException("存在旧规则在途任务，请先处理该任务后再新建当前规则导出")
                 volumes = (
                     await db.execute(
                         select(RensheExportVolume)
@@ -281,6 +225,7 @@ class RensheExportService:
             job = RensheExportJob(
                 plan_id=plan_id,
                 project_config_id=plan.renshe_config_id,
+                definition_fingerprint=definition_fingerprint(*current_templates),
                 generation_no=generation_no,
                 requested_by_admin_id=admin_id,
                 status="queued",
@@ -367,14 +312,8 @@ class RensheExportService:
                 if material is not None and material.extension not in requirement["extensions"]:
                     raise ConflictException(f"报名 {application_id} 材料格式与固定配置不一致")
             candidate = ExportCandidate(application_id, version_id, 0, version.realname_snapshot, version.student_snapshot, version.form_data, ())
-            if is_graduated(config):
-                await validate_snapshot(db, plan, version.form_data)
-            columns = TEMPLATES[config["export_template"]]["columns"]
-            values = build_registration_row(candidate, plan)
-            missing = [config["field_mapping"].get(str(i), key) for i, (key, value) in enumerate(zip(columns, values), 1)
-                       if config["field_mapping"].get(str(i), key) not in ({"blank", "enrollment_date"} if is_graduated(config) else {"blank"}) and (value is None or value == "")]
-            if missing:
-                raise ConflictException(f"报名 {application_id} 导出字段缺失：{', '.join(missing)}")
+            await validate_snapshot(db, plan, version.form_data)
+            build_registration_row(candidate, plan)
 
     async def list_jobs(self, plan_id: int) -> list[RensheExportJobResponse]:
         async with get_db_ctx() as db:
@@ -438,6 +377,8 @@ class RensheExportService:
                 raise NotFoundException("人社导出任务")
             if job.status != "failed":
                 raise ConflictException("只有失败的导出任务可以重试")
+            if job.definition_fingerprint != definition_fingerprint(*self._template_paths()):
+                raise ConflictException("导出规则或模板已更新，请新建导出任务；原任务产物保留")
             job.status = "queued"
             job.candidate_processed = 0
             job.volume_count = 0
@@ -696,7 +637,7 @@ class RensheExportService:
                 if volume.status != "succeeded" or not volume.storage_key:
                     raise ConflictException("导出分卷尚不可下载或已清理")
                 storage_key = volume.storage_key
-                filename = f"人社报名_批次{job.plan_id}_第{volume.volume_no}卷.zip"
+                filename = archive_download_name(job.plan_id, volume.volume_no)
         except Exception as exc:
             await self._access_audit(
                 actor_type="admin",
@@ -844,6 +785,22 @@ class RensheExportService:
 
     async def _run_claimed_job(self, job_id: int) -> None:
         template_registration, template_work = self._template_paths()
+        async with get_db_ctx() as db:
+            job = await db.get(RensheExportJob, job_id)
+            if job is None or job.definition_fingerprint != definition_fingerprint(template_registration, template_work):
+                raise ConflictException("导出规则或模板已更新，请新建导出任务；原任务产物保留")
+        # One private template copy per job prevents mixed volumes if deployed
+        # files are replaced while this worker is generating an archive.
+        with tempfile.TemporaryDirectory(prefix="renshe-job-templates-") as raw:
+            registration = Path(raw) / REGISTRATION_TEMPLATE_NAME
+            work = Path(raw) / WORK_HISTORY_TEMPLATE_NAME
+            await asyncio.to_thread(shutil.copyfile, template_registration, registration)
+            await asyncio.to_thread(shutil.copyfile, template_work, work)
+            if definition_fingerprint(registration, work) != job.definition_fingerprint:
+                raise ConflictException("复制导出模板时文件已变化，请新建导出任务")
+            await self._run_current_job(job_id, registration, work)
+
+    async def _run_current_job(self, job_id: int, template_registration: Path, template_work: Path) -> None:
         old_keys: list[str] = []
         async with get_db_ctx() as db:
             old_keys = list(
@@ -990,27 +947,8 @@ class RensheExportService:
                         )
                         if actual_size != material.size_bytes or actual_sha256 != material.sha256:
                             raise ConflictException("导出材料完整性校验失败")
-                        config = batch_configuration(plan)
                         extension = material.extension or Path(material.storage_key).suffix.lower()
-                        standard_package = is_graduated(config) and {
-                            item["kind"] for item in config["materials"]
-                        } == set(MATERIALS)
-                        label = (
-                            EXPORT_FILE_NAMES[material.kind]
-                            if standard_package
-                            else candidate.form_data["reporting_contract"]["policy"]["attachment_names"][material.kind]
-                            if is_graduated(config)
-                            else Path(MATERIAL_EXPORT_NAMES[material.kind]).stem
-                        )
-                        export_name = label + extension
-                        layout = candidate.form_data["reporting_contract"]["attachment_layout"] if is_graduated(config) else config["attachment_layout"]
-                        archive_name = (
-                            f"{id_card}_{export_name}"
-                            if standard_package
-                            else f"材料/{id_card}/{id_card}_{export_name}"
-                            if layout == "by_candidate"
-                            else f"材料/{material.kind}/{id_card}_{export_name}"
-                        )
+                        archive_name = material_archive_path(id_card, material.kind, extension)
                         await asyncio.to_thread(archive.write, local_path, archive_name)
                         await asyncio.to_thread(local_path.unlink)
             finally:
@@ -1035,15 +973,7 @@ class RensheExportService:
             from openpyxl import load_workbook
         except ImportError as exc:
             raise ThirdPartyException("缺少 Excel 模板处理依赖 openpyxl") from exc
-        config = batch_configuration(plan)
-        if config["export_template"] == "renshe_roster_v1":
-            from openpyxl import Workbook
-            workbook = Workbook()
-            worksheet = workbook.active
-            worksheet.title = "Sheet1"
-            worksheet.append(["姓名", "身份证号", "联系电话", "职业／工种", "技能等级", "考试类型", "申报类型", "学校", "专业", "电子邮箱", "通讯地址"])
-        else:
-            workbook = load_workbook(template_path)
+        workbook = load_workbook(template_path)
         try:
             worksheet = workbook["Sheet1"]
             for row_no, candidate in enumerate(candidates, start=2):
@@ -1096,8 +1026,7 @@ class RensheExportService:
             expected_kinds = {item["kind"] for item in config["materials"] if item["required"]}
             allowed_kinds = {item["kind"] for item in config["materials"]}
             for item, version in rows:
-                if is_graduated(config):
-                    await validate_snapshot(db, plan, version.form_data)
+                await validate_snapshot(db, plan, version.form_data)
                 version_materials = by_version.get(version.id, [])
                 actual = {material.kind for material in version_materials}
                 if not expected_kinds <= actual or not actual <= allowed_kinds:

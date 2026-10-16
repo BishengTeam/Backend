@@ -41,6 +41,13 @@ async def project_capabilities(_admin=Depends(require_permission("content:read")
     return success(data=RensheProjectService.capabilities())
 
 
+@router.get("/export-template")
+async def download_current_registration_template(_admin=Depends(require_permission("content:read"))):
+    from app.services.renshe_export import RensheExportService
+    registration, _ = RensheExportService._template_paths()
+    return FileResponse(registration, filename=registration.name)
+
+
 @router.post("/commitment-templates")
 async def upload_commitment_template(file: UploadFile = File(...), admin=Depends(require_permission("content:write"))):
     from app.services.renshe_graduated import save_template
