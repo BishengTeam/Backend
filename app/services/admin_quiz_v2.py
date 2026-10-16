@@ -7,6 +7,7 @@ legacy routes remain adapters until the cutover is complete.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, or_, select
@@ -75,6 +76,7 @@ from app.schemas.common import PaginatedData
 from app.services.quiz_v2 import QuizV2Service
 from app.services.course_entitlement import CourseEntitlementService
 from app.utils.audit import sanitize_audit_value
+from app.utils.excel import export_csv
 
 
 _RESTORE_WINDOW = timedelta(days=7)
@@ -1775,6 +1777,131 @@ class AdminQuizV2Service:
                 page=query.page,
                 page_size=query.page_size,
             )
+
+    async def export_questions_csv(self, query: AdminQuizQuestionQuery) -> str:
+        """按题库导出题目为导入兼容 CSV（路径固定为模块、知识点两级）。"""
+        if query.library_id is None:
+            raise ValidationException("导出必须指定题库")
+        async with get_db_ctx() as db:
+            stmt = select(QuizQuestion).where(
+                QuizQuestion.library_id == query.library_id,
+                QuizQuestion.knowledge_point_id.is_not(None),
+            )
+            if not query.include_deleted:
+                stmt = stmt.where(QuizQuestion.status != "deleted")
+            if query.question_id is not None:
+                stmt = stmt.where(QuizQuestion.id == query.question_id)
+            if query.module_id is not None:
+                point_ids = select(QuizKnowledgePoint.id).where(
+                    QuizKnowledgePoint.module_id == query.module_id
+                )
+                stmt = stmt.where(QuizQuestion.knowledge_point_id.in_(point_ids))
+            if query.knowledge_point_id is not None:
+                stmt = stmt.where(
+                    QuizQuestion.knowledge_point_id == query.knowledge_point_id
+                )
+            if query.question_type is not None:
+                stmt = stmt.where(QuizQuestion.question_type == str(query.question_type))
+            if query.status is not None:
+                stmt = stmt.where(QuizQuestion.status == str(query.status))
+            if query.keyword:
+                pattern = f"%{query.keyword.strip()}%"
+                stmt = stmt.where(
+                    or_(
+                        QuizQuestion.question_text.ilike(pattern),
+                        QuizQuestion.normalized_question_text.ilike(pattern),
+                    )
+                )
+            questions = list(
+                (await db.execute(stmt.order_by(QuizQuestion.id.asc()))).scalars()
+            )
+            points = {
+                int(item.id): item
+                for item in (
+                    await db.execute(
+                        select(QuizKnowledgePoint).where(
+                            QuizKnowledgePoint.library_id == query.library_id
+                        )
+                    )
+                ).scalars()
+            }
+            modules = {
+                int(item.id): item
+                for item in (
+                    await db.execute(
+                        select(QuizModule).where(
+                            QuizModule.library_id == query.library_id
+                        )
+                    )
+                ).scalars()
+            }
+
+        def path_cell(point_id: int | None) -> str:
+            point = points.get(point_id) if point_id is not None else None
+            module = modules.get(int(point.module_id)) if point is not None else None
+            path = [
+                module.name if module is not None else "",
+                point.name if point is not None else "",
+            ]
+            return json.dumps(path, ensure_ascii=False)
+
+        def options_cell(options: dict[str, str] | None) -> str:
+            if not options:
+                return ""
+            ordered = {letter: options[letter] for letter in "ABCD" if letter in options}
+            ordered.update(
+                {key: value for key, value in options.items() if key not in ordered}
+            )
+            return json.dumps(ordered, ensure_ascii=False)
+
+        def answer_cell(question_type: str, answer: object) -> str:
+            if answer is None:
+                return ""
+            if isinstance(answer, str):
+                return answer
+            if (
+                question_type == "fill_blank"
+                and isinstance(answer, list)
+                and answer
+                and all(isinstance(group, list) for group in answer)
+                and all(
+                    candidate.strip()
+                    and not any(sep in candidate for sep in (";;", "|"))
+                    for group in answer
+                    for candidate in group
+                )
+            ):
+                return "|".join(";;".join(group) for group in answer)
+            return json.dumps(answer, ensure_ascii=False)
+
+        include_option_images = any(question.option_image_urls for question in questions)
+        headers = [
+            "category_path",
+            "question_type",
+            "question_text",
+            "options",
+            "correct_answer",
+            "explanation",
+        ]
+        if include_option_images:
+            headers += [f"option_image_{letter}" for letter in "abcd"]
+        rows: list[list[str]] = []
+        for question in questions:
+            option_images = question.option_image_urls or {}
+            row = [
+                path_cell(question.knowledge_point_id),
+                question.question_type,
+                question.question_text,
+                options_cell(question.options),
+                answer_cell(question.question_type, question.correct_answer),
+                question.explanation or "",
+            ]
+            if include_option_images:
+                row += [
+                    option_images.get(letter.upper(), "") for letter in "abcd"
+                ]
+            rows.append(row)
+        return export_csv(headers, rows).getvalue()
 
     async def get_question(self, question_id: int) -> AdminQuizQuestionResponse:
         async with get_db_ctx() as db:

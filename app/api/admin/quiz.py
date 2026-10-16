@@ -2,6 +2,7 @@ from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, File, Form, Path, Query, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import PlainTextResponse
 from pydantic import ValidationError
 
 from app.port.exceptions import BusinessException
@@ -673,6 +674,33 @@ async def list_questions(
         page_size=query.page_size,
     )
     return success(data=result)
+
+
+@router.get(f"{QUESTION}/export/csv",
+    response_class=PlainTextResponse,
+    summary="导出题库题目 CSV",
+    description="""
+管理后台 **题库管理 → 导入中心** 页面使用。
+
+**使用场景**: 按题库导出题目为导入兼容 CSV（路径为模块、知识点两级，可直接回导）
+
+**查询参数**: 与题目列表一致（library_id 必传）；可选 module_id / knowledge_point_id / question_type / status / keyword
+
+**响应**: CSV 文件下载（带 BOM，Excel 可直接打开）
+
+**权限**: quiz:list
+    """,
+)
+async def export_questions_csv(
+    query: AdminQuizQuestionQuery = Depends(admin_question_query),
+    _admin=Depends(require_permission("quiz:list")),
+) -> PlainTextResponse:
+    csv_content = await AdminQuizV2Service().export_questions_csv(query)
+    return PlainTextResponse(
+        content=csv_content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=quiz_questions.csv"},
+    )
 
 
 # ── Category write routes ──
