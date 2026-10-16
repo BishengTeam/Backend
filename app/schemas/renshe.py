@@ -1,5 +1,6 @@
 import re
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -68,7 +69,7 @@ class RensheGraduatedEducation(BaseModel):
     graduated: Literal[True]
     school: str = Field(..., min_length=1, max_length=128)
     institution_type: Literal["technical", "vocational", "general_higher"]
-    education: Literal["secondary_vocational", "associate", "bachelor", "master", "doctorate"]
+    education: Literal["secondary_vocational", "technical_school", "vocational_high", "higher_vocational", "associate", "bachelor", "master", "doctorate"]
     major: str = Field(..., min_length=1, max_length=128)
     graduation_date: date
     certificate_number: str = Field(..., min_length=1, max_length=128)
@@ -82,6 +83,27 @@ class RensheGraduatedEducation(BaseModel):
         return value
 
 
+class RensheReportingInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    occupation_status: Literal["在校学生", "应届毕业生", "职工", "失业人员", "其他"]
+    ethnicity: str = Field(..., min_length=1, max_length=16)
+    political_status: str = Field(..., min_length=1, max_length=16)
+    has_work_experience: bool = Field(..., strict=True)
+    work_start_date: date | None = None
+    enrollment_date: date | None = None
+    occupation_years: Decimal | None = Field(None, ge=0, max_digits=6, decimal_places=2)
+    work_unit: str | None = Field(None, max_length=128)
+    social_insurance_unit: str | None = Field(None, max_length=128)
+
+    @field_validator("work_start_date", "enrollment_date")
+    @classmethod
+    def validate_reporting_date(cls, value: date | None) -> date | None:
+        from app.services.renshe_graduated import china_today
+        if value is not None and (value.year < 1900 or value > china_today()):
+            raise ValueError("日期不得晚于今天且不能早于1900年")
+        return value
+
+
 class RensheDraftUpsert(BaseModel):
     model_config = ConfigDict(extra="forbid")
     plan_id: int = Field(..., ge=1, description="人社报考批次 ID")
@@ -89,6 +111,8 @@ class RensheDraftUpsert(BaseModel):
     mailing_address: str = Field(..., min_length=1, max_length=256, description="通讯地址")
     email: str = Field(..., min_length=3, max_length=128, description="电子邮箱")
     education_info: RensheGraduatedEducation | None = None
+    reporting_info: RensheReportingInfo | None = None
+    reporting_config_id: int | None = Field(None, ge=1)
 
     @field_validator("contact_phone")
     @classmethod

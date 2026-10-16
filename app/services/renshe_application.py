@@ -42,6 +42,7 @@ from app.services.consultation_group import ConsultationGroupService
 from app.services.plan_enrollment import CAPACITY_OCCUPYING_ORDER_STATUSES, PlanEnrollmentService
 from app.services.renshe_project import batch_configuration, is_renshe_plan, default_configuration
 from app.services.renshe_graduated import is_graduated, validate_education
+from app.services.renshe_reporting import resolve_contract, validate_reporting, education_config, validate_snapshot, is_v2
 from app.utils.payment import generate_out_trade_no
 from app.utils.pii import identity_hash
 
@@ -90,6 +91,8 @@ class RensheApplicationService:
                 raise ConflictException("批次尚未确认项目配置，请联系管理员核实历史归属")
             if application is None and not is_graduated(batch_configuration(plan)):
                 raise ConflictException("本期新报名仅开放已毕业学历型批次；历史报名请从我的报名继续办理")
+            if application is None and not is_v2(batch_configuration(plan).get("reporting_policy", {})):
+                raise ConflictException("旧报送规则批次不再新建报名，请选择模板填报第二版批次")
             self._validate_edit_window(plan, application, paid_order=await self._paid_correction_order(db, application))
             if application is None:
                 application = RensheApplication(
@@ -107,7 +110,14 @@ class RensheApplicationService:
 
             values = data.model_dump(mode="json", exclude_none=True)
             if is_graduated(batch_configuration(plan)):
-                values["education_info"] = validate_education(values.get("education_info"), batch_configuration(plan))
+                if data.reporting_config_id is None:
+                    raise BusinessException("请先加载并确认本批次的模板填报口径")
+                contract = await resolve_contract(db, plan)
+                if data.reporting_config_id != contract["config_id"]:
+                    raise ConflictException("报送配置已变化或不属于当前批次，请重新加载核对")
+                values["education_info"] = validate_education(values.get("education_info"), education_config(batch_configuration(plan)))
+                values["reporting_info"] = validate_reporting(values.get("reporting_info"), contract["config"]["reporting_policy"])
+                values["reporting_contract"] = {"config_id": contract["config_id"], "policy": contract["config"]["reporting_policy"], "attachment_layout": contract["config"]["attachment_layout"]}
                 values["materials"] = (application.draft_data or {}).get("materials", {})
             application.draft_data = values
             db.add(
@@ -154,10 +164,12 @@ class RensheApplicationService:
                 graduated = is_graduated(config)
                 if graduated:
                     try:
-                        RensheDraftUpsert.model_validate({key: value for key, value in application.draft_data.items() if key != "materials"})
+                        RensheDraftUpsert.model_validate({key: value for key, value in application.draft_data.items() if key not in {"materials", "reporting_contract"}})
                     except ValueError as exc:
                         raise BusinessException("请先完整填写学历信息和联系方式并保存") from exc
-                    validate_education(application.draft_data.get("education_info"), config)
+                    policy = await validate_snapshot(db, plan, application.draft_data)
+                    validate_reporting(application.draft_data.get("reporting_info"), policy)
+                    validate_education(application.draft_data.get("education_info"), education_config(config))
 
                 if application.status != "draft" and paid_order is None:
                     raise ConflictException("驳回重提缺少原已支付订单")
@@ -384,6 +396,8 @@ class RensheApplicationService:
                     RensheApplication.status != "closed").with_for_update())
                 self._validate_edit_window(plan, application, paid_order=await self._paid_correction_order(db, application))
                 if application is None:
+                    if not is_v2(config.get("reporting_policy", {})):
+                        raise ConflictException("旧报送规则批次不再新建报名，请选择模板填报第二版批次")
                     application = RensheApplication(user_id=user_id, plan_id=plan_id, status="draft", draft_data={})
                     db.add(application)
                     await db.flush()
@@ -686,6 +700,14 @@ class RensheApplicationService:
         )
         if not all(required_realname):
             raise BusinessException("已通过的实名认证资料不完整，请重新提交审核")
+        if is_graduated(config):
+            from datetime import date
+            try:
+                date.fromisoformat(realname.birth_date or "")
+                if realname.gender not in {"男", "女"}:
+                    raise ValueError()
+            except ValueError as exc:
+                raise BusinessException("实名性别或出生日期不完整，请通过实名更正流程补齐") from exc
         digest = identity_hash(realname.id_card_number)
         occupied_by = await db.scalar(
             select(UserRealname.user_id)

@@ -44,6 +44,7 @@ from app.services.renshe_review import RensheReviewService
 from app.services.renshe_export import RensheExportService
 from app.services.plan import PlanService
 from app.services.order_fulfillment import OrderFulfillmentService
+from app.services.renshe_reporting import default_policy, DEGREE_CONDITION, assert_template
 
 isolated = _isolated
 
@@ -56,15 +57,12 @@ async def graduated_batch(env, monkeypatch):
     monkeypatch.setattr(settings, "RENSHE_TEMPLATE_DIR", str(root))
     config = graduated_configuration()
     config["reporting_policy"] = {
-        "version": "fixture-v1",
+        **default_policy(),
+        "version": "fixture-v2",
         "confirmed_by_client": True,
         "commitment_template": save_template("测试模板.pdf", b"%PDF-1.4\nfixture"),
         "attachment_names": dict(MATERIALS),
-        "export_values": {
-            "candidate_source": "社会人员",
-            "student_status": "已毕业",
-            "application_condition": "已取得本专业或相关专业毕业证书",
-        },
+        "employment_reporting": {"confirmed": True, "date_rule": "work_or_enrollment", "years_rule": "required", "allow_zero_years": True},
     }
     # Test-only labels use the same character set as approved import labels.
     config["reporting_policy"]["attachment_names"].update(
@@ -96,6 +94,8 @@ def draft_payload(batch, **changes):
         contact_phone="13800138000",
         email="graduate@example.com",
         mailing_address="毕业报名地址",
+        reporting_config_id=batch.renshe_config_id,
+        reporting_info={"occupation_status": "失业人员", "ethnicity": "汉族", "political_status": "群众", "has_work_experience": False, "enrollment_date": "2019-09-01", "occupation_years": 0},
         education_info={
             "graduated": True,
             "school": "测试大学",
@@ -265,10 +265,11 @@ async def test_graduate_without_student_identity_full_revision_review_and_export
         target.write_bytes(archive.read("报名信息.xlsx"))
     workbook = load_workbook(target)
     assert workbook["Sheet1"].cell(2, 6).value == "社会人员"
-    assert workbook["Sheet1"].cell(2, 13).value == "已毕业"
-    assert workbook["Sheet1"].cell(2, 18).value is None
-    assert workbook["毕业学历信息"].cell(2, 6).value == "信息安全"
-    assert workbook["毕业学历信息"].cell(2, 8).value == "TEST-20230001"
+    assert workbook["Sheet1"].cell(2, 13).value == "失业人员"
+    assert workbook["Sheet1"].cell(2, 18).value == "2019-09-01"
+    assert workbook["Sheet1"].cell(2, 19).value == 0
+    assert workbook["Sheet1"].cell(2, 21).value == DEGREE_CONDITION
+    assert_template(workbook)
     workbook.close()
     await review.review(
         reviewer_id=1,
@@ -397,6 +398,10 @@ async def test_graduated_http_upload_download_and_draft_ownership(
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
+            options = await client.get(f"/api/renshe/batches/{batch.id}/reporting-options")
+            assert options.status_code == 200, options.text
+            assert options.json()["data"]["config_id"] == batch.renshe_config_id
+            assert options.json()["data"]["application_condition"] == DEGREE_CONDITION
             response = await client.post(
                 f"/api/renshe/batches/{batch.id}/materials/commitment_letter",
                 files={"file": ("承诺书.pdf", b"%PDF-1.4\nfixture", "application/pdf")},

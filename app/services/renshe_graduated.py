@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from app.port.config import settings
 from app.port.exceptions import BusinessException, ConflictException
+from app.services.renshe_reporting import is_v2, employment_policy_errors, DEGREE_CONDITION, REPORT_FIELDS
 
 RULE = "related_major_graduated_degree_v1"
 INSTITUTION_TYPES = {
@@ -78,7 +79,11 @@ def policy_errors(policy: dict) -> list[str]:
     values = policy.get("export_values", {})
     if not isinstance(values, dict):
         values = {}
-    if set(values) != {
+    if is_v2(policy):
+        if values != {"candidate_source": "社会人员", "application_condition": DEGREE_CONDITION}:
+            errors.append("考生来源与申报条件须使用模板原字典，不能自由改写")
+        errors.extend(employment_policy_errors(policy))
+    elif set(values) != {
         "candidate_source",
         "student_status",
         "application_condition",
@@ -112,6 +117,8 @@ def activation_errors(config: dict) -> list[str]:
         return [
             "新开放批次仅支持信息安全管理员四级／中级工、已毕业学历型；历史批次保持原规则"
         ]
+    if not is_v2(config.get("reporting_policy", {})):
+        return ["新批次须使用模板填报第二版，确认R、S列口径；旧批次仅办理历史报名"]
     try:
         template_path(config.get("reporting_policy", {}))
     except ConflictException as exc:
@@ -176,7 +183,7 @@ def validate_education(info: dict | None, config: dict) -> dict:
         raise BusinessException("本批次不支持该学历层次")
     if (
         data["institution_type"] == "general_higher"
-        and data["education"] == "secondary_vocational"
+        and data["education"] not in {"higher_vocational", "associate", "bachelor", "master", "doctorate"}
     ):
         raise BusinessException("普通高等学校须为专科及以上学历")
     return data
@@ -205,6 +212,7 @@ def validate_review(data, *, stage: str, now: datetime, version_id: int) -> None
                 )
             }
             | {"contact_phone", "email", "mailing_address"}
+            | {"reporting_info." + key for key in REPORT_FIELDS}
         )
         if not data.required_changes or not set(data.required_changes) <= allowed:
             raise BusinessException("请选择需要补正的具体学历字段、联系方式或材料")

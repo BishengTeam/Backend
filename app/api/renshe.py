@@ -54,6 +54,20 @@ def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
+@router.get("/batches/{plan_id}/reporting-options")
+async def reporting_options(plan_id: int = Path(..., ge=1), current_user: User = Depends(get_current_user)):
+    from app.adapter.database import get_db_ctx
+    from app.domain.plan.src.index import Plan
+    from app.services.renshe_project import batch_configuration, is_renshe_plan
+    from app.services.renshe_reporting import resolve_contract, public_options
+    from app.port.exceptions import NotFoundException
+    async with get_db_ctx() as db:
+        plan = await db.get(Plan, plan_id)
+        if not await is_renshe_plan(db, plan) or plan.status == "draft":
+            raise NotFoundException("人社批次")
+        return success(data=public_options(await resolve_contract(db, plan), batch_configuration(plan)))
+
+
 @router.post("/batches/{plan_id}/materials/{kind}")
 async def upload_application_material(
     plan_id: int = Path(..., ge=1),
@@ -69,7 +83,7 @@ async def upload_application_material(
 
 
 @router.get("/batches/{plan_id}/commitment-template")
-async def download_commitment_template(plan_id: int = Path(..., ge=1), current_user: User = Depends(get_current_user)):
+async def download_commitment_template(plan_id: int = Path(..., ge=1), reporting_config_id: int | None = Query(None, ge=1), current_user: User = Depends(get_current_user)):
     from app.adapter.database import get_db_ctx
     from app.domain.plan.src.index import Plan
     from app.services.renshe_project import batch_configuration, is_renshe_plan
@@ -82,6 +96,9 @@ async def download_commitment_template(plan_id: int = Path(..., ge=1), current_u
         config = batch_configuration(plan)
         if not is_graduated(config) or plan.status == "draft":
             raise NotFoundException("承诺书模板")
+        if reporting_config_id is not None:
+            from app.services.renshe_reporting import resolve_contract
+            config = (await resolve_contract(db, plan, reporting_config_id))["config"]
         path = template_path(config["reporting_policy"])
     return FileResponse(path, filename=path.name)
 

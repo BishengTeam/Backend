@@ -31,6 +31,7 @@ from app.services.renshe_graduated import (
     RULE, INSTITUTION_TYPES, MATERIALS as GRADUATED_MATERIALS, REVIEW_CHECKS,
     is_graduated, policy_errors, activation_errors,
 )
+from app.services.renshe_reporting import EDUCATIONS, OCCUPATIONS, ETHNICITIES, POLITICS, DEGREE_CONDITION, is_v2, default_policy
 
 MATERIAL_NAMES = {
     "id_card_front": "身份证正面",
@@ -138,7 +139,8 @@ def graduated_configuration() -> dict:
     config.update(
         qualification_rule=RULE,
         institution_types=list(INSTITUTION_TYPES),
-        reporting_policy={},
+        reporting_policy=default_policy(),
+        education_levels=list(EDUCATIONS),
         materials=[{
             "kind": kind, "name": name, "required": True,
             "extensions": sorted(MATERIAL_SPECS[kind].extensions), "max_count": 1,
@@ -180,7 +182,7 @@ def configuration_errors(config: dict) -> list[str]:
         if config.get("export_template") != "renshe_graduated_v1" or config.get("field_mapping"):
             errors.append("已毕业学历型须使用专用导出器，字段由甲方确认口径控制")
     levels = config.get("education_levels", [])
-    if not levels or not set(levels) <= EDUCATION_LEVELS:
+    if not levels or not set(levels) <= (set(EDUCATIONS) if graduated and is_v2(config.get("reporting_policy", {})) else EDUCATION_LEVELS):
         errors.append("请选择已支持的学历范围")
     if set(config.get("form_fields", [])) != set(FORM_FIELDS):
         errors.append("报名字段需要适配；当前必须包含联系电话、通讯地址和邮箱")
@@ -307,6 +309,7 @@ class RensheProjectService:
             },
             "institution_types": INSTITUTION_TYPES,
             "review_checks": REVIEW_CHECKS,
+            "reporting_contract": {"education_labels": EDUCATIONS, "occupations": OCCUPATIONS, "ethnicities": ETHNICITIES, "political_statuses": POLITICS, "application_condition": DEGREE_CONDITION},
         }
 
     @staticmethod

@@ -50,7 +50,8 @@ from app.schemas.renshe import (
     RensheSignedUrlResponse,
 )
 from app.services.renshe_project import batch_configuration, is_renshe_plan, TEMPLATES
-from app.services.renshe_graduated import is_graduated, INSTITUTION_TYPES
+from app.services.renshe_graduated import is_graduated
+from app.services.renshe_reporting import EDUCATIONS, DEGREE_CONDITION, report_date, validate_row, validate_snapshot, assert_template
 
 
 logger = logging.getLogger(__name__)
@@ -159,34 +160,41 @@ def build_registration_row(candidate: ExportCandidate, plan: Plan) -> list[objec
     graduated = is_graduated(config)
     if graduated:
         student = form["education_info"]
-    reporting = config.get("reporting_policy", {}).get("export_values", {})
+        snapshot = form.get("reporting_contract", {})
+        if not snapshot.get("policy") or not form.get("reporting_info"):
+            raise ConflictException("该报名版本缺少模板填报信息，请补正后重新初审并导出")
+        policy = snapshot["policy"]
+        info = form["reporting_info"]
     values = [
         realname.get("real_name"),
         realname.get("gender"),
         realname.get("birth_date"),
         "居民身份证",
         realname.get("id_card_number"),
-        reporting.get("candidate_source") if graduated else "院校学生",
-        EDUCATION_LABELS.get(student.get("education"), student.get("education")),
-        realname.get("ethnicity"),
-        realname.get("political_status"),
+        "社会人员" if graduated else "院校学生",
+        (EDUCATIONS if graduated else EDUCATION_LABELS).get(student.get("education"), student.get("education")),
+        info.get("ethnicity") if graduated else realname.get("ethnicity"),
+        info.get("political_status") if graduated else realname.get("political_status"),
         form.get("contact_phone"),
         form.get("mailing_address"),
-        None,
-        reporting.get("student_status") if graduated else "应届毕业生",
+        info.get("work_unit") if graduated else None,
+        info.get("occupation_status") if graduated else "应届毕业生",
         config["occupation_name"],
         config["export_skill_level"],
         None,
         None,
-        None if graduated else student.get("enrollment_date"),
-        None,
+        report_date(info, policy["employment_reporting"]) if graduated else student.get("enrollment_date"),
+        float(info["occupation_years"]) if graduated and info.get("occupation_years") is not None else None,
         config["occupation_code"],
-        reporting.get("application_condition") if graduated else APPLICATION_CONDITION,
+        DEGREE_CONDITION if graduated else APPLICATION_CONDITION,
         plan.application_type,
         plan.exam_type,
-        None,
+        info.get("social_insurance_unit") if graduated else None,
         form.get("email"),
     ]
+    if graduated:
+        validate_row(values, info, policy)
+        return values
     standard = TEMPLATES["renshe_registration_v1"]["columns"]
     fields = dict(zip(standard, values))
     fields.update(school=student.get("school"), major=student.get("major"))
@@ -359,10 +367,12 @@ class RensheExportService:
                 if material is not None and material.extension not in requirement["extensions"]:
                     raise ConflictException(f"报名 {application_id} 材料格式与固定配置不一致")
             candidate = ExportCandidate(application_id, version_id, 0, version.realname_snapshot, version.student_snapshot, version.form_data, ())
+            if is_graduated(config):
+                await validate_snapshot(db, plan, version.form_data)
             columns = TEMPLATES[config["export_template"]]["columns"]
             values = build_registration_row(candidate, plan)
             missing = [config["field_mapping"].get(str(i), key) for i, (key, value) in enumerate(zip(columns, values), 1)
-                       if config["field_mapping"].get(str(i), key) not in ({"blank", "enrollment_date", "gender", "birth_date", "ethnicity", "political_status"} if is_graduated(config) else {"blank"}) and (value is None or value == "")]
+                       if config["field_mapping"].get(str(i), key) not in ({"blank", "enrollment_date"} if is_graduated(config) else {"blank"}) and (value is None or value == "")]
             if missing:
                 raise ConflictException(f"报名 {application_id} 导出字段缺失：{', '.join(missing)}")
 
@@ -982,10 +992,11 @@ class RensheExportService:
                             raise ConflictException("导出材料完整性校验失败")
                         config = batch_configuration(plan)
                         extension = material.extension or Path(material.storage_key).suffix.lower()
-                        label = (config["reporting_policy"]["attachment_names"][material.kind] if is_graduated(config)
+                        label = (candidate.form_data["reporting_contract"]["policy"]["attachment_names"][material.kind] if is_graduated(config)
                                  else Path(MATERIAL_EXPORT_NAMES[material.kind]).stem)
                         export_name = label + extension
-                        archive_name = (f"材料/{id_card}/{id_card}_{export_name}" if config["attachment_layout"] == "by_candidate"
+                        layout = candidate.form_data["reporting_contract"]["attachment_layout"] if is_graduated(config) else config["attachment_layout"]
+                        archive_name = (f"材料/{id_card}/{id_card}_{export_name}" if layout == "by_candidate"
                                         else f"材料/{material.kind}/{id_card}_{export_name}")
                         await asyncio.to_thread(archive.write, local_path, archive_name)
                         await asyncio.to_thread(local_path.unlink)
@@ -1028,23 +1039,6 @@ class RensheExportService:
                     cell = worksheet.cell(row=row_no, column=column_no, value=value)
                     if isinstance(value, str):
                         cell.data_type = "s"
-            if is_graduated(config):
-                # The official 25-column template has an enrollment-date column,
-                # so graduation data lives on its own sheet, never in that column.
-                name = "毕业学历信息"
-                if name in workbook.sheetnames:
-                    del workbook[name]
-                details = workbook.create_sheet(name)
-                details.append(["姓名", "身份证号", "毕业院校", "院校类型", "学历层次", "所学专业", "毕业日期", "毕业证书编号", "报名版本"])
-                for candidate in candidates:
-                    info = candidate.form_data["education_info"]
-                    details.append([candidate.realname_snapshot["real_name"], candidate.realname_snapshot["id_card_number"],
-                                    info["school"], INSTITUTION_TYPES[info["institution_type"]], EDUCATION_LABELS[info["education"]],
-                                    info["major"], info["graduation_date"], info["certificate_number"], candidate.version_id])
-                for row in details.iter_rows():
-                    for cell in row:
-                        if isinstance(cell.value, str):
-                            cell.data_type = "s"
             workbook.save(output_path)
         finally:
             workbook.close()
@@ -1089,6 +1083,8 @@ class RensheExportService:
             expected_kinds = {item["kind"] for item in config["materials"] if item["required"]}
             allowed_kinds = {item["kind"] for item in config["materials"]}
             for item, version in rows:
+                if is_graduated(config):
+                    await validate_snapshot(db, plan, version.form_data)
                 version_materials = by_version.get(version.id, [])
                 actual = {material.kind for material in version_materials}
                 if not expected_kinds <= actual or not actual <= allowed_kinds:
@@ -1346,10 +1342,11 @@ class RensheExportService:
             raise ThirdPartyException("人社 Excel 模板未配置或不存在")
         try:
             from openpyxl import load_workbook
-            workbook = load_workbook(registration, read_only=True)
+            workbook = load_workbook(registration)
             try:
                 if "Sheet1" not in workbook.sheetnames or workbook['Sheet1'].max_column != 25:
                     raise ValueError("报名信息模板须包含 Sheet1 及 25 列")
+                assert_template(workbook)
             finally:
                 workbook.close()
             workbook = load_workbook(work, read_only=True)

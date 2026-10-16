@@ -39,6 +39,7 @@ EXPECTED_PATHS: dict[str, set[str]] = {
     "/api/renshe/applications/{application_id}/submit": {"post"},
     "/api/renshe/batches": {"get"},
     "/api/renshe/batches/{plan_id}/commitment-template": {"get"},
+    "/api/renshe/batches/{plan_id}/reporting-options": {"get"},
     "/api/renshe/batches/{plan_id}/materials/{kind}": {"post"},
     "/api/renshe/projects": {"get"},
     "/api/renshe/refunds/{refund_id}": {"get"},
