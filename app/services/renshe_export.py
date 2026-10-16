@@ -50,7 +50,7 @@ from app.schemas.renshe import (
     RensheSignedUrlResponse,
 )
 from app.services.renshe_project import batch_configuration, is_renshe_plan, TEMPLATES
-from app.services.renshe_graduated import is_graduated
+from app.services.renshe_graduated import EXPORT_FILE_NAMES, MATERIALS, is_graduated
 from app.services.renshe_reporting import EDUCATIONS, DEGREE_CONDITION, report_date, validate_row, validate_snapshot, assert_template
 
 
@@ -992,12 +992,25 @@ class RensheExportService:
                             raise ConflictException("导出材料完整性校验失败")
                         config = batch_configuration(plan)
                         extension = material.extension or Path(material.storage_key).suffix.lower()
-                        label = (candidate.form_data["reporting_contract"]["policy"]["attachment_names"][material.kind] if is_graduated(config)
-                                 else Path(MATERIAL_EXPORT_NAMES[material.kind]).stem)
+                        standard_package = is_graduated(config) and {
+                            item["kind"] for item in config["materials"]
+                        } == set(MATERIALS)
+                        label = (
+                            EXPORT_FILE_NAMES[material.kind]
+                            if standard_package
+                            else candidate.form_data["reporting_contract"]["policy"]["attachment_names"][material.kind]
+                            if is_graduated(config)
+                            else Path(MATERIAL_EXPORT_NAMES[material.kind]).stem
+                        )
                         export_name = label + extension
                         layout = candidate.form_data["reporting_contract"]["attachment_layout"] if is_graduated(config) else config["attachment_layout"]
-                        archive_name = (f"材料/{id_card}/{id_card}_{export_name}" if layout == "by_candidate"
-                                        else f"材料/{material.kind}/{id_card}_{export_name}")
+                        archive_name = (
+                            f"{id_card}_{export_name}"
+                            if standard_package
+                            else f"材料/{id_card}/{id_card}_{export_name}"
+                            if layout == "by_candidate"
+                            else f"材料/{material.kind}/{id_card}_{export_name}"
+                        )
                         await asyncio.to_thread(archive.write, local_path, archive_name)
                         await asyncio.to_thread(local_path.unlink)
             finally:

@@ -200,6 +200,7 @@ class RensheApplicationService:
                 source_materials = ({
                     "id_card_front": realname.id_card_front_oss,
                     "id_card_back": realname.id_card_back_oss,
+                    "portrait": realname.avatar_oss,
                     **{kind: metadata["storage_key"] for kind, metadata in application.draft_data.get("materials", {}).items()},
                 } if graduated else self._material_sources(realname, student))
                 for requirement in config["materials"]:
@@ -377,7 +378,6 @@ class RensheApplicationService:
             Order.user_id == application.user_id, Order.status.in_(("paid", "completed"))).limit(1))
 
     async def upload_application_material(self, user_id: int, plan_id: int, kind: str, *, filename: str, content_type: str | None, content: bytes) -> dict:
-        from app.services.renshe_graduated import MATERIALS
         from app.services.renshe_source import delete_unreferenced_source_keys
         stored = None
         old_key = None
@@ -389,7 +389,10 @@ class RensheApplicationService:
                 if not await is_renshe_plan(db, plan):
                     raise NotFoundException("人社批次")
                 config = batch_configuration(plan)
-                if not is_graduated(config) or kind not in set(MATERIALS) - {"id_card_front", "id_card_back"}:
+                upload_kinds = {item["kind"] for item in config["materials"]} - {
+                    "id_card_front", "id_card_back", "portrait"
+                }
+                if not is_graduated(config) or kind not in upload_kinds:
                     raise BusinessException("当前批次不支持该报名材料上传")
                 application = await db.scalar(select(RensheApplication).where(
                     RensheApplication.user_id == user_id, RensheApplication.plan_id == plan_id,
@@ -405,7 +408,9 @@ class RensheApplicationService:
                     raise ConflictException("当前报名不可修改材料")
                 await self._verified_profiles(db, user_id, plan)
                 stored = await self.storage.save_source(user_id=user_id, kind=kind, filename=filename, content_type=content_type, data=content)
-                requirement = next(item for item in config["materials"] if item["kind"] == kind)
+                requirement = next((item for item in config["materials"] if item["kind"] == kind), None)
+                if requirement is None:
+                    raise BusinessException("当前批次不支持该报名材料上传")
                 if stored.extension not in requirement["extensions"]:
                     raise BusinessException("文件格式不符合本批次要求")
                 values = dict(application.draft_data or {})
@@ -696,7 +701,11 @@ class RensheApplicationService:
             realname.id_card_number,
             realname.id_card_front_oss,
             realname.id_card_back_oss,
-            *([] if is_graduated(config) else [realname.avatar_oss, realname.ethnicity, realname.political_status]),
+            *(
+                [realname.avatar_oss]
+                if is_graduated(config)
+                else [realname.avatar_oss, realname.ethnicity, realname.political_status]
+            ),
         )
         if not all(required_realname):
             raise BusinessException("已通过的实名认证资料不完整，请重新提交审核")

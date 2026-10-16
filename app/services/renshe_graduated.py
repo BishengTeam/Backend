@@ -23,18 +23,40 @@ INSTITUTION_TYPES = {
 MATERIALS = {
     "id_card_front": "身份证正面",
     "id_card_back": "身份证背面",
+    "portrait": "人像照片（二寸免冠照片）",
+    "social_security_proof": "社保缴费证明",
+    "xuexin_registration": "学信网电子注册表",
+    "education_proof": "学历证明",
+    "vocational_qualification_certificate": "职业资格证书",
+    "professional_title_certificate": "职称证书",
+    "commitment_letter": "承诺书（本人亲笔签名并按手印）",
+}
+LEGACY_MATERIALS = {
+    "id_card_front": "身份证正面",
+    "id_card_back": "身份证背面",
     "registration_portrait": "一寸白底近期证件照（≤500 KB）",
     "graduation_certificate": "毕业证",
     "education_report": "学信网学历备案表（在线验证有效期设置为6个月）",
     "commitment_letter": "承诺书（本人亲笔签名并按手印）",
 }
+EXPORT_FILE_NAMES = {
+    "id_card_front": "证件正面",
+    "id_card_back": "证件背面",
+    "portrait": "二寸免冠照片",
+    "social_security_proof": "社保证明",
+    "xuexin_registration": "学信网电子注册表",
+    "education_proof": "学历证明",
+    "vocational_qualification_certificate": "职业资格证书",
+    "professional_title_certificate": "职称证书",
+    "commitment_letter": "承诺书",
+}
 REVIEW_CHECKS = {
-    "identity": "实名、毕业证和学历报告属于同一人",
-    "graduated": "已取得毕业证，无在读替代材料",
-    "education": "院校类型与学历符合本期条件",
+    "identity": "实名信息与全部佐证材料属于同一人",
+    "graduated": "已取得毕业证，不使用在读替代材料",
+    "education": "学历证明与学信网电子注册表对应且可验证",
     "major": "本专业或规定相关专业（结合证书人工核验）",
-    "report": "学历报告对应、可验证，在线验证有效期设置为6个月",
-    "photo": "一寸、白底、近期，规格合格",
+    "employment": "社保、职业资格或职称佐证与报送信息相符",
+    "photo": "二寸、免冠、近期，规格合格",
     "commitment": "承诺书完整，本人亲笔签名并按手印",
 }
 
@@ -66,16 +88,19 @@ def policy_errors(policy: dict) -> list[str]:
     labels = policy.get("attachment_names", {})
     if not isinstance(labels, dict):
         labels = {}
-    if (
-        set(labels) != set(MATERIALS)
-        or len(set(str(value) for value in labels.values())) != len(MATERIALS)
-        or any(
-            not isinstance(value, str)
-            or not re.fullmatch(r"[\w\u4e00-\u9fff -]{1,64}", value)
-            for value in labels.values()
-        )
-    ):
-        errors.append("请确认六类附件的目录与命名规则（文件扩展名保留原格式）")
+    if labels:
+        # Historical versions froze their labels. New standard versions omit
+        # this field and use code-owned names instead.
+        if (
+            set(labels) != set(LEGACY_MATERIALS)
+            or len(set(str(value) for value in labels.values())) != len(LEGACY_MATERIALS)
+            or any(
+                not isinstance(value, str)
+                or not re.fullmatch(r"[\w\u4e00-\u9fff -]{1,64}", value)
+                for value in labels.values()
+            )
+        ):
+            errors.append("历史版本附件命名配置无效")
     values = policy.get("export_values", {})
     if not isinstance(values, dict):
         values = {}
@@ -119,6 +144,8 @@ def activation_errors(config: dict) -> list[str]:
         ]
     if not is_v2(config.get("reporting_policy", {})):
         return ["新批次须使用模板填报第二版，确认R、S列口径；旧批次仅办理历史报名"]
+    if {item.get("kind") for item in config.get("materials", [])} != set(MATERIALS):
+        return ["新批次必须使用甲方标准九类材料清单"]
     try:
         template_path(config.get("reporting_policy", {}))
     except ConflictException as exc:

@@ -118,7 +118,8 @@ class RensheMaterial(Base, TimestampMixin):
         CheckConstraint(
             "kind IN ('id_card_front', 'id_card_back', 'portrait', "
             "'student_card', 'xuexin_registration', 'education_proof', "
-            "'registration_portrait', 'graduation_certificate', 'education_report', 'commitment_letter')",
+            "'registration_portrait', 'graduation_certificate', 'education_report', 'commitment_letter', "
+            "'social_security_proof', 'vocational_qualification_certificate', 'professional_title_certificate')",
             name="ck_renshe_material_kind",
         ),
         CheckConstraint("size_bytes > 0", name="ck_renshe_material_size_positive"),

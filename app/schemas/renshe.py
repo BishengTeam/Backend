@@ -29,11 +29,14 @@ RensheMaterialKind = Literal[
     "education_proof",
 ]
 RensheApplicationMaterialKind = Literal[
-    "registration_portrait", "graduation_certificate", "education_report", "commitment_letter"
+    "registration_portrait", "graduation_certificate", "education_report", "commitment_letter",
+    "social_security_proof", "xuexin_registration", "education_proof",
+    "vocational_qualification_certificate", "professional_title_certificate"
 ]
 RensheAllMaterialKind = Literal[
     "id_card_front", "id_card_back", "portrait", "student_card", "xuexin_registration", "education_proof",
     "registration_portrait", "graduation_certificate", "education_report", "commitment_letter",
+    "social_security_proof", "vocational_qualification_certificate", "professional_title_certificate",
 ]
 RensheRefundStatus = Literal[
     "requested",

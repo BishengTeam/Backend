@@ -29,7 +29,7 @@ from app.schemas.renshe_project import (
 )
 from app.services.renshe_graduated import (
     RULE, INSTITUTION_TYPES, MATERIALS as GRADUATED_MATERIALS, REVIEW_CHECKS,
-    is_graduated, policy_errors, activation_errors,
+    LEGACY_MATERIALS, is_graduated, policy_errors, activation_errors,
 )
 from app.services.renshe_reporting import EDUCATIONS, OCCUPATIONS, ETHNICITIES, POLITICS, DEGREE_CONDITION, is_v2, default_policy
 
@@ -146,6 +146,7 @@ def graduated_configuration() -> dict:
             "extensions": sorted(MATERIAL_SPECS[kind].extensions), "max_count": 1,
         } for kind, name in GRADUATED_MATERIALS.items()],
         export_template="renshe_graduated_v1",
+        attachment_layout="flat",
     )
     return config
 
@@ -199,11 +200,18 @@ def configuration_errors(config: dict) -> list[str]:
             or not set(item["extensions"]) <= spec.extensions
         ):
             errors.append(f"材料「{item['name']}」的类型、格式或数量需要适配")
-    if graduated and set(kinds) != set(GRADUATED_MATERIALS):
-        errors.append("已毕业学历型必须使用身份证、报名照片、毕业证、学历备案表及承诺书材料清单")
+    standard_graduated = graduated and set(kinds) == set(GRADUATED_MATERIALS)
+    if graduated and not standard_graduated and set(kinds) != set(LEGACY_MATERIALS):
+        errors.append("学历型材料清单需要适配")
     if not graduated and not set(kinds) <= {"id_card_front", "id_card_back", "portrait", "student_card", "xuexin_registration", "education_proof"}:
         errors.append("历史学生规则仅支持原六类材料")
-    for kind in (GRADUATED_MATERIALS if graduated else ("id_card_front", "id_card_back", "portrait")):
+    for kind in (
+        GRADUATED_MATERIALS
+        if standard_graduated
+        else LEGACY_MATERIALS
+        if graduated
+        else ("id_card_front", "id_card_back", "portrait")
+    ):
         if not any(item["kind"] == kind and item["required"] for item in materials):
             errors.append(f"{MATERIAL_NAMES[kind]}为必填材料")
     template = TEMPLATES.get(config.get("export_template"))
@@ -228,7 +236,9 @@ def configuration_errors(config: dict) -> list[str]:
             "export_skill_level",
         } <= set(columns):
             errors.append("导出映射必须保留姓名、身份证、职业和等级")
-    if config.get("attachment_layout") not in {"by_candidate", "by_material"}:
+    if config.get("attachment_layout") not in (
+        {"flat"} if standard_graduated else {"by_candidate", "by_material"}
+    ):
         errors.append("附件目录规则需要适配")
     return errors
 
@@ -372,6 +382,13 @@ class RensheProjectService:
         if not is_graduated(config):
             config.pop("institution_types", None)
             config.pop("reporting_policy", None)
+        elif is_v2(config.get("reporting_policy", {})) and {
+            item.get("kind") for item in config.get("materials", [])
+        } == set(GRADUATED_MATERIALS):
+            config["attachment_layout"] = "flat"
+            policy = config.get("reporting_policy") or {}
+            policy.pop("attachment_names", None)
+            config["reporting_policy"] = policy
         errors = configuration_errors(config)
         if data.status == "available" and errors:
             raise BusinessException("项目配置不可用：" + "；".join(errors))

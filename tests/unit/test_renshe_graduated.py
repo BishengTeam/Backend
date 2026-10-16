@@ -61,15 +61,8 @@ async def graduated_batch(env, monkeypatch):
         "version": "fixture-v2",
         "confirmed_by_client": True,
         "commitment_template": save_template("测试模板.pdf", b"%PDF-1.4\nfixture"),
-        "attachment_names": dict(MATERIALS),
         "employment_reporting": {"confirmed": True, "date_rule": "work_or_enrollment", "years_rule": "required", "allow_zero_years": True},
     }
-    # Test-only labels use the same character set as approved import labels.
-    config["reporting_policy"]["attachment_names"].update(
-        registration_portrait="一寸白底证件照",
-        education_report="学历备案表",
-        commitment_letter="承诺书",
-    )
     project = await RensheProjectService().save(
         RensheProjectWrite(
             chinese_name="已毕业学历型", status="available", config=config
@@ -83,7 +76,6 @@ async def graduated_batch(env, monkeypatch):
         await db.execute(delete(UserStudent))
         identity = await db.scalar(select(UserRealname))
         identity.user_type = "social"
-        identity.avatar_oss = None
         await db.commit()
     return project, batch
 
@@ -112,14 +104,14 @@ def draft_payload(batch, **changes):
 
 async def uploads(service, batch, *, exclude=()):
     for kind in MATERIALS:
-        if kind in {"id_card_front", "id_card_back", *exclude}:
+        if kind in {"id_card_front", "id_card_back", "portrait", *exclude}:
             continue
-        pdf = kind != "registration_portrait"
+        pdf = kind in {"social_security_proof", "xuexin_registration", "commitment_letter"}
         await service.upload_application_material(
             1,
             batch.id,
             kind,
-            filename="实际原文件.pdf" if pdf else "一寸照.jpeg",
+            filename="实际原文件.pdf" if pdf else "证明材料.jpeg",
             content_type="application/pdf" if pdf else "image/jpeg",
             content=b"%PDF-1.4\nfixture" if pdf else b"\xff\xd8\xfffixture",
         )
@@ -200,7 +192,7 @@ async def test_graduate_without_student_identity_full_revision_review_and_export
     await uploads(
         service,
         batch,
-        exclude=("registration_portrait", "education_report", "commitment_letter"),
+        exclude=("commitment_letter",),
     )
     resubmitted = await service.submit(1, draft.id)
     assert not resubmitted.payment_required and resubmitted.order_id == result.order_id
@@ -259,7 +251,13 @@ async def test_graduate_without_student_identity_full_revision_review_and_export
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
         assert any(name.endswith("_承诺书.pdf") for name in names)
-        assert any(name.endswith("_一寸白底证件照.jpeg") for name in names)
+        assert any(name.endswith("_二寸免冠照片.jpg") for name in names)
+        assert any(name.endswith("_社保证明.pdf") for name in names)
+        assert any(name.endswith("_学信网电子注册表.pdf") for name in names)
+        assert any(name.endswith("_学历证明.jpeg") for name in names)
+        assert any(name.endswith("_职业资格证书.jpeg") for name in names)
+        assert any(name.endswith("_职称证书.jpeg") for name in names)
+        assert all("/" not in name for name in names)
         assert not any("学生证" in name for name in names)
         target = env.root / "graduated.xlsx"
         target.write_bytes(archive.read("报名信息.xlsx"))
@@ -296,10 +294,10 @@ async def test_missing_material_size_scope_identity_and_expired_corrections(
         await service.upload_application_material(
             1,
             batch.id,
-            "registration_portrait",
-            filename="large.jpg",
-            content_type="image/jpeg",
-            content=b"\xff\xd8\xff" + b"a" * (500 * 1024),
+            "social_security_proof",
+            filename="large.pdf",
+            content_type="application/pdf",
+            content=b"%PDF-1.4" + b"a" * (20 * 1024 * 1024),
         )
     with pytest.raises(ValueError):
         draft_payload(
@@ -374,7 +372,7 @@ async def test_new_rules_reject_unadapted_combinations_and_changed_uploads(
     service = RensheApplicationService(env.storage)
     await uploads(service, batch)
     draft = await service.save_draft(1, draft_payload(batch))
-    metadata = draft.draft_data["materials"]["graduation_certificate"]
+    metadata = draft.draft_data["materials"]["social_security_proof"]
     env.storage._local_path(metadata["storage_key"]).write_bytes(b"%PDF-1.4\nmodified")
     with pytest.raises(ConflictException, match="内容已变化"):
         await service.submit(1, draft.id)
