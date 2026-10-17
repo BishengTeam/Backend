@@ -51,7 +51,7 @@ from app.schemas.renshe import (
 )
 from app.services.renshe_project import batch_configuration, is_renshe_plan
 from app.services.renshe_graduated import is_graduated
-from app.services.renshe_reporting import EDUCATIONS, DEGREE_CONDITION, report_date, validate_row, validate_snapshot, assert_template, validate_reporting
+from app.services.renshe_reporting import EDUCATIONS, report_date, validate_row, validate_snapshot, assert_template, validate_reporting
 from app.services.renshe_export_definition import material_archive_path, definition_fingerprint, archive_download_name, REGISTRATION_TEMPLATE_NAME, WORK_HISTORY_TEMPLATE_NAME
 
 
@@ -126,10 +126,13 @@ def partition_export_candidates(
 
 def build_registration_row(candidate: ExportCandidate, plan: Plan) -> list[object | None]:
     """The current 25 columns always read the selected material version."""
-    from app.services.renshe_reporting import OCCUPATION_CODE
+    from app.services.renshe_catalog import combinations
     config = batch_configuration(plan)
-    if config["occupation_name"] != "信息安全管理员" or config["export_skill_level"] != "四级":
-        raise BusinessException("当前导出仅支持信息安全管理员四级／中级工")
+    selected = next((item for item in combinations() if item["occupation_code"] == config["occupation_code"]
+                     and item["skill_level"] == config["skill_level"] and item["application_type"] == plan.application_type), None)
+    if selected is None or not selected["adapted"]:
+        raise BusinessException("该报考组合尚未完成导出适配")
+    condition = selected["source_conditions"][0]
     realname, form = candidate.realname_snapshot, candidate.form_data
     education = form.get("education_info") or candidate.student_snapshot
     info = form.get("reporting_info") or {}
@@ -138,9 +141,9 @@ def build_registration_row(candidate: ExportCandidate, plan: Plan) -> list[objec
               "居民身份证", realname.get("id_card_number"), "社会人员",
               EDUCATIONS.get(education.get("education")), info.get("ethnicity"), info.get("political_status"),
               form.get("contact_phone"), form.get("mailing_address"), info.get("work_unit"), info.get("occupation_status"),
-              config["occupation_name"], "四级", None, None, report_date(info), float(info["occupation_years"]),
-              OCCUPATION_CODE, DEGREE_CONDITION, "学历型", plan.exam_type, info.get("social_insurance_unit"), form.get("email")]
-    validate_row(values, info, {})
+              config["occupation_name"], config["export_skill_level"], None, None, report_date(info), float(info["occupation_years"]),
+              config["occupation_code"], condition, plan.application_type, plan.exam_type, info.get("social_insurance_unit"), form.get("email")]
+    validate_row(values, info, {}, config={**config, "application_condition": condition})
     return values
 
 

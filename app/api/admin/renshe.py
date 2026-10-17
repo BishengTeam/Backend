@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, File, Path, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from app.schemas.renshe_project import RensheProjectWrite, RensheProjectResponse
 from app.services.renshe_project import RensheProjectService
+from app.port.exceptions import BusinessException
 
 from app.middleware.auth import require_permission, require_super_admin
 from app.middleware.rate_limit import limiter
@@ -80,12 +81,22 @@ async def list_projects(_admin=Depends(require_permission("content:list"))):
 
 @router.post("/projects", response_model=APIResponse[RensheProjectResponse])
 async def create_project(body: RensheProjectWrite, admin=Depends(require_permission("content:write"))):
+    assert_project_selection_payload(body, creating=True)
     return success(data=await RensheProjectService().save(body, admin_id=admin.id))
 
 
 @router.put("/projects/{project_id}", response_model=APIResponse[RensheProjectResponse])
 async def update_project(project_id: int, body: RensheProjectWrite, admin=Depends(require_permission("content:write"))):
+    assert_project_selection_payload(body, creating=False)
     return success(data=await RensheProjectService().save(body, product_id=project_id, admin_id=admin.id))
+
+
+def assert_project_selection_payload(body: RensheProjectWrite, *, creating: bool) -> None:
+    # Config JSON is a persisted snapshot, never an operator-authored rules API.
+    if body.config is not None or body.occupation_code is not None or body.skill_level is not None:
+        raise BusinessException("请更新后台并提交职业／工种、等级及申报类型的组合标识，不能提交底层配置")
+    if creating and body.selection_id is None:
+        raise BusinessException("请选择职业／工种、技能等级和申报类型")
 
 
 @router.delete("/projects/{project_id}")

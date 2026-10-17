@@ -48,6 +48,20 @@ REVIEW_CHECKS = {
     "photo": "二寸、免冠、近期，规格合格",
     "commitment": "承诺书完整，本人亲笔签名并按手印",
 }
+DEGREE_REVIEW_CHECKS = {
+    "identity": "实名、毕业证及学历报告属于同一人",
+    "graduated": "已取得毕业证，不接受在读替代证明",
+    "education": "院校类型及学历符合本期学历型条件",
+    "major": "本专业或资料列明相关专业，别名及不明确匹配人工核验",
+    "report": "学历备案表对应、可验证，验证有效期设置为6个月",
+    "photo": "一寸白底近期证件照，不超过500 KB",
+    "commitment": "承诺书完整、本人亲笔签名并按手印",
+}
+
+
+def review_checks(config: dict) -> dict:
+    kinds = {item["kind"] for item in config.get("materials", [])}
+    return DEGREE_REVIEW_CHECKS if "registration_portrait" in kinds else REVIEW_CHECKS
 
 
 def is_graduated(config: dict | None) -> bool:
@@ -91,12 +105,17 @@ def template_path(policy: dict) -> Path:
 
 
 def activation_errors(config: dict) -> list[str]:
+    from app.services.renshe_catalog import CURRENT_SELECTION, find_selection
+    if config.get("selection_id"):
+        selected = find_selection(config["selection_id"])
+        if selected is None or not selected["adapted"]:
+            return ["该组合尚未适配，仅可保存草稿，不能启用或发布招生"]
     if not is_graduated(config):
         return [
             "新开放批次仅支持信息安全管理员四级／中级工、已毕业学历型；历史批次保持原规则"
         ]
-    if {item.get("kind") for item in config.get("materials", [])} != set(MATERIALS):
-        return ["新批次必须使用甲方标准九类材料清单"]
+    if config.get("selection_id") != CURRENT_SELECTION or {item.get("kind") for item in config.get("materials", [])} != set(LEGACY_MATERIALS):
+        return ["新批次须使用当前已毕业学历型六类材料；历史批次保持原要求"]
     try:
         template_path(commitment_policy(config))
     except ConflictException as exc:
@@ -159,6 +178,8 @@ def validate_education(info: dict | None, config: dict) -> dict:
         raise BusinessException("本批次不支持该院校类型")
     if data["education"] not in config["education_levels"]:
         raise BusinessException("本批次不支持该学历层次")
+    if data["education"] in {"primary", "junior_high", "senior_high", "other"}:
+        raise BusinessException("文化程度可如实填写，但该学历不属于本期已毕业学历型支持范围，请联系管理员")
     if (
         data["institution_type"] == "general_higher"
         and data["education"] not in {"higher_vocational", "associate", "bachelor", "master", "doctorate"}
@@ -167,7 +188,7 @@ def validate_education(info: dict | None, config: dict) -> dict:
     return data
 
 
-def validate_review(data, *, stage: str, now: datetime, version_id: int) -> None:
+def validate_review(data, *, stage: str, now: datetime, version_id: int, config: dict | None = None) -> None:
     if data.expected_version_id != version_id:
         raise ConflictException("报名版本已变化，请刷新当前版本并重新核验")
     if data.decision == "rejected":
@@ -177,7 +198,7 @@ def validate_review(data, *, stage: str, now: datetime, version_id: int) -> None
                 "驳回补正必须设置晚于当前时间且带时区的补正截止时间"
             )
         allowed = (
-            set(MATERIALS)
+            (set(MATERIALS) | set(LEGACY_MATERIALS) if config is None else {item["kind"] for item in config["materials"]})
             | {
                 "education_info." + key
                 for key in (
@@ -195,7 +216,7 @@ def validate_review(data, *, stage: str, now: datetime, version_id: int) -> None
         if not data.required_changes or not set(data.required_changes) <= allowed:
             raise BusinessException("请选择需要补正的具体学历字段、联系方式或材料")
     elif stage == "initial" and (
-        set(data.checklist or {}) != set(REVIEW_CHECKS)
+        set(data.checklist or {}) != set(review_checks(config) if config is not None else REVIEW_CHECKS)
         or not all(value is True for value in data.checklist.values())
     ):
         raise BusinessException("请逐项完成七项学历型初审核验后再通过")

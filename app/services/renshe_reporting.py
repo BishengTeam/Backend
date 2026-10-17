@@ -11,6 +11,9 @@ CONTRACT_VERSION = 2
 DEGREE_CONDITION = "取得本专业或相关专业的技工院校或中等及以上职业院校、专科及以上普通高等学校毕业证书（含在读应届毕业生）。"
 OCCUPATIONS = ["在校学生", "应届毕业生", "职工", "失业人员", "其他"]
 EDUCATIONS = {
+    "primary": "小学",
+    "junior_high": "初中",
+    "senior_high": "高中",
     "secondary_vocational": "中专",
     "technical_school": "技校",
     "vocational_high": "职高",
@@ -19,6 +22,7 @@ EDUCATIONS = {
     "bachelor": "大学本科",
     "master": "硕士",
     "doctorate": "博士",
+    "other": "其他",
 }
 POLITICS = [
     "中共党员",
@@ -204,7 +208,7 @@ def public_options(contract: dict, frozen: dict) -> dict:
     }
 
 
-def validate_row(values: list, info: dict, policy: dict) -> None:
+def validate_row(values: list, info: dict, policy: dict, *, config: dict | None = None) -> None:
     """Always run before new jobs, including historical versions being retried."""
     required = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 19, 20, 21, 22, 24]
     missing = [
@@ -222,10 +226,10 @@ def validate_row(values: list, info: dict, policy: dict) -> None:
         or values[7] not in ETHNICITIES
         or values[8] not in POLITICS
         or values[12] not in OCCUPATIONS
-        or values[14] != "四级"
-        or values[19] != OCCUPATION_CODE
-        or values[20] != DEGREE_CONDITION
-        or values[21] != "学历型"
+        or values[14] != (config["export_skill_level"] if config else "四级")
+        or values[19] != (config["occupation_code"] if config else OCCUPATION_CODE)
+        or values[20] != (config["application_condition"] if config else DEGREE_CONDITION)
+        or values[21] not in (config["application_types"] if config else ["学历型"])
         or values[22] not in {"新考", "补考"}
     ):
         raise ConflictException("导出值不符合报名模板的下拉字典")

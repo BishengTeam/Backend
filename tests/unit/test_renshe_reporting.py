@@ -18,7 +18,7 @@ from app.schemas.renshe_project import RensheProjectWrite
 from app.services.renshe_application import RensheApplicationService
 from app.services.renshe_export import ExportCandidate, build_registration_row
 from app.services.renshe_graduated import (
-    REVIEW_CHECKS,
+    DEGREE_REVIEW_CHECKS as REVIEW_CHECKS,
     validate_education,
 )
 from app.services.renshe_project import RensheProjectService
@@ -167,6 +167,10 @@ async def test_fixed_rows_ignore_old_export_mapping_and_keep_actual_data(
                 "education": code,
                 "institution_type": "vocational",
             }
+            if code in {"primary", "junior_high", "senior_high", "other"}:
+                with pytest.raises(BusinessException, match="不属于本期"):
+                    validate_education(education, plan.renshe_config)
+                continue
             validate_education(education, plan.renshe_config)
             row = build_registration_row(
                 ExportCandidate(
@@ -241,6 +245,7 @@ async def test_old_paid_snapshot_adopts_new_reporting_without_rewriting_order_or
 ):
     project, batch = await graduated_batch(isolated, monkeypatch)
     legacy = project.config.model_dump()
+    legacy.pop("selection_id", None)
     legacy["education_levels"] = ["bachelor"]
     legacy["reporting_policy"].pop("contract_version")
     legacy["reporting_policy"].pop("employment_reporting", None)

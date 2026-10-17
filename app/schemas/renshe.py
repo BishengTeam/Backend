@@ -72,7 +72,7 @@ class RensheGraduatedEducation(BaseModel):
     graduated: Literal[True]
     school: str = Field(..., min_length=1, max_length=128)
     institution_type: Literal["technical", "vocational", "general_higher"]
-    education: Literal["secondary_vocational", "technical_school", "vocational_high", "higher_vocational", "associate", "bachelor", "master", "doctorate"]
+    education: Literal["primary", "junior_high", "senior_high", "other", "secondary_vocational", "technical_school", "vocational_high", "higher_vocational", "associate", "bachelor", "master", "doctorate"]
     major: str = Field(..., min_length=1, max_length=128)
     graduation_date: date
     certificate_number: str = Field(..., min_length=1, max_length=128)

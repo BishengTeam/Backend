@@ -29,8 +29,7 @@ from app.schemas.renshe import RensheDraftUpsert, RensheReviewCreate
 from app.schemas.renshe_project import RensheProjectWrite
 from app.services.renshe_application import RensheApplicationService
 from app.services.renshe_graduated import (
-    MATERIALS,
-    REVIEW_CHECKS,
+    DEGREE_REVIEW_CHECKS as REVIEW_CHECKS,
     save_template,
     activation_errors,
     china_today,
@@ -103,10 +102,10 @@ def draft_payload(batch, **changes):
 
 
 async def uploads(service, batch, *, exclude=()):
-    for kind in MATERIALS:
+    for kind in [item["kind"] for item in batch.renshe_config["materials"]]:
         if kind in {"id_card_front", "id_card_back", "portrait", *exclude}:
             continue
-        pdf = kind in {"social_security_proof", "xuexin_registration", "commitment_letter"}
+        pdf = kind in {"education_report", "xuexin_registration", "education_report", "commitment_letter"}
         await service.upload_application_material(
             1,
             batch.id,
@@ -251,12 +250,9 @@ async def test_graduate_without_student_identity_full_revision_review_and_export
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
         assert any(name.endswith("_承诺书.pdf") for name in names)
-        assert any(name.endswith("_二寸免冠照片.jpg") for name in names)
-        assert any(name.endswith("_社保证明.pdf") for name in names)
+        assert any(name.endswith("_二寸免冠照片.jpeg") for name in names)
         assert any(name.endswith("_学信网电子注册表.pdf") for name in names)
         assert any(name.endswith("_学历证明.jpeg") for name in names)
-        assert any(name.endswith("_职业资格证书.jpeg") for name in names)
-        assert any(name.endswith("_职称证书.jpeg") for name in names)
         assert all("/" not in name for name in names)
         assert not any("学生证" in name for name in names)
         target = env.root / "graduated.xlsx"
@@ -294,7 +290,7 @@ async def test_missing_material_size_scope_identity_and_expired_corrections(
         await service.upload_application_material(
             1,
             batch.id,
-            "social_security_proof",
+            "education_report",
             filename="large.pdf",
             content_type="application/pdf",
             content=b"%PDF-1.4" + b"a" * (20 * 1024 * 1024),
@@ -372,7 +368,7 @@ async def test_new_rules_reject_unadapted_combinations_and_changed_uploads(
     service = RensheApplicationService(env.storage)
     await uploads(service, batch)
     draft = await service.save_draft(1, draft_payload(batch))
-    metadata = draft.draft_data["materials"]["social_security_proof"]
+    metadata = draft.draft_data["materials"]["education_report"]
     env.storage._local_path(metadata["storage_key"]).write_bytes(b"%PDF-1.4\nmodified")
     with pytest.raises(ConflictException, match="内容已变化"):
         await service.submit(1, draft.id)

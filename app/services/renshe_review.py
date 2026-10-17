@@ -341,7 +341,7 @@ class RensheReviewService:
             from app.services.renshe_graduated import is_graduated, validate_review
             plan = await db.get(Plan, application.plan_id)
             if is_graduated(batch_configuration(plan)):
-                validate_review(data, stage=stage, now=now, version_id=application.current_version_id)
+                validate_review(data, stage=stage, now=now, version_id=application.current_version_id, config=batch_configuration(plan))
                 if stage == "initial" and data.decision == "approved":
                     from app.services.renshe_reporting import validate_snapshot, validate_reporting
                     version = await db.get(RensheApplicationVersion, application.current_version_id)
@@ -420,7 +420,7 @@ class RensheReviewService:
             from app.services.renshe_graduated import is_graduated, validate_review
             plan = await db.get(Plan, application.plan_id)
             if is_graduated(batch_configuration(plan)):
-                validate_review(data, stage="initial", now=now, version_id=application.current_version_id)
+                validate_review(data, stage="initial", now=now, version_id=application.current_version_id, config=batch_configuration(plan))
             application.correction_due_at = data.correction_due_at
             review = RensheReview(
                 application_id=application.id,

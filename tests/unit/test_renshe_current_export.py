@@ -23,7 +23,7 @@ from app.services.renshe_export_definition import (
     export_instructions,
     material_archive_path,
 )
-from app.services.renshe_graduated import REVIEW_CHECKS, save_template
+from app.services.renshe_graduated import DEGREE_REVIEW_CHECKS as REVIEW_CHECKS, save_template
 from app.services.renshe_project import RensheProjectService
 from app.services.renshe_project import graduated_configuration
 from app.services.renshe_review import RensheReviewService
@@ -92,7 +92,7 @@ async def test_actual_zip_matches_shared_preview_and_keeps_real_files(
         assert archive.read(f"{identity}_学历证明.jpeg").startswith(
             b"\xff\xd8\xff"
         )
-        assert archive.read(f"{identity}_二寸免冠照片.jpg").startswith(
+        assert archive.read(f"{identity}_二寸免冠照片.jpeg").startswith(
             b"\xff\xd8\xff"
         )
         book = load_workbook(io.BytesIO(archive.read("报名信息.xlsx")))

@@ -699,7 +699,7 @@ class RensheApplicationService:
             realname.id_card_front_oss,
             realname.id_card_back_oss,
             *(
-                [realname.avatar_oss]
+                ([realname.avatar_oss] if any(item["kind"] == "portrait" and item["required"] for item in config["materials"]) else [])
                 if is_graduated(config)
                 else [realname.avatar_oss, realname.ethnicity, realname.political_status]
             ),

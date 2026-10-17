@@ -6,6 +6,7 @@ commitment downloads use the project's current uploaded file.
 
 from dataclasses import asdict
 from copy import deepcopy
+import re
 from uuid import uuid4
 
 from sqlalchemy import func, select
@@ -30,9 +31,10 @@ from app.schemas.renshe_project import (
 )
 from app.services.renshe_graduated import (
     RULE, INSTITUTION_TYPES, MATERIALS as GRADUATED_MATERIALS, REVIEW_CHECKS,
-    LEGACY_MATERIALS, is_graduated, policy_errors, activation_errors,
+    LEGACY_MATERIALS, is_graduated, policy_errors, activation_errors, review_checks,
 )
 from app.services.renshe_reporting import EDUCATIONS, OCCUPATIONS, ETHNICITIES, POLITICS, DEGREE_CONDITION, HEADERS, default_policy
+from app.services.renshe_catalog import CURRENT_SELECTION, combinations, find_selection
 
 MATERIAL_NAMES = {
     "id_card_front": "身份证正面",
@@ -52,6 +54,8 @@ def admission_requirements(config: dict | None = None) -> dict:
     config = graduated_configuration() if config is None else config
     graduated = is_graduated(config)
     return {
+        "rule_profile": config.get("rule_profile", {}),
+        "review_checks": review_checks(config) if graduated else {},
         "scope": {
             "occupation_name": config["occupation_name"],
             "occupation_code": config["occupation_code"],
@@ -61,7 +65,7 @@ def admission_requirements(config: dict | None = None) -> dict:
             "exam_types": config["exam_types"],
             "qualification_rule": config["qualification_rule"],
         },
-        "form_sections": ["本人实名信息", "毕业学历信息" if graduated else "学生资料", "联系信息", "报送模板要求的其他实际信息"],
+        "form_sections": [] if config.get("qualification_rule") == "unadapted" else ["本人实名信息", "毕业学历信息" if graduated else "学生资料", "联系信息", "报送模板要求的其他实际信息"],
         "education_options": [
             {"value": value, "label": EDUCATIONS.get(value, value)}
             for value in config.get("education_levels", [])
@@ -124,6 +128,8 @@ def default_configuration() -> dict:
 def graduated_configuration() -> dict:
     config = default_configuration()
     config.update(
+        selection_id=CURRENT_SELECTION,
+        rule_profile=find_selection(CURRENT_SELECTION),
         qualification_rule=RULE,
         institution_types=list(INSTITUTION_TYPES),
         reporting_policy=default_policy(),
@@ -131,11 +137,24 @@ def graduated_configuration() -> dict:
         materials=[{
             "kind": kind, "name": name, "required": True,
             "extensions": sorted(MATERIAL_SPECS[kind].extensions), "max_count": 1,
-        } for kind, name in GRADUATED_MATERIALS.items()],
+        } for kind, name in LEGACY_MATERIALS.items()],
         export_template="renshe_graduated_v1",
         attachment_layout="flat",
     )
     return config
+
+
+def selection_configuration(selection: dict) -> dict:
+    if selection["adapted"]:
+        return graduated_configuration()
+    # Deliberately empty technical rules: never borrow the default program.
+    return RensheProjectConfiguration(
+        selection_id=selection["selection_id"], rule_profile=selection,
+        occupation_name=selection["occupation_name"], occupation_code=selection["occupation_code"],
+        skill_level=selection["skill_level"], export_skill_level=selection["export_skill_level"],
+        exam_types=["新考"], application_types=[selection["application_type"]],
+        qualification_rule="unadapted", attachment_layout="flat",
+    ).model_dump()
 
 
 def supported_programs() -> list[dict]:
@@ -155,6 +174,15 @@ def supported_programs() -> list[dict]:
 
 def configuration_errors(config: dict) -> list[str]:
     errors = []
+    if config.get("selection_id"):
+        selection = find_selection(config["selection_id"])
+        if selection is None or not selection["adapted"]:
+            return ["该组合尚未适配，仅可保存草稿"] + (selection["missing"] if selection else ["未找到资料依据"])
+        if any(config.get(key) != selection[key] for key in ("occupation_name", "occupation_code", "skill_level", "export_skill_level")) or config.get("application_types") != [selection["application_type"]]:
+            return ["报考组合与系统匹配规则不一致；本期只支持信息安全管理员四级／中级工学历型"]
+        canonical = graduated_configuration()
+        if any(config.get(key) != canonical[key] for key in ("qualification_rule", "materials", "form_fields", "education_levels", "institution_types")):
+            return ["资格、材料及报名字段须使用服务端匹配规则，不能手工修改"]
     for key, label in (
         ("occupation_name", "职业／工种"),
         ("occupation_code", "职业代码"),
@@ -215,6 +243,22 @@ def configuration_errors(config: dict) -> list[str]:
         if not any(item["kind"] == kind and item["required"] for item in materials):
             errors.append(f"{MATERIAL_NAMES[kind]}为必填材料")
     return errors
+
+
+def name_review_notices(name: str, config: dict) -> list[str]:
+    """Flag explicit conflicting names for humans; never guess a product's identity."""
+    own = config.get("occupation_name", "")
+    mentioned = {item["occupation_name"] for item in combinations()
+                 if item["occupation_name"] in name and item["occupation_name"] != own}
+    notices = [f"名称包含「{item}」，实际工种为「{own}」，请人工核查，不自动改归属" for item in sorted(mentioned)]
+    levels = set(re.findall(r"高级技师|中级工|初级工|高级工|技师|五级|四级|三级|二级|一级", name))
+    expected = {config.get("skill_level"), config.get("export_skill_level")}
+    if levels - expected:
+        notices.append(f"名称等级与实际配置「{config.get('export_skill_level', '')}／{config.get('skill_level', '')}」可能不一致，请人工核查")
+    types = {value for value in ("学历型", "工龄型", "复合型", "无类型") if value in name}
+    if types - set(config.get("application_types", [])):
+        notices.append("名称申报类型与实际配置可能不一致，请人工核查")
+    return notices
 
 
 def batch_configuration(plan: Plan) -> dict:
@@ -286,6 +330,11 @@ class RensheProjectService:
         return {
             "default_config": graduated_configuration(),
             "supported_programs": supported_programs(),
+            "combinations": [
+                {**item, "config": selection_configuration(item),
+                 "admission_requirements": admission_requirements(selection_configuration(item))}
+                for item in combinations()
+            ],
             "templates": {"current": {"label": "当前固定25列报名信息模板", "columns": HEADERS}},
             "material_names": MATERIAL_NAMES,
             "form_fields": FORM_FIELDS,
@@ -310,6 +359,7 @@ class RensheProjectService:
         )
 
     async def _response(self, db, product: CertProduct) -> RensheProjectResponse:
+        from app.services.renshe_export_definition import export_instructions
         version = await self.latest(db, product.id)
         config = (
             version.config
@@ -328,6 +378,7 @@ class RensheProjectService:
             version=version.version if version else 0,
             config=RensheProjectConfiguration.model_validate(config),
             admission_requirements=admission_requirements(config),
+            export_instructions=None if config.get("qualification_rule") == "unadapted" else export_instructions(config),
             validation_errors=configuration_errors(config),
             batch_count=await db.scalar(
                 select(func.count())
@@ -335,6 +386,7 @@ class RensheProjectService:
                 .where(Plan.product_type == product.code)
             )
             or 0,
+            review_notices=name_review_notices(product.chinese_name, config),
         )
 
     async def list_projects(
@@ -379,11 +431,23 @@ class RensheProjectService:
                 db.add(product)
             await db.flush()
             latest = await self.latest(db, product.id)
+            if data.selection_id is not None:
+                selection = find_selection(data.selection_id)
+                if selection is None:
+                    raise BusinessException("未找到该报考组合的资料依据，请重新选择")
+                same = latest is not None and latest.config.get("selection_id") == data.selection_id
+                if latest is not None and not latest.config.get("selection_id"):
+                    same = all(latest.config.get(key) == selection[key] for key in ("occupation_code", "skill_level")) and latest.config.get("application_types") == [selection["application_type"]]
+                config = deepcopy(latest.config) if same else selection_configuration(selection)
+                if latest is not None and not same:
+                    config["commitment_template"] = commitment_policy(latest.config)["commitment_template"]
             selection_changed = data.occupation_code is not None and (
                 latest is None or any(latest.config.get(key) != getattr(data, key)
                                       for key in ("occupation_code", "skill_level"))
             )
-            if selection_changed:
+            if data.selection_id is not None:
+                pass
+            elif selection_changed:
                 program = next((item for item in supported_programs()
                                 if item["occupation_code"] == data.occupation_code
                                 and item["skill_level"] == data.skill_level), None)
@@ -394,6 +458,12 @@ class RensheProjectService:
                     config["commitment_template"] = commitment_policy(latest.config)["commitment_template"]
             elif data.config is not None:
                 config = data.config.model_dump()
+                if config.get("selection_id"):
+                    selected = find_selection(config["selection_id"])
+                    if selected is None:
+                        raise BusinessException("未找到该报考组合的资料依据")
+                    # The legacy payload must not provide an invented source/profile.
+                    config["rule_profile"] = selected
                 config["commitment_template"] = commitment_policy(config)["commitment_template"]
                 config.update(export_template="renshe_graduated_v1" if is_graduated(config) else "renshe_registration_v1", field_mapping={}, attachment_layout="flat")
                 if is_graduated(config):
@@ -427,7 +497,7 @@ class RensheProjectService:
                 raise ConflictException("项目配置已更新，请刷新后重试")
             if latest and any(
                 latest.config.get(key) != config.get(key)
-                for key in ("occupation_name", "occupation_code", "skill_level", "export_skill_level")
+                for key in ("occupation_name", "occupation_code", "skill_level", "export_skill_level", "application_types")
             ):
                 used = await db.scalar(
                     select(Plan.id).where(Plan.product_type == product.code).limit(1)

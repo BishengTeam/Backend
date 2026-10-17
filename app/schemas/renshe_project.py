@@ -23,7 +23,7 @@ class RensheProjectConfiguration(BaseModel):
     exam_types: list[str] = Field(default_factory=list, max_length=10)
     application_types: list[str] = Field(default_factory=list, max_length=10)
     qualification_rule: str = Field("", max_length=64)
-    education_levels: list[str] = Field(default_factory=list, max_length=10)
+    education_levels: list[str] = Field(default_factory=list, max_length=20)
     form_fields: list[str] = Field(default_factory=list, max_length=20)
     materials: list[MaterialRequirement] = Field(default_factory=list, max_length=20)
     export_template: str = Field("", max_length=64)
@@ -32,6 +32,8 @@ class RensheProjectConfiguration(BaseModel):
     institution_types: list[str] = Field(default_factory=list, max_length=3)
     reporting_policy: dict = Field(default_factory=dict)
     commitment_template: dict | None = None
+    selection_id: str | None = None
+    rule_profile: dict = Field(default_factory=dict)
 
 
 class RensheProjectWrite(BaseModel):
@@ -42,6 +44,7 @@ class RensheProjectWrite(BaseModel):
     status: Literal["draft", "available", "disabled"] = "draft"
     # Select an adapted occupation/level; all other rules come from the server.
     occupation_code: str | None = Field(None, max_length=160)
+    selection_id: str | None = Field(None, max_length=100)
     skill_level: str | None = Field(None, max_length=32)
     commitment_template: dict | None = None
     # Compatibility for older clients. Omission preserves an existing project.
@@ -50,6 +53,8 @@ class RensheProjectWrite(BaseModel):
 
     @model_validator(mode="after")
     def paired_selection(self):
+        if self.selection_id is not None and (self.config is not None or self.occupation_code is not None or self.skill_level is not None):
+            raise ValueError("报考组合标识不能与完整配置或旧版选择同时提交")
         if (self.occupation_code is None) != (self.skill_level is None):
             raise ValueError("请选择职业和对应技能等级")
         if self.occupation_code is not None and self.config is not None:
@@ -75,5 +80,7 @@ class RensheProjectResponse(BaseModel):
     version: int = 0
     config: RensheProjectConfiguration
     admission_requirements: dict = Field(default_factory=dict)
+    export_instructions: dict | None = None
     validation_errors: list[str] = Field(default_factory=list)
     batch_count: int = 0
+    review_notices: list[str] = Field(default_factory=list)

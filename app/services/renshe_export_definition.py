@@ -1,7 +1,7 @@
 """Current reporting contract. Product editors cannot change these rules.
 
-Material stems follow the client's current standard package. New batches reuse
-the verified two-inch portrait; historical batches keep their admission rules.
+Material stems follow the client's established filenames. New degree batches
+require a one-inch white-background portrait; historical batches keep their rules.
 Extensions always describe the actual file.
 """
 
@@ -37,7 +37,7 @@ EMPLOYMENT_REPORTING = {
     "years_rule": "required",
     "allow_zero_years": True,
 }
-RULE_ID = "renshe-current-standard-package-work-date-20261017"
+RULE_ID = "renshe-current-graduated-degree-six-materials-20261017"
 
 
 def archive_download_name(plan_id: int | str, volume_no: int) -> str:
@@ -90,20 +90,22 @@ def definition_fingerprint(registration: Path, work: Path) -> str:
     ).hexdigest()
 
 
-def export_instructions() -> dict:
+def export_instructions(config: dict | None = None) -> dict:
     from app.services.renshe_reporting import HEADERS
 
     examples = [
         ("id_card_front", ".jpg"),
         ("id_card_back", ".jpeg"),
-        ("portrait", ".jpg"),
-        ("social_security_proof", ".pdf"),
-        ("xuexin_registration", ".pdf"),
-        ("education_proof", ".jpeg"),
-        ("vocational_qualification_certificate", ".jpeg"),
-        ("professional_title_certificate", ".jpeg"),
+        ("registration_portrait", ".jpg"),
+        ("graduation_certificate", ".pdf"),
+        ("education_report", ".pdf"),
         ("commitment_letter", ".pdf"),
     ]
+    if config is not None:
+        examples = [
+            (item["kind"], next((ext for ext in (".pdf", ".jpeg", ".jpg") if ext in item["extensions"]), ".jpg"))
+            for item in config.get("materials", []) if item["kind"] in MATERIAL_STEMS
+        ]
     masked = "110101********123X"
     paths = [REGISTRATION_TEMPLATE_NAME, WORK_HISTORY_TEMPLATE_NAME]
     paths += [
@@ -126,15 +128,15 @@ def export_instructions() -> dict:
         "本次通讯地址",
         "本次工作单位（选填）",
         "本人实际从事职业",
-        "信息安全管理员",
-        "四级",
+        "批次所选职业／工种",
+        "批次所选技能等级的导出值",
         "学历型不填写职称专业",
         "学历型不填写职称等级",
         "真实参加工作日期，格式如2022-9-21；不使用入学或毕业日期",
         "实际职业年限，必填，允许0",
-        "模板职业代码",
-        "模板完整学历型申报条件原文",
-        "学历型",
+        "批次匹配的职业代码",
+        "批次组合匹配的模板申报条件原文",
+        "批次所选申报类型",
         "批次考试类型（新考／补考）",
         "实际社保参保单位（选填）",
         "本次电子邮箱",
@@ -153,7 +155,7 @@ def export_instructions() -> dict:
         "work_template": WORK_HISTORY_TEMPLATE_NAME,
         "work_description": "原样附带甲方工作经历模板，目前不会按考生自动填写经历；后续按报送要求补充。",
         "directory_note": "目录示例，实际内容以报名材料为准；文件保留真实扩展名。",
-        "portrait_note": "新标准批次复用已审核实名二寸免冠照片；历史批次仍按原报名要求办理，导出使用固定材料名称。",
+        "portrait_note": "本期报名照片为一寸白底近期证件照、≤500 KB；文件名沿用甲方既定的二寸免冠照片，不改变真实格式。历史批次保留原材料要求。",
         "example_paths": paths,
         "file_tree": "\n".join(tree),
         "columns": [
