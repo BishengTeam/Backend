@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class MaterialRequirement(BaseModel):
@@ -40,10 +40,21 @@ class RensheProjectWrite(BaseModel):
     description: str | None = Field(None, max_length=512)
     home_cover_url: str | None = Field(None, max_length=512)
     status: Literal["draft", "available", "disabled"] = "draft"
-    # Rule and material definitions are code-owned. Admins send only the
-    # commitment file (if any); omitting this object selects the current rules.
+    # Select an adapted occupation/level; all other rules come from the server.
+    occupation_code: str | None = Field(None, max_length=160)
+    skill_level: str | None = Field(None, max_length=32)
+    commitment_template: dict | None = None
+    # Compatibility for older clients. Omission preserves an existing project.
     config: RensheProjectConfiguration | None = None
     expected_version: int | None = Field(None, ge=1)
+
+    @model_validator(mode="after")
+    def paired_selection(self):
+        if (self.occupation_code is None) != (self.skill_level is None):
+            raise ValueError("请选择职业和对应技能等级")
+        if self.occupation_code is not None and self.config is not None:
+            raise ValueError("职业等级选择与完整配置不能同时提交")
+        return self
 
     @field_validator("chinese_name")
     @classmethod
@@ -63,5 +74,6 @@ class RensheProjectResponse(BaseModel):
     config_id: int | None = None
     version: int = 0
     config: RensheProjectConfiguration
+    admission_requirements: dict = Field(default_factory=dict)
     validation_errors: list[str] = Field(default_factory=list)
     batch_count: int = 0

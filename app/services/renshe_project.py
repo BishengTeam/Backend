@@ -5,6 +5,7 @@ commitment downloads use the project's current uploaded file.
 """
 
 from dataclasses import asdict
+from copy import deepcopy
 from uuid import uuid4
 
 from sqlalchemy import func, select
@@ -46,9 +47,10 @@ MATERIAL_NAMES = {
 FORM_FIELDS = ["contact_phone", "mailing_address", "email"]
 
 
-def admission_requirements() -> dict:
-    """The single read-only admission contract served to Admin."""
-    config = graduated_configuration()
+def admission_requirements(config: dict | None = None) -> dict:
+    """Describe the selected or persisted admission contract, never a global substitute."""
+    config = graduated_configuration() if config is None else config
+    graduated = is_graduated(config)
     return {
         "scope": {
             "occupation_name": config["occupation_name"],
@@ -59,24 +61,25 @@ def admission_requirements() -> dict:
             "exam_types": config["exam_types"],
             "qualification_rule": config["qualification_rule"],
         },
-        "form_sections": ["本人实名信息", "毕业学历信息", "联系信息", "报送模板要求的其他实际信息"],
+        "form_sections": ["本人实名信息", "毕业学历信息" if graduated else "学生资料", "联系信息", "报送模板要求的其他实际信息"],
         "education_options": [
-            {"value": value, "label": label}
-            for value, label in EDUCATIONS.items()
+            {"value": value, "label": EDUCATIONS.get(value, value)}
+            for value in config.get("education_levels", [])
         ],
         "institution_types": [
-            {"value": value, "label": label}
-            for value, label in INSTITUTION_TYPES.items()
+            {"value": value, "label": INSTITUTION_TYPES.get(value, value)}
+            for value in config.get("institution_types", [])
         ],
         "materials": [
             {
                 **item,
-                "max_size_bytes": MATERIAL_SPECS[item["kind"]].max_bytes,
+                "max_size_bytes": MATERIAL_SPECS[item["kind"]].max_bytes if item["kind"] in MATERIAL_SPECS else 0,
             }
             for item in config["materials"]
         ],
         "notes": [
-            "文化程度选项全部展示，用于考生如实填报；是否符合本期资格仍由毕业证、院校类型、专业和初审共同判断。",
+            ("文化程度选项用于考生如实填报；资格由毕业证、院校类型、专业和初审共同判断。"
+             if graduated else "历史项目保留其实际学生资料及学历要求，不自动切换至新学历型规则。"),
             "新批次使用当前代码规则；已发布批次继续使用创建时冻结的报名要求。",
             "材料格式、大小、数量和必填性由服务端强制校验。",
         ],
@@ -135,6 +138,21 @@ def graduated_configuration() -> dict:
     return config
 
 
+def supported_programs() -> list[dict]:
+    """Only fully adapted admission/review/export combinations belong here."""
+    configs = [graduated_configuration()]
+    return [
+        {
+            **{key: config[key] for key in (
+                "occupation_name", "occupation_code", "skill_level", "export_skill_level"
+            )},
+            "config": config,
+            "admission_requirements": admission_requirements(config),
+        }
+        for config in configs
+    ]
+
+
 def configuration_errors(config: dict) -> list[str]:
     errors = []
     for key, label in (
@@ -156,10 +174,9 @@ def configuration_errors(config: dict) -> list[str]:
     if not graduated and config.get("qualification_rule") != "related_major_current_graduating_student":
         errors.append("资格规则尚未适配")
     if graduated:
-        program = RENSHE_DEFAULT_PROGRAM
-        if any(config.get(key) != getattr(program, key) for key in (
+        if not any(all(config.get(key) == program[key] for key in (
             "occupation_name", "occupation_code", "skill_level", "export_skill_level"
-        )):
+        )) for program in supported_programs()):
             errors.append("本期只支持信息安全管理员、四级／中级工")
         if not config.get("institution_types") or not set(config["institution_types"]) <= set(INSTITUTION_TYPES):
             errors.append("请选择本期支持的院校类型")
@@ -268,6 +285,7 @@ class RensheProjectService:
         from app.services.renshe_export_definition import export_instructions
         return {
             "default_config": graduated_configuration(),
+            "supported_programs": supported_programs(),
             "templates": {"current": {"label": "当前固定25列报名信息模板", "columns": HEADERS}},
             "material_names": MATERIAL_NAMES,
             "form_fields": FORM_FIELDS,
@@ -309,6 +327,7 @@ class RensheProjectService:
             config_id=version.id if version else None,
             version=version.version if version else 0,
             config=RensheProjectConfiguration.model_validate(config),
+            admission_requirements=admission_requirements(config),
             validation_errors=configuration_errors(config),
             batch_count=await db.scalar(
                 select(func.count())
@@ -338,33 +357,7 @@ class RensheProjectService:
     async def save(
         self, data: RensheProjectWrite, *, product_id: int | None = None, admin_id: int
     ) -> RensheProjectResponse:
-        incoming = data.config.model_dump() if data.config is not None else {}
         from app.services.renshe_graduated import commitment_policy
-        if data.config is None:
-            # Metadata-only saves select the current code-owned admission
-            # contract. An existing commitment file is preserved below.
-            config = graduated_configuration()
-            config["commitment_template"] = None
-            config["reporting_policy"] = default_policy()
-        else:
-            # Full payloads remain compatible with persisted versions. The
-            # current Admin sends the backend's default config for every save.
-            config = incoming
-            config["commitment_template"] = commitment_policy(config)["commitment_template"]
-            config.update(
-                export_template=(
-                    "renshe_graduated_v1"
-                    if is_graduated(config)
-                    else "renshe_registration_v1"
-                ),
-                field_mapping={},
-                attachment_layout="flat",
-            )
-            if is_graduated(config):
-                config["reporting_policy"] = default_policy()
-            else:
-                config.pop("institution_types", None)
-                config.pop("reporting_policy", None)
         async with get_db_ctx() as db:
             product = None
             if product_id is not None:
@@ -386,17 +379,45 @@ class RensheProjectService:
                 db.add(product)
             await db.flush()
             latest = await self.latest(db, product.id)
-            # A metadata-only save must not clear an existing commitment file.
-            if data.config is None and latest is not None:
-                config["commitment_template"] = latest.config.get("commitment_template")
+            selection_changed = data.occupation_code is not None and (
+                latest is None or any(latest.config.get(key) != getattr(data, key)
+                                      for key in ("occupation_code", "skill_level"))
+            )
+            if selection_changed:
+                program = next((item for item in supported_programs()
+                                if item["occupation_code"] == data.occupation_code
+                                and item["skill_level"] == data.skill_level), None)
+                if program is None:
+                    raise BusinessException("该职业或等级尚未适配，当前仅支持信息安全管理员四级／中级工")
+                config = deepcopy(program["config"])
+                if latest is not None:
+                    config["commitment_template"] = commitment_policy(latest.config)["commitment_template"]
+            elif data.config is not None:
+                config = data.config.model_dump()
+                config["commitment_template"] = commitment_policy(config)["commitment_template"]
+                config.update(export_template="renshe_graduated_v1" if is_graduated(config) else "renshe_registration_v1", field_mapping={}, attachment_layout="flat")
+                if is_graduated(config):
+                    config["reporting_policy"] = default_policy()
+                else:
+                    config.pop("institution_types", None)
+                    config.pop("reporting_policy", None)
+            elif latest is not None:
+                config = deepcopy(latest.config)
+            else:
+                raise BusinessException("请选择已适配的职业／工种和技能等级")
+            if "commitment_template" in data.model_fields_set:
+                config["commitment_template"] = data.commitment_template
             errors = configuration_errors(config)
             if data.status == "available" and errors:
                 raise BusinessException("项目配置不可用：" + "；".join(errors))
             admission_changed = latest is None or any(latest.config.get(key) != config.get(key) for key in ("qualification_rule", "occupation_name", "occupation_code", "skill_level", "education_levels", "institution_types", "materials", "exam_types", "application_types"))
-            if data.status == "available" and (is_graduated(config) or admission_changed or product.renshe_status != "available"):
+            if data.status == "available" and (admission_changed or product.renshe_status != "available"):
                 activation = activation_errors(config)
                 if activation:
                     raise BusinessException("；".join(activation))
+            elif data.status == "available" and is_graduated(config):
+                from app.services.renshe_graduated import template_path
+                template_path(commitment_policy(config))
             changed_fields = [
                 key
                 for key, value in config.items()
@@ -406,7 +427,7 @@ class RensheProjectService:
                 raise ConflictException("项目配置已更新，请刷新后重试")
             if latest and any(
                 latest.config.get(key) != config.get(key)
-                for key in ("occupation_name", "skill_level")
+                for key in ("occupation_name", "occupation_code", "skill_level", "export_skill_level")
             ):
                 used = await db.scalar(
                     select(Plan.id).where(Plan.product_type == product.code).limit(1)

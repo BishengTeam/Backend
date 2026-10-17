@@ -28,7 +28,7 @@ from app.services.renshe_project import RensheProjectService
 from app.services.renshe_project import graduated_configuration
 from app.services.renshe_review import RensheReviewService
 from tests.unit.test_renshe_graduated import graduated_batch, draft_payload, uploads
-from tests.unit.test_renshe_projects import isolated as _isolated, project_data
+from tests.unit.test_renshe_projects import isolated as _isolated
 
 isolated = _isolated
 
@@ -153,11 +153,13 @@ async def test_rule_upgrade_rejects_queued_task_but_preserves_completed_download
 
 
 @pytest.mark.asyncio
-async def test_legacy_project_save_uses_current_rules_and_preserves_frozen_batch(
+async def test_selected_project_metadata_save_preserves_rules_and_commitment(
     isolated, monkeypatch
 ):
+    selected = graduated_configuration()
     project = await RensheProjectService().save(
-        RensheProjectWrite(chinese_name="信息安全中级", status="draft"),
+        RensheProjectWrite(chinese_name="信息安全中级", status="draft",
+                           occupation_code=selected["occupation_code"], skill_level=selected["skill_level"]),
         admin_id=1,
     )
     monkeypatch.setattr(
