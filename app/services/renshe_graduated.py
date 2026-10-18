@@ -60,12 +60,32 @@ DEGREE_REVIEW_CHECKS = {
 
 
 def review_checks(config: dict) -> dict:
+    from app.services.renshe_employment import is_employment, review_checks as employment_checks
+    if is_employment(config):
+        return employment_checks(config)
     kinds = {item["kind"] for item in config.get("materials", [])}
     return DEGREE_REVIEW_CHECKS if "registration_portrait" in kinds else REVIEW_CHECKS
 
 
 def is_graduated(config: dict | None) -> bool:
     return bool(config and config.get("qualification_rule") == RULE)
+
+
+def is_self_reported(config: dict | None) -> bool:
+    from app.services.renshe_employment import is_employment
+    return is_graduated(config) or is_employment(config)
+
+
+def validate_admission(form: dict, config: dict, *, as_of: date | None = None) -> dict:
+    from app.services.renshe_employment import is_employment, validate_qualification
+    from app.services.renshe_reporting import education_config
+    if is_employment(config):
+        if form.get("education_info"):
+            raise BusinessException("工龄或证书路径不使用毕业学历资格，请按所选路径填写")
+        return validate_qualification(form, config, as_of=as_of)
+    if form.get("qualification_info"):
+        raise BusinessException("学历型不使用工龄或技能证书路径")
+    return {"education_info": validate_education(form.get("education_info"), education_config(config))}
 
 
 def policy_errors(policy: dict) -> list[str]:
@@ -105,16 +125,19 @@ def template_path(policy: dict) -> Path:
 
 
 def activation_errors(config: dict) -> list[str]:
-    from app.services.renshe_catalog import CURRENT_SELECTION, find_selection
+    from app.services.renshe_catalog import find_selection
     if config.get("selection_id"):
         selected = find_selection(config["selection_id"])
         if selected is None or not selected["adapted"]:
             return ["该组合尚未适配，仅可保存草稿，不能启用或发布招生"]
-    if not is_graduated(config):
+    if not is_self_reported(config):
         return [
-            "新开放批次仅支持信息安全管理员四级／中级工、已毕业学历型；历史批次保持原规则"
+            "新开放批次须使用已适配的已毕业学历型组合；历史批次保持原规则"
         ]
-    if config.get("selection_id") != CURRENT_SELECTION or {item.get("kind") for item in config.get("materials", [])} != set(LEGACY_MATERIALS):
+    selected = find_selection(config.get("selection_id"))
+    from app.services.renshe_project import selection_configuration
+    expected = selection_configuration(selected) if selected and selected["adapted"] else None
+    if expected is None or config.get("materials") != expected["materials"] or config.get("qualification_rule") != expected["qualification_rule"]:
         return ["新批次须使用当前已毕业学历型六类材料；历史批次保持原要求"]
     try:
         template_path(commitment_policy(config))
@@ -213,13 +236,17 @@ def validate_review(data, *, stage: str, now: datetime, version_id: int, config:
             | {"contact_phone", "email", "mailing_address"}
             | {"reporting_info." + key for key in REPORT_FIELDS}
         )
+        from app.services.renshe_employment import is_employment, QUALIFICATION_FIELDS
+        if config is not None and is_employment(config):
+            allowed -= {"education_info." + key for key in ("school", "institution_type", "education", "major", "graduation_date", "certificate_number")}
+            allowed |= set(QUALIFICATION_FIELDS)
         if not data.required_changes or not set(data.required_changes) <= allowed:
             raise BusinessException("请选择需要补正的具体学历字段、联系方式或材料")
     elif stage == "initial" and (
         set(data.checklist or {}) != set(review_checks(config) if config is not None else REVIEW_CHECKS)
         or not all(value is True for value in data.checklist.values())
     ):
-        raise BusinessException("请逐项完成七项学历型初审核验后再通过")
+        raise BusinessException("请逐项完成七项学历型初审核验后再通过" if config is None or is_graduated(config) else "请逐项完成当前工龄或证书路径的初审核验后再通过")
 
 
 def china_today() -> date:

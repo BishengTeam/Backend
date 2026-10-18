@@ -50,7 +50,7 @@ from app.schemas.renshe import (
     RensheSignedUrlResponse,
 )
 from app.services.renshe_project import batch_configuration, is_renshe_plan
-from app.services.renshe_graduated import is_graduated
+from app.services.renshe_graduated import is_self_reported
 from app.services.renshe_reporting import EDUCATIONS, report_date, validate_row, validate_snapshot, assert_template, validate_reporting
 from app.services.renshe_export_definition import material_archive_path, definition_fingerprint, archive_download_name, REGISTRATION_TEMPLATE_NAME, WORK_HISTORY_TEMPLATE_NAME
 
@@ -132,14 +132,15 @@ def build_registration_row(candidate: ExportCandidate, plan: Plan) -> list[objec
                      and item["skill_level"] == config["skill_level"] and item["application_type"] == plan.application_type), None)
     if selected is None or not selected["adapted"]:
         raise BusinessException("该报考组合尚未完成导出适配")
-    condition = selected["source_conditions"][0]
+    # Existing batches retain their frozen condition when source text evolves.
+    condition = (config.get("rule_profile", {}).get("source_conditions") or selected["source_conditions"])[0]
     realname, form = candidate.realname_snapshot, candidate.form_data
     education = form.get("education_info") or candidate.student_snapshot
     info = form.get("reporting_info") or {}
     validate_reporting(info, {})
     values = [realname.get("real_name"), realname.get("gender"), realname.get("birth_date"),
               "居民身份证", realname.get("id_card_number"), "社会人员",
-              EDUCATIONS.get(education.get("education")), info.get("ethnicity"), info.get("political_status"),
+              EDUCATIONS.get((form.get("qualification_info") or {}).get("cultural_education") or education.get("education")), info.get("ethnicity"), info.get("political_status"),
               form.get("contact_phone"), form.get("mailing_address"), info.get("work_unit"), info.get("occupation_status"),
               config["occupation_name"], config["export_skill_level"], None, None, report_date(info), float(info["occupation_years"]),
               config["occupation_code"], condition, plan.application_type, plan.exam_type, info.get("social_insurance_unit"), form.get("email")]
@@ -921,7 +922,11 @@ class RensheExportService:
                 candidates,
                 plan,
             )
-            await asyncio.to_thread(shutil.copyfile, work_template, work_path)
+            from app.services.renshe_employment import is_employment
+            if is_employment(batch_configuration(plan)):
+                await asyncio.to_thread(self._write_work_history_workbook, work_template, work_path, candidates)
+            else:
+                await asyncio.to_thread(shutil.copyfile, work_template, work_path)
 
             archive = zipfile.ZipFile(
                 zip_path,
@@ -966,6 +971,30 @@ class RensheExportService:
             return size_bytes, sha256
 
     @staticmethod
+    def _write_work_history_workbook(template_path: Path, output_path: Path, candidates: list[ExportCandidate]) -> None:
+        from openpyxl import load_workbook
+        workbook = load_workbook(template_path)
+        try:
+            sheet = workbook.worksheets[0]
+            if [sheet.cell(1, i).value for i in range(1, 7)] != ["姓名", "证件号码", "开始时间", "结束时间", "工作单位", "岗位"]:
+                raise BusinessException("工作经历模板六列表头与已适配格式不符")
+            if sheet.max_row > 1:
+                sheet.delete_rows(2, sheet.max_row - 1)
+            row_no = 2
+            for candidate in candidates:
+                for item in candidate.form_data["qualification_info"]["work_experiences"]:
+                    values = [candidate.realname_snapshot["real_name"], candidate.realname_snapshot["id_card_number"],
+                              item["start_date"], item.get("end_date"), item["work_unit"], item["position"]]
+                    for column, value in enumerate(values, 1):
+                        cell = sheet.cell(row_no, column, value)
+                        if isinstance(value, str):
+                            cell.data_type = "s"
+                    row_no += 1
+            workbook.save(output_path)
+        finally:
+            workbook.close()
+
+    @staticmethod
     def _write_registration_workbook(
         template_path: Path,
         output_path: Path,
@@ -978,6 +1007,8 @@ class RensheExportService:
             raise ThirdPartyException("缺少 Excel 模板处理依赖 openpyxl") from exc
         workbook = load_workbook(template_path)
         try:
+            from app.services.renshe_export_definition import prepare_reporting_workbook
+            prepare_reporting_workbook(workbook)
             worksheet = workbook["Sheet1"]
             for row_no, candidate in enumerate(candidates, start=2):
                 values = build_registration_row(candidate, plan)
@@ -1036,7 +1067,7 @@ class RensheExportService:
                     raise ConflictException("导出版本材料不完整")
                 if version.application_id != item.application_id or (version.project_config_id is not None and version.project_config_id != plan.renshe_config_id):
                     raise ConflictException("导出人员、材料或项目配置版本归属不一致")
-                if not version.realname_snapshot or (not version.student_snapshot and not (is_graduated(config) and version.form_data.get("education_info"))):
+                if not version.realname_snapshot or (not version.student_snapshot and not (is_self_reported(config) and (version.form_data.get("education_info") or version.form_data.get("qualification_info")))):
                     raise ConflictException("导出版本敏感快照已清理")
                 candidates.append(
                     ExportCandidate(

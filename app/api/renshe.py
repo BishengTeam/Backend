@@ -41,7 +41,7 @@ async def list_projects(current_user: User = Depends(get_current_user)):
                           "education_levels": item.config.education_levels,
                           "institution_types": item.config.institution_types,
                           "materials": [material.model_dump() for material in item.config.materials],
-                          "admission_notice": "本期仅接受已取得毕业证、本专业或相关专业申请人；学历及专业以报名初审为准。无法提供学历备案表请联系管理员。" if item.config.qualification_rule == "related_major_graduated_degree_v1" else "历史项目仅办理已有报名。本期新报名请选择已毕业学历型批次。"} for item in projects])
+                          "admission_notice": "本期仅接受已取得毕业证、本专业或相关专业申请人；学历及专业以报名初审为准。无法提供学历备案表请联系管理员。" if item.config.qualification_rule == "related_major_graduated_degree_v1" else "；".join(item.config.rule_profile.get("source_conditions", [])) + "。工龄、证书、相关职业及社保由本次初审核验。" if item.config.qualification_rule == "documented_employment_v1" else "历史项目仅办理已有报名。本期新报名请选择已适配批次。"} for item in projects])
 
 
 @router.get("/batches")
@@ -87,14 +87,14 @@ async def download_commitment_template(plan_id: int = Path(..., ge=1), current_u
     from app.adapter.database import get_db_ctx
     from app.domain.plan.src.index import Plan
     from app.services.renshe_project import batch_configuration, is_renshe_plan
-    from app.services.renshe_graduated import is_graduated, template_path
+    from app.services.renshe_graduated import is_self_reported, template_path
     from app.port.exceptions import NotFoundException
     async with get_db_ctx() as db:
         plan = await db.get(Plan, plan_id)
         if not await is_renshe_plan(db, plan):
             raise NotFoundException("人社批次")
         config = batch_configuration(plan)
-        if not is_graduated(config) or plan.status == "draft":
+        if not is_self_reported(config) or plan.status == "draft":
             raise NotFoundException("承诺书模板")
         from app.services.renshe_reporting import resolve_contract
         config = (await resolve_contract(db, plan))["config"]

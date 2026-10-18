@@ -31,12 +31,13 @@ from app.schemas.renshe_project import (
 )
 from app.services.renshe_graduated import (
     RULE, INSTITUTION_TYPES, MATERIALS as GRADUATED_MATERIALS, REVIEW_CHECKS,
-    LEGACY_MATERIALS, is_graduated, policy_errors, activation_errors, review_checks,
+    LEGACY_MATERIALS, is_graduated, is_self_reported, policy_errors, activation_errors, review_checks,
 )
 from app.services.renshe_reporting import EDUCATIONS, OCCUPATIONS, ETHNICITIES, POLITICS, DEGREE_CONDITION, HEADERS, default_policy
 from app.services.renshe_catalog import CURRENT_SELECTION, combinations, find_selection
 
 MATERIAL_NAMES = {
+    "work_proof": "工龄证明",
     "id_card_front": "身份证正面",
     "id_card_back": "身份证背面",
     "portrait": "二寸免冠照片",
@@ -55,7 +56,7 @@ def admission_requirements(config: dict | None = None) -> dict:
     graduated = is_graduated(config)
     return {
         "rule_profile": config.get("rule_profile", {}),
-        "review_checks": review_checks(config) if graduated else {},
+        "review_checks": review_checks(config) if is_self_reported(config) else {},
         "scope": {
             "occupation_name": config["occupation_name"],
             "occupation_code": config["occupation_code"],
@@ -65,7 +66,7 @@ def admission_requirements(config: dict | None = None) -> dict:
             "exam_types": config["exam_types"],
             "qualification_rule": config["qualification_rule"],
         },
-        "form_sections": [] if config.get("qualification_rule") == "unadapted" else ["本人实名信息", "毕业学历信息" if graduated else "学生资料", "联系信息", "报送模板要求的其他实际信息"],
+        "form_sections": [] if config.get("qualification_rule") == "unadapted" else ["本人实名信息", "毕业学历信息" if graduated else "文化程度、工作经历及技能证书" if is_self_reported(config) else "学生资料", "联系信息", "报送模板要求的其他实际信息"],
         "education_options": [
             {"value": value, "label": EDUCATIONS.get(value, value)}
             for value in config.get("education_levels", [])
@@ -83,7 +84,7 @@ def admission_requirements(config: dict | None = None) -> dict:
         ],
         "notes": [
             ("文化程度选项用于考生如实填报；资格由毕业证、院校类型、专业和初审共同判断。"
-             if graduated else "历史项目保留其实际学生资料及学历要求，不自动切换至新学历型规则。"),
+             if graduated else "按实际工作经历及证书提交，职业关联、证明和社保由初审逐项核验。" if is_self_reported(config) else "历史项目保留其实际学生资料及学历要求，不自动切换至新学历型规则。"),
             "新批次使用当前代码规则；已发布批次继续使用创建时冻结的报名要求。",
             "材料格式、大小、数量和必填性由服务端强制校验。",
         ],
@@ -125,13 +126,18 @@ def default_configuration() -> dict:
     }
 
 
-def graduated_configuration() -> dict:
+def graduated_configuration(selection: dict | None = None) -> dict:
+    selection = find_selection(CURRENT_SELECTION) if selection is None else selection
+    if not selection["adapted"] or selection["application_type"] != "学历型":
+        raise BusinessException("该组合尚未适配，不能套用学历型规则")
     config = default_configuration()
     config.update(
-        selection_id=CURRENT_SELECTION,
-        rule_profile=find_selection(CURRENT_SELECTION),
+        **{key: selection[key] for key in ("occupation_name", "occupation_code", "skill_level", "export_skill_level")},
+        application_types=[selection["application_type"]],
+        selection_id=selection["selection_id"],
+        rule_profile=deepcopy(selection),
         qualification_rule=RULE,
-        institution_types=list(INSTITUTION_TYPES),
+        institution_types=list(selection["institution_types"]),
         reporting_policy=default_policy(),
         education_levels=list(EDUCATIONS),
         materials=[{
@@ -146,7 +152,10 @@ def graduated_configuration() -> dict:
 
 def selection_configuration(selection: dict) -> dict:
     if selection["adapted"]:
-        return graduated_configuration()
+        if selection["application_type"] != "学历型":
+            from app.services.renshe_employment import configuration
+            return configuration(selection)
+        return graduated_configuration(selection)
     # Deliberately empty technical rules: never borrow the default program.
     return RensheProjectConfiguration(
         selection_id=selection["selection_id"], rule_profile=selection,
@@ -159,7 +168,7 @@ def selection_configuration(selection: dict) -> dict:
 
 def supported_programs() -> list[dict]:
     """Only fully adapted admission/review/export combinations belong here."""
-    configs = [graduated_configuration()]
+    configs = [graduated_configuration()] + [selection_configuration(item) for item in combinations() if item["adapted"] and item["selection_id"] != CURRENT_SELECTION]
     return [
         {
             **{key: config[key] for key in (
@@ -179,10 +188,18 @@ def configuration_errors(config: dict) -> list[str]:
         if selection is None or not selection["adapted"]:
             return ["该组合尚未适配，仅可保存草稿"] + (selection["missing"] if selection else ["未找到资料依据"])
         if any(config.get(key) != selection[key] for key in ("occupation_name", "occupation_code", "skill_level", "export_skill_level")) or config.get("application_types") != [selection["application_type"]]:
-            return ["报考组合与系统匹配规则不一致；本期只支持信息安全管理员四级／中级工学历型"]
-        canonical = graduated_configuration()
+            return ["报考组合与系统匹配规则不一致，请使用所选职业、等级及申报类型对应的规则"]
+        canonical = selection_configuration(selection)
         if any(config.get(key) != canonical[key] for key in ("qualification_rule", "materials", "form_fields", "education_levels", "institution_types")):
             return ["资格、材料及报名字段须使用服务端匹配规则，不能手工修改"]
+    from app.services.renshe_employment import is_employment
+    if is_employment(config):
+        from app.services.renshe_graduated import commitment_policy
+        if not config.get("selection_id"):
+            return ["工龄及复合型必须由服务端匹配具体报考组合"]
+        if config.get("exam_types") != ["新考"]:
+            return ["工龄及复合型须使用已适配的新考批次"]
+        return policy_errors(commitment_policy(config))
     for key, label in (
         ("occupation_name", "职业／工种"),
         ("occupation_code", "职业代码"),
@@ -205,7 +222,7 @@ def configuration_errors(config: dict) -> list[str]:
         if not any(all(config.get(key) == program[key] for key in (
             "occupation_name", "occupation_code", "skill_level", "export_skill_level"
         )) for program in supported_programs()):
-            errors.append("本期只支持信息安全管理员、四级／中级工")
+            errors.append("该职业、等级与申报类型尚未完成适配")
         if not config.get("institution_types") or not set(config["institution_types"]) <= set(INSTITUTION_TYPES):
             errors.append("请选择本期支持的院校类型")
         from app.services.renshe_graduated import commitment_policy
@@ -332,6 +349,7 @@ class RensheProjectService:
             "supported_programs": supported_programs(),
             "combinations": [
                 {**item, "config": selection_configuration(item),
+                 "export_instructions": export_instructions(selection_configuration(item)) if item["adapted"] else None,
                  "admission_requirements": admission_requirements(selection_configuration(item))}
                 for item in combinations()
             ],
@@ -340,6 +358,7 @@ class RensheProjectService:
             "form_fields": FORM_FIELDS,
             "qualification_rules": {
                 RULE: "已取得毕业证的本专业或相关专业（学历型，人工核验）",
+                "documented_employment_v1": "四级工龄型或五级证书后相关工作满3年的复合型",
                 "related_major_current_graduating_student": "历史规则：在读应届学生（仅保留历史批次）",
             },
             "institution_types": INSTITUTION_TYPES,
@@ -438,8 +457,15 @@ class RensheProjectService:
                 same = latest is not None and latest.config.get("selection_id") == data.selection_id
                 if latest is not None and not latest.config.get("selection_id"):
                     same = all(latest.config.get(key) == selection[key] for key in ("occupation_code", "skill_level")) and latest.config.get("application_types") == [selection["application_type"]]
-                config = deepcopy(latest.config) if same else selection_configuration(selection)
-                if latest is not None and not same:
+                # Upgrade an unreferenced pending draft when its combination becomes
+                # available. Never replace an already adapted or historical contract.
+                upgrade_draft = same and latest.config.get("qualification_rule") == "unadapted" and selection["adapted"]
+                config = deepcopy(latest.config) if same and not upgrade_draft else selection_configuration(selection)
+                if upgrade_draft:
+                    used = await db.scalar(select(Plan.id).where(Plan.product_type == product.code).limit(1))
+                    if used is not None:
+                        raise BusinessException("已有关联批次的待适配项目不能自动升级，请新建项目")
+                if latest is not None and (not same or upgrade_draft):
                     config["commitment_template"] = commitment_policy(latest.config)["commitment_template"]
             selection_changed = data.occupation_code is not None and (
                 latest is None or any(latest.config.get(key) != getattr(data, key)
@@ -452,7 +478,7 @@ class RensheProjectService:
                                 if item["occupation_code"] == data.occupation_code
                                 and item["skill_level"] == data.skill_level), None)
                 if program is None:
-                    raise BusinessException("该职业或等级尚未适配，当前仅支持信息安全管理员四级／中级工")
+                    raise BusinessException("该职业或等级尚未适配，请选择能力目录中的已适配组合")
                 config = deepcopy(program["config"])
                 if latest is not None:
                     config["commitment_template"] = commitment_policy(latest.config)["commitment_template"]
@@ -465,8 +491,8 @@ class RensheProjectService:
                     # The legacy payload must not provide an invented source/profile.
                     config["rule_profile"] = selected
                 config["commitment_template"] = commitment_policy(config)["commitment_template"]
-                config.update(export_template="renshe_graduated_v1" if is_graduated(config) else "renshe_registration_v1", field_mapping={}, attachment_layout="flat")
-                if is_graduated(config):
+                config.update(export_template="renshe_graduated_v1" if is_self_reported(config) else "renshe_registration_v1", field_mapping={}, attachment_layout="flat")
+                if is_self_reported(config):
                     config["reporting_policy"] = default_policy()
                 else:
                     config.pop("institution_types", None)
@@ -485,7 +511,7 @@ class RensheProjectService:
                 activation = activation_errors(config)
                 if activation:
                     raise BusinessException("；".join(activation))
-            elif data.status == "available" and is_graduated(config):
+            elif data.status == "available" and is_self_reported(config):
                 from app.services.renshe_graduated import template_path
                 template_path(commitment_policy(config))
             changed_fields = [

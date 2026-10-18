@@ -358,7 +358,7 @@ async def test_new_rules_reject_unadapted_combinations_and_changed_uploads(
     project, batch = await graduated_batch(env, monkeypatch)
     config = project.config.model_dump()
     config["skill_level"] = "高级工"
-    with pytest.raises(BusinessException, match="四级"):
+    with pytest.raises(BusinessException, match="报考组合"):
         await RensheProjectService().save(
             RensheProjectWrite(
                 chinese_name="未适配三级", status="available", config=config

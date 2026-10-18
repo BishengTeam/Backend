@@ -156,14 +156,14 @@ async def resolve_contract(db, plan, config_id: int | None = None) -> dict:
     from app.models.cert_product import CertProduct
     from app.models.renshe_project import RensheProjectConfig
     from app.services.renshe_graduated import (
-        is_graduated,
+        is_self_reported,
         template_path,
         commitment_policy,
     )
     from app.services.renshe_project import batch_configuration
 
     frozen = batch_configuration(plan)
-    if not is_graduated(frozen):
+    if not is_self_reported(frozen):
         return {
             "config_id": plan.renshe_config_id,
             "config": {**frozen, "reporting_policy": {"commitment_template": None}},
@@ -198,11 +198,12 @@ def public_options(contract: dict, frozen: dict) -> dict:
         "education_levels": config["education_levels"],
         "education_labels": EDUCATIONS,
         "institution_types": config.get("institution_types", []),
+        "rule_profile": frozen.get("rule_profile", {}),
         "occupations": OCCUPATIONS,
         "ethnicities": ETHNICITIES,
         "political_statuses": POLITICS,
         "candidate_source": "社会人员",
-        "application_condition": DEGREE_CONDITION,
+        "application_condition": (frozen.get("rule_profile", {}).get("source_conditions") or [DEGREE_CONDITION])[0],
         "employment_reporting": employment_rules(),
         "commitment_template": policy["commitment_template"],
     }
@@ -245,6 +246,16 @@ async def validate_snapshot(db, plan, form: dict) -> dict:
     if not isinstance(form.get("reporting_info"), dict):
         raise ConflictException("该报名版本缺少模板填报信息，请补正后重新初审并导出")
     validate_reporting(form["reporting_info"], {})
+    from app.services.renshe_employment import is_employment
+    from app.services.renshe_project import batch_configuration
+    from app.services.renshe_graduated import validate_admission
+    config = batch_configuration(plan)
+    if is_employment(config):
+        try:
+            as_of = date.fromisoformat(form["eligibility_snapshot"]["as_of"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ConflictException("该报名缺少提交时的工龄核算快照，请补正后重新审核") from exc
+        validate_admission(form, config, as_of=as_of)
     return {}
 
 
@@ -274,12 +285,20 @@ def assert_template(workbook) -> None:
             for rule in sheet.data_validations.dataValidation
             if cell in rule.sqref and rule.type == "list"
         ]
-        if not any(
-            rule.formula1
-            and rule.formula1.startswith('"')
-            and choices <= set(rule.formula1.strip('"').split(","))
-            for rule in rules
-        ):
+        def allowed_values(rule):
+            formula = rule.formula1 or ""
+            if formula.startswith('"'):
+                return set(formula.strip('"').split(","))
+            name = workbook.defined_names.get(formula.lstrip("="))
+            if name is None:
+                return set()
+            values = set()
+            for sheet_name, cells in name.destinations:
+                if sheet_name in workbook.sheetnames:
+                    values.update(cell.value for row in workbook[sheet_name][cells] for cell in row)
+            return values
+
+        if not any(choices <= allowed_values(rule) for rule in rules):
             raise ValueError(f"模板{column}列下拉字典不匹配")
     condition = workbook["申报条件"]
     if not any(

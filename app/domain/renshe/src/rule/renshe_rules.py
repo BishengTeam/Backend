@@ -143,6 +143,7 @@ MATERIAL_SPECS: dict[str, MaterialSpec] = {
     "education_report": PDF_SPEC,
     "commitment_letter": MaterialSpec(JPEG_SPEC.extensions | PDF_SPEC.extensions, JPEG_SPEC.content_types | PDF_SPEC.content_types, PDF_SPEC.max_bytes, JPEG_SPEC.magic + PDF_SPEC.magic),
     "social_security_proof": PDF_SPEC,
+    "work_proof": MaterialSpec(JPEG_SPEC.extensions | PDF_SPEC.extensions, JPEG_SPEC.content_types | PDF_SPEC.content_types, PDF_SPEC.max_bytes, JPEG_SPEC.magic + PDF_SPEC.magic),
     "vocational_qualification_certificate": JPEG_SPEC,
     "professional_title_certificate": JPEG_SPEC,
 }

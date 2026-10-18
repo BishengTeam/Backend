@@ -41,8 +41,8 @@ from app.services.agreement_template import ensure_accepted
 from app.services.consultation_group import ConsultationGroupService
 from app.services.plan_enrollment import CAPACITY_OCCUPYING_ORDER_STATUSES, PlanEnrollmentService
 from app.services.renshe_project import batch_configuration, is_renshe_plan, default_configuration
-from app.services.renshe_graduated import is_graduated, validate_education
-from app.services.renshe_reporting import resolve_contract, validate_reporting, education_config, validate_snapshot, is_v2
+from app.services.renshe_graduated import is_self_reported, validate_admission
+from app.services.renshe_reporting import resolve_contract, validate_reporting, validate_snapshot, is_v2
 from app.utils.payment import generate_out_trade_no
 from app.utils.pii import identity_hash
 
@@ -86,8 +86,8 @@ class RensheApplicationService:
             )
             if plan.renshe_config_id is None:
                 raise ConflictException("批次尚未确认项目配置，请联系管理员核实历史归属")
-            if application is None and not is_graduated(batch_configuration(plan)):
-                raise ConflictException("本期新报名仅开放已毕业学历型批次；历史报名请从我的报名继续办理")
+            if application is None and not is_self_reported(batch_configuration(plan)):
+                raise ConflictException("本期新报名仅开放已适配批次；历史报名请从我的报名继续办理")
             if application is None and not is_v2(batch_configuration(plan).get("reporting_policy", {})):
                 raise ConflictException("历史批次仅办理已有报名，新报名请选择当前批次")
             self._validate_edit_window(plan, application, paid_order=await self._paid_correction_order(db, application))
@@ -106,9 +106,9 @@ class RensheApplicationService:
             await self._verified_profiles(db, user_id, plan)
 
             values = data.model_dump(mode="json", exclude_none=True)
-            if is_graduated(batch_configuration(plan)):
+            if is_self_reported(batch_configuration(plan)):
                 contract = await resolve_contract(db, plan)
-                values["education_info"] = validate_education(values.get("education_info"), education_config(batch_configuration(plan)))
+                values.update(validate_admission(values, batch_configuration(plan)))
                 values["reporting_info"] = validate_reporting(values.get("reporting_info"), contract["config"]["reporting_policy"])
                 values.pop("reporting_config_id", None)
                 values["commitment_template"] = contract["config"]["reporting_policy"]["commitment_template"]
@@ -157,16 +157,16 @@ class RensheApplicationService:
                 self._validate_edit_window(plan, application, paid_order=paid_order)
                 realname, student = await self._verified_profiles(db, user_id, plan)
                 config = batch_configuration(plan)
-                graduated = is_graduated(config)
+                graduated = is_self_reported(config)
                 await validate_snapshot(db, plan, application.draft_data)
                 if graduated:
                     try:
-                        RensheDraftUpsert.model_validate({key: value for key, value in application.draft_data.items() if key not in {"materials", "reporting_contract", "commitment_template"}})
+                        RensheDraftUpsert.model_validate({key: value for key, value in application.draft_data.items() if key not in {"materials", "reporting_contract", "commitment_template", "eligibility_snapshot"}})
                     except ValueError as exc:
-                        raise BusinessException("请先完整填写学历信息和联系方式并保存") from exc
+                        raise BusinessException("请先完整填写本申报路径的资格信息和联系方式并保存") from exc
                     policy = await validate_snapshot(db, plan, application.draft_data)
                     validate_reporting(application.draft_data.get("reporting_info"), policy)
-                    validate_education(application.draft_data.get("education_info"), education_config(config))
+                    application.draft_data = {**application.draft_data, **validate_admission(application.draft_data, config)}
 
                 if application.status != "draft" and paid_order is None:
                     raise ConflictException("驳回重提缺少原已支付订单")
@@ -354,7 +354,7 @@ class RensheApplicationService:
     @classmethod
     def _validate_edit_window(cls, plan, application, *, paid_order=None):
         config = batch_configuration(plan)
-        if (is_graduated(config) and application is not None
+        if (is_self_reported(config) and application is not None
                 and application.status in {"initial_rejected", "external_rejected"}):
             if plan.status not in {"published", "registration_closed"} or application.closed_at is not None:
                 raise ConflictException("批次或报名已关闭，不能补正")
@@ -389,7 +389,7 @@ class RensheApplicationService:
                 upload_kinds = {item["kind"] for item in config["materials"]} - {
                     "id_card_front", "id_card_back", "portrait"
                 }
-                if not is_graduated(config) or kind not in upload_kinds:
+                if not is_self_reported(config) or kind not in upload_kinds:
                     raise BusinessException("当前批次不支持该报名材料上传")
                 application = await db.scalar(select(RensheApplication).where(
                     RensheApplication.user_id == user_id, RensheApplication.plan_id == plan_id,
@@ -688,7 +688,7 @@ class RensheApplicationService:
             select(UserRealname).where(
                 UserRealname.user_id == user_id,
                 UserRealname.status == "verified",
-                *([] if is_graduated(config) else [UserRealname.user_type == "student"]),
+                *([] if is_self_reported(config) else [UserRealname.user_type == "student"]),
             )
         )
         if realname is None:
@@ -700,13 +700,13 @@ class RensheApplicationService:
             realname.id_card_back_oss,
             *(
                 ([realname.avatar_oss] if any(item["kind"] == "portrait" and item["required"] for item in config["materials"]) else [])
-                if is_graduated(config)
+                if is_self_reported(config)
                 else [realname.avatar_oss, realname.ethnicity, realname.political_status]
             ),
         )
         if not all(required_realname):
             raise BusinessException("已通过的实名认证资料不完整，请重新提交审核")
-        if is_graduated(config):
+        if is_self_reported(config):
             from datetime import date
             try:
                 date.fromisoformat(realname.birth_date or "")
@@ -733,7 +733,7 @@ class RensheApplicationService:
             raise BusinessException("该身份证号已绑定其他有效账号")
         realname.id_card_hash = digest
         realname.active_id_card_hash = digest
-        if is_graduated(config):
+        if is_self_reported(config):
             return realname, None
 
         student = await db.scalar(

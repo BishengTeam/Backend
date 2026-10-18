@@ -18,8 +18,8 @@ isolated = _isolated
 
 def test_catalog_uses_documented_grades_and_type_paths_only():
     items = combinations()
-    assert sum(item["adapted"] for item in items) == 1
-    assert next(item for item in items if item["adapted"])["selection_id"] == CURRENT_SELECTION
+    assert sum(item["adapted"] for item in items) == 21
+    assert any(item["selection_id"] == CURRENT_SELECTION and item["adapted"] for item in items)
     assert {item["application_type"] for item in items if item["grade"] in {1, 2}} == {"复合型"}
     assert {item["application_type"] for item in items if item["grade"] == 5} == {"无类型"}
     assert not any(item["occupation_key"] == "ai_trainer" and item["grade"] == 5 for item in items)
@@ -30,7 +30,7 @@ def test_catalog_uses_documented_grades_and_type_paths_only():
 @pytest.mark.asyncio
 async def test_pending_choice_saves_empty_technical_rules_and_cannot_enable_or_bind(isolated):
     service = RensheProjectService()
-    chosen = "information_security:4:复合型"
+    chosen = "information_security:3:复合型"
     draft = await service.save(RensheProjectWrite(chinese_name="工龄及证书路径", selection_id=chosen), admin_id=1)
     assert draft.config.application_types == ["复合型"]
     assert draft.config.qualification_rule == "unadapted"

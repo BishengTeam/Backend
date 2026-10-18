@@ -29,11 +29,13 @@ RensheMaterialKind = Literal[
     "education_proof",
 ]
 RensheApplicationMaterialKind = Literal[
+    "work_proof",
     "registration_portrait", "graduation_certificate", "education_report", "commitment_letter",
     "social_security_proof", "xuexin_registration", "education_proof",
     "vocational_qualification_certificate", "professional_title_certificate"
 ]
 RensheAllMaterialKind = Literal[
+    "work_proof",
     "id_card_front", "id_card_back", "portrait", "student_card", "xuexin_registration", "education_proof",
     "registration_portrait", "graduation_certificate", "education_report", "commitment_letter",
     "social_security_proof", "vocational_qualification_certificate", "professional_title_certificate",
@@ -107,6 +109,45 @@ class RensheReportingInfo(BaseModel):
         return value
 
 
+class RensheWorkExperience(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    work_unit: str = Field(..., min_length=1, max_length=128)
+    position: str = Field(..., min_length=1, max_length=128)
+    occupation_name: str = Field(..., min_length=1, max_length=128)
+    start_date: date
+    end_date: date | None = None
+
+    @model_validator(mode="after")
+    def valid_period(self):
+        from app.services.renshe_graduated import china_today
+        if self.start_date.year < 1900 or self.start_date > (self.end_date or china_today()) or (self.end_date and self.end_date > china_today()):
+            raise ValueError("工作起止日期须有效且不得晚于今天")
+        return self
+
+
+class RensheSkillCertificate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    occupation_name: str = Field(..., min_length=1, max_length=128)
+    grade: Literal[5]
+    certificate_number: str = Field(..., min_length=1, max_length=128)
+    issued_on: date
+
+    @field_validator("issued_on")
+    @classmethod
+    def valid_date(cls, value):
+        from app.services.renshe_graduated import china_today
+        if value.year < 1900 or value > china_today():
+            raise ValueError("证书日期须有效且不得晚于今天")
+        return value
+
+
+class RensheEmploymentQualification(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    cultural_education: Literal["primary", "junior_high", "senior_high", "other", "secondary_vocational", "technical_school", "vocational_high", "higher_vocational", "associate", "bachelor", "master", "doctorate"]
+    work_experiences: list[RensheWorkExperience] = Field(..., min_length=1, max_length=20)
+    skill_certificate: RensheSkillCertificate | None = None
+
+
 class RensheDraftUpsert(BaseModel):
     model_config = ConfigDict(extra="forbid")
     plan_id: int = Field(..., ge=1, description="人社报考批次 ID")
@@ -114,6 +155,7 @@ class RensheDraftUpsert(BaseModel):
     mailing_address: str = Field(..., min_length=1, max_length=256, description="通讯地址")
     email: str = Field(..., min_length=3, max_length=128, description="电子邮箱")
     education_info: RensheGraduatedEducation | None = None
+    qualification_info: RensheEmploymentQualification | None = None
     reporting_info: RensheReportingInfo | None = None
     reporting_config_id: int | None = Field(None, ge=1, deprecated=True, description="兼容旧客户端；当前报送规则由代码固定，此字段不参与选择")
 

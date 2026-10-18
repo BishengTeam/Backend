@@ -46,7 +46,19 @@ async def project_capabilities(_admin=Depends(require_permission("content:read")
 async def download_current_registration_template(_admin=Depends(require_permission("content:read"))):
     from app.services.renshe_export import RensheExportService
     registration, _ = RensheExportService._template_paths()
-    return FileResponse(registration, filename=registration.name)
+    from io import BytesIO
+    from fastapi.responses import Response
+    from openpyxl import load_workbook
+    from app.services.renshe_export_definition import prepare_reporting_workbook
+    workbook = load_workbook(registration)
+    try:
+        prepare_reporting_workbook(workbook)
+        output = BytesIO()
+        workbook.save(output)
+    finally:
+        workbook.close()
+    return Response(output.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": "attachment; filename*=UTF-8''%E6%8A%A5%E5%90%8D%E4%BF%A1%E6%81%AF.xlsx"})
 
 
 @router.post("/commitment-templates")
