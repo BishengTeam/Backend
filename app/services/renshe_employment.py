@@ -7,6 +7,7 @@ from decimal import Decimal, InvalidOperation
 from app.port.exceptions import BusinessException
 
 RULE = "documented_employment_v1"
+LEVEL_FIVE_RULE = "level_five_employment_v1"
 BASE_MATERIALS = {
     "id_card_front": "身份证正面", "id_card_back": "身份证背面",
     "registration_portrait": "一寸白底近期证件照（≤500 KB）",
@@ -35,11 +36,21 @@ QUALIFICATION_FIELDS = {
 
 
 def is_employment(config: dict | None) -> bool:
-    return bool(config and config.get("qualification_rule") == RULE)
+    return bool(config and config.get("qualification_rule") in {RULE, LEVEL_FIVE_RULE})
+
+
+def is_level_five(config: dict | None) -> bool:
+    return bool(config and config.get("qualification_rule") == LEVEL_FIVE_RULE)
 
 
 def review_checks(config: dict) -> dict:
     result = dict(REVIEW_CHECKS)
+    if is_level_five(config):
+        result.update(
+            age="以首次正式提交的北京时间日期核对本人实名出生日期，年满16周岁",
+            employment="五级工龄型：实际从事本职业或相关职业，不设最低工作年数，不套用四级满5年条件",
+            social_security="社保单位与工作单位一致，时间信息与申报经历相符，验证码完整、有效且可验证",
+        )
     if config.get("application_types") == ["复合型"]:
         result["certificate"] = "五级本职业或相关职业证书与同一材料内网查截图一致、可验证；证书取得后相关工作满3年"
     return result
@@ -50,7 +61,8 @@ def configuration(selection: dict) -> dict:
     from app.services.renshe_project import FORM_FIELDS, default_configuration
     from app.services.renshe_reporting import EDUCATIONS, default_policy
 
-    if selection["grade"] != 4 or selection["application_type"] not in {"工龄型", "复合型"} or not selection["adapted"]:
+    five_work = selection["grade"] == 5 and selection["application_type"] == "工龄型" and selection.get("implementation_ready")
+    if not five_work and (selection["grade"] != 4 or selection["application_type"] not in {"工龄型", "复合型"} or not selection["adapted"]):
         raise BusinessException("该工龄或复合申报路径尚未适配")
     materials = dict(BASE_MATERIALS)
     if selection["application_type"] == "复合型":
@@ -59,7 +71,7 @@ def configuration(selection: dict) -> dict:
     result.update(
         **{key: selection[key] for key in ("occupation_name", "occupation_code", "skill_level", "export_skill_level")},
         selection_id=selection["selection_id"], rule_profile=deepcopy(selection),
-        qualification_rule=RULE, application_types=[selection["application_type"]],
+        qualification_rule=LEVEL_FIVE_RULE if five_work else RULE, application_types=[selection["application_type"]],
         education_levels=list(EDUCATIONS), institution_types=[], reporting_policy=default_policy(),
         form_fields=list(FORM_FIELDS), export_template="renshe_employment_v1", attachment_layout="flat",
         materials=[{"kind": kind, "name": name, "required": True, "extensions": sorted(MATERIAL_SPECS[kind].extensions), "max_count": 1} for kind, name in materials.items()],
@@ -107,7 +119,7 @@ def cumulative_years(experiences: list[dict], *, as_of: date, after: date | None
     return total
 
 
-def validate_qualification(form: dict, config: dict, *, as_of: date | None = None) -> dict:
+def validate_qualification(form: dict, config: dict, *, as_of: date | None = None, verified_birth_date: str | None = None, age_as_of: date | None = None) -> dict:
     from app.schemas.renshe import RensheEmploymentQualification
     from app.services.renshe_graduated import china_today
 
@@ -116,6 +128,21 @@ def validate_qualification(form: dict, config: dict, *, as_of: date | None = Non
     except ValueError as exc:
         raise BusinessException("请完整填写文化程度、工作经历及本路径要求的证书信息；日期不得晚于今天") from exc
     today = as_of or china_today()
+    five_work = is_level_five(config)
+    profile = config.get("rule_profile", {})
+    expected_grade = 5 if five_work else 4
+    if profile.get("grade") != expected_grade or config.get("export_skill_level") != ("五级" if five_work else "四级") or config.get("application_types") not in ([["工龄型"]] if five_work else [["工龄型"], ["复合型"]]):
+        raise BusinessException("申报职业、等级、类型与独立资格规则不一致")
+    age_snapshot = {}
+    if five_work:
+        basis = age_as_of or today
+        try:
+            birth = date.fromisoformat(verified_birth_date or "")
+        except ValueError as exc:
+            raise BusinessException("五级年龄核验须使用已验证的本人实名出生日期") from exc
+        if basis > today or anniversary(birth, 16) > basis:
+            raise BusinessException("五级工龄型须在首次正式提交当日年满16周岁")
+        age_snapshot = {"birth_date": birth.isoformat(), "age_as_of": basis.isoformat()}
     report = form.get("reporting_info") or {}
     if not report.get("has_work_experience") or not report.get("work_unit") or not report.get("social_insurance_unit"):
         raise BusinessException("工龄型及复合型须填写实际工作单位、社保参保单位及工作经历")
@@ -131,7 +158,7 @@ def validate_qualification(form: dict, config: dict, *, as_of: date | None = Non
     after = date.fromisoformat(certificate["issued_on"]) if compound else None
     if after and after > today:
         raise BusinessException("证书取得日期不得晚于核算日期")
-    required = 3 if compound else 5
+    required = 0 if five_work else 3 if compound else 5
     total = cumulative_years(info["work_experiences"], as_of=today, after=after)
     if total < required or (after and anniversary(after, required) > today):
         raise BusinessException(f"{'取得五级证书后' if compound else ''}累计本职业或相关职业工作须满{required}年，重叠经历不重复计算")
@@ -142,4 +169,4 @@ def validate_qualification(form: dict, config: dict, *, as_of: date | None = Non
     all_years = cumulative_years(info["work_experiences"], as_of=today)
     if not declared.is_finite() or declared < required or declared > all_years:
         raise BusinessException("职业年限须满足申报条件，且不能超过所填去重工作经历的累计年限")
-    return {"qualification_info": info, "eligibility_snapshot": {"as_of": today.isoformat(), "effective_years": str(total), "required_years": required}}
+    return {"qualification_info": info, "eligibility_snapshot": {"as_of": today.isoformat(), "effective_years": str(total), "required_years": required, **age_snapshot}}

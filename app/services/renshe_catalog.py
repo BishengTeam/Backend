@@ -18,7 +18,9 @@ ADAPTED_DEGREE_OCCUPATIONS = {
 CONDITION_SOURCE = "职业技能等级认定职业工种申报条件.pdf，第1页"
 MATERIAL_SOURCE = "职业技能等级认定申报条件相关解答.pdf，第1—9页"
 CONDITIONS = {
-    5: {"无类型": ["年满16周岁，拟从事本职业或相关职业工作。", "年满16周岁，从事本职业或相关职业工作。"]},
+    5: {
+        "工龄型": ["年满16周岁，从事本职业或相关职业工作。"],
+    },
     4: {
         "工龄型": ["累计从事本职业或相关职业工作满5年。"],
         "复合型": ["取得本职业或相关职业五级/初级工职业资格（职业技能等级）证书后，累计从事本职业或相关职业工作满3年。"],
@@ -62,6 +64,7 @@ def combinations() -> list[dict]:
             for application_type, conditions in CONDITIONS[grade].items():
                 selection_id = f"{key}:{grade}:{application_type}"
                 adapted = key in ADAPTED_DEGREE_OCCUPATIONS and grade == 4
+                five_work = grade == 5 and application_type == "工龄型"
                 degree = application_type == "学历型"
                 institution_types = ["technical", "vocational"] + ([] if key == "ai_trainer" else ["general_higher"])
                 missing = []
@@ -75,6 +78,8 @@ def combinations() -> list[dict]:
                         missing += ["五级申报类型在PDF与个人申报表间存在差异，待业务确认"]
                     if key == "business_data":
                         missing += ["相关职业、专业及院校细则待补齐"]
+                if five_work:
+                    missing = ["PDF将本路径标为工龄型，个人申报表归为无类型；外部系统的五级工龄型分类及申报条件值尚未确认，须完成甲方导入验证后方可启用"]
                 sources = [CONDITION_SOURCE, MATERIAL_SOURCE]
                 sources.append("职业技能等级认定申报条件相关解答.pdf，第10—12页" if key != "business_data" else "注意.txt；报名信息.xlsx／申报条件工作表")
                 if grade == 5:
@@ -86,6 +91,8 @@ def combinations() -> list[dict]:
                     "export_skill_level": export_level, "level_label": f"{export_level}／{skill_level}",
                     "occupation_code": f"{code}-{occupation}-{trade}-{skill_level}" if occupation != trade else f"{code}-{trade}-{skill_level}",
                     "application_type": application_type, "adapted": adapted,
+                    "implementation_ready": adapted or five_work,
+                    "reporting_confirmed": grade != 5 and adapted,
                     "status": "已适配" if adapted else "待适配",
                     "adaptation_status": "已适配" if adapted else "待业务确认" if grade == 5 or key == "business_data" else "待开发",
                     "missing": missing,
@@ -95,6 +102,12 @@ def combinations() -> list[dict]:
                     "related_occupations": RELATED.get(key, RELATED["information_security"] if key in {"network_security", "internet_review"} else "相关职业细则待补齐，不套用其他职业。"),
                     "project_limits": ((["本期只接受已取得毕业证，不开放在读应届替代证明", "不能提供既定学历报告时联系管理员，不开放替代材料线上报名"] + (["人工智能训练师仅开放资料明确的技工院校、中等及以上职业院校；普通高等学校专业范围待核实"] if key == "ai_trainer" else [])) if degree else ["工作经历须为本职业或资料列明相关职业，重叠时间不重复累计", "工龄证明单独提交；证书与网查截图合并在同一份JPEG材料中", "复合型仅开放取得五级证书后累计相关工作满3年路径" if application_type == "复合型" else "累计相关职业工作满5年，工龄及社保须逐项初审核验"]) if adapted else ["仅可保存草稿，禁止启用、发布及新报名"],
                 })
+                if grade == 5:
+                    results[-1]["project_limits"] = [
+                        "年满16周岁，按北京时间首次正式提交日期核算；补正沿用首次提交基准",
+                        "工龄型须提供相关职业工作经历、工龄证明及社保证明；不设置最低工作年数，不要求前置证书或毕业学历材料" if five_work else "拟从事相关职业；PDF本行未列额外佐证材料，报名及报送规则待适配",
+                        "拟适配要求，仅可保存草稿；报送分类未确认，禁止启用及发布招生",
+                    ]
     return results
 
 

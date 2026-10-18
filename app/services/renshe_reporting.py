@@ -255,7 +255,14 @@ async def validate_snapshot(db, plan, form: dict) -> dict:
             as_of = date.fromisoformat(form["eligibility_snapshot"]["as_of"])
         except (KeyError, TypeError, ValueError) as exc:
             raise ConflictException("该报名缺少提交时的工龄核算快照，请补正后重新审核") from exc
-        validate_admission(form, config, as_of=as_of)
+        from app.services.renshe_employment import is_level_five
+        age_context = {}
+        if is_level_five(config):
+            try:
+                age_context = {"verified_birth_date": form["eligibility_snapshot"]["birth_date"], "age_as_of": date.fromisoformat(form["eligibility_snapshot"]["age_as_of"])}
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ConflictException("该报名缺少首次提交的实名年龄核算快照，请补正后重新审核") from exc
+        validate_admission(form, config, as_of=as_of, **age_context)
     return {}
 
 

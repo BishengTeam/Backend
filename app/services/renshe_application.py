@@ -103,12 +103,12 @@ class RensheApplicationService:
                 raise ConflictException("当前报名状态不可编辑")
             if application.frozen_at is not None:
                 raise ConflictException("退款处理中，报名已冻结")
-            await self._verified_profiles(db, user_id, plan)
+            realname, _ = await self._verified_profiles(db, user_id, plan)
 
             values = data.model_dump(mode="json", exclude_none=True)
             if is_self_reported(batch_configuration(plan)):
                 contract = await resolve_contract(db, plan)
-                values.update(validate_admission(values, batch_configuration(plan)))
+                values.update(await self._admission_values(db, application, realname, batch_configuration(plan), values))
                 values["reporting_info"] = validate_reporting(values.get("reporting_info"), contract["config"]["reporting_policy"])
                 values.pop("reporting_config_id", None)
                 values["commitment_template"] = contract["config"]["reporting_policy"]["commitment_template"]
@@ -158,6 +158,7 @@ class RensheApplicationService:
                 realname, student = await self._verified_profiles(db, user_id, plan)
                 config = batch_configuration(plan)
                 graduated = is_self_reported(config)
+                now = self._now()
                 await validate_snapshot(db, plan, application.draft_data)
                 if graduated:
                     try:
@@ -166,7 +167,7 @@ class RensheApplicationService:
                         raise BusinessException("请先完整填写本申报路径的资格信息和联系方式并保存") from exc
                     policy = await validate_snapshot(db, plan, application.draft_data)
                     validate_reporting(application.draft_data.get("reporting_info"), policy)
-                    application.draft_data = {**application.draft_data, **validate_admission(application.draft_data, config)}
+                    application.draft_data = {**application.draft_data, **await self._admission_values(db, application, realname, config, application.draft_data, submitted_at=now)}
 
                 if application.status != "draft" and paid_order is None:
                     raise ConflictException("驳回重提缺少原已支付订单")
@@ -180,7 +181,6 @@ class RensheApplicationService:
                     )
                 )
                 version_no = (latest_no or 0) + 1
-                now = self._now()
                 version = RensheApplicationVersion(
                     application_id=application.id,
                     version_no=version_no,
@@ -680,6 +680,19 @@ class RensheApplicationService:
         if user is None:
             raise NotFoundException("用户")
         return user
+
+    @staticmethod
+    async def _admission_values(db, application, realname, config: dict, form: dict, *, submitted_at=None) -> dict:
+        from datetime import timezone
+        from zoneinfo import ZoneInfo
+        from app.services.renshe_employment import is_level_five
+        age_as_of = None
+        if is_level_five(config):
+            first = await db.scalar(select(func.min(RensheApplicationVersion.submitted_at)).where(RensheApplicationVersion.application_id == application.id))
+            if first is not None:
+                age_as_of = (first if first.tzinfo else first.replace(tzinfo=timezone.utc)).astimezone(ZoneInfo("Asia/Shanghai")).date()
+        assessment_date = submitted_at.astimezone(ZoneInfo("Asia/Shanghai")).date() if submitted_at else None
+        return validate_admission(form, config, as_of=assessment_date, verified_birth_date=realname.birth_date, age_as_of=age_as_of)
 
     @staticmethod
     async def _verified_profiles(db, user_id: int, plan: Plan | None = None) -> tuple[UserRealname, UserStudent | None]:

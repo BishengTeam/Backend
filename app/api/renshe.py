@@ -41,7 +41,7 @@ async def list_projects(current_user: User = Depends(get_current_user)):
                           "education_levels": item.config.education_levels,
                           "institution_types": item.config.institution_types,
                           "materials": [material.model_dump() for material in item.config.materials],
-                          "admission_notice": "本期仅接受已取得毕业证、本专业或相关专业申请人；学历及专业以报名初审为准。无法提供学历备案表请联系管理员。" if item.config.qualification_rule == "related_major_graduated_degree_v1" else "；".join(item.config.rule_profile.get("source_conditions", [])) + "。工龄、证书、相关职业及社保由本次初审核验。" if item.config.qualification_rule == "documented_employment_v1" else "历史项目仅办理已有报名。本期新报名请选择已适配批次。"} for item in projects])
+                          "admission_notice": "本期仅接受已取得毕业证、本专业或相关专业申请人；学历及专业以报名初审为准。无法提供学历备案表请联系管理员。" if item.config.qualification_rule == "related_major_graduated_degree_v1" else "；".join(item.config.rule_profile.get("source_conditions", [])) + "。工龄、证书、相关职业及社保由本次初审核验。" if item.config.qualification_rule in {"documented_employment_v1", "level_five_employment_v1"} else "历史项目仅办理已有报名。本期新报名请选择已适配批次。"} for item in projects])
 
 
 @router.get("/batches")

@@ -76,13 +76,13 @@ def is_self_reported(config: dict | None) -> bool:
     return is_graduated(config) or is_employment(config)
 
 
-def validate_admission(form: dict, config: dict, *, as_of: date | None = None) -> dict:
+def validate_admission(form: dict, config: dict, *, as_of: date | None = None, verified_birth_date: str | None = None, age_as_of: date | None = None) -> dict:
     from app.services.renshe_employment import is_employment, validate_qualification
     from app.services.renshe_reporting import education_config
     if is_employment(config):
         if form.get("education_info"):
             raise BusinessException("工龄或证书路径不使用毕业学历资格，请按所选路径填写")
-        return validate_qualification(form, config, as_of=as_of)
+        return validate_qualification(form, config, as_of=as_of, verified_birth_date=verified_birth_date, age_as_of=age_as_of)
     if form.get("qualification_info"):
         raise BusinessException("学历型不使用工龄或技能证书路径")
     return {"education_info": validate_education(form.get("education_info"), education_config(config))}
@@ -129,7 +129,7 @@ def activation_errors(config: dict) -> list[str]:
     if config.get("selection_id"):
         selected = find_selection(config["selection_id"])
         if selected is None or not selected["adapted"]:
-            return ["该组合尚未适配，仅可保存草稿，不能启用或发布招生"]
+            return ["该组合尚未适配，仅可保存草稿，不能启用或发布招生"] + (selected["missing"] if selected else [])
     if not is_self_reported(config):
         return [
             "新开放批次须使用已适配的已毕业学历型组合；历史批次保持原规则"

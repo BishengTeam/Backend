@@ -185,12 +185,14 @@ def export_instructions(config: dict | None = None) -> dict:
         "实际社保参保单位（选填）",
         "本次电子邮箱",
     ]
-    if config and config.get("qualification_rule") == "documented_employment_v1":
+    if config and config.get("qualification_rule") in {"documented_employment_v1", "level_five_employment_v1"}:
         sources[6] = "本次实际填报文化程度（不以毕业学历作为本路径门槛）"
         sources[11] = "本次实际工作单位（必填，与工龄证明核对）"
         sources[15] = "本路径不填写职称专业"
         sources[16] = "本路径不填写职称等级"
         sources[23] = "实际社保参保单位（必填，与社保证明核对）"
+    if config and config.get("qualification_rule") == "level_five_employment_v1":
+        sources[18] = "实际职业年限，必填且允许0；五级不设最低工作年数"
     tree = [
         archive_download_name("编号", 1),
         f"├─ {paths[0]}",
@@ -203,8 +205,8 @@ def export_instructions(config: dict | None = None) -> dict:
     return {
         "registration_template": REGISTRATION_TEMPLATE_NAME,
         "work_template": WORK_HISTORY_TEMPLATE_NAME,
-        "work_description": "按本次报名版本的实际工作经历逐条生成；结束日期为空表示至今。证书及其网查截图合并为同一份JPEG材料，工龄证明独立导出。" if config and config.get("qualification_rule") == "documented_employment_v1" else "原样附带甲方工作经历模板，目前不会按考生自动填写经历；后续按报送要求补充。",
-        "directory_note": "目录示例，实际内容以报名材料为准；文件保留真实扩展名。",
+        "work_description": "按本次报名版本的实际工作经历逐条生成；结束日期为空表示至今。证书及其网查截图合并为同一份JPEG材料，工龄证明独立导出。" if config and config.get("qualification_rule") in {"documented_employment_v1", "level_five_employment_v1"} else "原样附带甲方工作经历模板，目前不会按考生自动填写经历；后续按报送要求补充。",
+        "directory_note": ("五级报送分类及申报条件值尚未确认，以下仅为拟报送目录，不能创建正式导出。" if config and config.get("qualification_rule") == "level_five_employment_v1" else "目录示例，实际内容以报名材料为准；文件保留真实扩展名。"),
         "portrait_note": "本期报名照片为一寸白底近期证件照、≤500 KB；文件名沿用甲方既定的二寸免冠照片，不改变真实格式。历史批次保留原材料要求。",
         "example_paths": paths,
         "file_tree": "\n".join(tree),

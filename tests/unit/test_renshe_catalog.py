@@ -21,7 +21,7 @@ def test_catalog_uses_documented_grades_and_type_paths_only():
     assert sum(item["adapted"] for item in items) == 21
     assert any(item["selection_id"] == CURRENT_SELECTION and item["adapted"] for item in items)
     assert {item["application_type"] for item in items if item["grade"] in {1, 2}} == {"复合型"}
-    assert {item["application_type"] for item in items if item["grade"] == 5} == {"无类型"}
+    assert {item["application_type"] for item in items if item["grade"] == 5} == {"工龄型"}
     assert not any(item["occupation_key"] == "ai_trainer" and item["grade"] == 5 for item in items)
     assert {item["grade"] for item in items if item["occupation_key"] == "business_data"} == {3, 4}
     assert all(item["sources"] and item["source_conditions"] for item in items)
