@@ -376,3 +376,31 @@ async def test_old_paid_snapshot_adopts_new_reporting_without_rewriting_order_or
             checklist={key: True for key in REVIEW_CHECKS},
         ),
     )
+
+
+@pytest.mark.parametrize("worked", [False, True])
+def test_degree_work_date_optional_but_employment_paths_remain_required(worked):
+    from app.services.renshe_export_definition import employment_rules
+    data = info(has_work_experience=worked, work_start_date=None)
+    config = {"application_types": ["学历型"]}
+    assert validate_reporting(data, {}, config=config)["work_start_date"] is None
+    assert report_date(data, employment_rules(config)) is None
+    for kind in ["工龄型", "复合型"]:
+        with pytest.raises(BusinessException, match="参加工作日期"):
+            validate_reporting(data, {}, config={"application_types": [kind]})
+    with pytest.raises(BusinessException):
+        validate_reporting(info(work_start_date="2999-01-01"), {}, config=config)
+
+
+@pytest.mark.asyncio
+async def test_degree_without_work_date_can_save_and_export_blank_r(isolated, monkeypatch):
+    _, batch = await graduated_batch(isolated, monkeypatch)
+    service = RensheApplicationService(isolated.storage)
+    saved = await service.save_draft(1, draft_payload(batch, reporting_info=info(has_work_experience=False, work_start_date=None)))
+    from app.services.renshe_reporting import validate_snapshot
+    async with isolated.db() as db:
+        plan = await db.get(Plan, batch.id)
+        realname = await db.scalar(select(UserRealname))
+        await validate_snapshot(db, plan, saved.draft_data)
+        values = build_registration_row(ExportCandidate(saved.id, 1, 0, service._realname_snapshot(realname), {}, saved.draft_data, ()), plan)
+        assert values[17] is None and values[18] == 0

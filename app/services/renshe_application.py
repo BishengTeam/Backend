@@ -109,12 +109,12 @@ class RensheApplicationService:
             if is_self_reported(batch_configuration(plan)):
                 contract = await resolve_contract(db, plan)
                 values.update(await self._admission_values(db, application, realname, batch_configuration(plan), values))
-                values["reporting_info"] = validate_reporting(values.get("reporting_info"), contract["config"]["reporting_policy"])
+                values["reporting_info"] = validate_reporting(values.get("reporting_info"), contract["config"]["reporting_policy"], config=batch_configuration(plan))
                 values.pop("reporting_config_id", None)
                 values["commitment_template"] = contract["config"]["reporting_policy"]["commitment_template"]
                 values["materials"] = (application.draft_data or {}).get("materials", {})
             else:
-                values["reporting_info"] = validate_reporting(values.get("reporting_info"), {})
+                values["reporting_info"] = validate_reporting(values.get("reporting_info"), {}, config=batch_configuration(plan))
             application.draft_data = values
             db.add(
                 self._audit(
@@ -166,7 +166,7 @@ class RensheApplicationService:
                     except ValueError as exc:
                         raise BusinessException("请先完整填写本申报路径的资格信息和联系方式并保存") from exc
                     policy = await validate_snapshot(db, plan, application.draft_data)
-                    validate_reporting(application.draft_data.get("reporting_info"), policy)
+                    validate_reporting(application.draft_data.get("reporting_info"), policy, config=config)
                     application.draft_data = {**application.draft_data, **await self._admission_values(db, application, realname, config, application.draft_data, submitted_at=now)}
 
                 if application.status != "draft" and paid_order is None:
@@ -200,7 +200,8 @@ class RensheApplicationService:
                     "portrait": realname.avatar_oss,
                     **{kind: metadata["storage_key"] for kind, metadata in application.draft_data.get("materials", {}).items()},
                 } if graduated else self._material_sources(realname, student))
-                for requirement in config["materials"]:
+                from app.services.renshe_level_three import material_requirements
+                for requirement in material_requirements(config, application.draft_data):
                     kind = requirement["kind"]
                     if not source_materials.get(kind) and not requirement["required"]:
                         continue

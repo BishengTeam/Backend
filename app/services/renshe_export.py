@@ -135,14 +135,18 @@ def build_registration_row(candidate: ExportCandidate, plan: Plan) -> list[objec
     # Existing batches retain their frozen condition when source text evolves.
     condition = (config.get("rule_profile", {}).get("source_conditions") or selected["source_conditions"])[0]
     realname, form = candidate.realname_snapshot, candidate.form_data
+    from app.services.renshe_level_three import is_level_three, selected_path
+    if is_level_three(config):
+        condition = selected_path(config, form)["condition"]
     education = form.get("education_info") or candidate.student_snapshot
     info = form.get("reporting_info") or {}
-    validate_reporting(info, {})
+    validate_reporting(info, {}, config=config)
+    title = (form.get("qualification_info") or {}).get("title_certificate") or {}
     values = [realname.get("real_name"), realname.get("gender"), realname.get("birth_date"),
               "居民身份证", realname.get("id_card_number"), "社会人员",
               EDUCATIONS.get((form.get("qualification_info") or {}).get("cultural_education") or education.get("education")), info.get("ethnicity"), info.get("political_status"),
               form.get("contact_phone"), form.get("mailing_address"), info.get("work_unit"), info.get("occupation_status"),
-              config["occupation_name"], config["export_skill_level"], None, None, report_date(info), float(info["occupation_years"]),
+              config["occupation_name"], config["export_skill_level"], title.get("major"), "初级职称" if title else None, report_date(info, {"work_date_required": config.get("application_types") != ["学历型"]}), float(info["occupation_years"]),
               config["occupation_code"], condition, plan.application_type, plan.exam_type, info.get("social_insurance_unit"), form.get("email")]
     validate_row(values, info, {}, config={**config, "application_condition": condition})
     return values
@@ -309,7 +313,8 @@ class RensheExportService:
             if version.project_config_id != plan.renshe_config_id:
                 raise ConflictException("导出报名与批次项目配置版本不一致")
             owned = {item.kind: item for item in materials if item.version_id == version_id and item.application_id == application_id}
-            for requirement in config["materials"]:
+            from app.services.renshe_level_three import material_requirements
+            for requirement in material_requirements(config, version.form_data):
                 material = owned.get(requirement["kind"])
                 if requirement["required"] and material is None:
                     raise ConflictException(f"报名 {application_id} 缺少材料：{requirement['name']}")

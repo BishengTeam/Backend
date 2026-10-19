@@ -28,8 +28,8 @@ CONDITIONS = {
     },
     3: {
         "工龄型": ["累计从事本职业或相关职业工作满10年。"],
-        "复合型": ["取得本职业或相关职业四级/中级工证书后累计从事本职业或相关职业工作满4年。", "取得符合专业对应关系的初级职称后累计从事本职业或相关职业工作满1年。", "取得本职业或相关职业四级证书，并取得本专业或相关专业高职、专科及以上毕业证书（含在读应届毕业生）。"],
-        "学历型": ["取得本专业或相关专业的技工院校高级工班及以上毕业证书（含在读应届毕业生）。", "取得经评估论证的高职、专科及以上本专业或相关专业毕业证书（含在读应届毕业生）。"],
+        "复合型": ["取得本职业或相关职业四级/中级工职业资格（职业技能等级）证书后，累计从事本职业或相关职业工作满4年。", "取得符合专业对应关系的初级职称（专业技术人员职业资格）后，累计从事本职业或相关职业工作满1年。", "取得本职业或相关职业四级/中级工职业资格（职业技能等级）证书，并取得高等职业学校、专科及以上普通高等学校本专业或相关专业毕业证书（含在读应届毕业生）。"],
+        "学历型": ["取得本专业或相关专业的技工院校高级工班及以上毕业证书（含在读应届毕业生）。", "取得经评估论证的高等职业学校、专科及以上普通高等学校本专业或相关专业的毕业证书（含在读应届毕业生）。"],
     },
     2: {"复合型": ["三级证书后累计从事本职业或相关职业工作满5年。", "初级职称后累计工作满5年，且三级证书后工作满1年。", "中级职称后累计工作满1年。", "具有三级证书的高级技校、技师学院毕业生累计工作满2年。", "取得三级证书满2年的技师学院预备技师班、技师班学生。"]},
     1: {"复合型": ["二级证书后累计从事本职业或相关职业工作满5年。", "中级职称后累计工作满5年，且二级证书后工作满1年。", "高级职称后累计从事本职业或相关职业工作满1年。"]},
@@ -63,8 +63,8 @@ def combinations() -> list[dict]:
             export_level, skill_level = LEVELS[grade]
             for application_type, conditions in CONDITIONS[grade].items():
                 selection_id = f"{key}:{grade}:{application_type}"
-                adapted = key in ADAPTED_DEGREE_OCCUPATIONS and grade == 4
                 five_work = grade == 5 and application_type == "工龄型"
+                adapted = key in ADAPTED_DEGREE_OCCUPATIONS and (grade in {3, 4} or five_work)
                 degree = application_type == "学历型"
                 institution_types = ["technical", "vocational"] + ([] if key == "ai_trainer" else ["general_higher"])
                 missing = []
@@ -74,16 +74,12 @@ def combinations() -> list[dict]:
                         missing += ["需适配工作经历、工龄与社保证明；涉及技能证书或职称时须校验证书取得日期及对应关系"]
                     if grade == 3 and application_type == "学历型":
                         missing += ["需区分技工院校高级工班与经评估论证院校路径，补齐培养层次和院校核验"]
-                    if grade == 5:
-                        missing += ["五级申报类型在PDF与个人申报表间存在差异，待业务确认"]
                     if key == "business_data":
                         missing += ["相关职业、专业及院校细则待补齐"]
-                if five_work:
-                    missing = ["PDF将本路径标为工龄型，个人申报表归为无类型；外部系统的五级工龄型分类及申报条件值尚未确认，须完成甲方导入验证后方可启用"]
                 sources = [CONDITION_SOURCE, MATERIAL_SOURCE]
                 sources.append("职业技能等级认定申报条件相关解答.pdf，第10—12页" if key != "business_data" else "注意.txt；报名信息.xlsx／申报条件工作表")
                 if grade == 5:
-                    sources.append("四川省职业技能等级认定个人申报表.docx，填表说明第1条：两条年龄路径均为无类型；解答PDF第2页分类存在差异，待确认")
+                    sources.append("四川省职业技能等级认定个人申报表.docx填表说明与解答PDF第2页分类存在差异；业务已确认五级统一按工龄型报名及导出")
                 results.append({
                     "selection_id": selection_id, "occupation_key": key,
                     "occupation_title": occupation, "occupation_name": trade,
@@ -92,7 +88,7 @@ def combinations() -> list[dict]:
                     "occupation_code": f"{code}-{occupation}-{trade}-{skill_level}" if occupation != trade else f"{code}-{trade}-{skill_level}",
                     "application_type": application_type, "adapted": adapted,
                     "implementation_ready": adapted or five_work,
-                    "reporting_confirmed": grade != 5 and adapted,
+                    "reporting_confirmed": adapted,
                     "status": "已适配" if adapted else "待适配",
                     "adaptation_status": "已适配" if adapted else "待业务确认" if grade == 5 or key == "business_data" else "待开发",
                     "missing": missing,
@@ -106,8 +102,17 @@ def combinations() -> list[dict]:
                     results[-1]["project_limits"] = [
                         "年满16周岁，按北京时间首次正式提交日期核算；补正沿用首次提交基准",
                         "工龄型须提供相关职业工作经历、工龄证明及社保证明；不设置最低工作年数，不要求前置证书或毕业学历材料" if five_work else "拟从事相关职业；PDF本行未列额外佐证材料，报名及报送规则待适配",
-                        "拟适配要求，仅可保存草稿；报送分类未确认，禁止启用及发布招生",
+                        "五级统一按工龄型报名及导出，申报条件为年满16周岁、从事本职业或相关职业工作",
                     ]
+                if grade == 3 and adapted:
+                    from app.services.renshe_level_three import paths
+                    results[-1]["admission_paths"] = paths(application_type, conditions)
+                    results[-1]["project_limits"] = [
+                        "须选择具体三级申报路径，按路径匹配必填字段、材料、初审核验及导出条件，不套用四级规则",
+                        "学历及证书加学历路径仅接受已取得毕业证，不开放在读应届替代证明",
+                        "技工院校须高级工班及以上；经评估论证院校由初审核验其备案等级认定评价机构资格",
+                        "证书与对应网查截图合并JPEG；学历网查截图整理为PDF，不伪装文件扩展名",
+                    ] + (["人工智能训练师普通高等学校专业范围待核实，仅开放资料明确的技工院校及高等职业学校"] if key == "ai_trainer" else [])
     return results
 
 

@@ -346,7 +346,7 @@ class RensheReviewService:
                     from app.services.renshe_reporting import validate_snapshot, validate_reporting
                     version = await db.get(RensheApplicationVersion, application.current_version_id)
                     policy = await validate_snapshot(db, plan, version.form_data)
-                    validate_reporting(version.form_data.get("reporting_info"), policy)
+                    validate_reporting(version.form_data.get("reporting_info"), policy, config=batch_configuration(plan))
             application.correction_due_at = data.correction_due_at if data.decision == "rejected" else None
             review = RensheReview(
                 application_id=application.id,

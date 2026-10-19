@@ -65,7 +65,7 @@ REVIEW_CHECKS = {
 DEGREE_REVIEW_CHECKS = {
     "identity": "实名、毕业证及学历报告属于同一人",
     "graduated": "已取得毕业证，不接受在读替代证明",
-    "education": "院校类型及学历符合本期学历型条件",
+    "education": "院校类型及学历符合本期学历型条件；参加工作日期可为空，工作信息由管理员人工审核",
     "major": "本专业或资料列明相关专业，别名及不明确匹配人工核验",
     "report": "学历备案表对应、可验证，验证有效期设置为6个月",
     "photo": "一寸白底近期证件照，不超过500 KB",
@@ -74,6 +74,9 @@ DEGREE_REVIEW_CHECKS = {
 
 
 def review_checks(config: dict) -> dict:
+    from app.services.renshe_level_three import is_level_three, review_checks as three_checks
+    if is_level_three(config):
+        return three_checks(config)
     from app.services.renshe_employment import is_employment, review_checks as employment_checks
     if is_employment(config):
         return employment_checks(config)
@@ -91,6 +94,9 @@ def is_self_reported(config: dict | None) -> bool:
 
 
 def validate_admission(form: dict, config: dict, *, as_of: date | None = None, verified_birth_date: str | None = None, age_as_of: date | None = None) -> dict:
+    from app.services.renshe_level_three import is_level_three, validate_admission as three_admission
+    if is_level_three(config):
+        return three_admission(form, config, as_of=as_of)
     from app.services.renshe_employment import is_employment, validate_qualification
     from app.services.renshe_reporting import education_config
     if is_employment(config):
@@ -283,8 +289,13 @@ def validate_review(data, *, stage: str, now: datetime, version_id: int, config:
             | {"reporting_info." + key for key in REPORT_FIELDS}
         )
         from app.services.renshe_employment import is_employment, QUALIFICATION_FIELDS
+        from app.services.renshe_level_three import is_level_three
+        if config is not None and is_level_three(config):
+            allowed |= {"qualification_info.admission_path", "education_info.training_level", "education_info.evaluation_reference"}
+            allowed |= {"qualification_info.title_certificate." + key for key in ("title_name", "level", "major", "certificate_number", "issued_on")}
         if config is not None and is_employment(config):
-            allowed -= {"education_info." + key for key in ("school", "institution_type", "education", "major", "graduation_date", "certificate_number")}
+            if not is_level_three(config):
+                allowed -= {"education_info." + key for key in ("school", "institution_type", "education", "major", "graduation_date", "certificate_number")}
             allowed |= set(QUALIFICATION_FIELDS)
         if not data.required_changes or not set(data.required_changes) <= allowed:
             raise BusinessException("请选择需要补正的具体学历字段、联系方式或材料")

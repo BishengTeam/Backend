@@ -78,6 +78,8 @@ class RensheGraduatedEducation(BaseModel):
     major: str = Field(..., min_length=1, max_length=128)
     graduation_date: date
     certificate_number: str = Field(..., min_length=1, max_length=128)
+    training_level: Literal["senior_worker", "preparatory_technician", "technician"] | None = None
+    evaluation_reference: str | None = Field(None, min_length=1, max_length=256)
 
     @field_validator("graduation_date")
     @classmethod
@@ -128,7 +130,7 @@ class RensheWorkExperience(BaseModel):
 class RensheSkillCertificate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     occupation_name: str = Field(..., min_length=1, max_length=128)
-    grade: Literal[5]
+    grade: Literal[4, 5]
     certificate_number: str = Field(..., min_length=1, max_length=128)
     issued_on: date
 
@@ -148,6 +150,29 @@ class RensheEmploymentQualification(BaseModel):
     skill_certificate: RensheSkillCertificate | None = None
 
 
+class RensheTitleCertificate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    title_name: str = Field(..., min_length=1, max_length=128)
+    level: Literal["primary"]
+    major: str = Field(..., min_length=1, max_length=128)
+    certificate_number: str = Field(..., min_length=1, max_length=128)
+    issued_on: date
+
+    @field_validator("issued_on")
+    @classmethod
+    def valid_date(cls, value: date) -> date:
+        return RensheSkillCertificate.valid_date(value)
+
+
+class RensheLevelThreeQualification(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    admission_path: Literal["work_10", "skill_4_work_4", "title_work_1", "skill_4_degree", "technical_senior", "evaluated_college"]
+    cultural_education: Literal["primary", "junior_high", "senior_high", "other", "secondary_vocational", "technical_school", "vocational_high", "higher_vocational", "associate", "bachelor", "master", "doctorate"]
+    work_experiences: list[RensheWorkExperience] = Field(default_factory=list, max_length=20)
+    skill_certificate: RensheSkillCertificate | None = None
+    title_certificate: RensheTitleCertificate | None = None
+
+
 class RensheDraftUpsert(BaseModel):
     model_config = ConfigDict(extra="forbid")
     plan_id: int = Field(..., ge=1, description="人社报考批次 ID")
@@ -155,7 +180,7 @@ class RensheDraftUpsert(BaseModel):
     mailing_address: str = Field(..., min_length=1, max_length=256, description="通讯地址")
     email: str = Field(..., min_length=3, max_length=128, description="电子邮箱")
     education_info: RensheGraduatedEducation | None = None
-    qualification_info: RensheEmploymentQualification | None = None
+    qualification_info: RensheEmploymentQualification | RensheLevelThreeQualification | None = None
     reporting_info: RensheReportingInfo | None = None
     reporting_config_id: int | None = Field(None, ge=1, deprecated=True, description="兼容旧客户端；当前报送规则由代码固定，此字段不参与选择")
 

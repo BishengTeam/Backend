@@ -7,10 +7,29 @@ from pydantic import ValidationError
 
 from app.port.exceptions import BusinessException
 from app.schemas.renshe_project import RensheProjectWrite
-from app.services.renshe_project import RensheProjectService, supported_programs
+from app.services.renshe_project import RensheProjectService, supported_programs, graduated_configuration
+from app.services.renshe_graduated import save_template
 from tests.unit.test_renshe_projects import isolated as _isolated, project_data, create_batch
 
 isolated = _isolated
+
+
+@pytest.mark.asyncio
+async def test_selected_combination_always_uses_current_rules_and_keeps_template(isolated):
+    service = RensheProjectService()
+    config = graduated_configuration()
+    selection_id = config.pop("selection_id")
+    config.pop("rule_profile")
+    config["commitment_template"] = save_template("承诺书.pdf", b"%PDF-1.4\nfixture")
+    draft = await service.save(RensheProjectWrite(chinese_name="报考产品", config=config), admin_id=1)
+    result = await service.save(RensheProjectWrite(
+        chinese_name=draft.chinese_name, selection_id=selection_id,
+        expected_version=draft.version, status="available",
+    ), product_id=draft.id, admin_id=1)
+    assert result.status == "available"
+    assert result.config.selection_id == selection_id
+    assert result.config.commitment_template == draft.config.commitment_template
+    assert result.config.materials == RensheProjectWrite(chinese_name="对照", config=graduated_configuration()).config.materials
 
 
 @pytest.mark.asyncio

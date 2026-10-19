@@ -106,7 +106,7 @@ def default_policy() -> dict:
     return {"contract_version": CONTRACT_VERSION}
 
 
-def validate_reporting(info: dict | None, policy: dict) -> dict:
+def validate_reporting(info: dict | None, policy: dict, *, config: dict | None = None) -> dict:
     from app.schemas.renshe import RensheReportingInfo
 
     try:
@@ -123,16 +123,16 @@ def validate_reporting(info: dict | None, policy: dict) -> dict:
         raise BusinessException("从事职业、民族或政治面貌不在模板允许选项中")
     if not model.has_work_experience and model.work_start_date is not None:
         raise BusinessException("未参加过工作时不能填写参加工作日期")
-    if model.has_work_experience and model.work_start_date is None:
+    from app.services.renshe_export_definition import employment_rules
+
+    rules = employment_rules(config)
+    if rules["work_date_required"] and model.has_work_experience and model.work_start_date is None:
         raise BusinessException("请填写真实参加工作日期")
     if not model.has_work_experience and model.occupation_years not in (
         None,
         Decimal(0),
     ):
         raise BusinessException("未参加过工作时职业年限不能大于零")
-    from app.services.renshe_export_definition import employment_rules
-
-    rules = employment_rules()
     report_date(model.model_dump(mode="json"), rules)
     if rules["years_rule"] == "required" and model.occupation_years is None:
         raise BusinessException(
@@ -145,10 +145,10 @@ def validate_reporting(info: dict | None, policy: dict) -> dict:
     return model.model_dump(mode="json")
 
 
-def report_date(info: dict, rules: dict | None = None) -> str:
+def report_date(info: dict, rules: dict | None = None) -> str | None:
     from app.services.renshe_export_definition import work_date
 
-    return work_date(info)
+    return work_date(info, required=(rules or {}).get("work_date_required", True))
 
 
 async def resolve_contract(db, plan, config_id: int | None = None) -> dict:
@@ -204,7 +204,7 @@ def public_options(contract: dict, frozen: dict) -> dict:
         "political_statuses": POLITICS,
         "candidate_source": "社会人员",
         "application_condition": (frozen.get("rule_profile", {}).get("source_conditions") or [DEGREE_CONDITION])[0],
-        "employment_reporting": employment_rules(),
+        "employment_reporting": employment_rules(frozen),
         "commitment_template": policy["commitment_template"],
     }
 
@@ -236,7 +236,7 @@ def validate_row(values: list, info: dict, policy: dict, *, config: dict | None 
         raise ConflictException("导出值不符合报名模板的下拉字典")
     try:
         date.fromisoformat(str(values[2]))
-        validate_reporting(info, policy)
+        validate_reporting(info, policy, config=config)
     except ValueError as exc:
         raise ConflictException("模板出生日期格式不正确") from exc
 
@@ -245,11 +245,11 @@ async def validate_snapshot(db, plan, form: dict) -> dict:
     # Current exports read material snapshots, never historical export policies.
     if not isinstance(form.get("reporting_info"), dict):
         raise ConflictException("该报名版本缺少模板填报信息，请补正后重新初审并导出")
-    validate_reporting(form["reporting_info"], {})
     from app.services.renshe_employment import is_employment
     from app.services.renshe_project import batch_configuration
     from app.services.renshe_graduated import validate_admission
     config = batch_configuration(plan)
+    validate_reporting(form["reporting_info"], {}, config=config)
     if is_employment(config):
         try:
             as_of = date.fromisoformat(form["eligibility_snapshot"]["as_of"])

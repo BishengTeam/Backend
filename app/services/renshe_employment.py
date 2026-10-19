@@ -36,7 +36,7 @@ QUALIFICATION_FIELDS = {
 
 
 def is_employment(config: dict | None) -> bool:
-    return bool(config and config.get("qualification_rule") in {RULE, LEVEL_FIVE_RULE})
+    return bool(config and config.get("qualification_rule") in {RULE, LEVEL_FIVE_RULE, "level_three_v1"})
 
 
 def is_level_five(config: dict | None) -> bool:
@@ -53,6 +53,12 @@ def review_checks(config: dict) -> dict:
         )
     if config.get("application_types") == ["复合型"]:
         result["certificate"] = "五级本职业或相关职业证书与同一材料内网查截图一致、可验证；证书取得后相关工作满3年"
+    if config.get("rule_profile", {}).get("grade") == 4:
+        result["employment"] = (
+            "四级复合型：取得本职业或相关职业五级证书后累计相关工作满3年；证前经历不计入、重叠时间不重复累计"
+            if config.get("application_types") == ["复合型"] else
+            "四级工龄型：累计本职业或相关职业工作满5年；重叠时间不重复累计，不以学历或证书代替工龄"
+        )
     return result
 
 

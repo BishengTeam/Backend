@@ -66,7 +66,7 @@ def admission_requirements(config: dict | None = None) -> dict:
             "exam_types": config["exam_types"],
             "qualification_rule": config["qualification_rule"],
         },
-        "form_sections": (["本人实名信息（年满16周岁）", "联系信息", "其他报名字段待适配"] if config.get("rule_profile", {}).get("grade") == 5 else []) if config.get("qualification_rule") == "unadapted" else ["本人实名信息", "毕业学历信息" if graduated else "文化程度、实际工作经历（无前置证书）" if config.get("qualification_rule") == "level_five_employment_v1" else "文化程度、工作经历及技能证书" if is_self_reported(config) else "学生资料", "联系信息", "报送模板要求的其他实际信息"],
+        "form_sections": (["本人实名信息（年满16周岁）", "联系信息", "其他报名字段待适配"] if config.get("rule_profile", {}).get("grade") == 5 else []) if config.get("qualification_rule") == "unadapted" else ["本人实名信息", "三级具体申报路径、对应的证书、职称或毕业学历及工作经历" if config.get("qualification_rule") == "level_three_v1" else "毕业学历信息" if graduated else "文化程度、实际工作经历（无前置证书）" if config.get("qualification_rule") == "level_five_employment_v1" else "文化程度、工作经历及技能证书" if is_self_reported(config) else "学生资料", "联系信息", "报送模板要求的其他实际信息"],
         "education_options": [
             {"value": value, "label": EDUCATIONS.get(value, value)}
             for value in config.get("education_levels", [])
@@ -83,8 +83,8 @@ def admission_requirements(config: dict | None = None) -> dict:
             for item in config["materials"]
         ],
         "notes": [
-            ("文化程度选项用于考生如实填报；资格由毕业证、院校类型、专业和初审共同判断。"
-             if graduated else "五级拟适配要求：年龄使用本人实名资料按首次正式提交日期核验；工龄型不设置最低年数或前置证书，报送分类未确认前仅可保存草稿。" if config.get("rule_profile", {}).get("grade") == 5 else "按实际工作经历及证书提交，职业关联、证明和社保由初审逐项核验。" if is_self_reported(config) else "该组合尚未适配，所需字段与材料不得借用其他组合。" if config.get("qualification_rule") == "unadapted" else "历史项目保留其实际学生资料及学历要求，不自动切换至新学历型规则。"),
+            ("三级须按具体申报路径核验资格、材料及导出条件；涉及学历只接受已取得毕业证，技工院校培养层次及评估论证情况逐项初审核验。" if config.get("qualification_rule") == "level_three_v1" else "文化程度选项用于考生如实填报；资格由毕业证、院校类型、专业和初审共同判断。"
+             if graduated or config.get("qualification_rule") == "level_three_v1" else "五级工龄型：年龄使用本人实名资料按首次正式提交日期核验；不设置最低工作年数或前置证书，报名及导出均使用工龄型。" if config.get("rule_profile", {}).get("grade") == 5 else "按实际工作经历及证书提交，职业关联、证明和社保由初审逐项核验。" if is_self_reported(config) else "该组合尚未适配，所需字段与材料不得借用其他组合。" if config.get("qualification_rule") == "unadapted" else "历史项目保留其实际学生资料及学历要求，不自动切换至新学历型规则。"),
             "新批次使用当前代码规则；已发布批次继续使用创建时冻结的报名要求。",
             "材料格式、大小、数量和必填性由服务端强制校验。",
         ],
@@ -151,6 +151,9 @@ def graduated_configuration(selection: dict | None = None) -> dict:
 
 
 def selection_configuration(selection: dict) -> dict:
+    if selection["grade"] == 3 and selection["adapted"]:
+        from app.services.renshe_level_three import configuration
+        return configuration(selection)
     if selection.get("implementation_ready") and selection["grade"] == 5:
         from app.services.renshe_employment import configuration
         return configuration(selection)
@@ -362,7 +365,8 @@ class RensheProjectService:
             "qualification_rules": {
                 RULE: "已取得毕业证的本专业或相关专业（学历型，人工核验）",
                 "documented_employment_v1": "四级工龄型或五级证书后相关工作满3年的复合型",
-                "level_five_employment_v1": "五级工龄型：年满16周岁、从事相关职业，不设最低年数；报送未确认，仅草稿",
+                "level_three_v1": "三级按具体申报路径核验工龄、四级证书、初级职称或毕业学历，条件与材料分别匹配",
+                "level_five_employment_v1": "五级工龄型：年满16周岁、从事相关职业，不设最低年数，报名及导出均为工龄型",
                 "related_major_current_graduating_student": "历史规则：在读应届学生（仅保留历史批次）",
             },
             "institution_types": INSTITUTION_TYPES,
@@ -458,18 +462,8 @@ class RensheProjectService:
                 selection = find_selection(data.selection_id)
                 if selection is None:
                     raise BusinessException("未找到该报考组合的资料依据，请重新选择")
-                same = latest is not None and latest.config.get("selection_id") == data.selection_id
-                if latest is not None and not latest.config.get("selection_id"):
-                    same = all(latest.config.get(key) == selection[key] for key in ("occupation_code", "skill_level")) and latest.config.get("application_types") == [selection["application_type"]]
-                # Upgrade an unreferenced pending draft when its combination becomes
-                # available. Never replace an already adapted or historical contract.
-                upgrade_draft = same and latest.config.get("qualification_rule") == "unadapted" and selection["adapted"]
-                config = deepcopy(latest.config) if same and not upgrade_draft else selection_configuration(selection)
-                if upgrade_draft:
-                    used = await db.scalar(select(Plan.id).where(Plan.product_type == product.code).limit(1))
-                    if used is not None:
-                        raise BusinessException("已有关联批次的待适配项目不能自动升级，请新建项目")
-                if latest is not None and (not same or upgrade_draft):
+                config = selection_configuration(selection)
+                if latest is not None:
                     config["commitment_template"] = commitment_policy(latest.config)["commitment_template"]
             selection_changed = data.occupation_code is not None and (
                 latest is None or any(latest.config.get(key) != getattr(data, key)
