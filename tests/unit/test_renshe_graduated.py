@@ -336,6 +336,7 @@ def test_policy_activation_and_templates_never_assume_client_approval(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(settings, "RENSHE_TEMPLATE_DIR", str(tmp_path))
+    monkeypatch.setattr(settings, "RENSHE_COMMITMENT_TEMPLATE_DIR", str(tmp_path / "uploaded"))
     assert activation_errors(default_configuration())
     assert activation_errors(graduated_configuration())
     with pytest.raises(BusinessException):
@@ -347,7 +348,7 @@ def test_policy_activation_and_templates_never_assume_client_approval(
         metadata["filename"].startswith("commitment_")
         and "/" not in metadata["filename"]
     )
-    assert (tmp_path / metadata["filename"]).is_file()
+    assert (tmp_path / "uploaded" / metadata["filename"]).is_file()
 
 
 @pytest.mark.asyncio

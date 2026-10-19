@@ -73,16 +73,15 @@ async def upload_commitment_template(file: UploadFile = File(...), admin=Depends
 
 @router.get("/commitment-templates/{filename}")
 async def download_commitment_template(filename: str, _admin=Depends(require_permission("content:read"))):
-    import hashlib
     import re
-    from pathlib import Path as FilePath
-    from app.port.config import settings
-    from app.port.exceptions import NotFoundException
+    from app.port.exceptions import NotFoundException, ConflictException
+    from app.services.renshe_graduated import template_path
     if not re.fullmatch(r"commitment_[a-f0-9]{64}\.(pdf|docx)", filename):
         raise NotFoundException("承诺书模板")
-    path = FilePath(settings.RENSHE_TEMPLATE_DIR).resolve() / filename
-    if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != filename[11:75]:
-        raise NotFoundException("承诺书模板")
+    try:
+        path = template_path({"commitment_template": {"filename": filename, "sha256": filename[11:75]}})
+    except ConflictException as exc:
+        raise NotFoundException("承诺书模板") from exc
     return FileResponse(path, filename=filename)
 
 

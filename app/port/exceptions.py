@@ -65,6 +65,11 @@ class ThirdPartyException(AppException):
         super().__init__(code=40400, message=message, http_status_code=502)
 
 
+class StorageUnavailableException(AppException):
+    def __init__(self, message: str):
+        super().__init__(code=50410, message=message, http_status_code=503)
+
+
 class ValidationException(AppException):
     def __init__(self, message: str = "参数校验失败", detail: list[dict] | None = None):
         super().__init__(code=40001, message=message, http_status_code=422)

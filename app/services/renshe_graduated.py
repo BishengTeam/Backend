@@ -5,16 +5,30 @@ Reporting columns, dates and filenames are maintained in the current code.
 """
 
 import hashlib
+import logging
+import os
 import re
+import stat
+import tempfile
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from app.port.config import settings
-from app.port.exceptions import BusinessException, ConflictException
+from app.port.exceptions import BusinessException, ConflictException, StorageUnavailableException
 from app.services.renshe_reporting import REPORT_FIELDS
 
 RULE = "related_major_graduated_degree_v1"
+logger = logging.getLogger(__name__)
+
+
+def commitment_directory() -> Path:
+    return Path(settings.RENSHE_COMMITMENT_TEMPLATE_DIR or Path(settings.UPLOAD_DIR) / "private" / "renshe-commitment-templates").resolve()
+
+
+def _storage_unavailable(operation: str, exc: OSError) -> StorageUnavailableException:
+    logger.exception("renshe.commitment_template.storage_failed operation=%s errno=%s", operation, exc.errno)
+    return StorageUnavailableException("承诺书模板存储不可用，请联系管理员检查目录权限和持久化配置")
 INSTITUTION_TYPES = {
     "technical": "技工院校",
     "vocational": "中等及以上职业院校",
@@ -113,15 +127,28 @@ def commitment_policy(config: dict) -> dict:
 
 def template_path(policy: dict) -> Path:
     if policy_errors(policy):
-        raise ConflictException("甲方报送口径尚未确认")
+        raise ConflictException("承诺书模板尚未配置，请上传模板并保存项目")
     info = policy["commitment_template"]
-    root = Path(settings.RENSHE_TEMPLATE_DIR).resolve()
-    path = (root / info["filename"]).resolve()
-    if path.parent != root or not path.is_file():
-        raise ConflictException("承诺书模板尚未部署，请联系管理员")
-    if hashlib.sha256(path.read_bytes()).hexdigest() != info["sha256"]:
-        raise ConflictException("承诺书模板与确认版本不一致，请联系管理员")
-    return path
+    try:
+        # Old administrator-uploaded files remain readable on the static RO mount.
+        # Never copy or write anything to that directory.
+        roots = (commitment_directory(), Path(settings.RENSHE_TEMPLATE_DIR).resolve())
+        for root in dict.fromkeys(roots):
+            path = (root / info["filename"]).resolve()
+            if path.parent != root:
+                raise ConflictException("承诺书模板路径无效，请联系管理员")
+            try:
+                metadata = path.stat()
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ConflictException("承诺书模板文件无效，请联系管理员")
+            if hashlib.sha256(path.read_bytes()).hexdigest() != info["sha256"]:
+                raise ConflictException("承诺书模板与确认版本不一致，请联系管理员")
+            return path
+    except OSError as exc:
+        raise _storage_unavailable("read", exc) from exc
+    raise ConflictException("承诺书模板尚未部署，请联系管理员")
 
 
 def activation_errors(config: dict) -> list[str]:
@@ -132,13 +159,13 @@ def activation_errors(config: dict) -> list[str]:
             return ["该组合尚未适配，仅可保存草稿，不能启用或发布招生"] + (selected["missing"] if selected else [])
     if not is_self_reported(config):
         return [
-            "新开放批次须使用已适配的已毕业学历型组合；历史批次保持原规则"
+            "新开放批次须绑定已适配的报考项目配置；请检查项目、职业等级和申报类型，历史批次保持原规则"
         ]
     selected = find_selection(config.get("selection_id"))
     from app.services.renshe_project import selection_configuration
     expected = selection_configuration(selected) if selected and selected["adapted"] else None
     if expected is None or config.get("materials") != expected["materials"] or config.get("qualification_rule") != expected["qualification_rule"]:
-        return ["新批次须使用当前已毕业学历型六类材料；历史批次保持原要求"]
+        return ["批次资格规则或材料与所选报考组合不一致，请重新选择对应项目配置；历史批次保持原要求"]
     try:
         template_path(commitment_policy(config))
     except ConflictException as exc:
@@ -167,18 +194,37 @@ def save_template(filename: str, content: bytes) -> dict:
     else:
         raise BusinessException("模板仅支持PDF或DOCX")
     digest = hashlib.sha256(content).hexdigest()
-    root = Path(settings.RENSHE_TEMPLATE_DIR).resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    path = root / f"commitment_{digest}{extension}"
-    # Hash paths are immutable and retries are idempotent.
-    if not path.exists():
-        try:
-            with path.open("xb") as target:
+    temporary = None
+    try:
+        root = commitment_directory()
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = root / f"commitment_{digest}{extension}"
+        if path.resolve().parent != root:
+            raise ConflictException("模板存储路径无效，请联系管理员")
+        # Publish only complete files. Concurrent identical retries are safe;
+        # interrupted writes never expose partial PDFs under the final hash.
+        if not path.exists():
+            with tempfile.NamedTemporaryFile(dir=root, prefix=".commitment_", delete=False) as target:
+                temporary = Path(target.name)
                 target.write(content)
-        except FileExistsError:
-            pass
-    if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
-        raise ConflictException("模板存储校验失败，请联系管理员")
+                target.flush()
+                os.fsync(target.fileno())
+            try:
+                # Same-directory hard link publishes a complete file atomically
+                # without replacing an existing hash, including concurrent reads.
+                os.link(temporary, path)
+            except FileExistsError:
+                pass
+        if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            raise ConflictException("模板存储校验失败，请联系管理员")
+    except OSError as exc:
+        raise _storage_unavailable("write", exc) from exc
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("renshe.commitment_template.temporary_cleanup_failed", exc_info=True)
     return {
         "filename": path.name,
         "sha256": digest,

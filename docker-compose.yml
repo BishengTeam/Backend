@@ -13,6 +13,7 @@ services:
         mkdir -p \
           /app/uploads/private/quiz-imports \
           /app/uploads/private/renshe \
+          /app/uploads/private/renshe-commitment-templates \
           /app/uploads/private/course-assets
         chown -R 10001:10001 /app/uploads
     volumes:
@@ -94,6 +95,7 @@ services:
       - ALIYUN_OSS_PREFIX=${ALIYUN_OSS_PREFIX:-renshe}
       - ALIYUN_OSS_SIGNED_URL_TTL_SECONDS=300
       - RENSHE_TEMPLATE_DIR=/app/renshe-templates
+      - RENSHE_COMMITMENT_TEMPLATE_DIR=/app/uploads/private/renshe-commitment-templates
       - RENSHE_CLEANUP_RETENTION_DAYS=30
       - HEALTH_CHECK_TIMEOUT_SECONDS=${HEALTH_CHECK_TIMEOUT_SECONDS:-3}
       # 题库导入 — 生产环境必须使用私有阿里云 OSS；显式注入任务参数，

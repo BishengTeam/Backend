@@ -309,6 +309,9 @@ class Settings(BaseSettings):
     ALIYUN_OSS_SIGNED_URL_TTL_SECONDS: int = 300
     COURSE_OSS_INSTALLATION_ID: str = ""
     RENSHE_TEMPLATE_DIR: str = "../docs/renshe"
+    # Administrator uploads are private, persistent and separate from Excel assets.
+    # Empty means UPLOAD_DIR/private/renshe-commitment-templates.
+    RENSHE_COMMITMENT_TEMPLATE_DIR: str = ""
     RENSHE_WORKER_POLL_SECONDS: int = 5
     # Production retention is frozen at 30 days.  Non-production deployments
     # may shorten it only through deployment configuration for destructive OSS

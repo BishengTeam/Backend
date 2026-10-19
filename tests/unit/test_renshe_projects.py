@@ -113,6 +113,7 @@ async def isolated(monkeypatch, tmp_path):
         PlanService, "_reject_dedicated_certification_batch", AsyncMock()
     )
     monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setattr(settings, "RENSHE_COMMITMENT_TEMPLATE_DIR", "")
     monkeypatch.setattr(settings, "RENSHE_STORAGE_TYPE", "local")
     template_dir = Path(__file__).parents[2] / "docs" / "renshe"
     monkeypatch.setattr(settings, "RENSHE_TEMPLATE_DIR", str(template_dir))

@@ -51,6 +51,7 @@ x-backend-environment: &backend_environment
   ALIYUN_OSS_PREFIX: ${ALIYUN_OSS_PREFIX:-renshe}
   ALIYUN_OSS_SIGNED_URL_TTL_SECONDS: "300"
   RENSHE_TEMPLATE_DIR: /app/renshe-templates
+  RENSHE_COMMITMENT_TEMPLATE_DIR: /app/uploads/private/renshe-commitment-templates
   RENSHE_CLEANUP_RETENTION_DAYS: "30"
   HEALTH_CHECK_TIMEOUT_SECONDS: ${HEALTH_CHECK_TIMEOUT_SECONDS:-3}
   QUIZ_TASKS_ENABLED: "true"
@@ -105,6 +106,7 @@ services:
         mkdir -p \
           /app/uploads/private/quiz-imports \
           /app/uploads/private/renshe \
+          /app/uploads/private/renshe-commitment-templates \
           /app/uploads/private/course-assets
         chown -R ${BOOTSTRAP_UID:?BOOTSTRAP_UID is required}:${BOOTSTRAP_GID:?BOOTSTRAP_GID is required} /app/uploads
     volumes:
