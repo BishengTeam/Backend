@@ -306,7 +306,9 @@ async def test_worker_honors_refund_backoff(monkeypatch):
     not_due = NS(
         id=13,
         status='failed',
-        updated_at=NOW - timedelta(seconds=1),
+        # Keep this timestamp in the future. The original ``NOW - 1s``
+        # became due when the full unit suite ran longer than one second.
+        updated_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         retry_count=0,
     )
     db = session(monkeypatch, 'app.services.nisp_worker')
