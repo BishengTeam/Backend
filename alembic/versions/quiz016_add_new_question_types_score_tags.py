@@ -1,6 +1,6 @@
 """add uncertain_choice/matching/ordering types plus question score and tags
 
-Revision ID: quiz012
+Revision ID: quiz016
 Revises: rsh007_employment_paths
 Create Date: 2026-10-20 00:00:00.000000
 """
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision: str = "quiz012"
+revision: str = "quiz016"
 down_revision: str | Sequence[str] | None = "rsh007_employment_paths"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
