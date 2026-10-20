@@ -462,7 +462,11 @@ class NispAdminService:
     @staticmethod
     async def _sync_legacy_qrcode(db, *, plan_id: int, qrcode_url: str | None) -> None:
         """Keep legacy NISP clients compatible with the shared configuration."""
-        row = await db.get(CertConsultationGroup, plan_id, with_for_update=True)
+        row = await db.scalar(
+            select(CertConsultationGroup)
+            .where(CertConsultationGroup.plan_id == plan_id)
+            .with_for_update()
+        )
         cleaned = (qrcode_url or "").strip() or None
         if cleaned is None:
             if row is not None:
@@ -507,7 +511,11 @@ class NispAdminService:
                 .group_by(NispRegistration.status)
             )
         ).all()
-        consultation = await db.get(CertConsultationGroup, batch.plan_id)
+        consultation = await db.scalar(
+            select(CertConsultationGroup).where(
+                CertConsultationGroup.plan_id == batch.plan_id
+            )
+        )
         return NispExamBatchResponse(
             id=batch.id,
             plan_id=batch.plan_id,

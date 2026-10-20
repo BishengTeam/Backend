@@ -60,7 +60,11 @@ class ConsultationGroupService:
             plan = await db.get(Plan, plan_id)
             if plan is None:
                 raise NotFoundException("认证批次")
-            row = await db.get(CertConsultationGroup, plan_id)
+            row = await db.scalar(
+                select(CertConsultationGroup).where(
+                    CertConsultationGroup.plan_id == plan_id
+                )
+            )
             if row is None:
                 return ConsultationGroupEmptyResponse(plan_id=plan_id)
             return ConsultationGroupAdminResponse(
@@ -82,7 +86,11 @@ class ConsultationGroupService:
                 plan = await db.get(Plan, plan_id, with_for_update=True)
                 if plan is None:
                     raise NotFoundException("认证批次")
-                row = await db.get(CertConsultationGroup, plan_id, with_for_update=True)
+                row = await db.scalar(
+                    select(CertConsultationGroup)
+                    .where(CertConsultationGroup.plan_id == plan_id)
+                    .with_for_update()
+                )
                 current_version = row.version if row is not None else 0
                 if current_version != data.version:
                     raise ConflictException("咨询群配置已更新，请刷新后重试")
@@ -154,7 +162,11 @@ class ConsultationGroupService:
             return None
         if registration_status not in USER_VISIBLE_REGISTRATION_STATUSES:
             return None
-        row = await db.get(CertConsultationGroup, plan.id)
+        row = await db.scalar(
+            select(CertConsultationGroup).where(
+                CertConsultationGroup.plan_id == plan.id
+            )
+        )
         if row is None or _is_expired(row):
             return None
         return ConsultationGroupUserResponse(

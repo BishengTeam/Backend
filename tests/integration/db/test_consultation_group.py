@@ -4,9 +4,11 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.domain.plan.src.index import Plan
+from app.models.consultation_group import CertConsultationGroup
 from app.port.exceptions import ConflictException
 from app.schemas.consultation_group import ConsultationGroupUpdate
 from app.services.consultation_group import ConsultationGroupService
@@ -119,3 +121,48 @@ async def test_consultation_group_crud_visibility_and_version(context):
         data=ConsultationGroupUpdate(qrcode_url=None, version=2),
     )
     assert removed.status == "not_configured"
+
+
+async def test_consultation_group_lookup_uses_plan_id_not_row_id(context):
+    """Regression: rows must be found by plan_id, not by the row's own id.
+
+    Production incident: a config row created with id != plan_id made every
+    later read report not_configured and every later write hit the plan_id
+    unique constraint (HTTP 500).
+    """
+    plan, db_ctx = context
+    service = ConsultationGroupService()
+    async with db_ctx() as db:
+        db.add(CertConsultationGroup(
+            id=990001,
+            plan_id=plan.id,
+            qrcode_url="/api/media/existing.png",
+            version=1,
+        ))
+        await db.commit()
+
+    try:
+        found = await service.get_admin(plan.id)
+        assert found.status == "configured"
+        assert found.qrcode_url == "/api/media/existing.png"
+
+        updated = await service.update(
+            plan_id=plan.id,
+            admin_id=9,
+            data=ConsultationGroupUpdate(
+                qrcode_url="/api/media/replaced.png",
+                version=1,
+            ),
+        )
+        assert updated.version == 2
+        assert updated.qrcode_url == "/api/media/replaced.png"
+    finally:
+        async with db_ctx() as db:
+            row = await db.scalar(
+                select(CertConsultationGroup).where(
+                    CertConsultationGroup.plan_id == plan.id
+                )
+            )
+            if row is not None:
+                await db.delete(row)
+                await db.commit()
