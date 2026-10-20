@@ -42,6 +42,8 @@ class AdminQuizQuestionCreate(BaseModel):
     explanation: str | None = Field(None, max_length=1024)
     image_urls: list[str] = Field(default_factory=list, max_length=9)
     option_image_urls: dict | None = None
+    score: float | None = Field(None, ge=0, le=100)
+    tags: list[str] = Field(default_factory=list, max_length=10)
 
 
 class AdminQuizQuestionUpdate(BaseModel):
@@ -53,6 +55,8 @@ class AdminQuizQuestionUpdate(BaseModel):
     explanation: str | None = Field(None, max_length=1024)
     image_urls: list[str] | None = Field(None, max_length=9)
     option_image_urls: dict | None = None
+    score: float | None = Field(None, ge=0, le=100)
+    tags: list[str] | None = Field(None, max_length=10)
 
 
 class AdminQuizQuestionItem(BaseModel):

@@ -311,8 +311,12 @@ class AdminQuizReviewService:
             wrong_count = 0
             unanswered_count = 0
             ratio_sum = Decimal(0)
+            weighted_ratio_sum = Decimal(0)
+            weight_sum = Decimal(0)
+            weights = await QuizExamService._question_weights(db, snapshots)
             finalized_at = self._now()
             for snapshot in snapshots:
+                weight = weights.get(int(snapshot.id), Decimal(1))
                 answer = answers.get(int(snapshot.id))
                 if snapshot.question_type == _ESSAY:
                     review = reviews[int(snapshot.id)]
@@ -331,6 +335,8 @@ class AdminQuizReviewService:
                         answer.is_correct = ratio == 1
                         answer.score_ratio = ratio
                     ratio_sum += ratio
+                    weighted_ratio_sum += ratio * weight
+                    weight_sum += weight
                     await self._bump_revision_stats(
                         db,
                         snapshot=snapshot,
@@ -340,9 +346,12 @@ class AdminQuizReviewService:
                 else:
                     if answer is None:
                         unanswered_count += 1
+                        weight_sum += weight
                         continue
                     ratio = Decimal(answer.score_ratio or 0)
                     ratio_sum += ratio
+                    weighted_ratio_sum += ratio * weight
+                    weight_sum += weight
                     if ratio == 1:
                         correct_count += 1
                     elif ratio > 0:
@@ -356,7 +365,9 @@ class AdminQuizReviewService:
             stats.exam_partial += partial_count
             stats.exam_wrong += wrong_count
             stats.exam_unanswered += unanswered_count
-            score = QuizExamService._score_ratio(ratio_sum, len(snapshots))
+            score = QuizExamService._weighted_score(
+                weighted_ratio_sum, weight_sum, ratio_sum, len(snapshots)
+            )
             stats.exam_score_sum = Decimal(stats.exam_score_sum or 0) + score
             if stats.exam_high_score is None or score > stats.exam_high_score:
                 stats.exam_high_score = score

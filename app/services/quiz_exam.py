@@ -27,6 +27,7 @@ from app.domain.community.src.rule.quiz import (
     QuizExamStatus,
     QuizQuestionStatus,
     answer_score_ratio,
+    matching_rights_pool,
     normalize_submitted_answer,
 )
 from app.domain.user.src.index import User
@@ -143,6 +144,14 @@ class QuizExamService:
             options=dict(sorted((snapshot.options or {}).items())),
             option_image_urls=sign_quiz_media_map(getattr(snapshot, "option_image_urls", None) or {}),
             image_urls=sign_quiz_media_urls(list(snapshot.image_urls or [])),
+            matching_rights=(
+                matching_rights_pool(
+                    snapshot.correct_answer,
+                    snapshot.question_revision_id or snapshot.question_id,
+                )
+                if snapshot.question_type == "matching"
+                else []
+            ),
         )
 
     @staticmethod
@@ -261,6 +270,45 @@ class QuizExamService:
             return Decimal("0.0")
         return (
             Decimal(ratio_sum) * Decimal(100) / Decimal(question_count)
+        ).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+
+    @staticmethod
+    async def _question_weights(db, snapshots) -> dict[int, Decimal]:
+        """Per-snapshot score weights; NULL/missing score counts as 1."""
+        score_by_question: dict[int, Decimal | None] = {}
+        question_ids = {int(snapshot.question_id) for snapshot in snapshots}
+        if question_ids:
+            rows = await db.execute(
+                select(QuizQuestion.id, QuizQuestion.score).where(
+                    QuizQuestion.id.in_(question_ids)
+                )
+            )
+            score_by_question = {
+                int(row_id): score for row_id, score in rows.all()
+            }
+        return {
+            int(snapshot.id): (
+                Decimal(str(score_by_question[int(snapshot.question_id)]))
+                if score_by_question.get(int(snapshot.question_id)) is not None
+                else Decimal(1)
+            )
+            for snapshot in snapshots
+        }
+
+    @classmethod
+    def _weighted_score(
+        cls,
+        weighted_ratio_sum: Decimal,
+        weight_sum: Decimal,
+        ratio_sum: Decimal,
+        question_count: int,
+    ) -> Decimal:
+        if question_count <= 0:
+            return Decimal("0.0")
+        if weight_sum <= 0:
+            return cls._score_ratio(ratio_sum, question_count)
+        return (
+            Decimal(weighted_ratio_sum) * Decimal(100) / Decimal(weight_sum)
         ).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
 
     @staticmethod
@@ -414,13 +462,17 @@ class QuizExamService:
             settled_at = settled_at.replace(tzinfo=timezone.utc)
         snapshots = await self._load_snapshots(db, exam.id, lock=True)
         answers = await self._load_answers(db, exam.id, lock=True)
+        weights = await self._question_weights(db, snapshots)
         correct_count = 0
         partial_count = 0
         wrong_count = 0
         unanswered_count = 0
         ratio_sum = Decimal(0)
+        weighted_ratio_sum = Decimal(0)
+        weight_sum = Decimal(0)
         has_essay = False
         for snapshot in snapshots:
+            weight = weights.get(int(snapshot.id), Decimal(1))
             answer = answers.get(int(snapshot.id))
             if snapshot.question_type == _ESSAY:
                 has_essay = True
@@ -430,6 +482,7 @@ class QuizExamService:
                     answer.is_correct = None
                     answer.score_ratio = None
                 continue
+            weight_sum += weight
             if answer is None:
                 unanswered_count += 1
                 continue
@@ -439,6 +492,7 @@ class QuizExamService:
             answer.score_ratio = ratio
             assert ratio is not None
             ratio_sum += ratio
+            weighted_ratio_sum += ratio * weight
             if correct:
                 correct_count += 1
             elif ratio > 0:
@@ -487,7 +541,9 @@ class QuizExamService:
             stats.exam_partial += partial_count
             stats.exam_wrong += wrong_count
             stats.exam_unanswered += unanswered_count
-            score = self._score_ratio(ratio_sum, len(snapshots))
+            score = self._weighted_score(
+                weighted_ratio_sum, weight_sum, ratio_sum, len(snapshots)
+            )
             stats.exam_score_sum = Decimal(stats.exam_score_sum or 0) + score
             if stats.exam_high_score is None or score > stats.exam_high_score:
                 stats.exam_high_score = score

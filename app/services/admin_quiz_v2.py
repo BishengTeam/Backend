@@ -7,6 +7,7 @@ legacy routes remain adapters until the cutover is complete.
 
 from __future__ import annotations
 
+import io
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -202,6 +203,8 @@ class AdminQuizV2Service:
             "correct_answer": question.correct_answer,
             "explanation": question.explanation,
             "image_urls": question.image_urls,
+            "score": question.score,
+            "tags": list(question.tags or []),
             "current_revision_id": question.current_revision_id,
             "pending_revision_id": question.pending_revision_id,
             "deleted_at": question.deleted_at,
@@ -256,6 +259,8 @@ class AdminQuizV2Service:
             explanation=question.explanation,
             image_urls=sign_quiz_media_urls(list(question.image_urls or [])),
             option_image_urls=sign_quiz_media_map(dict(question.option_image_urls or {})),
+            score=question.score,
+            tags=list(question.tags or []),
             ever_published=bool(question.ever_published),
             published_at=question.published_at,
             disabled_at=question.disabled_at,
@@ -307,6 +312,8 @@ class AdminQuizV2Service:
         image_urls: object,
         option_image_urls: object = None,
         require_publishable: bool,
+        score: object = None,
+        tags: object = None,
     ):
         try:
             return normalize_question_payload(
@@ -318,6 +325,8 @@ class AdminQuizV2Service:
                 image_urls=image_urls,
                 option_image_urls=option_image_urls,
                 require_publishable=require_publishable,
+                score=score,
+                tags=tags,
             )
         except QuizRuleViolation as exc:
             raise ValidationException(exc.message, [{"field": exc.field, "reason": exc.message}]) from exc
@@ -1903,6 +1912,159 @@ class AdminQuizV2Service:
             rows.append(row)
         return export_csv(headers, rows).getvalue()
 
+    _TEMPLATE_TYPE_LABELS: dict[str, str] = {
+        "single_choice": "单选题",
+        "multiple_choice": "多选题",
+        "uncertain_choice": "不定项选择题",
+        "judge": "判断题",
+        "fill_blank": "填空题",
+        "essay": "问答题",
+        "matching": "配对题",
+        "ordering": "排序题",
+    }
+
+    async def export_questions_xlsx(self, query: AdminQuizQuestionQuery) -> bytes:
+        """按甲方《试题导入模板》13 列格式导出，可直接回导。"""
+        from openpyxl import Workbook
+
+        if query.library_id is None:
+            raise ValidationException("导出必须指定题库")
+        async with get_db_ctx() as db:
+            stmt = select(QuizQuestion).where(
+                QuizQuestion.library_id == query.library_id,
+                QuizQuestion.knowledge_point_id.is_not(None),
+            )
+            if not query.include_deleted:
+                stmt = stmt.where(QuizQuestion.status != "deleted")
+            if query.question_id is not None:
+                stmt = stmt.where(QuizQuestion.id == query.question_id)
+            if query.module_id is not None:
+                point_ids = select(QuizKnowledgePoint.id).where(
+                    QuizKnowledgePoint.module_id == query.module_id
+                )
+                stmt = stmt.where(QuizQuestion.knowledge_point_id.in_(point_ids))
+            if query.knowledge_point_id is not None:
+                stmt = stmt.where(
+                    QuizQuestion.knowledge_point_id == query.knowledge_point_id
+                )
+            if query.question_type is not None:
+                stmt = stmt.where(QuizQuestion.question_type == str(query.question_type))
+            if query.status is not None:
+                stmt = stmt.where(QuizQuestion.status == str(query.status))
+            if query.keyword:
+                pattern = f"%{query.keyword.strip()}%"
+                stmt = stmt.where(
+                    or_(
+                        QuizQuestion.question_text.ilike(pattern),
+                        QuizQuestion.normalized_question_text.ilike(pattern),
+                    )
+                )
+            questions = list(
+                (await db.execute(stmt.order_by(QuizQuestion.id.asc()))).scalars()
+            )
+            points = {
+                int(item.id): item
+                for item in (
+                    await db.execute(
+                        select(QuizKnowledgePoint).where(
+                            QuizKnowledgePoint.library_id == query.library_id
+                        )
+                    )
+                ).scalars()
+            }
+            modules = {
+                int(item.id): item
+                for item in (
+                    await db.execute(
+                        select(QuizModule).where(
+                            QuizModule.library_id == query.library_id
+                        )
+                    )
+                ).scalars()
+            }
+
+        def category_path(question: QuizQuestion) -> str:
+            point = points.get(question.knowledge_point_id)
+            module = modules.get(int(point.module_id)) if point is not None else None
+            names = [
+                module.name if module is not None else "",
+                point.name if point is not None else "",
+            ]
+            return "/".join(name for name in names if name)
+
+        def option_cells(question: QuizQuestion) -> list[str]:
+            qtype = question.question_type
+            if qtype == "judge":
+                return ["对", "错"]
+            if qtype == "essay":
+                return []
+            if qtype == "fill_blank":
+                answer = question.correct_answer
+                groups = answer if isinstance(answer, list) else []
+                return [
+                    "|".join(
+                        candidate
+                        for candidate in (group if isinstance(group, list) else [group])
+                        if isinstance(candidate, str)
+                    )
+                    for group in groups
+                ]
+            if qtype == "matching":
+                answer = question.correct_answer
+                rights = answer if isinstance(answer, list) else []
+                return [
+                    f"{left} -> {rights[index] if index < len(rights) else ''}"
+                    for index, left in enumerate((question.options or {}).values())
+                ]
+            return list((question.options or {}).values())
+
+        def answer_cell(question: QuizQuestion) -> str:
+            qtype = question.question_type
+            answer = question.correct_answer
+            if qtype in ("single_choice", "judge", "essay", "fill_blank"):
+                return answer if isinstance(answer, str) else ""
+            keys: list[str] = []
+            if qtype in ("multiple_choice", "uncertain_choice"):
+                keys = [str(item) for item in answer] if isinstance(answer, list) else []
+            elif qtype == "ordering":
+                if isinstance(answer, list) and question.options:
+                    by_text = {text: key for key, text in question.options.items()}
+                    keys = [by_text.get(str(item), "") for item in answer]
+            elif qtype == "matching":
+                # Exported pairing cells already carry the correct right side in
+                # column order, so the reference letters are the identity map.
+                count = len(question.options or {})
+                keys = [chr(ord("A") + index) for index in range(count)]
+            return "".join(keys)
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "试题导入"
+        sheet.append([
+            "题目（必填）", "题型（必填）", "选项A（必填）", "选项B（必填）",
+            "选项C", "选项D", "选项E", "选项F", "正确答案（必填）",
+            "解析", "分数（必填）", "分类（必填）", "标签",
+        ])
+        for question in questions:
+            cells = option_cells(question)
+            cells += [""] * (6 - len(cells))
+            score = question.score
+            sheet.append([
+                question.question_text,
+                self._TEMPLATE_TYPE_LABELS.get(
+                    question.question_type, question.question_type
+                ),
+                cells[0], cells[1], cells[2], cells[3], cells[4], cells[5],
+                answer_cell(question),
+                question.explanation or "",
+                float(score) if score is not None else None,
+                category_path(question),
+                ",".join(question.tags or []),
+            ])
+        buffer = io.BytesIO()
+        workbook.save(buffer)
+        return buffer.getvalue()
+
     async def get_question(self, question_id: int) -> AdminQuizQuestionResponse:
         async with get_db_ctx() as db:
             question = await db.get(QuizQuestion, question_id)
@@ -1942,6 +2104,8 @@ class AdminQuizV2Service:
             image_urls=data.image_urls,
             option_image_urls=data.option_image_urls,
             require_publishable=False,
+            score=data.score,
+            tags=data.tags,
         )
         async with get_db_ctx() as db:
             library, _module, point = await self._active_point(
@@ -1966,6 +2130,8 @@ class AdminQuizV2Service:
                 correct_answer=normalized.correct_answer,
                 explanation=normalized.explanation,
                 image_urls=normalized.image_urls,
+                score=normalized.score,
+                tags=normalized.tags,
                 ever_published=False,
                 stem_reserved=True,
                 lock_version=1,
@@ -2030,7 +2196,11 @@ class AdminQuizV2Service:
                 "category_id",
                 "knowledge_point_id",
             }
-            content_changed = bool(fields)
+            # score/tags are question-level metadata without revision snapshots:
+            # editing them alone must not spawn a new revision.
+            meta_fields = fields & {"score", "tags"}
+            content_fields = fields - meta_fields
+            content_changed = bool(content_fields)
             base_revision = None
             if question.pending_revision_id is not None:
                 base_revision = await db.get(
@@ -2043,26 +2213,26 @@ class AdminQuizV2Service:
             source = base_revision or question
             normalized = self._normalize_question(
                 question_type=(
-                    data.question_type if "question_type" in fields else source.question_type
+                    data.question_type if "question_type" in content_fields else source.question_type
                 ),
                 question_text=(
-                    data.question_text if "question_text" in fields else source.question_text
+                    data.question_text if "question_text" in content_fields else source.question_text
                 ),
-                options=data.options if "options" in fields else source.options,
+                options=data.options if "options" in content_fields else source.options,
                 correct_answer=(
                     data.correct_answer
-                    if "correct_answer" in fields
+                    if "correct_answer" in content_fields
                     else source.correct_answer
                 ),
                 explanation=(
-                    data.explanation if "explanation" in fields else source.explanation
+                    data.explanation if "explanation" in content_fields else source.explanation
                 ),
                 image_urls=(
-                    data.image_urls if "image_urls" in fields else source.image_urls
+                    data.image_urls if "image_urls" in content_fields else source.image_urls
                 ),
                 option_image_urls=(
                     data.option_image_urls
-                    if "option_image_urls" in fields
+                    if "option_image_urls" in content_fields
                     else source.option_image_urls
                 ),
                 require_publishable=bool(question.ever_published),
@@ -2077,6 +2247,10 @@ class AdminQuizV2Service:
             before = self._question_fields(question)
             if target_point is not None:
                 question.knowledge_point_id = target_point.id
+            if "score" in meta_fields:
+                question.score = normalized.score
+            if "tags" in meta_fields:
+                question.tags = normalized.tags
             if content_changed:
                 next_no = int(
                     (

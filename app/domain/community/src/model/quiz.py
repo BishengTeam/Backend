@@ -341,8 +341,13 @@ class QuizQuestion(Base, _QuizTimestampMixin):
     __table_args__ = (
         CheckConstraint(
             "question_type IN "
-            "('single_choice', 'multiple_choice', 'judge', 'fill_blank', 'essay')",
+            "('single_choice', 'multiple_choice', 'uncertain_choice', 'judge', "
+            "'fill_blank', 'essay', 'matching', 'ordering')",
             name="ck_quiz_question_type",
+        ),
+        CheckConstraint(
+            "score IS NULL OR (score >= 0 AND score <= 100)",
+            name="ck_quiz_question_score_range",
         ),
         CheckConstraint(
             "status IN ('draft', 'published', 'disabled', 'deleted')",
@@ -436,6 +441,10 @@ class QuizQuestion(Base, _QuizTimestampMixin):
     option_image_urls: Mapped[dict[str, str] | None] = mapped_column(JSONB)
     correct_answer: Mapped[str | list[str] | list[list[str]] | None] = mapped_column(JSONB)
     explanation: Mapped[str | None] = mapped_column(String(1024))
+    score: Mapped[Decimal | None] = mapped_column(Numeric(5, 1))
+    tags: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'")
+    )
     image_urls: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'")
     )
@@ -469,7 +478,8 @@ class QuizQuestionRevision(Base, _QuizCreatedAtMixin):
     __table_args__ = (
         CheckConstraint(
             "question_type IN "
-            "('single_choice', 'multiple_choice', 'judge', 'fill_blank', 'essay')",
+            "('single_choice', 'multiple_choice', 'uncertain_choice', 'judge', "
+            "'fill_blank', 'essay', 'matching', 'ordering')",
             name="ck_quiz_question_revision_type",
         ),
         CheckConstraint(
@@ -824,7 +834,8 @@ class QuizPracticeSessionQuestion(Base, _QuizTimestampMixin):
         CheckConstraint("position >= 1", name="ck_quiz_practice_question_position"),
         CheckConstraint(
             "question_type IN "
-            "('single_choice', 'multiple_choice', 'judge', 'fill_blank', 'essay')",
+            "('single_choice', 'multiple_choice', 'uncertain_choice', 'judge', "
+            "'fill_blank', 'essay', 'matching', 'ordering')",
             name="ck_quiz_practice_question_type",
         ),
         CheckConstraint(
@@ -1202,7 +1213,8 @@ class QuizExamQuestion(Base, _QuizTimestampMixin):
         CheckConstraint("position >= 1", name="ck_quiz_exam_question_position"),
         CheckConstraint(
             "question_type IN "
-            "('single_choice', 'multiple_choice', 'judge', 'fill_blank', 'essay')",
+            "('single_choice', 'multiple_choice', 'uncertain_choice', 'judge', "
+            "'fill_blank', 'essay', 'matching', 'ordering')",
             name="ck_quiz_exam_question_type",
         ),
         UniqueConstraint("exam_id", "position", name="uq_quiz_exam_question_position"),
@@ -1429,7 +1441,7 @@ class QuizQuestionStats(Base, _QuizTimestampMixin):
 class QuizImportJob(Base, _QuizTimestampMixin):
     __tablename__ = "quiz_import_job"
     __table_args__ = (
-        CheckConstraint("source_type IN ('csv', 'json')", name="ck_quiz_import_source_type"),
+        CheckConstraint("source_type IN ('csv', 'json', 'xlsx')", name="ck_quiz_import_source_type"),
         CheckConstraint(
             "status IN ('queued', 'validating', 'validation_failed', 'importing', "
             "'awaiting_category_confirmation', 'succeeded', 'failed', "

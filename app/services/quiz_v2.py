@@ -24,7 +24,7 @@ from app.domain.community.src.index import (
 from app.domain.user.src.index import User
 from app.port.exceptions import QuizV2Exception
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
-from app.domain.community.src.rule.quiz import QuizPracticeMode
+from app.domain.community.src.rule.quiz import QuizPracticeMode, matching_rights_pool
 from app.schemas.common import PaginatedData
 from app.schemas.quiz_contract import (
     QuizKnowledgePointProgress,
@@ -136,6 +136,14 @@ class QuizV2Service:
                     question_type=question.question_type,
                     question_text=question.question_text,
                     options=dict(question.options or {}),
+                    matching_rights=(
+                        matching_rights_pool(
+                            question.correct_answer,
+                            question.current_revision_id or question.id,
+                        )
+                        if question.question_type == "matching"
+                        else []
+                    ),
                     image_urls=sign_quiz_media_urls(list(question.image_urls or [])),
                     option_image_urls=sign_quiz_media_map(
                         getattr(question, "option_image_urls", None) or {}
@@ -1242,8 +1250,16 @@ class QuizV2Service:
                     question_type=snapshot.question_type,
                     question_text=snapshot.question_text,
                     options=dict(snapshot.options or {}),
-                    option_image_urls=sign_quiz_media_map(getattr(snapshot, "option_image_urls", None) or {}),
+                    matching_rights=(
+                        matching_rights_pool(
+                            snapshot.correct_answer,
+                            f"{session.id}:{snapshot.position}",
+                        )
+                        if snapshot.question_type == "matching"
+                        else []
+                    ),
                     image_urls=sign_quiz_media_urls(list(snapshot.image_urls or [])),
+                    option_image_urls=sign_quiz_media_map(getattr(snapshot, "option_image_urls", None) or {}),
                     session_question_id=int(snapshot.id),
                     position=int(snapshot.position),
                     category_path=[

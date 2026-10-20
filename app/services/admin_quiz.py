@@ -54,10 +54,23 @@ from app.domain.community.src.rule.quiz import (
     QUESTION_TYPE_IMPORT_ALIASES,
     QuizCategoryStatus,
     QuizQuestionStatus,
+    QuizQuestionType,
     QuizRuleViolation,
     normalize_category_name,
     normalize_question_payload,
 )
+
+_OPTION_COLUMNS = ("A", "B", "C", "D", "E", "F")
+
+
+def _xlsx_cell_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
 from app.schemas.admin_quiz import (
     # This import is used only by the deprecated, unmounted helper methods at
     # the bottom of this module. The active `/admin/quiz/imports/*` routes use
@@ -346,10 +359,15 @@ class AdminQuizService:
         image_urls: object,
         option_image_urls: object = None,
         require_publishable: bool,
+        score: object = None,
+        tags: object = None,
     ):
         # The pre-contract admin UI sent multi-select answers as "AC". Accept
         # that legacy shape at this boundary, then persist the frozen array form.
-        if question_type == "multiple_choice" and isinstance(correct_answer, str):
+        if (
+            question_type in {"multiple_choice", "uncertain_choice"}
+            and isinstance(correct_answer, str)
+        ):
             answer_text = correct_answer.strip()
             # Accept the legacy ``AC``/``A,C``/``A、C`` shapes at the service
             # boundary, then persist the frozen sorted array representation.
@@ -367,6 +385,8 @@ class AdminQuizService:
                 image_urls=image_urls,
                 option_image_urls=option_image_urls,
                 require_publishable=require_publishable,
+                score=score,
+                tags=tags,
             )
         except QuizRuleViolation as exc:
             raise ValidationException(
@@ -899,6 +919,8 @@ class AdminQuizService:
                 image_urls=data.image_urls,
                 option_image_urls=data.option_image_urls,
                 require_publishable=False,
+                score=data.score,
+                tags=data.tags,
             )
             if await self._question_text_taken(
                 db,
@@ -918,6 +940,8 @@ class AdminQuizService:
                 explanation=normalized.explanation,
                 image_urls=normalized.image_urls,
                 option_image_urls=normalized.option_image_urls,
+                score=normalized.score,
+                tags=normalized.tags,
                 ever_published=False,
                 lock_version=1,
                 created_by=admin_id,
@@ -985,6 +1009,8 @@ class AdminQuizService:
                     "correct_answer",
                     "explanation",
                     "image_urls",
+                    "score",
+                    "tags",
                     "status",
                 )
             }
@@ -1021,6 +1047,8 @@ class AdminQuizService:
                     else question.option_image_urls
                 ),
                 require_publishable=question.ever_published,
+                score=data.score if "score" in fields else question.score,
+                tags=data.tags if "tags" in fields else question.tags,
             )
             target_category_id = data.category_id if data.category_id is not None else question.category_id
             if await self._question_text_taken(
@@ -1039,6 +1067,8 @@ class AdminQuizService:
             question.explanation = normalized.explanation
             question.image_urls = normalized.image_urls
             question.option_image_urls = normalized.option_image_urls
+            question.score = normalized.score
+            question.tags = normalized.tags
             if data.category_id is not None:
                 question.category_id = data.category_id
                 target_category.ever_had_question = True
@@ -2628,20 +2658,25 @@ class AdminQuizService:
         filename: str,
         library_id: int | None = None,
     ) -> QuizImportJob:
-        if source_type not in {"csv", "json"}:
-            raise ValidationException("导入类型必须为 csv 或 json")
+        if source_type not in {"csv", "json", "xlsx"}:
+            raise ValidationException("导入类型必须为 csv、json 或 xlsx")
         expected_suffix = f".{source_type}"
         if not Path(filename).name.lower().endswith(expected_suffix):
             raise ValidationException(f"文件扩展名必须为 {expected_suffix}")
         if not 1 <= len(content) <= settings.QUIZ_IMPORT_MAX_FILE_BYTES:
             raise ValidationException("导入文件大小必须在 1 B 至 10 MiB 之间")
         batch_key = uuid.uuid4().hex
-        suffix = "csv" if source_type == "csv" else "json"
+        suffix = source_type if source_type != "json" else "json"
         source_key = self._import_object_key(batch_key, suffix)
+        content_types = {
+            "csv": "text/csv; charset=utf-8",
+            "json": "application/json",
+            "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }
         await self._put_import_object(
             source_key,
             content,
-            "text/csv; charset=utf-8" if source_type == "csv" else "application/json",
+            content_types[source_type],
         )
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(days=settings.QUIZ_IMPORT_RETENTION_DAYS)
@@ -3511,6 +3546,8 @@ class AdminQuizService:
         """Parse every row without touching the database."""
         rows: list[tuple[int, AdminQuizImportQuestion]] = []
         errors: list[dict[str, object]] = []
+        if source_type == "xlsx":
+            return self._parse_import_rows_xlsx(content)
         if source_type == "json":
             try:
                 payload = json.loads(content.decode("utf-8-sig"))
@@ -3693,6 +3730,285 @@ class AdminQuizService:
                     )
         return rows, errors
 
+    _XLSX_HEADER_ALIASES: dict[str, str] = {
+        "题目": "question_text",
+        "题干": "question_text",
+        "题型": "question_type",
+        "正确答案": "correct_answer",
+        "答案": "correct_answer",
+        "解析": "explanation",
+        "分数": "score",
+        "分值": "score",
+        "分类": "category",
+        "分类路径": "category",
+        "标签": "tags",
+    }
+    _XLSX_REQUIRED_HEADERS = ("question_text", "question_type", "correct_answer", "category")
+    _XLSX_REQUIRED_TEXT_MARK_RE = re.compile(r"[（(]\s*必填\s*[)）]\s*$")
+    _JUDGE_TRUE_TEXTS = {"对", "正确", "√", "是", "T", "TRUE", "Y", "YES"}
+    _JUDGE_FALSE_TEXTS = {"错", "错误", "×", "X", "否", "F", "FALSE", "N", "NO"}
+    _MATCHING_ARROW_RE = re.compile(r"\s*(?:->|→|=>)\s*")
+
+    def _parse_import_rows_xlsx(
+        self, content: bytes
+    ) -> tuple[list[tuple[int, AdminQuizImportQuestion]], list[dict[str, object]]]:
+        """Parse the 甲方 13-column import template (first worksheet only)."""
+        from openpyxl import load_workbook
+
+        try:
+            workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        except Exception as exc:
+            return [], [
+                self._import_error(
+                    row=None,
+                    question_index=None,
+                    field=None,
+                    error_code="invalid_workbook",
+                    message=f"Excel 文件无效: {exc}",
+                )
+            ]
+        try:
+            return self._parse_template_worksheet(workbook)
+        finally:
+            workbook.close()
+
+    def _parse_template_worksheet(
+        self, workbook: object
+    ) -> tuple[list[tuple[int, AdminQuizImportQuestion]], list[dict[str, object]]]:
+        sheet = workbook.worksheets[0]
+        rows_iter = sheet.iter_rows(values_only=True)
+        header_row = next(rows_iter, None)
+        if header_row is None:
+            return [], [
+                self._import_error(
+                    row=None,
+                    question_index=None,
+                    field=None,
+                    error_code="invalid_workbook",
+                    message="Excel 第一个工作表为空",
+                )
+            ]
+
+        column_map: dict[str, int] = {}
+        option_columns: dict[int, int] = {}
+        for index, raw_header in enumerate(header_row):
+            header = re.sub(r"\s+", "", _xlsx_cell_text(raw_header))
+            if not header:
+                continue
+            header = self._XLSX_REQUIRED_TEXT_MARK_RE.sub("", header)
+            match = re.fullmatch(r"选项([A-Fa-f])", header)
+            if match:
+                option_columns[ord(match.group(1).upper()) - 65] = index
+                continue
+            target = self._XLSX_HEADER_ALIASES.get(header)
+            if target is not None:
+                column_map.setdefault(target, index)
+
+        missing = [field for field in self._XLSX_REQUIRED_HEADERS if field not in column_map]
+        if missing:
+            return [], [
+                self._import_error(
+                    row=1,
+                    question_index=None,
+                    field=None,
+                    error_code="invalid_workbook_header",
+                    message="Excel 表头缺少必要列（题目/题型/正确答案/分类），请使用标准导入模板",
+                )
+            ]
+
+        rows: list[tuple[int, AdminQuizImportQuestion]] = []
+        errors: list[dict[str, object]] = []
+        data_row_count = 0
+        limit_error_added = False
+        max_column = max(
+            [index for index in column_map.values()]
+            + [index for index in option_columns.values()]
+            + [0]
+        )
+        for row_no, raw_row in enumerate(rows_iter, start=2):
+            cells = list(raw_row[: max_column + 1]) if raw_row else []
+            values = {
+                field: _xlsx_cell_text(cells[index]) if index < len(cells) else ""
+                for field, index in column_map.items()
+            }
+            option_values: list[str] = []
+            for slot in range(len(_OPTION_COLUMNS)):
+                index = option_columns.get(slot)
+                option_values.append(
+                    _xlsx_cell_text(cells[index]) if index is not None and index < len(cells) else ""
+                )
+            if not any(values.values()) and not any(option_values):
+                continue
+            data_row_count += 1
+            if data_row_count > settings.QUIZ_IMPORT_MAX_QUESTIONS:
+                if not limit_error_added:
+                    errors.append(
+                        self._import_error(
+                            row=row_no,
+                            question_index=data_row_count,
+                            field=None,
+                            error_code="question_count_out_of_range",
+                            message=(
+                                "Excel 题目数量超过限制，单批最多 "
+                                f"{settings.QUIZ_IMPORT_MAX_QUESTIONS} 道"
+                            ),
+                        )
+                    )
+                    limit_error_added = True
+                continue
+            try:
+                item = self._build_import_item_from_template(values, option_values)
+                rows.append((row_no, AdminQuizImportQuestion.model_validate(item)))
+            except (ValueError, TypeError, PydanticValidationError) as exc:
+                if isinstance(exc, PydanticValidationError):
+                    errors.extend(
+                        self._validation_errors(exc, source_type="xlsx", locator=row_no)
+                    )
+                else:
+                    errors.append(
+                        self._import_error(
+                            row=row_no,
+                            question_index=data_row_count,
+                            field=None,
+                            error_code="invalid_row",
+                            message=f"行无效: {exc}",
+                        )
+                    )
+        return rows, errors
+
+    def _build_import_item_from_template(
+        self, values: dict[str, str], option_values: list[str]
+    ) -> dict[str, object]:
+        type_text = values.get("question_type", "").strip()
+        question_text = values.get("question_text", "").strip()
+        answer_text = values.get("correct_answer", "").strip()
+        if not type_text:
+            raise ValueError("题型不能为空")
+        if not question_text:
+            raise ValueError("题目不能为空")
+        question_type = QUESTION_TYPE_IMPORT_ALIASES.get(type_text, type_text)
+        if question_type not in {item.value for item in QuizQuestionType}:
+            raise ValueError(f"无效题型: {type_text}")
+        enum_type = QuizQuestionType(question_type)
+
+        item: dict[str, object] = {
+            "category_path": [
+                part for part in re.split(r"[，,、/]", values.get("category", "")) if part.strip()
+            ],
+            "question_type": type_text,
+            "question_text": question_text,
+            "explanation": values.get("explanation", "") or None,
+            "score": values.get("score", "") or None,
+            "tags": values.get("tags", "") or [],
+        }
+        letters = [
+            chr(ord("A") + index)
+            for index, text in enumerate(option_values)
+            if text
+        ]
+
+        if enum_type in {QuizQuestionType.SINGLE_CHOICE, QuizQuestionType.MULTIPLE_CHOICE,
+                         QuizQuestionType.UNCERTAIN_CHOICE}:
+            if len(letters) < 2:
+                raise ValueError("选择题至少需要填写选项A、选项B")
+            item["options"] = {
+                chr(ord("A") + index): text
+                for index, text in enumerate(option_values)
+                if text
+            }
+            normalized_answer = self._normalize_choice_answer_text(
+                answer_text, allow_single=enum_type is not QuizQuestionType.MULTIPLE_CHOICE
+            )
+            if not normalized_answer:
+                raise ValueError("正确答案不能为空")
+            unknown = [key for key in normalized_answer if key not in item["options"]]
+            if unknown:
+                raise ValueError(f"正确答案包含未填写的选项: {','.join(unknown)}")
+            item["correct_answer"] = (
+                normalized_answer[0]
+                if enum_type is QuizQuestionType.SINGLE_CHOICE
+                else normalized_answer
+            )
+        elif enum_type is QuizQuestionType.JUDGE:
+            item["options"] = None
+            item["correct_answer"] = self._normalize_judge_answer_text(answer_text)
+        elif enum_type is QuizQuestionType.FILL_BLANK:
+            item["options"] = None
+            groups = [
+                [candidate.strip() for candidate in cell.split("|") if candidate.strip()]
+                for cell in option_values
+                if cell.strip()
+            ]
+            item["correct_answer"] = groups or None
+        elif enum_type is QuizQuestionType.ESSAY:
+            item["options"] = None
+            item["correct_answer"] = answer_text or None
+        elif enum_type is QuizQuestionType.MATCHING:
+            if len(letters) < 2:
+                raise ValueError("配对题至少需要填写两组「左侧 -> 右侧」")
+            options: dict[str, str] = {}
+            rights: list[str] = []
+            for index, cell in enumerate(option_values):
+                if not cell:
+                    continue
+                parts = self._MATCHING_ARROW_RE.split(cell, maxsplit=1)
+                if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+                    raise ValueError(
+                        f"配对题选项格式无效，应为「左侧 -> 右侧」: {cell}"
+                    )
+                options[chr(ord("A") + index)] = parts[0].strip()
+                rights.append(parts[1].strip())
+            item["options"] = options
+            answer_keys = self._normalize_choice_answer_text(answer_text, allow_single=True)
+            if not answer_keys:
+                raise ValueError("配对题正确答案不能为空")
+            unknown = [key for key in answer_keys if key not in options]
+            if unknown:
+                raise ValueError(f"配对答案包含未填写的选项: {','.join(unknown)}")
+            if len(answer_keys) != len(options):
+                raise ValueError("配对答案必须覆盖全部左侧项")
+            item["correct_answer"] = [rights[ord(key) - 65] for key in answer_keys]
+        else:  # ORDERING
+            if len(letters) < 2:
+                raise ValueError("排序题至少需要填写两个待排序项")
+            options = {
+                chr(ord("A") + index): text
+                for index, text in enumerate(option_values)
+                if text
+            }
+            item["options"] = options
+            sequence_keys = self._normalize_choice_answer_text(answer_text, allow_single=True)
+            if not sequence_keys:
+                raise ValueError("排序题正确答案不能为空")
+            unknown = [key for key in sequence_keys if key not in options]
+            if unknown:
+                raise ValueError(f"排序答案包含未填写的选项: {','.join(unknown)}")
+            if len(sequence_keys) != len(options):
+                raise ValueError("排序答案必须包含全部待排序项")
+            item["correct_answer"] = [options[key] for key in sequence_keys]
+        return item
+
+    def _normalize_choice_answer_text(
+        self, answer_text: str, *, allow_single: bool
+    ) -> list[str]:
+        cleaned = re.sub(r"[\s,，、;；]+", "", answer_text.upper())
+        if not cleaned:
+            return []
+        keys = list(cleaned)
+        if any(key not in _OPTION_COLUMNS for key in keys):
+            return []
+        if not allow_single and len(keys) < 2:
+            return []
+        return keys
+
+    def _normalize_judge_answer_text(self, answer_text: str) -> str:
+        cleaned = answer_text.strip().upper()
+        if cleaned in self._JUDGE_TRUE_TEXTS or cleaned in {"A"}:
+            return "A"
+        if cleaned in self._JUDGE_FALSE_TEXTS or cleaned in {"B"}:
+            return "B"
+        raise ValueError(f"判断题答案无效，应为 A/B 或 对/错: {answer_text}")
+
     async def _validate_import_rows(
         self,
         db,
@@ -3819,6 +4135,8 @@ class AdminQuizService:
                     image_urls=item.image_urls,
                     option_image_urls=item.option_image_urls,
                     require_publishable=False,
+                    score=item.score,
+                    tags=item.tags,
                 )
             except QuizRuleViolation as exc:
                 errors.append(
@@ -4067,6 +4385,8 @@ class AdminQuizService:
                     image_urls=item.image_urls,
                     option_image_urls=item.option_image_urls,
                     require_publishable=False,
+                    score=item.score,
+                    tags=item.tags,
                 )
             except QuizRuleViolation as exc:
                 errors.append(
@@ -4389,6 +4709,8 @@ class AdminQuizService:
                 image_urls=item.image_urls,
                 option_image_urls=item.option_image_urls,
                 require_publishable=False,
+                score=item.score,
+                tags=item.tags,
             )
             db.add(
                 QuizQuestion(
@@ -4403,6 +4725,8 @@ class AdminQuizService:
                     explanation=normalized.explanation,
                     image_urls=normalized.image_urls,
                     option_image_urls=normalized.option_image_urls,
+                    score=normalized.score,
+                    tags=normalized.tags,
                     ever_published=False,
                     lock_version=1,
                     created_by=current.admin_id,
@@ -4442,6 +4766,8 @@ class AdminQuizService:
                 image_urls=item.image_urls,
                 option_image_urls=item.option_image_urls,
                 require_publishable=False,
+                score=item.score,
+                tags=item.tags,
             )
             question = QuizQuestion(
                 library_id=current.library_id,
@@ -4457,6 +4783,8 @@ class AdminQuizService:
                 explanation=normalized.explanation,
                 image_urls=normalized.image_urls,
                 option_image_urls=normalized.option_image_urls,
+                score=normalized.score,
+                tags=normalized.tags,
                 ever_published=False,
                 stem_reserved=True,
                 lock_version=1,

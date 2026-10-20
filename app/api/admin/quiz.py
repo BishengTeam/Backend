@@ -678,23 +678,33 @@ async def list_questions(
 
 @router.get(f"{QUESTION}/export/csv",
     response_class=PlainTextResponse,
-    summary="导出题库题目 CSV",
+    summary="导出题库题目（CSV 或甲方模板 xlsx）",
     description="""
 管理后台 **题库管理 → 导入中心** 页面使用。
 
-**使用场景**: 按题库导出题目为导入兼容 CSV（路径为模块、知识点两级，可直接回导）
+**使用场景**: 按题库导出题目为导入兼容格式（路径为模块、知识点两级，可直接回导）
 
-**查询参数**: 与题目列表一致（library_id 必传）；可选 module_id / knowledge_point_id / question_type / status / keyword
+**查询参数**: 与题目列表一致（library_id 必传）；可选 module_id / knowledge_point_id / question_type / status / keyword / format
 
-**响应**: CSV 文件下载（带 BOM，Excel 可直接打开）
+**format**: `csv`（默认，六列冻结契约）或 `xlsx`（《试题导入模板》13 列，含分数标签，可直接回导）
+
+**响应**: 文件下载
 
 **权限**: quiz:list
     """,
 )
 async def export_questions_csv(
     query: AdminQuizQuestionQuery = Depends(admin_question_query),
+    format: str = Query("csv", pattern="^(csv|xlsx)$"),
     _admin=Depends(require_permission("quiz:list")),
-) -> PlainTextResponse:
+) -> Response:
+    if format == "xlsx":
+        content = await AdminQuizV2Service().export_questions_xlsx(query)
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": "attachment; filename=quiz_questions.xlsx"},
+        )
     csv_content = await AdminQuizV2Service().export_questions_csv(query)
     return PlainTextResponse(
         content=csv_content,
@@ -1183,7 +1193,7 @@ async def list_audit_logs(
 
 @router.post("/imports/csv",
     response_model=APIResponse[AdminQuizImportJobResponse],
-    summary="创建 CSV 导入任务",
+    summary="创建文件导入任务（CSV / Excel 模板）",
 )
 @limiter.limit(
     f"{settings.QUIZ_ADMIN_IMPORT_RATE_PER_MINUTE}/minute",
@@ -1191,7 +1201,7 @@ async def list_audit_logs(
 )
 async def create_csv_import(
     request: Request,
-    file: UploadFile = File(..., description="CSV 文件"),
+    file: UploadFile = File(..., description="CSV 或按甲方模板填写的 .xlsx 文件"),
     filename: str = Form(..., min_length=1, max_length=255),
     size_bytes: int = Form(..., ge=1, le=10 * 1024 * 1024),
     library_id: int | None = Form(None, ge=1),
@@ -1202,10 +1212,15 @@ async def create_csv_import(
         raise BusinessException("导入文件不能超过 10 MiB")
     if size_bytes != len(content):
         raise BusinessException("文件大小校验失败")
-    if not filename.lower().endswith(".csv"):
-        raise BusinessException("仅允许上传 .csv 文件")
+    lower_name = filename.lower()
+    if lower_name.endswith(".csv"):
+        source_type = "csv"
+    elif lower_name.endswith(".xlsx"):
+        source_type = "xlsx"
+    else:
+        raise BusinessException("仅允许上传 .csv 或 .xlsx 文件")
     result = await AdminQuizService().create_import_job(
-        source_type="csv",
+        source_type=source_type,
         content=content,
         admin_id=admin.id,
         filename=filename,

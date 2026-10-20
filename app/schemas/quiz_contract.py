@@ -186,6 +186,15 @@ class QuizPublicQuestion(QuizContractModel):
     options: dict[str, str]
     image_urls: list[str] = Field(default_factory=list)
     option_image_urls: dict[str, str] = Field(default_factory=dict)
+    # 配对题专用：打乱后的右侧候选池（只暴露集合，不暴露配对关系）。
+    matching_rights: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_matching_rights(self, handler):
+        payload = handler(self)
+        if not payload.get("matching_rights"):
+            payload.pop("matching_rights", None)
+        return payload
 
 
 class QuizCategoryPathItem(QuizContractModel):

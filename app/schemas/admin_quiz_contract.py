@@ -20,6 +20,8 @@ from app.domain.community.src.rule.quiz import (
     QUESTION_TYPE_IMPORT_ALIASES,
     normalize_category_name,
     normalize_question_payload,
+    normalize_question_score,
+    normalize_question_tags,
 )
 from app.schemas.quiz_contract import QuizAnswer, QuizContractModel
 
@@ -145,6 +147,8 @@ class AdminQuizQuestionCreate(QuizContractModel):
     explanation: str | None = Field(default=None, max_length=1024)
     image_urls: list[str] = Field(default_factory=list, max_length=9)
     option_image_urls: dict[str, str] | None = None
+    score: Decimal | None = None
+    tags: list[str] = Field(default_factory=list, max_length=10)
 
     @model_validator(mode="after")
     def normalize_draft(self) -> "AdminQuizQuestionCreate":
@@ -159,6 +163,8 @@ class AdminQuizQuestionCreate(QuizContractModel):
             image_urls=self.image_urls,
             option_image_urls=self.option_image_urls,
             require_publishable=False,
+            score=self.score,
+            tags=self.tags,
         )
         self.question_type = normalized.question_type
         self.question_text = normalized.question_text
@@ -167,6 +173,8 @@ class AdminQuizQuestionCreate(QuizContractModel):
         self.explanation = normalized.explanation
         self.image_urls = normalized.image_urls
         self.option_image_urls = normalized.option_image_urls
+        self.score = normalized.score
+        self.tags = normalized.tags
         return self
 
 
@@ -181,6 +189,8 @@ class AdminQuizQuestionUpdate(QuizContractModel):
     explanation: str | None = Field(default=None, max_length=1024)
     image_urls: list[str] | None = Field(default=None, max_length=9)
     option_image_urls: dict[str, str] | None = None
+    score: Decimal | None = None
+    tags: list[str] | None = Field(default=None, max_length=10)
 
     @model_validator(mode="after")
     def require_change(self) -> "AdminQuizQuestionUpdate":
@@ -205,6 +215,8 @@ class AdminQuizQuestionResponse(QuizContractModel):
     explanation: str | None = None
     image_urls: list[str] = Field(default_factory=list)
     option_image_urls: dict[str, str] = Field(default_factory=dict)
+    score: Decimal | None = None
+    tags: list[str] = Field(default_factory=list)
     ever_published: bool
     published_at: datetime | None = None
     disabled_at: datetime | None = None
@@ -460,6 +472,8 @@ class AdminQuizImportQuestion(QuizContractModel):
     explanation: str | None = Field(default=None, max_length=1024)
     image_urls: object = Field(default_factory=list)
     option_image_urls: object = None
+    score: Decimal | None = None
+    tags: list[str] = Field(default_factory=list, max_length=10)
 
     @field_validator("question_type", mode="before")
     @classmethod
@@ -467,6 +481,16 @@ class AdminQuizImportQuestion(QuizContractModel):
         if isinstance(value, str):
             return QUESTION_TYPE_IMPORT_ALIASES.get(value.strip(), value.strip())
         return value
+
+    @field_validator("score", mode="before")
+    @classmethod
+    def normalize_score(cls, value: object) -> object:
+        return normalize_question_score(value)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalize_tags(cls, value: object) -> object:
+        return normalize_question_tags(value)
 
     @field_validator("category_path")
     @classmethod
@@ -484,6 +508,8 @@ class AdminQuizImportQuestion(QuizContractModel):
             image_urls=self.image_urls,
             option_image_urls=self.option_image_urls,
             require_publishable=False,
+            score=self.score,
+            tags=self.tags,
         )
         self.question_type = normalized.question_type
         self.question_text = normalized.question_text
@@ -492,6 +518,8 @@ class AdminQuizImportQuestion(QuizContractModel):
         self.explanation = normalized.explanation
         self.image_urls = normalized.image_urls
         self.option_image_urls = normalized.option_image_urls
+        self.score = normalized.score
+        self.tags = normalized.tags
         return self
 
 

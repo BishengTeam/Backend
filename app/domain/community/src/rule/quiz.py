@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import random
 import re
 import unicodedata
 from collections.abc import Mapping, Sequence
@@ -13,7 +14,8 @@ from typing import TypeAlias
 
 
 QuizAnswer: TypeAlias = str | list[str] | list[list[str]]
-_OPTION_KEYS = ("A", "B", "C", "D")
+_OPTION_KEYS = ("A", "B", "C", "D", "E", "F")
+_OPTION_COUNT_MAX = len(_OPTION_KEYS)
 _WHITESPACE_RE = re.compile(r"\s+")
 _FILL_BLANK_PLACEHOLDER_RE = re.compile(r"_{4,}")
 _FILL_BLANK_MAX = 5
@@ -21,12 +23,17 @@ _FILL_BLANK_CANDIDATE_MAX = 5
 _FILL_BLANK_ANSWER_MAX_LENGTH = 200
 _ESSAY_REFERENCE_MAX_LENGTH = 5000
 _ESSAY_ANSWER_MAX_LENGTH = 2000
+_QUESTION_SCORE_MAX = Decimal("100")
+_QUESTION_TAGS_MAX = 10
+_QUESTION_TAG_MAX_LENGTH = 32
 JUDGE_OPTIONS: dict[str, str] = {"A": "正确", "B": "错误"}
 QUESTION_TYPE_IMPORT_ALIASES: dict[str, str] = {
     "单选": "single_choice",
     "单选题": "single_choice",
     "多选": "multiple_choice",
     "多选题": "multiple_choice",
+    "不定项": "uncertain_choice",
+    "不定项选择题": "uncertain_choice",
     "判断": "judge",
     "判断题": "judge",
     "填空": "fill_blank",
@@ -35,15 +42,22 @@ QUESTION_TYPE_IMPORT_ALIASES: dict[str, str] = {
     "问答题": "essay",
     "简答": "essay",
     "简答题": "essay",
+    "配对": "matching",
+    "配对题": "matching",
+    "排序": "ordering",
+    "排序题": "ordering",
 }
 
 
 class QuizQuestionType(StrEnum):
     SINGLE_CHOICE = "single_choice"
     MULTIPLE_CHOICE = "multiple_choice"
+    UNCERTAIN_CHOICE = "uncertain_choice"
     JUDGE = "judge"
     FILL_BLANK = "fill_blank"
     ESSAY = "essay"
+    MATCHING = "matching"
+    ORDERING = "ordering"
 
 
 class QuizCategoryStatus(StrEnum):
@@ -117,6 +131,7 @@ class QuizExamStatus(StrEnum):
 class QuizImportSourceType(StrEnum):
     CSV = "csv"
     JSON = "json"
+    XLSX = "xlsx"
 
 
 class QuizImportStatus(StrEnum):
@@ -152,6 +167,52 @@ class NormalizedQuizQuestion:
     explanation: str | None
     image_urls: list[str]
     option_image_urls: dict[str, str] = field(default_factory=dict)
+    score: Decimal | None = None
+    tags: list[str] = field(default_factory=list)
+
+
+def normalize_question_score(value: object = None) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal, str)):
+        raise QuizRuleViolation("score", "分数必须是数字")
+    try:
+        score = Decimal(str(value).strip())
+    except (ArithmeticError, ValueError) as exc:
+        raise QuizRuleViolation("score", "分数必须是数字") from exc
+    if not Decimal("0") <= score <= _QUESTION_SCORE_MAX:
+        raise QuizRuleViolation("score", "分数必须在 0 至 100 之间")
+    return score.quantize(Decimal("0.1"))
+
+
+def normalize_question_tags(value: object = None) -> list[str]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        items = [part for part in re.split(r"[,，、]+", value) if part.strip()]
+    elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        items = list(value)
+    else:
+        raise QuizRuleViolation("tags", "标签必须是字符串数组")
+    tags: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(items):
+        if not isinstance(item, str):
+            raise QuizRuleViolation(f"tags.{index}", "标签必须是字符串")
+        tag = _WHITESPACE_RE.sub(" ", item.strip())
+        if not tag:
+            continue
+        if len(tag) > _QUESTION_TAG_MAX_LENGTH:
+            raise QuizRuleViolation(
+                f"tags.{index}",
+                f"标签长度不能超过 {_QUESTION_TAG_MAX_LENGTH}",
+            )
+        if tag not in seen:
+            tags.append(tag)
+            seen.add(tag)
+    if len(tags) > _QUESTION_TAGS_MAX:
+        raise QuizRuleViolation("tags", f"标签最多 {_QUESTION_TAGS_MAX} 个")
+    return tags
 
 
 def _enum_value(value: str | StrEnum, enum_type: type[StrEnum], field: str) -> StrEnum:
@@ -244,7 +305,7 @@ def _normalize_option_key(value: object, *, field: str) -> str:
         raise QuizRuleViolation(field, "选项键必须是字符串")
     key = value.strip().upper()
     if key not in _OPTION_KEYS:
-        raise QuizRuleViolation(field, "选项键只能为 A、B、C、D")
+        raise QuizRuleViolation(field, "选项键只能为 A、B、C、D、E、F")
     return key
 
 
@@ -270,11 +331,13 @@ def _normalize_options(
         return dict(JUDGE_OPTIONS)
 
     if options is None:
+        if question_type in {QuizQuestionType.MATCHING, QuizQuestionType.ORDERING}:
+            raise QuizRuleViolation("options", "配对题和排序题必须填写选项")
         if require_publishable:
             raise QuizRuleViolation("options", "发布前必须填写选项")
         return None
     if not isinstance(options, Mapping):
-        raise QuizRuleViolation("options", "必须是以 A-D 为键的对象")
+        raise QuizRuleViolation("options", "必须是以 A-F 为键的对象")
 
     normalized = _normalize_options_mapping(options)
     keys = tuple(normalized)
@@ -284,16 +347,41 @@ def _normalize_options(
 
     count = len(normalized)
     if question_type is QuizQuestionType.SINGLE_CHOICE:
-        if require_publishable and count not in {3, 4}:
-            raise QuizRuleViolation("options", "单选题发布时必须有 3 至 4 个选项")
-        if count > 4:
-            raise QuizRuleViolation("options", "单选题最多 4 个选项")
+        if require_publishable and not 3 <= count <= _OPTION_COUNT_MAX:
+            raise QuizRuleViolation("options", "单选题发布时必须有 3 至 6 个选项")
+        if count > _OPTION_COUNT_MAX:
+            raise QuizRuleViolation("options", f"单选题最多 {_OPTION_COUNT_MAX} 个选项")
     elif question_type is QuizQuestionType.MULTIPLE_CHOICE:
-        if require_publishable and count != 4:
-            raise QuizRuleViolation("options", "多选题发布时必须有 A-D 四个选项")
-        if count > 4:
-            raise QuizRuleViolation("options", "多选题最多 4 个选项")
+        if require_publishable and not 3 <= count <= _OPTION_COUNT_MAX:
+            raise QuizRuleViolation("options", "多选题发布时必须有 3 至 6 个选项")
+        if count > _OPTION_COUNT_MAX:
+            raise QuizRuleViolation("options", f"多选题最多 {_OPTION_COUNT_MAX} 个选项")
+    elif question_type is QuizQuestionType.UNCERTAIN_CHOICE:
+        if require_publishable and not 3 <= count <= _OPTION_COUNT_MAX:
+            raise QuizRuleViolation("options", "不定项选择题发布时必须有 3 至 6 个选项")
+        if count > _OPTION_COUNT_MAX:
+            raise QuizRuleViolation("options", f"不定项选择题最多 {_OPTION_COUNT_MAX} 个选项")
+    elif question_type is QuizQuestionType.MATCHING:
+        if count < 2:
+            raise QuizRuleViolation("options", "配对题至少需要 2 个左侧项")
+        if count > _OPTION_COUNT_MAX:
+            raise QuizRuleViolation("options", f"配对题最多 {_OPTION_COUNT_MAX} 个左侧项")
+        _ensure_unique_option_texts(normalized, "配对题左侧项不能重复")
+    elif question_type is QuizQuestionType.ORDERING:
+        if count < 2:
+            raise QuizRuleViolation("options", "排序题至少需要 2 个待排序项")
+        if count > _OPTION_COUNT_MAX:
+            raise QuizRuleViolation("options", f"排序题最多 {_OPTION_COUNT_MAX} 个待排序项")
+        _ensure_unique_option_texts(normalized, "排序题待排序项不能重复")
     return normalized
+
+
+def _ensure_unique_option_texts(options: Mapping[str, str], message: str) -> None:
+    seen: set[str] = set()
+    for text in options.values():
+        if text in seen:
+            raise QuizRuleViolation("options", message)
+        seen.add(text)
 
 
 def _normalize_options_mapping(options: Mapping[object, object]) -> dict[str, str]:
@@ -450,6 +538,12 @@ def _normalize_correct_answer(
                 raise QuizRuleViolation("correct_answer", "参考答案不能包含控制字符")
         return reference
 
+    if question_type is QuizQuestionType.MATCHING:
+        return _normalize_matching_answer(answer, options=options)
+
+    if question_type is QuizQuestionType.ORDERING:
+        return _normalize_ordering_answer(answer, options=options)
+
     if isinstance(answer, (str, bytes)) or not isinstance(answer, Sequence):
         raise QuizRuleViolation("correct_answer", "多选题标准答案必须是字符串数组")
     keys = sorted(
@@ -458,15 +552,73 @@ def _normalize_correct_answer(
             for item in answer
         }
     )
-    minimum = 2 if require_publishable else 1
-    if not minimum <= len(keys) <= 4:
-        raise QuizRuleViolation(
-            "correct_answer",
-            "多选题发布时至少 2 个答案" if require_publishable else "多选题答案不能为空",
+    if question_type is QuizQuestionType.UNCERTAIN_CHOICE:
+        minimum = 1
+        empty_message = "不定项选择题答案不能为空"
+    else:
+        minimum = 2 if require_publishable else 1
+        empty_message = (
+            "多选题发布时至少 2 个答案" if require_publishable else "多选题答案不能为空"
         )
+    if not minimum <= len(keys) <= _OPTION_COUNT_MAX:
+        raise QuizRuleViolation("correct_answer", empty_message)
     if options is not None and any(key not in options for key in keys):
         raise QuizRuleViolation("correct_answer", "标准答案包含不存在的选项")
     return keys
+
+
+def _normalize_matching_answer(
+    answer: object,
+    *,
+    options: dict[str, str] | None,
+) -> list[str]:
+    if options is None:
+        raise QuizRuleViolation("options", "配对题必须先填写左侧选项")
+    if isinstance(answer, (str, bytes)) or not isinstance(answer, Sequence):
+        raise QuizRuleViolation("correct_answer", "配对题标准答案必须是字符串数组")
+    rights: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(answer):
+        field = f"correct_answer.{index}"
+        if not isinstance(item, str):
+            raise QuizRuleViolation(field, "配对题右侧答案必须是字符串")
+        cleaned = item.strip()
+        if not cleaned:
+            raise QuizRuleViolation(field, "配对题右侧答案不能为空")
+        if len(cleaned) > 1024:
+            raise QuizRuleViolation(field, "配对题右侧答案长度不能超过 1024")
+        if cleaned in seen:
+            raise QuizRuleViolation(field, "配对题右侧答案不能重复")
+        rights.append(cleaned)
+        seen.add(cleaned)
+    if len(rights) != len(options):
+        raise QuizRuleViolation(
+            "correct_answer",
+            "配对题右侧答案数量必须与左侧选项数量一致",
+        )
+    return rights
+
+
+def _normalize_ordering_answer(
+    answer: object,
+    *,
+    options: dict[str, str] | None,
+) -> list[str]:
+    if options is None:
+        raise QuizRuleViolation("options", "排序题必须先填写待排序项")
+    if isinstance(answer, (str, bytes)) or not isinstance(answer, Sequence):
+        raise QuizRuleViolation("correct_answer", "排序题标准答案必须是字符串数组")
+    sequence: list[str] = []
+    for index, item in enumerate(answer):
+        if not isinstance(item, str):
+            raise QuizRuleViolation(f"correct_answer.{index}", "排序题标准答案必须是字符串")
+        sequence.append(item.strip())
+    if len(sequence) != len(options) or sorted(sequence) != sorted(options.values()):
+        raise QuizRuleViolation(
+            "correct_answer",
+            "排序题标准答案必须是全部待排序项的一种排列",
+        )
+    return sequence
 
 
 def normalize_question_payload(
@@ -479,6 +631,8 @@ def normalize_question_payload(
     image_urls: object = None,
     option_image_urls: object = None,
     require_publishable: bool = False,
+    score: object = None,
+    tags: object = None,
 ) -> NormalizedQuizQuestion:
     normalized_type = _enum_value(
         question_type,
@@ -542,6 +696,8 @@ def normalize_question_payload(
         explanation=normalized_explanation,
         image_urls=normalized_image_urls,
         option_image_urls=normalized_option_image_urls,
+        score=normalize_question_score(score),
+        tags=normalize_question_tags(tags),
     )
 
 
@@ -600,12 +756,48 @@ def normalize_submitted_answer(
             raise QuizRuleViolation("user_answer", "答案不在现有选项中")
         return key
 
+    if normalized_type is QuizQuestionType.MATCHING:
+        if isinstance(answer, (str, bytes)) or not isinstance(answer, Sequence):
+            raise QuizRuleViolation("user_answer", "配对题答案必须是字符串数组")
+        picked: list[str] = []
+        for index, item in enumerate(answer):
+            field = f"user_answer.{index}"
+            if not isinstance(item, str):
+                raise QuizRuleViolation(field, "配对题每项答案必须是字符串")
+            cleaned = item.strip()
+            if not cleaned:
+                raise QuizRuleViolation(field, "配对题每项答案不能为空")
+            picked.append(cleaned)
+        if len(picked) != len(normalized_options):
+            raise QuizRuleViolation(
+                "user_answer",
+                "配对题答案数量必须与左侧选项数量一致",
+            )
+        return picked
+
+    if normalized_type is QuizQuestionType.ORDERING:
+        if isinstance(answer, (str, bytes)) or not isinstance(answer, Sequence):
+            raise QuizRuleViolation("user_answer", "排序题答案必须是字符串数组")
+        sequence: list[str] = []
+        for index, item in enumerate(answer):
+            if not isinstance(item, str):
+                raise QuizRuleViolation(f"user_answer.{index}", "排序题每项答案必须是字符串")
+            sequence.append(item.strip())
+        if len(sequence) != len(normalized_options) or sorted(sequence) != sorted(
+            normalized_options.values()
+        ):
+            raise QuizRuleViolation(
+                "user_answer",
+                "排序题答案必须是全部待排序项的一种排列",
+            )
+        return sequence
+
     if isinstance(answer, (str, bytes)) or not isinstance(answer, Sequence):
         raise QuizRuleViolation("user_answer", "多选题答案必须是字符串数组")
     keys = sorted(
         {_normalize_option_key(item, field="user_answer") for item in answer}
     )
-    if not 1 <= len(keys) <= 4:
+    if not 1 <= len(keys) <= max(len(normalized_options), 1):
         raise QuizRuleViolation("user_answer", "多选题至少选择 1 个选项")
     if any(key not in normalized_options for key in keys):
         raise QuizRuleViolation("user_answer", "答案包含不存在的选项")
@@ -685,3 +877,22 @@ def answer_score_ratio(
     return Decimal(1) if answers_match(
         normalized_type, user_answer, correct_answer, options=options
     ) else Decimal(0)
+
+
+def matching_rights_pool(correct_answer: object, seed: object) -> list[str]:
+    """Deterministic shuffled right-side pool for public matching payloads.
+
+    The pool exposes only the SET of right items, never the pairing, so the
+    mini-program can render the answer column without leaking the key.
+    """
+    if not isinstance(correct_answer, Sequence) or isinstance(correct_answer, (str, bytes)):
+        return []
+    rights = [item for item in correct_answer if isinstance(item, str)]
+    if len(rights) < 2:
+        return rights
+    try:
+        numeric_seed = int(str(seed))
+    except (TypeError, ValueError):
+        numeric_seed = 0
+    random.Random(numeric_seed).shuffle(rights)
+    return rights

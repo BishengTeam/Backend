@@ -45,6 +45,7 @@ from app.domain.community.src.rule.quiz import (
     QuizPracticeSessionStatus,
     QuizWrongStatus,
     answers_match,
+    matching_rights_pool,
     normalize_submitted_answer,
 )
 from app.domain.user.src.index import User
@@ -750,6 +751,14 @@ class QuizPracticeService:
                     options=dict(snapshot.options or {}),
                     option_image_urls=sign_quiz_media_map(getattr(snapshot, "option_image_urls", None) or {}),
                     image_urls=sign_quiz_media_urls(list(snapshot.image_urls or [])),
+                    matching_rights=(
+                        matching_rights_pool(
+                            snapshot.correct_answer,
+                            f"{session.id}:{snapshot.position}",
+                        )
+                        if snapshot.question_type == "matching"
+                        else []
+                    ),
                     session_question_id=int(snapshot.id),
                     position=int(snapshot.position),
                     category_path=[
