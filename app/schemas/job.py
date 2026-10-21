@@ -6,7 +6,7 @@ from pydantic import BaseModel
 class JobResponse(BaseModel):
     id: int
     title: str
-    company: str
+    company: str | None
     location: str | None
     salary_range: str | None
     description: str | None

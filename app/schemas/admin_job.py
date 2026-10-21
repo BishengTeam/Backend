@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 class AdminJobCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=256, description="岗位标题")
-    company: str = Field(..., min_length=1, max_length=128, description="公司名称")
+    company: str | None = Field(None, max_length=128, description="公司名称")
     location: str | None = Field(None, max_length=128, description="工作地点")
     salary_range: str | None = Field(None, max_length=64, description="薪资范围")
     description: str | None = Field(None, description="岗位描述")
@@ -16,7 +16,7 @@ class AdminJobCreate(BaseModel):
 
 class AdminJobUpdate(BaseModel):
     title: str | None = Field(None, min_length=1, max_length=256, description="岗位标题")
-    company: str | None = Field(None, min_length=1, max_length=128, description="公司名称")
+    company: str | None = Field(None, max_length=128, description="公司名称")
     location: str | None = Field(None, max_length=128, description="工作地点")
     salary_range: str | None = Field(None, max_length=64, description="薪资范围")
     description: str | None = Field(None, description="岗位描述")
@@ -28,7 +28,7 @@ class AdminJobUpdate(BaseModel):
 class AdminJobListItem(BaseModel):
     id: int
     title: str
-    company: str
+    company: str | None = None
     location: str | None = None
     salary_range: str | None = None
     description: str | None = None

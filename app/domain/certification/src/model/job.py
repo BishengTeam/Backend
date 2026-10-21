@@ -8,7 +8,7 @@ class Job(Base, TimestampMixin):
     __tablename__ = "job"
 
     title: Mapped[str] = mapped_column(String(256), nullable=False)
-    company: Mapped[str] = mapped_column(String(128), nullable=False)
+    company: Mapped[str | None] = mapped_column(String(128))
     location: Mapped[str | None] = mapped_column(String(128))
     salary_range: Mapped[str | None] = mapped_column(String(64))
     description: Mapped[str | None] = mapped_column(Text)
