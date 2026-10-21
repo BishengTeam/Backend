@@ -17,3 +17,5 @@ build/
 .pytest-tmp/
 .pip-cache/
 docs/certfile
+
+.temp/
