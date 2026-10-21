@@ -14,6 +14,7 @@ SECRET_FILE_FIELDS = (
     "JWT_SECRET",
     "PII_HASH_KEY",
     "WECHAT_SECRET",
+    "GZH_APP_SECRET",
     "WECHAT_PAY_PRIVATE_KEY",
     "WECHAT_PAY_API_V3_KEY",
     "WECHAT_PAY_PUBLIC_KEY",
@@ -143,6 +144,7 @@ class Settings(BaseSettings):
     JWT_SECRET_FILE: str = ""
     PII_HASH_KEY_FILE: str = ""
     WECHAT_SECRET_FILE: str = ""
+    GZH_APP_SECRET_FILE: str = ""
     WECHAT_PAY_PRIVATE_KEY_FILE: str = ""
     WECHAT_PAY_API_V3_KEY_FILE: str = ""
     WECHAT_PAY_PUBLIC_KEY_FILE: str = ""
@@ -253,6 +255,10 @@ class Settings(BaseSettings):
     WECHAT_APPID: str = ""
     WECHAT_SUBSCRIBE_APPROVED_TEMPLATE_ID: str = ""
     WECHAT_SECRET: str = ""
+
+    # 公众号（首页资讯栏数据源）：与小程序凭据相互独立，留空则同步任务空转
+    GZH_APPID: str = ""
+    GZH_APP_SECRET: str = ""
 
     # All payment traffic uses WeChat Pay API V3.  Production explicitly
     # enables the capability after the merchant materials are provisioned.

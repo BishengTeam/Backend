@@ -1,7 +1,7 @@
 from app.domain.content.src.index import (
     Activity, ActivityRegistration, ActivityReminder,
     Agreement, Ticket, Zone,
-    DocumentResource, Popup, SharePoster,
+    DocumentResource, GzhArticle, Popup, SharePoster,
 )
 from app.domain.certification.src.index import (
     Certification,

@@ -24,6 +24,7 @@ from app.middleware import setup_middleware
 from app.middleware.rate_limit import limiter
 from app.schemas.common import success
 from app.services.cleanup import cleanup_loop
+from app.services.gzh_article import gzh_article_worker_loop
 from app.services.renshe_export import renshe_export_worker_loop
 from app.services.renshe_cleanup import renshe_cleanup_worker_loop
 from app.services.h3c_export import h3c_export_worker_loop
@@ -107,6 +108,7 @@ async def lifespan(app: FastAPI):
     videoweb_reconciliation_task = asyncio.create_task(
         videoweb_code_reconciliation_worker_loop()
     )
+    gzh_article_task = asyncio.create_task(gzh_article_worker_loop())
     logger.info("Application startup complete")
     yield
     logger.info("Shutting down background tasks...")
@@ -130,6 +132,7 @@ async def lifespan(app: FastAPI):
     if nisp_refund_task is not None:
         nisp_refund_task.cancel()
     videoweb_reconciliation_task.cancel()
+    gzh_article_task.cancel()
     try:
         await cleanup_task
     except asyncio.CancelledError:
@@ -190,6 +193,10 @@ async def lifespan(app: FastAPI):
             pass
     try:
         await videoweb_reconciliation_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await gzh_article_task
     except asyncio.CancelledError:
         pass
     logger.info("Closing database connections...")

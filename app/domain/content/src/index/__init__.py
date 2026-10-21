@@ -9,6 +9,7 @@ from app.domain.content.src.model.agreement_template import (
 )
 from app.domain.content.src.model.banner import Banner
 from app.domain.content.src.model.document_resource import DocumentResource
+from app.domain.content.src.model.gzh_article import GzhArticle
 from app.domain.content.src.model.popup import Popup
 from app.domain.content.src.model.share_poster import SharePoster
 from app.domain.content.src.model.ticket import Ticket
@@ -25,6 +26,7 @@ __all__ = [
     "AgreementTemplate",
     "Banner",
     "DocumentResource",
+    "GzhArticle",
     "Popup",
     "SharePoster",
     "Ticket",
