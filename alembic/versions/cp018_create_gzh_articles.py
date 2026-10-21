@@ -1,6 +1,6 @@
 """gzh_articles table for home news ticker (公众号资讯栏)
 
-Revision ID: cp017_create_gzh_articles
+Revision ID: cp018_create_gzh_articles
 Revises: job001
 """
 from collections.abc import Sequence
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = 'cp017_create_gzh_articles'
+revision: str = 'cp018_create_gzh_articles'
 down_revision: str | Sequence[str] = 'job001'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
