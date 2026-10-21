@@ -279,12 +279,13 @@ async def test_daily_checkin_claim_does_not_duplicate_auto_checkin_grant(
     user_id = await _seed_user(session_factory, test_prefix)
     service = app_context.points_module.PointsService()
 
-    # 模拟 quiz_practice 自动打卡发分：source_id 格式必须与 _upsert_checkin 完全一致
+    # 模拟 quiz_practice 自动打卡发分：source_id 格式必须与 _upsert_checkin 完全一致，
+    # 金额与 CLAIM_SCENE_POINTS["daily_checkin"]（当前 1）保持一致
     await service.grant_points(
         user_id,
-        amount=5,
+        amount=1,
         action_type="claim_daily_checkin",
-        description="每日答题打卡 +5积分",
+        description="每日答题打卡 +1积分",
         source_type="points_claim",
         source_id=f"daily_checkin:{user_id}:{today().isoformat()}",
     )
@@ -298,8 +299,8 @@ async def test_daily_checkin_claim_does_not_duplicate_auto_checkin_grant(
         )
 
     assert claim.claimed is False
-    assert claim.amount == 5
-    assert account.balance == 5
+    assert claim.amount == 1
+    assert account.balance == 1
     assert history_count == 1
 
 

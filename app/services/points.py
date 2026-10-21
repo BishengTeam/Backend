@@ -22,7 +22,7 @@ from app.schemas.points import (
 )
 
 CLAIM_SCENE_POINTS: dict[str, int] = {
-    "daily_checkin": 5,
+    "daily_checkin": 1,
     "new_user": 20,
     "activity": 10,
 }

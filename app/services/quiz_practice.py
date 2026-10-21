@@ -50,7 +50,7 @@ from app.domain.community.src.rule.quiz import (
 )
 from app.domain.user.src.index import User
 from app.port.config import settings
-from app.services.points import PointsService
+from app.services.points import CLAIM_SCENE_POINTS, PointsService
 from app.port.exceptions import (
     BusinessException,
     ConflictException,
@@ -99,6 +99,10 @@ _WRONG_ACTIVE = QuizWrongStatus.ACTIVE.value
 _WRONG_CLEARED = QuizWrongStatus.CLEARED.value
 _WRONG_CLEAR_CORRECT_STREAK = 3
 _SETTLED_EXAMS = ("completed", "timed_out")
+
+# 打卡积分单一来源：与手动领取（PointsService.claim_points）共用 CLAIM_SCENE_POINTS，
+# 2026-10-21 起每次打卡 1 积分。
+_CHECKIN_POINTS = CLAIM_SCENE_POINTS["daily_checkin"]
 
 
 class QuizPracticeService:
@@ -1304,9 +1308,9 @@ class QuizPracticeService:
                 await PointsService()._grant_points_in_session(
                     db,
                     user_id=user_id,
-                    amount=5,
+                    amount=_CHECKIN_POINTS,
                     action_type="claim_daily_checkin",
-                    description="每日答题打卡 +5积分",
+                    description=f"每日答题打卡 +{_CHECKIN_POINTS}积分",
                     source_type="points_claim",
                     source_id=f"daily_checkin:{user_id}:{local_day.isoformat()}",
                 )
@@ -1867,7 +1871,7 @@ class QuizPracticeService:
 
         与练习自动打卡共用同一套约束和积分幂等键
         （``daily_checkin:{user_id}:{业务时区自然日}``），
-        因此手动与自动在同一天互相幂等，合计只发一次 5 积分。
+        因此手动与自动在同一天互相幂等，合计只发一次打卡积分（金额见 _CHECKIN_POINTS）。
         """
         now = self._now()
         local_day = self._local_date(now)
@@ -1925,26 +1929,9 @@ class QuizPracticeService:
             stats.checkin_days += 1
             stats.consecutive_days = consecutive
 
-            # 与 _upsert_checkin 保持一致：SAVEPOINT 隔离积分发放，
-            # 失败只回滚发放本身，不阻断手动打卡；日志用于事后对账补发。
-            try:
-                async with db.begin_nested():
-                    await PointsService()._grant_points_in_session(
-                        db,
-                        user_id=user_id,
-                        amount=5,
-                        action_type="claim_daily_checkin",
-                        description=f"每日答题打卡 +5积分",
-                        source_type="points_claim",
-                        source_id=f"daily_checkin:{user_id}:{local_day.isoformat()}",
-                    )
-            except Exception:
-                logger.warning(
-                    "manual checkin points grant failed: user_id=%s checkin_date=%s",
-                    user_id,
-                    local_day.isoformat(),
-                    exc_info=True,
-                )
+            # 与 _upsert_checkin 一致：发分统一走 _award_checkin_points（SAVEPOINT 隔离，
+            # 失败只回滚发放本身，不阻断手动打卡；日志用于事后对账补发）。
+            await self._award_checkin_points(db, user_id=user_id, local_day=local_day)
             await db.commit()
             return QuizCheckinStatusResponse(
                 checkin_date=local_day,
