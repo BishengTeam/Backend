@@ -453,6 +453,7 @@ async def test_manual_checkin_repairs_missing_points_for_existing_checkin(
         history = await db.scalar(
             select(PointsHistory).where(PointsHistory.user_id == user_id)
         )
-    assert account.balance == 5
+    # 金额与 CLAIM_SCENE_POINTS["daily_checkin"]（当前 1）保持一致
+    assert account.balance == 1
     assert history is not None
     assert history.source_id == f"daily_checkin:{user_id}:{local_day.isoformat()}"
