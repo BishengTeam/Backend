@@ -1,3 +1,4 @@
+import random
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -7,6 +8,7 @@ from app.domain.content.src.index import Activity, Training, Zone
 from app.domain.certification.src.index import Competition, Course, Job
 from app.models.cert_product import CertProduct
 from app.domain.content.src.model.banner import Banner
+from app.domain.content.src.model.gzh_article import GzhArticle
 from app.domain.content.src.model.popup import Popup
 from app.schemas.activity import ActivityResponse
 from app.schemas.admin_training import AdminTrainingListItem
@@ -14,6 +16,7 @@ from app.schemas.competition import CompetitionListItem
 from app.schemas.job import JobResponse
 from app.schemas.zone import (
     BannerBrief,
+    GzhArticleBrief,
     HomeAggregationResponse,
     PopupBrief,
     ZONE_ENTITY_MAP,
@@ -67,19 +70,29 @@ class ZoneService:
                 BannerBrief.model_validate(b) for b in banner_result.scalars().all()
             ]
 
-            # ── Popup（登录后弹窗海报，取时间窗内 sort 最小的一条）──
-            popup_stmt = (
-                select(Popup)
-                .where(
-                    Popup.is_active == True,
-                    (Popup.start_time == None) | (Popup.start_time <= now),
-                    (Popup.end_time == None) | (Popup.end_time >= now),
-                )
-                .order_by(Popup.sort, Popup.id.desc())
-                .limit(1)
+            # ── Popup（登录后弹窗海报；多条同时生效时随机取一条轮换曝光）──
+            popup_stmt = select(Popup).where(
+                Popup.is_active == True,
+                (Popup.start_time == None) | (Popup.start_time <= now),
+                (Popup.end_time == None) | (Popup.end_time >= now),
             )
-            popup_row = (await db.execute(popup_stmt)).scalars().first()
-            popup = PopupBrief.model_validate(popup_row) if popup_row else None
+            popup_rows = (await db.execute(popup_stmt)).scalars().all()
+            popup = (
+                PopupBrief.model_validate(random.choice(popup_rows))
+                if popup_rows
+                else None
+            )
+
+            # ── 公众号资讯（首页 ticker，最新 5 条；无数据时字段缺省）──
+            gzh_stmt = (
+                select(GzhArticle)
+                .order_by(GzhArticle.publish_time.desc().nullslast(), GzhArticle.id.desc())
+                .limit(5)
+            )
+            gzh_rows = (await db.execute(gzh_stmt)).scalars().all()
+            gzh_articles = (
+                [GzhArticleBrief.model_validate(r) for r in gzh_rows] or None
+            )
 
             # ── Zone cards ───────────────────────────────────────
             zones: dict[str, list[ZoneBrief]] = {}
@@ -153,5 +166,6 @@ class ZoneService:
                     zone_sections[ztype] = ZoneSectionData(**section_kwargs)
 
             return HomeAggregationResponse(
-                banners=banners, zones=zone_sections, popup=popup
+                banners=banners, zones=zone_sections, popup=popup,
+                gzh_articles=gzh_articles,
             )

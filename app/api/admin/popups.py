@@ -52,7 +52,7 @@ async def list_popups(
 |------|------|------|--------|------|
 | image_url | str | ✅ | — | 海报图片 URL（建议 1280×1080），最长 512 字符 |
 | jump_link | str | 否 | null | 跳转链接：站内页面路径 |
-| sort | int | 否 | 0 | 排序权重，同时多条 active 时取最小 sort 的一条 |
+| sort | int | 否 | 0 | 后台列表排序；同时多条 active 时小程序端随机展示其中一条 |
 | start_time | str(ISO 8601) | 否 | null | 生效开始时间 |
 | end_time | str(ISO 8601) | 否 | null | 生效结束时间 |
 | is_active | bool | 否 | true | 是否启用 |

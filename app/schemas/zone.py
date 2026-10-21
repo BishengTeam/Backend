@@ -45,6 +45,16 @@ class PopupBrief(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class GzhArticleBrief(BaseModel):
+    id: int
+    title: str
+    url: str
+    thumb_url: str | None = None
+    publish_time: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
 class ZoneBrief(BaseModel):
     id: int
     zone_type: str
@@ -84,3 +94,5 @@ class HomeAggregationResponse(BaseModel):
     zones: dict[str, ZoneSectionData] = Field(default_factory=dict)
     # 登录后弹窗海报：时间窗内 sort 最小的一条，无则 None
     popup: PopupBrief | None = None
+    # 公众号资讯（首页 ticker）：最新 5 条，无则 None（前端整条隐藏）
+    gzh_articles: list[GzhArticleBrief] | None = None

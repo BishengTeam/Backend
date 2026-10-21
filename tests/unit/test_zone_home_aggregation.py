@@ -9,6 +9,7 @@ course serialization to CourseService.
 """
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -18,6 +19,7 @@ import app.services.zone as zone_module
 from app.domain.certification.src.index import Course
 from app.domain.content.src.index import Zone
 from app.domain.content.src.model.banner import Banner
+from app.domain.content.src.model.gzh_article import GzhArticle
 from app.domain.content.src.model.popup import Popup
 from app.models.cert_product import CertProduct
 from app.schemas.certification import CertificationResponse
@@ -194,6 +196,26 @@ async def test_popup_returns_configured_poster(
 
 
 @pytest.mark.asyncio
+async def test_popup_randomly_picked_among_eligible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """多条弹窗同时生效时必须从全部候选里随机抽取，而不是固定 sort 最小的一条。"""
+
+    rows = [
+        SimpleNamespace(id=1, image_url="a.jpg", jump_link=None, sort=0),
+        SimpleNamespace(id=2, image_url="b.jpg", jump_link=None, sort=0),
+    ]
+    session = _FakeSession({Popup: rows})
+    _patch_db(monkeypatch, session)
+    monkeypatch.setattr(zone_module.random, "choice", lambda seq: seq[-1])
+
+    result = await ZoneService().get_home_aggregation()
+
+    assert result.popup is not None
+    assert result.popup.image_url == "b.jpg"
+
+
+@pytest.mark.asyncio
 async def test_popup_absent_yields_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -205,3 +227,42 @@ async def test_popup_absent_yields_none(
     result = await ZoneService().get_home_aggregation()
 
     assert result.popup is None
+
+
+@pytest.mark.asyncio
+async def test_gzh_articles_piggyback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """同步落库的公众号推文必须捎带在聚合响应里（首页 ticker 数据源）。"""
+
+    rows = [
+        SimpleNamespace(
+            id=2, title="新推文", url="https://mp.weixin.qq.com/s/b", thumb_url=None,
+            publish_time=datetime(2026, 10, 21, 9, 0, tzinfo=timezone.utc),
+        ),
+        SimpleNamespace(
+            id=1, title="旧推文", url="https://mp.weixin.qq.com/s/a", thumb_url=None,
+            publish_time=datetime(2026, 10, 20, 9, 0, tzinfo=timezone.utc),
+        ),
+    ]
+    session = _FakeSession({GzhArticle: rows})
+    _patch_db(monkeypatch, session)
+
+    result = await ZoneService().get_home_aggregation()
+
+    assert result.gzh_articles is not None
+    assert [a.title for a in result.gzh_articles] == ["新推文", "旧推文"]
+
+
+@pytest.mark.asyncio
+async def test_gzh_articles_absent_yields_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """从未同步过时 gzh_articles 必须为 None，前端据此整条隐藏 ticker。"""
+
+    session = _FakeSession({})
+    _patch_db(monkeypatch, session)
+
+    result = await ZoneService().get_home_aggregation()
+
+    assert result.gzh_articles is None
