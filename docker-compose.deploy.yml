@@ -23,6 +23,9 @@ x-backend-environment: &backend_environment
   CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
   WECHAT_APPID: ${WECHAT_APPID:?WECHAT_APPID is required}
   WECHAT_SECRET_FILE: /run/secrets/wechat_secret
+  # 公众号资讯栏（首页 ticker）：留空则同步任务空转，不启用
+  GZH_APPID: ${GZH_APPID:-}
+  GZH_APP_SECRET_FILE: /run/secrets/gzh_app_secret
   WECHAT_PAY_ENABLED: "true"
   WECHAT_PAY_API_VERSION: v3
   WECHAT_PAY_MCHID: ${WECHAT_PAY_MCHID:?WECHAT_PAY_MCHID is required}
@@ -87,6 +90,7 @@ x-backend-secrets: &backend_secrets
   - jwt_secret
   - pii_hash_key
   - wechat_secret
+  - gzh_app_secret
   - wechat_pay_private_key
   - wechat_pay_api_v3_key
   - wechat_pay_public_key
@@ -252,6 +256,8 @@ secrets:
     file: ${SECRETS_DIR:?SECRETS_DIR is required}/pii_hash_key
   wechat_secret:
     file: ${SECRETS_DIR:?SECRETS_DIR is required}/wechat_secret
+  gzh_app_secret:
+    file: ${SECRETS_DIR:?SECRETS_DIR is required}/gzh_app_secret
   wechat_pay_private_key:
     file: ${SECRETS_DIR:?SECRETS_DIR is required}/wechat_pay_private_key
   wechat_pay_api_v3_key:
