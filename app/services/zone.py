@@ -29,6 +29,9 @@ from app.services.course import CourseService
 # Maximum items per zone_type in home aggregation
 HOME_ZONE_LIMIT = 10
 
+# 公众号资讯捎带条数：首页新闻 tab / ticker 默认展示最新 10 条
+GZH_ARTICLE_LIMIT = 10
+
 ALL_ZONE_TYPES = ("cert", "study", "competition", "activity", "employment", "training")
 # Zone content rows are legacy per-zone banners/cards. Competition is driven by
 # real competition entities and must never consume a separately configured banner.
@@ -83,11 +86,11 @@ class ZoneService:
                 else None
             )
 
-            # ── 公众号资讯（首页 ticker，最新 5 条；无数据时字段缺省）──
+            # ── 公众号资讯（首页 ticker / 新闻资讯 tab，最新 10 条；无数据时字段缺省）──
             gzh_stmt = (
                 select(GzhArticle)
                 .order_by(GzhArticle.publish_time.desc().nullslast(), GzhArticle.id.desc())
-                .limit(5)
+                .limit(GZH_ARTICLE_LIMIT)
             )
             gzh_rows = (await db.execute(gzh_stmt)).scalars().all()
             gzh_articles = (

@@ -255,6 +255,28 @@ async def test_gzh_articles_piggyback(
 
 
 @pytest.mark.asyncio
+async def test_gzh_articles_capped_at_latest_ten(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """首页资讯默认展示最新 10 条：聚合查询的 limit 必须同步为 10。"""
+
+    captured: list[Any] = []
+
+    class _CapturingSession(_FakeSession):
+        async def execute(self, stmt: Any) -> _FakeResult:
+            if stmt.column_descriptions[0]["entity"] is GzhArticle:
+                captured.append(stmt)
+            return await super().execute(stmt)
+
+    _patch_db(monkeypatch, _CapturingSession({}))
+
+    await ZoneService().get_home_aggregation()
+
+    compiled = captured[0].compile(compile_kwargs={"literal_binds": True})
+    assert "LIMIT 10" in str(compiled)
+
+
+@pytest.mark.asyncio
 async def test_gzh_articles_absent_yields_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
