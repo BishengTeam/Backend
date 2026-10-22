@@ -523,10 +523,11 @@ async def test_import_errors_and_relaxed_auto_import_http_workflow(
     assert completed.json()["data"]["status"] == "succeeded"
     assert completed.json()["data"]["created_count"] == 1
 
-    # Format errors still fail validation row-by-row: an oversized stem is
-    # reported on question_text with the raw value redacted.
-    oversized_text = f"{env.prefix}_oversized_http_question" + "字" * 2000
-    invalid_response = await env.client.post(
+    # Format errors still fail validation row-by-row. Legacy (category-based)
+    # imports keep their in-batch duplicate check, so it exercises the error
+    # listing API; library (V2) imports skip duplicates silently instead.
+    duplicate_text = f"{env.prefix}_duplicate_http_question"
+    duplicate_response = await env.client.post(
         "/admin/quiz/imports/json",
         headers=env.headers,
         json={
@@ -534,19 +535,27 @@ async def test_import_errors_and_relaxed_auto_import_http_workflow(
                 {
                     "category_path": [category["name"]],
                     "question_type": "judge",
-                    "question_text": oversized_text,
+                    "question_text": duplicate_text,
                     "options": {"A": "正确", "B": "错误"},
                     "correct_answer": "A",
                     "explanation": None,
-                }
+                },
+                {
+                    "category_path": [category["name"]],
+                    "question_type": "judge",
+                    "question_text": duplicate_text,
+                    "options": {"A": "正确", "B": "错误"},
+                    "correct_answer": "A",
+                    "explanation": None,
+                },
             ]
         },
     )
-    assert invalid_response.status_code == 200, invalid_response.text
-    invalid_job = invalid_response.json()["data"]
-    assert await AdminQuizService().process_import_job(invalid_job["id"]) is True
+    assert duplicate_response.status_code == 200, duplicate_response.text
+    duplicate_job = duplicate_response.json()["data"]
+    assert await AdminQuizService().process_import_job(duplicate_job["id"]) is True
     errors_response = await env.client.get(
-        f"/admin/quiz/imports/{invalid_job['id']}/errors?field=question_text&page=1",
+        f"/admin/quiz/imports/{duplicate_job['id']}/errors?field=question_text&page=1",
         headers=env.headers,
     )
     assert errors_response.status_code == 200, errors_response.text
@@ -555,7 +564,7 @@ async def test_import_errors_and_relaxed_auto_import_http_workflow(
     assert errors["total"] == 1
     assert errors["available_fields"] == ["question_text"]
     assert errors["items"][0]["field"] == "question_text"
-    assert oversized_text not in json.dumps(errors, ensure_ascii=False)
+    assert duplicate_text not in json.dumps(errors, ensure_ascii=False)
 
 
 async def test_audit_request_id_and_time_filters(quiz_http_env) -> None:
