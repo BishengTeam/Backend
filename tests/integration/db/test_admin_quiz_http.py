@@ -480,7 +480,7 @@ async def test_new_admin_quiz_operations_are_mounted_and_strict(quiz_http_env) -
     assert missing_retry.status_code == 404
 
 
-async def test_import_errors_and_category_confirmation_http_workflow(
+async def test_import_errors_and_relaxed_auto_import_http_workflow(
     quiz_http_env,
 ) -> None:
     env = quiz_http_env
@@ -492,6 +492,8 @@ async def test_import_errors_and_category_confirmation_http_workflow(
     assert category_response.status_code == 200, category_response.text
     category = category_response.json()["data"]
 
+    # 2026-10-22 relaxed flow: a missing category no longer pauses the job for
+    # confirmation — one processing run auto-creates it and imports.
     missing_name = f"{env.prefix}_missing_child"
     create_response = await env.client.post(
         "/admin/quiz/imports/json",
@@ -513,39 +515,6 @@ async def test_import_errors_and_category_confirmation_http_workflow(
     job = create_response.json()["data"]
     assert job["status"] == "queued"
     assert await AdminQuizService().process_import_job(job["id"]) is True
-
-    impact_response = await env.client.get(
-        f"/admin/quiz/imports/{job['id']}/category-impact",
-        headers=env.headers,
-    )
-    assert impact_response.status_code == 200, impact_response.text
-    impact = impact_response.json()["data"]
-    assert impact["new_category_count"] == 1
-    assert impact["affected_question_count"] == 1
-    assert impact["tree"][0]["children"][0]["status"] == "will_create"
-
-    stale_confirm = await env.client.post(
-        f"/admin/quiz/imports/{job['id']}/confirm-categories",
-        headers=env.headers,
-        json={
-            "lock_version": impact["lock_version"] + 1,
-            "impact_version": impact["impact_version"],
-        },
-    )
-    assert stale_confirm.status_code == 409
-    assert stale_confirm.json()["code"] == 40201
-
-    confirm_response = await env.client.post(
-        f"/admin/quiz/imports/{job['id']}/confirm-categories",
-        headers=env.headers,
-        json={
-            "lock_version": impact["lock_version"],
-            "impact_version": impact["impact_version"],
-        },
-    )
-    assert confirm_response.status_code == 200, confirm_response.text
-    assert confirm_response.json()["data"]["status"] == "queued"
-    assert await AdminQuizService().process_import_job(job["id"]) is True
     completed = await env.client.get(
         f"/admin/quiz/imports/{job['id']}",
         headers=env.headers,
@@ -554,8 +523,10 @@ async def test_import_errors_and_category_confirmation_http_workflow(
     assert completed.json()["data"]["status"] == "succeeded"
     assert completed.json()["data"]["created_count"] == 1
 
-    duplicate_text = f"{env.prefix}_duplicate_http_question"
-    duplicate_response = await env.client.post(
+    # Format errors still fail validation row-by-row: an oversized stem is
+    # reported on question_text with the raw value redacted.
+    oversized_text = f"{env.prefix}_oversized_http_question" + "字" * 2000
+    invalid_response = await env.client.post(
         "/admin/quiz/imports/json",
         headers=env.headers,
         json={
@@ -563,27 +534,19 @@ async def test_import_errors_and_category_confirmation_http_workflow(
                 {
                     "category_path": [category["name"]],
                     "question_type": "judge",
-                    "question_text": duplicate_text,
+                    "question_text": oversized_text,
                     "options": {"A": "正确", "B": "错误"},
                     "correct_answer": "A",
                     "explanation": None,
-                },
-                {
-                    "category_path": [category["name"]],
-                    "question_type": "judge",
-                    "question_text": duplicate_text,
-                    "options": {"A": "正确", "B": "错误"},
-                    "correct_answer": "A",
-                    "explanation": None,
-                },
+                }
             ]
         },
     )
-    assert duplicate_response.status_code == 200, duplicate_response.text
-    duplicate_job = duplicate_response.json()["data"]
-    assert await AdminQuizService().process_import_job(duplicate_job["id"]) is True
+    assert invalid_response.status_code == 200, invalid_response.text
+    invalid_job = invalid_response.json()["data"]
+    assert await AdminQuizService().process_import_job(invalid_job["id"]) is True
     errors_response = await env.client.get(
-        f"/admin/quiz/imports/{duplicate_job['id']}/errors?field=question_text&page=1",
+        f"/admin/quiz/imports/{invalid_job['id']}/errors?field=question_text&page=1",
         headers=env.headers,
     )
     assert errors_response.status_code == 200, errors_response.text
@@ -592,39 +555,7 @@ async def test_import_errors_and_category_confirmation_http_workflow(
     assert errors["total"] == 1
     assert errors["available_fields"] == ["question_text"]
     assert errors["items"][0]["field"] == "question_text"
-    assert duplicate_text not in json.dumps(errors, ensure_ascii=False)
-
-    cancel_response = await env.client.post(
-        "/admin/quiz/imports/json",
-        headers=env.headers,
-        json={
-            "questions": [
-                {
-                    "category_path": [f"{env.prefix}_cancel_http"],
-                    "question_type": "judge",
-                    "question_text": f"{env.prefix}_cancel_http_question",
-                    "options": {"A": "正确", "B": "错误"},
-                    "correct_answer": "B",
-                    "explanation": None,
-                }
-            ]
-        },
-    )
-    cancel_job = cancel_response.json()["data"]
-    assert await AdminQuizService().process_import_job(cancel_job["id"]) is True
-    cancel_impact = (
-        await env.client.get(
-            f"/admin/quiz/imports/{cancel_job['id']}/category-impact",
-            headers=env.headers,
-        )
-    ).json()["data"]
-    cancelled = await env.client.post(
-        f"/admin/quiz/imports/{cancel_job['id']}/cancel",
-        headers=env.headers,
-        json={"lock_version": cancel_impact["lock_version"]},
-    )
-    assert cancelled.status_code == 200, cancelled.text
-    assert cancelled.json()["data"]["status"] == "cancelled"
+    assert oversized_text not in json.dumps(errors, ensure_ascii=False)
 
 
 async def test_audit_request_id_and_time_filters(quiz_http_env) -> None:
