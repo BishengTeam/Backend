@@ -306,33 +306,12 @@ def test_clean_install_upgrade_guards_and_downgrade_rehearsal(
                 digest="b" * 63,
             )
 
-    monkeypatch.setenv("ADMIN_SECURITY_DOWNGRADE_BACKUP_REF", "isolated-test-backup")
-    command.downgrade(config, "deploy001")
-    assert "admin_security_audit" not in inspect(engine).get_table_names()
-    with engine.connect() as connection:
-        ordinary = connection.execute(
-            text("SELECT role, is_active FROM admin_user WHERE id = :id"),
-            {"id": quiz_admin_id},
-        ).mappings().one()
-        assert dict(ordinary) == {"role": "admin", "is_active": True}
-
-    monkeypatch.setenv("ADMIN_SECURITY_MIGRATION_BACKUP_REF", "isolated-test-backup")
-    command.upgrade(config, "head")
+    # pay002 deliberately makes the current financial schema irreversible.
+    # Verify that a rehearsal cannot silently cross that boundary.
+    with pytest.raises(RuntimeError, match="Offline orders require"):
+        command.downgrade(config, "deploy001")
+    assert "admin_security_audit" in inspect(engine).get_table_names()
     _assert_credential_idempotency_schema(inspect(engine))
-    with engine.connect() as connection:
-        ordinary = connection.execute(
-            text(
-                "SELECT role, is_active, must_change_password, auth_version "
-                "FROM admin_user WHERE id = :id"
-            ),
-            {"id": quiz_admin_id},
-        ).mappings().one()
-        assert dict(ordinary) == {
-            "role": "quiz_admin",
-            "is_active": False,
-            "must_change_password": True,
-            "auth_version": 2,
-        }
     engine.dispose()
 
 

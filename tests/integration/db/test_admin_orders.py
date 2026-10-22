@@ -378,8 +378,11 @@ class TestAdminOrderReconciliation:
             target_date
         )
         assert result == {
+            "bank_transfer_total": 0,
+            "date": target_date,
             "order_total": 30,
             "refund_total": 0,
             "net_income": 30,
             "order_count": 2,
+            "wechat_total": 0,
         }

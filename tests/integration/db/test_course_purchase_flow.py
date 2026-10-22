@@ -214,11 +214,44 @@ async def _seed_courses(context):
     return result
 
 
+async def _seed_pending_course_purchase(context, user_id, course_id, price):
+    """Seed a legacy pending cash order without re-enabling cash sales."""
+    from app.domain.certification.src.index import CourseEnrollment
+    from app.domain.order.src.index import ORDER_PAYMENT_EXPIRE_MINUTES, Order
+    from app.utils.payment import generate_out_trade_no
+
+    async with context.factory() as db:
+        order = Order(
+            user_id=user_id,
+            order_kind="course",
+            product_type=f"course:{course_id}",
+            price=price,
+            status="pending",
+            out_trade_no=generate_out_trade_no("CRS"),
+            expires_at=datetime.now(timezone.utc)
+            + timedelta(minutes=ORDER_PAYMENT_EXPIRE_MINUTES),
+            extra_data={"course_id": course_id, "course_title": "integration"},
+        )
+        db.add(order)
+        await db.flush()
+        enrollment = CourseEnrollment(
+            user_id=user_id,
+            course_id=course_id,
+            order_id=order.id,
+            status="pending_payment",
+            learning_access=False,
+        )
+        db.add(enrollment)
+        await db.flush()
+        order_id, enrollment_id = order.id, enrollment.id
+        await db.commit()
+        return SimpleNamespace(order_id=order_id, enrollment_id=enrollment_id)
+
+
 async def test_free_and_concurrent_paid_purchase_use_backend_price(course_context):
     from sqlalchemy import func, select
 
     from app.domain.certification.src.index import CourseEnrollment
-    from app.domain.order.src.index import Order
     from app.port.exceptions import BusinessException
     from app.schemas.course import CourseEnrollRequest
 
@@ -239,7 +272,9 @@ async def test_free_and_concurrent_paid_purchase_use_backend_price(course_contex
             CourseEnrollRequest(course_id=data.paid_course_id),
         )
 
-    first, second = await asyncio.gather(
+    # Course cash sales are intentionally closed. Concurrent callers must both
+    # receive the deterministic rejection without creating a pending order.
+    results = await asyncio.gather(
         course_context.purchase_service.purchase(
             data.paid_user_id,
             data.paid_course_id,
@@ -248,14 +283,16 @@ async def test_free_and_concurrent_paid_purchase_use_backend_price(course_contex
             data.paid_user_id,
             data.paid_course_id,
         ),
+        return_exceptions=True,
     )
-    assert first.enrollment_id == second.enrollment_id
-    assert first.order_id == second.order_id
-    assert first.payment_required is True
-    assert first.learning_access is False
+    assert len(results) == 2
+    assert all(
+        isinstance(result, BusinessException)
+        and str(result) == "课程现金购买已关闭，请使用积分兑换"
+        for result in results
+    )
 
     async with course_context.factory() as db:
-        order = await db.get(Order, first.order_id)
         active_count = await db.scalar(
             select(func.count())
             .select_from(CourseEnrollment)
@@ -265,8 +302,7 @@ async def test_free_and_concurrent_paid_purchase_use_backend_price(course_contex
                 CourseEnrollment.status.in_(("pending_payment", "enrolled", "completed")),
             )
         )
-    assert order.price == 12345
-    assert active_count == 1
+    assert active_count == 0
 
 
 async def test_payment_refund_and_private_content_authorization(
@@ -281,9 +317,11 @@ async def test_payment_refund_and_private_content_authorization(
     from app.port.exceptions import ForbiddenException
 
     data = await _seed_courses(course_context)
-    purchase = await course_context.purchase_service.purchase(
+    purchase = await _seed_pending_course_purchase(
+        course_context,
         data.paid_user_id,
         data.paid_course_id,
+        12345,
     )
     callback = WechatPayTransaction(
         appid="integration-test",
@@ -432,9 +470,11 @@ async def test_expired_course_order_cancels_pending_enrollment(course_context):
     from app.domain.order.src.index import Order
 
     data = await _seed_courses(course_context)
-    purchase = await course_context.purchase_service.purchase(
+    purchase = await _seed_pending_course_purchase(
+        course_context,
         data.paid_user_id,
         data.timeout_course_id,
+        6789,
     )
     async with course_context.factory() as db:
         order = await db.get(Order, purchase.order_id)

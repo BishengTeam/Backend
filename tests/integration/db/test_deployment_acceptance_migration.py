@@ -203,9 +203,9 @@ def test_deploy001_upgrade_downgrade_upgrade_and_append_only_guards(
                 {"acceptance_id": acceptance_id},
             )
 
-    command.downgrade(config, "quiz007")
-    assert "deployment_acceptance" not in inspect(engine).get_table_names()
-    command.upgrade(config, "head")
+    # The bank-transfer financial migration is intentionally irreversible.
+    with pytest.raises(RuntimeError, match="Offline orders require"):
+        command.downgrade(config, "quiz007")
     assert "deployment_acceptance" in inspect(engine).get_table_names()
     engine.dispose()
 

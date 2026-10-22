@@ -82,6 +82,61 @@ async def _cleanup_test_data(session_factory, prefix: str) -> None:
         await db.execute(
             text(
                 """
+                DELETE FROM offline_bank_entry
+                WHERE order_id IN (
+                    SELECT id FROM "order" WHERE product_type LIKE :prefix_like
+                )
+                """
+            ),
+            {"prefix_like": prefix_like},
+        )
+        await db.execute(
+            text(
+                """
+                DELETE FROM offline_payment_audit
+                WHERE order_id IN (
+                    SELECT id FROM "order" WHERE product_type LIKE :prefix_like
+                )
+                """
+            ),
+            {"prefix_like": prefix_like},
+        )
+        await db.execute(
+            text(
+                """
+                DELETE FROM offline_payment_material
+                WHERE order_id IN (
+                    SELECT id FROM "order" WHERE product_type LIKE :prefix_like
+                )
+                """
+            ),
+            {"prefix_like": prefix_like},
+        )
+        await db.execute(
+            text(
+                """
+                DELETE FROM offline_payment_submission
+                WHERE order_id IN (
+                    SELECT id FROM "order" WHERE product_type LIKE :prefix_like
+                )
+                """
+            ),
+            {"prefix_like": prefix_like},
+        )
+        await db.execute(
+            text(
+                """
+                DELETE FROM offline_payment
+                WHERE order_id IN (
+                    SELECT id FROM "order" WHERE product_type LIKE :prefix_like
+                )
+                """
+            ),
+            {"prefix_like": prefix_like},
+        )
+        await db.execute(
+            text(
+                """
                 DELETE FROM inventory_record
                 WHERE order_id IN (
                     SELECT id FROM "order" WHERE product_type LIKE :prefix_like

@@ -19,6 +19,7 @@ from app.domain.order.src.index import Order
 from app.domain.plan.src.index import Plan
 from app.domain.user.src.index import User, UserRealname, AdminUser
 from app.models.cert_product import CertProduct
+from app.models.offline_payment import OfflinePaymentSettings
 from app.port.exceptions import BusinessException, ConflictException
 from app.schemas.nisp import (
     NispExamBatchFullCreate,
@@ -98,6 +99,18 @@ async def seed(context, *, capacity=10, price=0):
         batch = NispExamBatch(plan_id=plan.id, level='1',
                               level1_price_cents=price, level2_price_cents=price)
         db.add(batch)
+        if price:
+            # Paid NISP orders now use the private bank-transfer workflow.
+            # Keep this schema-local fixture self-contained instead of depending
+            # on another integration module having configured the account.
+            if await db.get(OfflinePaymentSettings, 1) is None:
+                db.add(OfflinePaymentSettings(id=1, version=1, data={
+                    'account_name': '测试收款账户',
+                    'bank_name': '测试银行',
+                    'account_number': '6222000000000000',
+                    'contact_name': '测试管理员',
+                    'contact_phone': '13800000000',
+                }))
         await db.commit()
         return batch, admin.id
 

@@ -172,21 +172,10 @@ def test_quiz_rebuild_upgrade_downgrade_upgrade(
         assert all("WHERE" in definition for definition in partial_indexes)
         assert all("in_progress" in definition for definition in partial_indexes)
 
-    command.downgrade(config, "rsh001")
-    inspector = inspect(engine)
-    legacy_tables = {
-        table for table in inspector.get_table_names() if table.startswith("quiz_")
-    }
-    assert legacy_tables == {
-        "quiz_category",
-        "quiz_checkin",
-        "quiz_exam",
-        "quiz_question",
-        "quiz_record",
-    }
-
-    monkeypatch.delenv("QUIZ_DESTRUCTIVE_MIGRATION_BACKUP_REF", raising=False)
-    command.upgrade(config, "head")
+    # Pay002 must stop any downgrade rehearsal before financial history can be
+    # removed; the quiz migration itself remains guarded by its backup test.
+    with pytest.raises(RuntimeError, match="Offline orders require"):
+        command.downgrade(config, "rsh001")
     assert "quiz_record" not in inspect(engine).get_table_names()
     engine.dispose()
 
