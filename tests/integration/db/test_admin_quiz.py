@@ -38,8 +38,6 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizCategoryImpactQuery,
     AdminQuizCategoryStatusUpdate,
     AdminQuizCategoryUpdate,
-    AdminQuizImportCancelRequest,
-    AdminQuizImportConfirmCategoriesRequest,
     AdminQuizImportErrorQuery,
     AdminQuizQuestionCreate,
     AdminQuizQuestionUpdate,
@@ -530,11 +528,12 @@ async def test_batch_contract_rejects_101_items() -> None:
         )
 
 
-async def test_five_thousand_row_import_with_missing_category_waits_without_writes(
+async def test_five_thousand_row_import_auto_creates_missing_category(
     quiz_env,
 ) -> None:
     env = quiz_env
     category = await _category(env, "import")
+    missing_name = f"{env.prefix}_missing"
     questions = [
         {
             "category_path": [category.name],
@@ -548,7 +547,7 @@ async def test_five_thousand_row_import_with_missing_category_waits_without_writ
     ]
     questions.append(
         {
-            "category_path": [f"{env.prefix}_missing"],
+            "category_path": [missing_name],
             "question_type": "judge",
             "question_text": f"{env.prefix}_invalid_category",
             "options": {"A": "正确", "B": "错误"},
@@ -577,26 +576,24 @@ async def test_five_thousand_row_import_with_missing_category_waits_without_writ
                 QuizQuestion.category_id == category.id
             )
         )
-        waiting_audit = (
+        missing_category = (
             await db.execute(
-                select(QuizAdminAuditLog).where(
-                    QuizAdminAuditLog.action
-                    == "import.awaiting_category_confirmation",
-                    QuizAdminAuditLog.object_id == job.id,
+                select(QuizCategory).where(
+                    QuizCategory.normalized_name == missing_name
                 )
             )
         ).scalar_one()
-        assert persisted.status == "awaiting_category_confirmation"
+        missing_question_count = await db.scalar(
+            select(func.count()).select_from(QuizQuestion).where(
+                QuizQuestion.category_id == missing_category.id
+            )
+        )
+        assert persisted.status == "succeeded"
         assert persisted.total_rows == 5000
-        assert persisted.created_count == 0
+        assert persisted.created_count == 5000
         assert persisted.error_count == 0
-        assert persisted.report_object_key is None
-        assert persisted.finished_at is None
-        assert persisted.missing_category_count == 1
-        assert persisted.affected_question_count == 5000
-        assert created_count == 0
-        assert waiting_audit.result == "succeeded"
-        assert waiting_audit.changed_fields["missing_category_count"]["after"] == 1
+        assert created_count == 4999
+        assert missing_question_count == 1
 
 
 async def test_qf55_frozen_import_fixtures_succeed_and_roll_back_atomically(
@@ -785,7 +782,7 @@ async def test_import_job_claim_prevents_two_workers_from_processing_same_batch(
         assert created_count == 1
 
 
-async def test_import_missing_categories_waits_for_confirmation_and_commits_atomically(
+async def test_import_missing_categories_auto_creates_and_commits_atomically(
     quiz_env,
 ) -> None:
     env = quiz_env
@@ -810,40 +807,8 @@ async def test_import_missing_categories_waits_for_confirmation_and_commits_atom
         filename="confirm.json",
     )
 
-    assert await env.service.process_import_job(job.id) is True
-    impact = await env.service.get_import_category_impact(
-        job.id,
-        admin_id=env.admin_id,
-    )
-    assert impact.new_category_count == 2
-    assert impact.reused_category_count == 1
-    assert impact.affected_question_count == 2
-    assert impact.tree[0].status == "existing"
-    assert impact.tree[0].children[0].status == "will_create"
-
-    async with env.factory() as db:
-        persisted = await db.get(QuizImportJob, job.id)
-        assert persisted.status == "awaiting_category_confirmation"
-        assert persisted.created_count == 0
-        assert persisted.error_count == 0
-        assert await db.scalar(
-            select(func.count()).select_from(QuizCategory).where(
-                QuizCategory.normalized_name.in_([missing_child, missing_leaf])
-            )
-        ) == 0
-
-    queued = await env.service.confirm_import_categories(
-        job.id,
-        AdminQuizImportConfirmCategoriesRequest(
-            lock_version=impact.lock_version,
-            impact_version=impact.impact_version,
-        ),
-        admin_id=env.admin_id,
-    )
-    assert queued.status == "queued"
-    assert queued.execution_protected_until - queued.confirmed_at == timedelta(
-        minutes=30
-    )
+    # 2026-10-22 relaxed flow: one run creates the missing categories and
+    # commits everything atomically without manual confirmation.
     assert await env.service.process_import_job(job.id) is True
 
     async with env.factory() as db:
@@ -864,11 +829,12 @@ async def test_import_missing_categories_waits_for_confirmation_and_commits_atom
         )
         assert persisted.status == "succeeded"
         assert persisted.created_count == 2
+        assert persisted.error_count == 0
         assert len(created_categories) == 2
         assert created_questions == 2
 
 
-async def test_confirmed_import_requires_reconfirmation_when_categories_appear(
+async def test_import_reuses_categories_created_during_processing(
     quiz_env,
 ) -> None:
     env = quiz_env
@@ -896,58 +862,22 @@ async def test_confirmed_import_requires_reconfirmation_when_categories_appear(
         admin_id=env.admin_id,
         filename="reconfirm.json",
     )
-    assert await env.service.process_import_job(job.id) is True
-    first_impact = await env.service.get_import_category_impact(
-        job.id,
-        admin_id=env.admin_id,
-    )
-    await env.service.confirm_import_categories(
-        job.id,
-        AdminQuizImportConfirmCategoriesRequest(
-            lock_version=first_impact.lock_version,
-            impact_version=first_impact.impact_version,
-        ),
-        admin_id=env.admin_id,
-    )
 
     # Simulate another administrator creating the formerly missing category
-    # after the impact preview was confirmed but before the Worker executes.
+    # after the job was uploaded but before the Worker executes. The relaxed
+    # import reuses it instead of duplicating the name.
     child = await env.service.create_category(
         AdminQuizCategoryCreate(name=missing_child, parent_id=root.id),
         admin_id=env.admin_id,
     )
     assert await env.service.process_import_job(job.id) is True
-
-    refreshed = await env.service.get_import_category_impact(
-        job.id,
-        admin_id=env.admin_id,
-    )
-    assert refreshed.impact_version != first_impact.impact_version
-    assert refreshed.lock_version == first_impact.lock_version + 2
-    assert refreshed.new_category_count == 0
-    assert refreshed.reused_category_count == 2
     async with env.factory() as db:
         persisted = await db.get(QuizImportJob, job.id)
-        assert persisted.status == "awaiting_category_confirmation"
-        assert persisted.confirmed_at is None
-        assert persisted.execution_protected_until is None
-        assert await db.scalar(
-            select(func.count()).select_from(QuizQuestion).where(
-                QuizQuestion.question_text == question_text
+        same_name_count = await db.scalar(
+            select(func.count()).select_from(QuizCategory).where(
+                QuizCategory.normalized_name == missing_child
             )
-        ) == 0
-
-    await env.service.confirm_import_categories(
-        job.id,
-        AdminQuizImportConfirmCategoriesRequest(
-            lock_version=refreshed.lock_version,
-            impact_version=refreshed.impact_version,
-        ),
-        admin_id=env.admin_id,
-    )
-    assert await env.service.process_import_job(job.id) is True
-    async with env.factory() as db:
-        persisted = await db.get(QuizImportJob, job.id)
+        )
         created = await db.scalar(
             select(func.count()).select_from(QuizQuestion).where(
                 QuizQuestion.category_id == child.id,
@@ -956,6 +886,7 @@ async def test_confirmed_import_requires_reconfirmation_when_categories_appear(
         )
         assert persisted.status == "succeeded"
         assert persisted.created_count == 1
+        assert same_name_count == 1
         assert created == 1
 
 
@@ -1002,51 +933,6 @@ async def test_import_error_page_is_redacted_fixed_size_and_filterable(quiz_env)
     assert f"{env.prefix}_error_" not in serialized
     assert [item.row for item in first.items[:2]] == [1, 2]
     assert [item.question_index for item in first.items[:2]] == [1, 2]
-
-
-async def test_import_confirmation_cancel_is_optimistically_locked(quiz_env) -> None:
-    env = quiz_env
-    missing = f"{env.prefix}_cancel_missing"
-    content = json.dumps(
-        {
-            "questions": [
-                {
-                    "category_path": [missing],
-                    "question_type": "judge",
-                    "question_text": f"{env.prefix}_cancel_question",
-                    "options": {"A": "正确", "B": "错误"},
-                    "correct_answer": "A",
-                    "explanation": None,
-                }
-            ]
-        },
-        ensure_ascii=False,
-    ).encode()
-    job = await env.service.create_import_job(
-        source_type="json",
-        content=content,
-        admin_id=env.admin_id,
-        filename="cancel.json",
-    )
-    assert await env.service.process_import_job(job.id) is True
-    impact = await env.service.get_import_category_impact(
-        job.id, admin_id=env.admin_id
-    )
-    cancelled = await env.service.cancel_import_job(
-        job.id,
-        AdminQuizImportCancelRequest(lock_version=impact.lock_version),
-        admin_id=env.admin_id,
-    )
-    assert cancelled.status == "cancelled"
-    with pytest.raises(ConflictException):
-        await env.service.confirm_import_categories(
-            job.id,
-            AdminQuizImportConfirmCategoriesRequest(
-                lock_version=impact.lock_version,
-                impact_version=impact.impact_version,
-            ),
-            admin_id=env.admin_id,
-        )
 
 
 async def test_import_expiry_cleanup_download_audit_and_local_signing(quiz_env) -> None:

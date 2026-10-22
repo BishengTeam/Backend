@@ -145,6 +145,7 @@ class ImportValidationResult:
     errors: list[dict[str, object]]
     missing_errors: list[dict[str, object]]
     impact: AdminQuizImportCategoryImpactResponse | None
+    skipped_duplicate_count: int = 0
 
 
 class AdminQuizService:
@@ -4307,6 +4308,7 @@ class AdminQuizService:
             tuple[int, AdminQuizImportQuestion, int | tuple[str, ...], str]
         ] = []
         seen_hashes: set[str] = set()
+        skipped_duplicates = 0
 
         def location(locator: int) -> tuple[int, int]:
             return (locator, locator - 1) if source_type == "csv" else (locator, locator)
@@ -4332,35 +4334,16 @@ class AdminQuizService:
                 missing_prefixes.update({path[:1], path})
                 target: int | tuple[str, ...] = path
                 first_missing = path[0]
-            elif module.status != "active":
-                errors.append(
-                    self._import_error(
-                        row=row_no,
-                        question_index=question_index,
-                        field="category_path",
-                        error_code="module_disabled",
-                        message=f"模块已停用: {module.name}",
-                    )
-                )
-                continue
             else:
+                # Relaxed per 2026-10-22 product decision: disabled modules and
+                # knowledge points no longer block imports; only deleted ones
+                # are excluded from resolution.
                 entity_by_prefix[path[:1]] = module
                 point = point_by_parent_name.get((int(module.id), path[1]))
                 if point is None:
                     missing_prefixes.add(path)
                     target = path
                     first_missing = path[1]
-                elif point.status != "active":
-                    errors.append(
-                        self._import_error(
-                            row=row_no,
-                            question_index=question_index,
-                            field="category_path",
-                            error_code="knowledge_point_disabled",
-                            message=f"知识点已停用: {point.name}",
-                        )
-                    )
-                    continue
                 else:
                     entity_by_prefix[path] = point
                     target = int(point.id)
@@ -4400,15 +4383,10 @@ class AdminQuizService:
                 )
                 continue
             if normalized.question_text_hash in seen_hashes:
-                errors.append(
-                    self._import_error(
-                        row=row_no,
-                        question_index=question_index,
-                        field="question_text",
-                        error_code="duplicate_question_in_batch",
-                        message="同一题库内本批次题干重复",
-                    )
-                )
+                # Relaxed per 2026-10-22 product decision: keep the first
+                # occurrence, silently skip later duplicates instead of
+                # failing the whole batch.
+                skipped_duplicates += 1
                 continue
             seen_hashes.add(normalized.question_text_hash)
             candidates.append(
@@ -4446,15 +4424,9 @@ class AdminQuizService:
         for locator, item, target, question_hash in candidates:
             row_no, question_index = location(locator)
             if question_hash in existing_hashes:
-                errors.append(
-                    self._import_error(
-                        row=row_no,
-                        question_index=question_index,
-                        field="question_text",
-                        error_code="duplicate_question",
-                        message="同一题库内规范化题干已存在",
-                    )
-                )
+                # Relaxed: stem already in library — skip the row instead of
+                # failing the import.
+                skipped_duplicates += 1
                 continue
             valid.append((locator, item, target))
 
@@ -4474,6 +4446,7 @@ class AdminQuizService:
             errors=errors,
             missing_errors=missing_errors,
             impact=impact,
+            skipped_duplicate_count=skipped_duplicates,
         )
 
     def _build_v2_import_impact(
@@ -4948,8 +4921,6 @@ class AdminQuizService:
                 db.add(module)
                 await db.flush()
                 module_by_name[path[0]] = module
-            if module.status != "active":
-                raise ValidationException(f"模块已停用: {module.name}")
             point = point_by_parent_name.get((int(module.id), path[1]))
             if point is None:
                 created_count += 1
@@ -4969,8 +4940,6 @@ class AdminQuizService:
                 db.add(point)
                 await db.flush()
                 point_by_parent_name[(int(module.id), path[1])] = point
-            if point.status != "active":
-                raise ValidationException(f"知识点已停用: {point.name}")
             resolved[path] = point
         if created_count > 500:
             raise ValidationException("单个导入任务最多新建 500 个模块或知识点")
@@ -5197,94 +5166,15 @@ class AdminQuizService:
                     await db.commit()
                     return True
 
-                if missing_errors and not confirmed_run:
-                    assert validation.impact is not None
-                    impact = validation.impact
-                    snapshot = impact.model_dump(mode="json")
-                    current.status = "awaiting_category_confirmation"
-                    current.error_count = 0
-                    current.report_object_key = None
-                    current.error_message = None
-                    current.category_impact = snapshot
-                    current.impact_version = impact.impact_version
-                    current.missing_category_count = impact.new_category_count
-                    current.affected_question_count = impact.affected_question_count
-                    current.finished_at = None
-                    current.lock_version += 1
-                    snapshot["lock_version"] = current.lock_version
-                    current.category_impact = snapshot
-                    self._add_audit(
-                        db,
-                        admin_id=current.admin_id,
-                        action="import.awaiting_category_confirmation",
-                        object_type="import_job",
-                        object_id=current.id,
-                        changed_fields={
-                            "status": {
-                                "before": "validating",
-                                "after": current.status,
-                            },
-                            "missing_category_count": {
-                                "before": 0,
-                                "after": current.missing_category_count,
-                            },
-                            "affected_question_count": {
-                                "before": 0,
-                                "after": current.affected_question_count,
-                            },
-                        },
-                        permission="quiz:import",
-                    )
-                    await self._replace_import_errors(
-                        db,
-                        job_id=current.id,
-                        validation_version=next_validation_version,
-                        errors=[],
-                    )
-                    await db.commit()
-                    return True
-
+                # Relaxed per 2026-10-22 product decision: imports no longer
+                # pause for category confirmation. Missing modules/knowledge
+                # points are created automatically; only format errors fail.
+                current.status = "importing"
                 if (
                     confirmed_run
-                    and validation.impact is not None
-                    and validation.impact.impact_version != current.impact_version
+                    or current.library_id is not None
+                    or validation.missing_errors
                 ):
-                    # The administrator confirmed an earlier impact but the
-                    # category tree has since changed. Publish the refreshed
-                    # snapshot and require an explicit second confirmation.
-                    assert validation.impact is not None
-                    impact = validation.impact
-                    snapshot = impact.model_dump(mode="json")
-                    current.status = "awaiting_category_confirmation"
-                    current.confirmed_by = None
-                    current.confirmed_at = None
-                    current.execution_protected_until = None
-                    current.category_impact = snapshot
-                    current.impact_version = impact.impact_version
-                    current.missing_category_count = impact.new_category_count
-                    current.affected_question_count = impact.affected_question_count
-                    current.lock_version += 1
-                    snapshot["lock_version"] = current.lock_version
-                    current.category_impact = snapshot
-                    self._add_audit(
-                        db,
-                        admin_id=current.admin_id,
-                        action="import.category_impact_changed",
-                        object_type="import_job",
-                        object_id=current.id,
-                        changed_fields={
-                            "status": {
-                                "before": "importing",
-                                "after": current.status,
-                            }
-                        },
-                        permission="quiz:import",
-                    )
-                    await db.commit()
-                    return True
-
-                current.status = "importing"
-                if confirmed_run:
                     final = await self._create_confirmed_categories_and_questions(
                         db,
                         current=current,
@@ -5320,6 +5210,10 @@ class AdminQuizService:
                     target_ids=[],
                     changed_fields={
                         "created_count": {"before": 0, "after": len(final)},
+                        "skipped_duplicate_count": {
+                            "before": 0,
+                            "after": validation.skipped_duplicate_count,
+                        },
                         "status": {"before": "importing", "after": "succeeded"},
                     },
                     permission="quiz:import",
