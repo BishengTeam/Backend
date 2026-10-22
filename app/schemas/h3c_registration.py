@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.schemas.registration_payment import RegistrationPaymentSummary
 
 from datetime import datetime
 from typing import Literal
@@ -247,6 +248,7 @@ class H3cReviewResponse(BaseModel):
 
 
 class H3cRegistrationResponse(BaseModel):
+    payment_summary: RegistrationPaymentSummary | None = None
     id: int
     registration_no: str
     batch_id: int

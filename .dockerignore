@@ -24,3 +24,8 @@ docs/nisp/*
 !docs/nisp/NISP二级考试报名申请表.pdf
 uploads/*
 !uploads/.gitkeep
+
+!docs/renshe/
+docs/renshe/*
+!docs/renshe/references/
+!docs/renshe/references/**

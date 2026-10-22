@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 
 from app.domain.order.src.index import Order
 from app.domain.plan.src.index import Plan
-from app.domain.renshe.src.index import RensheApplication, RensheApplicationVersion
+from app.domain.renshe.src.index import RensheApplication, RensheApplicationVersion, RensheMaterial
 from app.domain.user.src.index import UserRealname
 from app.models.renshe_project import RensheProjectConfig
 from app.port.exceptions import BusinessException, ConflictException
@@ -292,6 +292,14 @@ async def test_old_paid_snapshot_adopts_new_reporting_without_rewriting_order_or
         db.add(old_version)
         await db.flush()
         application.current_version_id = old_version.id
+        # Valid pre-existing attachments isolate the missing reporting snapshot
+        # assertion from the stricter material gate added to initial review.
+        for rule in legacy["materials"]:
+            extension = ".pdf" if ".pdf" in rule["extensions"] else ".jpg"
+            db.add(RensheMaterial(application_id=application.id, version_id=old_version.id, kind=rule["kind"],
+                source_storage_key="legacy/source", storage_key=f"legacy/{old_version.id}/{rule['kind']}",
+                original_filename="proof" + extension, extension=extension,
+                content_type="application/pdf" if extension == ".pdf" else "image/jpeg", size_bytes=100, sha256="a" * 64))
         order = Order(
             user_id=1,
             plan_id=plan.id,
@@ -299,6 +307,8 @@ async def test_old_paid_snapshot_adopts_new_reporting_without_rewriting_order_or
             product_type=plan.product_type,
             price=12345,
             status="paid",
+            payment_channel="wechat",
+            transaction_id="legacy-reporting-payment",
             paid_at=datetime.now(timezone.utc),
         )
         db.add(order)

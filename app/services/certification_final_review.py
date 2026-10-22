@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.registration_payment_guard import require_review_payment
 from app.adapter.database import get_db_ctx
 from app.domain.h3c.src.index import (
     H3cExamBatch,
@@ -69,6 +70,7 @@ async def _lock_h3c_chain(db: AsyncSession, registration_id: int):
     )
     if plan is None or batch is None or order is None or registration is None:
         raise NotFoundException("H3C 报名")
+    await require_review_payment(db, order, registration)
     return registration, order
 
 
@@ -93,6 +95,7 @@ async def _lock_nisp_chain(db: AsyncSession, registration_id: int):
     )
     if plan is None or batch is None or order is None or registration is None:
         raise NotFoundException("NISP 报名")
+    await require_review_payment(db, order, registration)
     return registration, order
 
 
@@ -196,6 +199,7 @@ class H3cFinalReviewService:
                             ),
                         }
                         if registration.status == "final_approved":
+                            await require_review_payment(db, await db.get(Order, registration.order_id), registration)
                             existing = await db.scalar(
                                 select(H3cFinalReview).where(
                                     H3cFinalReview.registration_id == registration.id
@@ -351,6 +355,7 @@ class NispFinalReviewService:
                             "name": (registration.candidate_snapshot or {}).get("name"),
                         }
                         if registration.status == "final_approved":
+                            await require_review_payment(db, await db.get(Order, registration.order_id), registration)
                             existing = await db.scalar(
                                 select(NispFinalReview).where(
                                     NispFinalReview.registration_id == registration.id

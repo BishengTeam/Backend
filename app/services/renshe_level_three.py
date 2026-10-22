@@ -76,12 +76,39 @@ def material_requirements(config: dict, form: dict) -> list[dict]:
     if not is_level_three(config):
         return config["materials"]
     branch = selected_path(config, form)
-    return [{**item, "required": True} for item in config["materials"] if item["kind"] in branch["material_kinds"]]
+    result = [{**item, "required": True} for item in config["materials"] if item["kind"] in branch["material_kinds"]]
+    for item in result:
+        if item["kind"] == "education_report":
+            item["name"] = "学信网学历备案表（验证有效期6个月）" if branch["id"] == "skill_4_degree" else "学历网查截图（PDF）"
+    return result
 
 
-def review_checks(config: dict) -> dict:
+def review_checks(config: dict, form_data: dict | None = None) -> dict:
     from app.services.renshe_employment import REVIEW_CHECKS
     result = {key: REVIEW_CHECKS[key] for key in ("identity", "photo", "commitment")}
+    if form_data is not None:
+        branch = selected_path(config, form_data)
+        result["path"] = "核对实际选择的申报路径：" + branch["condition"]
+        result["occupation"] = "逐项核对本职业、相关职业或专业对应关系，不仅核验附件存在"
+        if branch.get("work"):
+            result["employment"] = f"{'证书或职称取得后' if branch.get('skill') or branch.get('title') else ''}累计相关工作满{branch['years']}年；合并重叠经历，按提交时基准日核算"
+            result["work_proof"] = REVIEW_CHECKS["work_proof"]
+            result["social_security"] = REVIEW_CHECKS["social_security"]
+        if branch.get("skill"):
+            result["certificate"] = "四级／中级工本职业或相关职业证书与合并网查截图一致、可验证，取得日期符合本路径条件"
+        if branch.get("title"):
+            result["title"] = "初级职称证书与合并网查截图一致，专业相关、可验证，取得日期符合本路径条件"
+        if branch.get("education"):
+            result["graduated"] = "已取得本人毕业证，不接受在读替代证明"
+            result["education"] = "技工院校高级工班及以上毕业，核对本人院校及毕业材料" if branch["id"] == "technical_senior" else "核对本人高等职业学校或普通高等学校专科及以上毕业学历"
+            result["major"] = "本专业或资料列明相关专业，结合实际证书人工核验"
+            result["report"] = "学信网学历备案表与毕业证对应、可验证，验证有效期须为6个月" if branch["id"] == "skill_4_degree" else "学历网查截图PDF与毕业证对应、可验证"
+        if branch["id"] == "technical_senior":
+            result["training"] = "技工院校高级工班及以上毕业，核对培养层次"
+        if branch["id"] == "evaluated_college":
+            result["institution_evaluation"] = "核验院校经评估论证的备案等级认定评价机构资格及其依据"
+        return result
+
     result["path"] = "核对所选三级申报路径与实际证书、职称、工作或毕业学历材料一致；不得借用其他路径条件"
     result["occupation"] = "逐项核对本职业、相关职业或专业对应关系，不仅核验附件存在"
     if config["application_types"] != ["学历型"]:

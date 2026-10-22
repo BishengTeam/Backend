@@ -73,10 +73,10 @@ DEGREE_REVIEW_CHECKS = {
 }
 
 
-def review_checks(config: dict) -> dict:
+def review_checks(config: dict, form_data: dict | None = None) -> dict:
     from app.services.renshe_level_three import is_level_three, review_checks as three_checks
     if is_level_three(config):
-        return three_checks(config)
+        return three_checks(config, form_data=form_data)
     from app.services.renshe_employment import is_employment, review_checks as employment_checks
     if is_employment(config):
         return employment_checks(config)
@@ -263,7 +263,15 @@ def validate_education(info: dict | None, config: dict) -> dict:
     return data
 
 
-def validate_review(data, *, stage: str, now: datetime, version_id: int, config: dict | None = None) -> None:
+def validate_review(data, *, stage: str, now: datetime, version_id: int, config: dict | None = None, form_data: dict | None = None, requirements: dict | None = None) -> None:
+    if requirements is not None:
+        from app.services.renshe_review_requirements import validate_requirements
+        validate_requirements(data, requirements, stage=stage)
+        if data.decision == "rejected":
+            deadline = data.correction_due_at
+            if deadline is None or deadline.tzinfo is None or deadline <= now:
+                raise BusinessException("驳回补正必须设置晚于当前时间且带时区的补正截止时间")
+        return
     if data.expected_version_id != version_id:
         raise ConflictException("报名版本已变化，请刷新当前版本并重新核验")
     if data.decision == "rejected":

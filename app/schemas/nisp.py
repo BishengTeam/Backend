@@ -1,3 +1,4 @@
+from app.schemas.registration_payment import RegistrationPaymentSummary
 """NISP certification schemas."""
 
 from datetime import datetime
@@ -196,6 +197,7 @@ class NispOrderCreate(BaseModel):
 # ── Registration response ──
 
 class NispRegistrationResponse(BaseModel):
+    payment_summary: RegistrationPaymentSummary | None = None
     id: int
     registration_no: str
     batch_id: int

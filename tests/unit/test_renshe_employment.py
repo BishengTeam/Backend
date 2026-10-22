@@ -69,6 +69,8 @@ async def employment_batch(env, monkeypatch, occupation="information_security", 
 async def pay(env, submitted):
     async with env.db() as db:
         order = await db.get(Order, submitted.order_id)
+        order.payment_channel = "wechat"
+        order.offline_status = None
         order.status, order.paid_at, order.transaction_id = "paid", datetime.now(UTC), f"work-{order.id}"
         await OrderFulfillmentService().on_paid(db, order)
         await db.commit()

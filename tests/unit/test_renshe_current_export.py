@@ -41,6 +41,8 @@ async def approved(env, monkeypatch):
     result = await service.submit(1, draft.id)
     async with env.db() as db:
         order = await db.get(Order, result.order_id)
+        order.payment_channel = "wechat"
+        order.offline_status = None
         order.status, order.transaction_id, order.paid_at = (
             "paid",
             "current-export-test",

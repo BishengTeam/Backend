@@ -73,6 +73,8 @@ async def test_each_degree_trade_uses_its_own_rules_through_real_zip(isolated, m
     submitted = await applicant.submit(1, draft.id)
     async with isolated.db() as db:
         order = await db.get(Order, submitted.order_id)
+        order.payment_channel = "wechat"
+        order.offline_status = None
         order.status, order.paid_at, order.transaction_id = "paid", datetime.now(UTC), f"multi-degree-{occupation}"
         await OrderFulfillmentService().on_paid(db, order)
         await db.commit()

@@ -130,6 +130,7 @@ async def test_graduate_without_student_identity_full_revision_review_and_export
         order = await db.get(Order, result.order_id)
         # This fixture exercises historical provider settlement; offline settlement has PostgreSQL coverage.
         order.payment_channel = "wechat"
+        order.offline_status = None
         order.status, order.transaction_id, order.paid_at = (
             "paid",
             "graduate-test",

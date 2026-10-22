@@ -381,6 +381,7 @@ class NispAdminService:
         batch_id: int | None = None,
         level: str | None = None,
         status: str | None = None,
+        payment_state: str | None = None,
         keyword: str | None = None,
         has_valid_export: bool | None = None,
         page: int = 1,
@@ -389,6 +390,10 @@ class NispAdminService:
         service = NispRegistrationService()
         async with get_db_ctx() as db:
             base = select(NispRegistration)
+            if payment_state:
+                from app.services.registration_payment_guard import payment_filter
+                from app.domain.order.src.index import Order
+                base = base.join(Order, Order.id == NispRegistration.order_id).where(payment_filter(payment_state))
             if batch_id is not None:
                 base = base.where(NispRegistration.batch_id == batch_id)
             if level is not None:

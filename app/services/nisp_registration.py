@@ -1,3 +1,4 @@
+from app.services.registration_payment_guard import payment_summary, require_review_payment
 """NISP registration service: order creation, review, export-ready snapshots."""
 
 import re
@@ -583,6 +584,7 @@ class NispRegistrationService:
                 raise NotFoundException("NISP 报名记录")
             if reg.batch_id != batch.id or reg.order_id != order.id:
                 raise ConflictException("NISP 报名关联记录不一致")
+            await require_review_payment(db, order, reg)
             if reg.status not in {"pending_review", "approved"}:
                 raise ConflictException("当前状态不能审核")
 
@@ -983,7 +985,11 @@ class NispRegistrationService:
             final_review_ready, final_review_block_reason = False, "导出版本与当前报名版本不一致"
         else:
             final_review_ready, final_review_block_reason = True, None
+        payment = await payment_summary(db, order, registration)
+        if not payment.review_payment_allowed:
+            final_review_ready, final_review_block_reason = False, payment.review_block_reason
         return NispRegistrationResponse(
+            payment_summary=payment,
             id=registration.id,
             registration_no=registration.registration_no,
             batch_id=registration.batch_id,

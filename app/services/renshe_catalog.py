@@ -5,6 +5,7 @@ No catalog entry grants eligibility without an adapted admission profile.
 """
 
 from copy import deepcopy
+from app.services.renshe_references import reference_list
 
 LEVELS = {
     5: ("五级", "初级工"), 4: ("四级", "中级工"), 3: ("三级", "高级工"),
@@ -93,7 +94,7 @@ def combinations() -> list[dict]:
                     "adaptation_status": "已适配" if adapted else "待业务确认" if grade == 5 or key == "business_data" else "待开发",
                     "missing": missing,
                     "institution_types": institution_types if adapted and degree else [],
-                    "source_conditions": deepcopy(conditions), "sources": sources,
+                    "source_conditions": deepcopy(conditions), "sources": sources, "references": reference_list(grade),
                     "related_majors": majors,
                     "related_occupations": RELATED.get(key, RELATED["information_security"] if key in {"network_security", "internet_review"} else "相关职业细则待补齐，不套用其他职业。"),
                     "project_limits": ((["本期只接受已取得毕业证，不开放在读应届替代证明", "不能提供既定学历报告时联系管理员，不开放替代材料线上报名"] + (["人工智能训练师仅开放资料明确的技工院校、中等及以上职业院校；普通高等学校专业范围待核实"] if key == "ai_trainer" else [])) if degree else ["工作经历须为本职业或资料列明相关职业，重叠时间不重复累计", "工龄证明单独提交；证书与网查截图合并在同一份JPEG材料中", "复合型仅开放取得五级证书后累计相关工作满3年路径" if application_type == "复合型" else "累计相关职业工作满5年，工龄及社保须逐项初审核验"]) if adapted else ["仅可保存草稿，禁止启用、发布及新报名"],

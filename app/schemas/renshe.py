@@ -1,3 +1,4 @@
+from app.schemas.registration_payment import RegistrationPaymentSummary
 import re
 from datetime import date, datetime
 from decimal import Decimal
@@ -315,6 +316,7 @@ class RensheApplicationListItem(RensheApplicationResponse):
 
 
 class RensheAdminApplicationListItem(BaseModel):
+    payment_summary: RegistrationPaymentSummary | None = None
     id: int
     plan_id: int
     user_id: int
@@ -364,6 +366,7 @@ class RensheReviewResponse(BaseModel):
     required_changes: list[str] | None = None
     correction_due_at: datetime | None = None
     checklist: dict[str, bool] | None = None
+    checklist_snapshot: dict | None = None
     reviewer_id: int
     reviewed_at: datetime
     export_item_id: int | None = None
@@ -383,7 +386,7 @@ class RensheBatchExternalReviewTarget(BaseModel):
 class RensheBatchExternalReviewResult(BaseModel):
     application_id: int
     success: bool
-    status: Literal["success", "failed"]
+    status: Literal["success", "skipped", "failed"]
     reason: str | None = None
     review: RensheReviewResponse | None = None
 
@@ -487,7 +490,7 @@ class RensheMaterialMetadataResponse(BaseModel):
     id: int
     application_id: int
     version_id: int
-    kind: RensheAllMaterialKind
+    kind: str
     original_filename: str
     content_type: str
     size_bytes: int
@@ -499,6 +502,8 @@ class RensheMaterialMetadataResponse(BaseModel):
 
 
 class RensheAdminVersionDetailResponse(BaseModel):
+    project_config_id: int | None = None
+    review_requirements: dict | None = None
     id: int
     version_no: int
     submitted_at: datetime
@@ -513,6 +518,7 @@ class RensheAdminVersionDetailResponse(BaseModel):
 
 
 class RensheAdminApplicationDetailResponse(RensheApplicationResponse):
+    payment_summary: RegistrationPaymentSummary | None = None
     plan: RensheApplicationPlanSummary
     versions: list[RensheAdminVersionDetailResponse] = Field(default_factory=list)
     current_order_id: int | None = None

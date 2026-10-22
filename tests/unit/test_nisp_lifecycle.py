@@ -361,7 +361,7 @@ async def test_rejection_requires_material_selection(monkeypatch):
     reg = NS(id=1, batch_id=1, order_id=2, status='pending_review', level='1',
              material_keys={'portrait_photo': 'old'})
     db = session(monkeypatch, 'app.services.nisp_registration', execute=[result(reg)],
-                 scalars=[reg, batch(), NS(id=2), None])
+                 scalars=[reg, batch(), NS(id=2, status='paid', payment_channel='free', price=0, paid_at=NOW), None])
     with pytest.raises(BusinessException):
         await NispRegistrationService().review(admin_id=9, registration_id=1,
             data=NispReviewDecisionRequest(decision='rejected', reason_detail='照片不清晰'))

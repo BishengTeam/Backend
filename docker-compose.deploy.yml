@@ -54,6 +54,7 @@ x-backend-environment: &backend_environment
   ALIYUN_OSS_ACCESS_KEY_SECRET_FILE: /run/secrets/aliyun_oss_access_key_secret
   ALIYUN_OSS_PREFIX: ${ALIYUN_OSS_PREFIX:-renshe}
   ALIYUN_OSS_SIGNED_URL_TTL_SECONDS: "300"
+  RENSHE_REFERENCE_DIR: ${RENSHE_REFERENCE_DIR:-/app/docs/renshe/references}
   RENSHE_TEMPLATE_DIR: /app/renshe-templates
   RENSHE_COMMITMENT_TEMPLATE_DIR: /app/uploads/private/renshe-commitment-templates
   RENSHE_CLEANUP_RETENTION_DAYS: "30"

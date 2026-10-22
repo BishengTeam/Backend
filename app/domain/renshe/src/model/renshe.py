@@ -189,6 +189,7 @@ class RensheReview(Base, TimestampMixin):
     required_changes: Mapped[list | None] = mapped_column(JSON)
     correction_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     checklist: Mapped[dict | None] = mapped_column(JSON)
+    checklist_snapshot: Mapped[dict | None] = mapped_column(JSON)
     reviewer_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("admin_user.id", ondelete="RESTRICT"), nullable=False
     )

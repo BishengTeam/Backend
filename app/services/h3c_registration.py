@@ -1,6 +1,7 @@
+from __future__ import annotations
+from app.services.registration_payment_guard import payment_summary, require_review_payment
 """H3C exam-batch registration, review, and material-resubmission workflow."""
 
-from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -492,6 +493,7 @@ class H3cRegistrationService:
         batch_id: int | None = None,
         registration_type: str | None = None,
         status: str | None = None,
+        payment_state: str | None = None,
         keyword: str | None = None,
         registration_ids: list[int] | None = None,
         has_valid_export: bool | None = None,
@@ -500,6 +502,10 @@ class H3cRegistrationService:
     ) -> PaginatedData[H3cRegistrationResponse]:
         async with get_db_ctx() as db:
             base = select(H3cRegistration)
+            if payment_state:
+                from app.services.registration_payment_guard import payment_filter
+                from app.domain.order.src.index import Order
+                base = base.join(Order, Order.id == H3cRegistration.order_id).where(payment_filter(payment_state))
             if batch_id is not None:
                 base = base.where(H3cRegistration.batch_id == batch_id)
             if registration_type:
@@ -826,6 +832,7 @@ class H3cRegistrationService:
                     or registration.order_id != order.id
                 ):
                     raise ConflictException("H3C 报名关联记录不一致")
+                await require_review_payment(db, order, registration)
                 if registration.status not in {"pending_review", "approved"}:
                     raise ConflictException("当前报名状态不能审核")
                 now = _now()
@@ -1333,7 +1340,11 @@ class H3cRegistrationService:
             )
             for material in materials
         ]
+        payment = await payment_summary(db, order, registration)
+        if not payment.review_payment_allowed:
+            final_review_ready, final_review_block_reason = False, payment.review_block_reason
         return H3cRegistrationResponse(
+            payment_summary=payment,
             id=registration.id,
             registration_no=registration.registration_no,
             batch_id=registration.batch_id,

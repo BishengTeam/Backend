@@ -160,7 +160,7 @@ async def test_full_path_material_review_and_actual_zip(isolated, monkeypatch, p
     reviewer = RensheReviewService()
     with pytest.raises(BusinessException, match="逐项"):
         await reviewer.review(reviewer_id=1, application_id=draft.id, stage="initial", data=RensheReviewCreate(decision="approved", expected_version_id=submitted.version.id))
-    await reviewer.review(reviewer_id=1, application_id=draft.id, stage="initial", data=RensheReviewCreate(decision="approved", expected_version_id=submitted.version.id, checklist={key: True for key in review_checks(batch.renshe_config)}))
+    await reviewer.review(reviewer_id=1, application_id=draft.id, stage="initial", data=RensheReviewCreate(decision="approved", expected_version_id=submitted.version.id, checklist={key: True for key in review_checks(batch.renshe_config, form_data=data)}))
     exporter = RensheExportService(isolated.storage)
     job = await exporter.create_job(plan_id=batch.id, admin_id=1)
     await exporter.process_next_job()
@@ -208,7 +208,7 @@ async def test_paid_branch_correction_reuses_order_and_only_snapshots_current_ma
     submitted = await applicant.submit(1, draft.id)
     await pay(isolated, submitted)
     await RensheReviewService().review(reviewer_id=1, application_id=draft.id, stage="initial", data=RensheReviewCreate(
-        decision="rejected", expected_version_id=submitted.version.id, reason="请核实实际申报路径", required_changes=["qualification_info.admission_path", "education_info.school"], correction_due_at=datetime.now(timezone.utc) + timedelta(days=3)))
+        decision="rejected", expected_version_id=submitted.version.id, reason="请核实实际申报路径", required_changes=["qualification_info.admission_path"], correction_due_at=datetime.now(timezone.utc) + timedelta(days=3)))
     data = payload("skill_4_degree", batch.id)
     await applicant.save_draft(1, RensheDraftUpsert.model_validate(data))
     for item in material_requirements(batch.renshe_config, data):

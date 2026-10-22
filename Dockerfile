@@ -31,6 +31,7 @@ COPY --chown=10001:10001 . .
 
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh \
+    && chmod -R a-w /app/docs/renshe/references \
     && mkdir -p /app/uploads \
     && chown app:app /app/uploads \
     && apt-get clean \

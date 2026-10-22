@@ -45,6 +45,9 @@ from app.services.order_fulfillment import OrderFulfillmentService
 
 @pytest.fixture
 async def isolated(monkeypatch, tmp_path):
+    from app.domain.h3c.src.model.h3c import H3cRefundRequest
+    from app.domain.nisp.src.model.nisp import NispRefundRequest
+    from app.domain.order.src.model.payment_refund import PaymentRefundTask
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'projects.sqlite'}")
     names = {
         "cert_product_catalog",
@@ -56,6 +59,9 @@ async def isolated(monkeypatch, tmp_path):
         "admin_user",
         "plan",
         "order",
+        "h3c_refund_request",
+        "nisp_refund_request",
+        "payment_refund_task",
         "cert_consultation_group",
     }
     names.update(name for name in Base.metadata.tables if name.startswith(("renshe_", "offline_")))
@@ -221,6 +227,14 @@ async def verified_student(env):
         await db.commit()
 
 
+async def review_payload(env, application_id, *, decision="approved", reason=None, required_changes=None):
+    detail = await RensheReviewService().get_application(application_id)
+    version = next(item for item in detail.versions if item.id == detail.current_version_id)
+    return RensheReviewCreate(expected_version_id=version.id, decision=decision, reason=reason, required_changes=required_changes,
+        correction_due_at=datetime.now(timezone.utc) + timedelta(days=3) if decision == "rejected" else None,
+        checklist={item["key"]: True for item in version.review_requirements["checks"]})
+
+
 async def enroll(env, batch):
     from app.domain.renshe.src.index import RensheApplication
     # A persisted pre-rollout application may continue under its frozen rule;
@@ -245,6 +259,7 @@ async def enroll(env, batch):
         assert order.product_type == batch.product_type
         # This fixture exercises historical provider settlement; offline settlement has PostgreSQL coverage.
         order.payment_channel = "wechat"
+        order.offline_status = None
         order.status, order.transaction_id, order.paid_at = (
             "paid",
             f"transaction-{order.id}",
@@ -256,7 +271,7 @@ async def enroll(env, batch):
         reviewer_id=1,
         application_id=draft.id,
         stage="initial",
-        data=RensheReviewCreate(decision="approved"),
+        data=await review_payload(env, draft.id),
     )
     return submission
 
@@ -337,7 +352,7 @@ async def test_two_projects_complete_separate_admission_exports_external_review_
             reviewer_id=1,
             application_id=submitted.application.id,
             stage="external",
-            data=RensheReviewCreate(decision="approved"),
+            data=await review_payload(isolated, submitted.application.id),
         )
     # Refunds still use the dedicated full-refund flow and original order price.
     submitted = submissions[1]
@@ -500,9 +515,7 @@ async def test_export_keeps_requested_material_version_after_resubmission_and_re
     await RensheReviewService().return_for_correction(
         reviewer_id=1,
         application_id=submission.application.id,
-        data=RensheReviewCreate(
-            decision="rejected", reason="测试补正", required_changes=["email"]
-        ),
+        data=await review_payload(isolated, submission.application.id, decision="rejected", reason="测试补正", required_changes=["email"]),
     )
     service = RensheApplicationService(isolated.storage)
     await service.save_draft(
@@ -538,14 +551,14 @@ async def test_export_keeps_requested_material_version_after_resubmission_and_re
         reviewer_id=1,
         application_id=submission.application.id,
         stage="initial",
-        data=RensheReviewCreate(decision="approved"),
+        data=await review_payload(isolated, submission.application.id),
     )
     with pytest.raises(ConflictException, match="尚未成功导出"):
         await RensheReviewService().review(
             reviewer_id=1,
             application_id=submission.application.id,
             stage="external",
-            data=RensheReviewCreate(decision="approved"),
+            data=await review_payload(isolated, submission.application.id),
         )
 
 

@@ -37,6 +37,23 @@ from app.services.renshe_review import RensheReviewService
 router = APIRouter(prefix="/cert-products/renshe", tags=["管理后台-人社报名"])
 
 
+@router.get("/references/{document_id}")
+async def read_reference(document_id: str, _admin=Depends(require_permission("user:list"))):
+    from app.services.renshe_references import reference_file
+    from fastapi.responses import Response
+    path, mime = reference_file(document_id)
+    headers = {"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
+    if mime == "text/plain":
+        content = path.read_bytes()
+        try:
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = content.decode("gb18030")
+        return Response(text, media_type="text/plain; charset=utf-8", headers=headers)
+    return FileResponse(path, media_type=mime, filename=path.name,
+        content_disposition_type="inline" if mime == "application/pdf" else "attachment", headers=headers)
+
+
 @router.get("/project-capabilities", response_model=APIResponse[dict])
 async def project_capabilities(_admin=Depends(require_permission("content:read"))):
     return success(data=RensheProjectService.capabilities())
@@ -158,6 +175,7 @@ async def list_applications(
     plan_id: int | None = Query(None, ge=1),
     status: RensheApplicationStatus | None = Query(None),
     payment_status: Literal["pending", "paid", "completed", "refunded", "closed"] | None = Query(None),
+    payment_state: str | None = Query(None, pattern="^(awaiting_proof|under_review|returned|exception|confirmed|closed)$"),
     keyword: str | None = Query(None, max_length=64, description="姓名、身份证号或联系电话"),
     submitted_at_start: datetime | None = Query(None),
     submitted_at_end: datetime | None = Query(None),
@@ -170,6 +188,7 @@ async def list_applications(
         status=status,
         payment_status=payment_status,
         keyword=keyword,
+        payment_state=payment_state,
         submitted_at_start=submitted_at_start,
         submitted_at_end=submitted_at_end,
         page=page,

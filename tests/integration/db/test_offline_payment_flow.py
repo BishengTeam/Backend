@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import UploadFile
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -34,7 +34,7 @@ async def context(monkeypatch, tmp_path):
         async with factory() as session:
             yield session
 
-    for name in ["offline_payment", "order", "order_timeout", "nisp_admin", "nisp_refund", "renshe_refund", "h3c_refund"]:
+    for name in ["offline_payment", "order", "order_timeout", "nisp_admin", "nisp_refund", "renshe_refund", "h3c_refund", "h3c_registration", "nisp_registration", "renshe_review", "certification_final_review"]:
         monkeypatch.setattr(importlib.import_module(f"app.services.{name}"), "get_db_ctx", ctx)
     from app.port.config import settings
     monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
@@ -73,6 +73,7 @@ async def context(monkeypatch, tmp_path):
         async with factory() as db, db.begin():
             await db.execute(delete(OfflineBankEntry).where(OfflineBankEntry.order_id.in_(created_order_ids)))
             await db.execute(delete(PaymentRefundTask).where(PaymentRefundTask.order_id.in_(created_order_ids)))
+            await db.execute(update(Order).where(Order.id.in_(created_order_ids)).values(paid_at=None))
         await engine.dispose()
 
 
@@ -144,14 +145,14 @@ async def test_daily_wechat_receipt_and_successful_refund_use_their_own_dates(co
         order = await db.get(Order, order_id)
         order.payment_channel = "wechat"
         order.status = "refunded"
-        order.paid_at = datetime(2096, 10, 22, tzinfo=timezone.utc)
+        order.paid_at = datetime(2094, 10, 22, tzinfo=timezone.utc)
         db.add(PaymentRefundTask(order_id=order_id, user_id=uid, amount_cents=10000,
             out_trade_no=order.out_trade_no, transaction_id=uuid4().hex,
             out_refund_no=uuid4().hex, status="succeeded", next_attempt_at=now(),
-            succeeded_at=datetime(2096, 10, 23, tzinfo=timezone.utc)))
+            succeeded_at=datetime(2094, 10, 23, tzinfo=timezone.utc)))
     service = admin_order.AdminOrderService()
-    receipt = await service.reconciliation("2096-10-22")
-    refund = await service.reconciliation("2096-10-23")
+    receipt = await service.reconciliation("2094-10-22")
+    refund = await service.reconciliation("2094-10-23")
     assert (receipt["order_total"], receipt["refund_total"], receipt["wechat_total"]) == (10000, 0, 10000)
     assert (refund["order_total"], refund["refund_total"], refund["wechat_total"]) == (0, 10000, -10000)
 
@@ -405,3 +406,203 @@ async def test_zero_coupon_settlement_still_requires_qualification_review(contex
     with pytest.raises(ConflictException, match="零元"):
         await RensheRefundService().request_refund(user_id=uid, application_id=application_id,
             data=RensheRefundCreate(request_kind="normal", reason_code="user_request", reason_detail="零元报名"))
+
+
+@pytest.mark.parametrize("channel", ["bank_transfer", "free", "wechat"])
+async def test_review_payment_summary_accepts_only_real_confirmed_payment(context, channel):
+    from app.services.registration_payment_guard import payment_summary
+    id, uid = await context.create()
+    async with context.db() as db:
+        assert not (await payment_summary(db, await db.get(Order, id))).review_payment_allowed
+    if channel == "bank_transfer":
+        await context.submit(id, uid)
+        await context.service.decide(id, 101, confirmation(), "confirm")
+    else:
+        async with context.db() as db, db.begin():
+            order = await db.get(Order, id)
+            order.payment_channel = channel
+            order.offline_status = None
+            order.status = "paid"
+            order.price = 0 if channel == "free" else 10000
+            order.paid_at = now()
+            order.transaction_id = uuid4().hex if channel == "wechat" else None
+    async with context.db() as db:
+        summary = await payment_summary(db, await db.get(Order, id))
+        assert summary.review_payment_allowed and summary.review_block_reason is None
+        assert "materials" not in summary.model_dump() and "bank_reference" not in summary.model_dump()
+
+
+@pytest.mark.parametrize("vendor", ["h3c", "nisp", "renshe"])
+async def test_initial_and_final_review_cannot_bypass_payment(context, vendor):
+    from app.services.h3c_registration import H3cRegistrationService
+    from app.services.nisp_registration import NispRegistrationService
+    from app.services.renshe_review import RensheReviewService
+    from app.services.certification_final_review import H3cFinalReviewService, NispFinalReviewService
+    from app.schemas.h3c_registration import H3cReviewDecision, H3cFinalReviewRequest
+    from app.schemas.nisp import NispReviewDecisionRequest, NispFinalReviewRequest
+    from app.schemas.renshe import RensheReviewCreate
+    from app.domain.h3c.src.index import H3cRegistration
+    from app.domain.nisp.src.index import NispRegistration
+    from app.domain.renshe.src.index import RensheApplication, RensheApplicationVersion
+    id, uid, admin, rid = await seed_registration(context, vendor)
+    model = {"h3c": H3cRegistration, "nisp": NispRegistration, "renshe": RensheApplication}[vendor]
+    async with context.db() as db, db.begin():
+        reg = await db.get(model, rid)
+        reg.status = "pending_initial_review" if vendor == "renshe" else "pending_review"
+        if vendor == "renshe":
+            from app.domain.renshe.src.index import RENSHE_DEFAULT_PROGRAM
+            from app.domain.plan.src.index import Plan
+            plan = await db.get(Plan, reg.plan_id)
+            plan.product_type = "RS-ZY"
+            (await db.get(Order, id)).product_type = "RS-ZY"
+            for key in ("occupation_name", "occupation_code", "skill_level", "exam_type", "application_type"):
+                setattr(plan, key, getattr(RENSHE_DEFAULT_PROGRAM, key))
+            version = RensheApplicationVersion(application_id=rid, version_no=1, submitted_by_user_id=uid,
+                realname_snapshot={}, student_snapshot={}, form_data={}, submitted_at=now())
+            db.add(version); await db.flush(); reg.current_version_id = version.id
+            from app.domain.renshe.src.index import RensheMaterial
+            from app.services.renshe_project import default_configuration
+            for requirement in default_configuration()["materials"]:
+                extension = ".pdf" if ".pdf" in requirement["extensions"] else ".jpg"
+                db.add(RensheMaterial(application_id=rid, version_id=version.id, kind=requirement["kind"],
+                    source_storage_key="fixture/source", storage_key=f"fixture/{rid}/{requirement['kind']}", original_filename="proof" + extension,
+                    extension=extension, content_type="application/pdf" if extension == ".pdf" else "image/jpeg", size_bytes=100, sha256="a" * 64))
+    async def initial():
+        if vendor == "h3c":
+            return await H3cRegistrationService().review(admin_id=admin, registration_id=rid, decision_data=H3cReviewDecision(decision="approved"))
+        if vendor == "nisp":
+            return await NispRegistrationService().review(admin_id=admin, registration_id=rid, data=NispReviewDecisionRequest(decision="approved"))
+        detail = await RensheReviewService().get_application(rid)
+        current = next(version for version in detail.versions if version.id == detail.current_version_id)
+        return await RensheReviewService().review(reviewer_id=admin, application_id=rid, stage="initial", data=RensheReviewCreate(
+            decision="approved", expected_version_id=current.id,
+            checklist={check["key"]: True for check in current.review_requirements["checks"]}))
+    with pytest.raises(ConflictException, match="付款"):
+        await initial()
+    await context.submit(id, uid)
+    await context.service.decide(id, admin, confirmation(), "confirm")
+    await initial()
+    if vendor == "renshe":
+        from app.schemas.renshe import RensheBatchExternalReviewRequest
+        stale = await RensheReviewService().batch_external_review(reviewer_id=admin,
+            data=RensheBatchExternalReviewRequest(decision="approved", targets=[{"application_id": rid, "version_id": 2147483647}]))
+        assert stale[0].status == "failed" and "版本" in stale[0].reason
+    # A paid order marked as a financial exception must stop all further review writes.
+    await context.service.decide(id, admin, DecisionInput(expected_version=1, request_key=uuid4().hex, note="到账资金待进一步核实"), "exception")
+    if vendor == "renshe":
+        with pytest.raises(ConflictException, match="异常"):
+            await RensheReviewService().return_for_correction(reviewer_id=admin, application_id=rid,
+                data=RensheReviewCreate(decision="rejected", reason="需补正", required_changes=["contact_phone"]))
+        with pytest.raises(ConflictException, match="异常"):
+            await RensheReviewService().review(reviewer_id=admin, application_id=rid, stage="external", data=RensheReviewCreate(decision="approved"))
+    else:
+        final = H3cFinalReviewService() if vendor == "h3c" else NispFinalReviewService()
+        data = H3cFinalReviewRequest(export_item_id=1) if vendor == "h3c" else NispFinalReviewRequest(export_item_id=1)
+        with pytest.raises(ConflictException, match="异常"):
+            await final.review(admin_id=admin, registration_id=rid, data=data)
+        with pytest.raises(ConflictException, match="异常"):
+            await initial()
+    if vendor == "renshe":
+        from app.schemas.renshe import RensheBatchExternalReviewRequest
+        result = await RensheReviewService().batch_external_review(reviewer_id=admin,
+            data=RensheBatchExternalReviewRequest(decision="approved", targets=[{"application_id": rid}]))
+        item = result[0]
+    else:
+        from app.schemas.h3c_registration import H3cBatchFinalReviewRequest
+        from app.schemas.nisp import NispBatchFinalReviewRequest
+        request = H3cBatchFinalReviewRequest if vendor == "h3c" else NispBatchFinalReviewRequest
+        result = await final.review_batch(admin_id=admin, data=request(targets=[{"registration_id": rid, "export_item_id": 1}]))
+        item = result.items[0]
+    assert item.status == "failed" and not item.success and "异常" in item.reason
+
+
+async def test_payment_guard_rejects_inconsistent_receipt_and_active_refund(context):
+    from app.services.registration_payment_guard import payment_summary
+    id, uid = await context.create(); await context.submit(id, uid)
+    await context.service.decide(id, 101, confirmation(), "confirm")
+    async with context.db() as db, db.begin():
+        receipt = await db.scalar(select(OfflineBankEntry).where(OfflineBankEntry.order_id == id))
+        receipt.amount_cents = 9999
+    async with context.db() as db:
+        assert not (await payment_summary(db, await db.get(Order, id))).review_payment_allowed
+    # A real NISP refund request blocks the prerequisite even before registration status changes.
+    from app.domain.nisp.src.index import NispRefundRequest
+    id, uid, admin, rid = await seed_registration(context, "nisp")
+    await context.submit(id, uid); await context.service.decide(id, admin, confirmation(), "confirm")
+    async with context.db() as db, db.begin():
+        db.add(NispRefundRequest(order_id=id, user_id=uid, registration_id=rid, amount_cents=10000,
+            status="requested", request_kind="review_failed", reason_code="user_request", requested_at=now()))
+    async with context.db() as db:
+        summary = await payment_summary(db, await db.get(Order, id))
+        assert not summary.review_payment_allowed and "退款" in summary.review_block_reason
+
+
+@pytest.mark.parametrize("mutation", ["exception", "refund"])
+async def test_review_serializes_with_financial_exception_and_refund(context, monkeypatch, mutation):
+    import app.services.nisp_registration as registrations
+    from app.services.registration_payment_guard import require_review_payment, payment_summary
+    from app.schemas.nisp import NispReviewDecisionRequest, NispRejectRefundRequest
+    id, uid, admin, rid = await seed_registration(context, "nisp")
+    await context.submit(id, uid); await context.service.decide(id, admin, confirmation(), "confirm")
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def pause_guard(db, order, registration=None):
+        result = await require_review_payment(db, order, registration)
+        entered.set()
+        await release.wait()
+        return result
+    monkeypatch.setattr(registrations, "require_review_payment", pause_guard)
+    review = asyncio.create_task(registrations.NispRegistrationService().review(admin_id=admin, registration_id=rid,
+        data=NispReviewDecisionRequest(decision="approved")))
+    await asyncio.wait_for(entered.wait(), 5)
+    if mutation == "exception":
+        financial = asyncio.create_task(context.service.decide(id, admin,
+            DecisionInput(expected_version=1, request_key=uuid4().hex, note="资金待查"), "exception"))
+    else:
+        financial = asyncio.create_task(registrations.NispRegistrationService().reject_and_refund(admin_id=admin, registration_id=rid,
+            data=NispRejectRefundRequest(reason_code="review_rejected", reason_detail="需要退费")))
+    try:
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(financial), .2)
+    finally:
+        release.set()
+    await asyncio.wait_for(asyncio.gather(review, financial), 10)
+    async with context.db() as db:
+        assert not (await payment_summary(db, await db.get(Order, id))).review_payment_allowed
+    monkeypatch.setattr(registrations, "require_review_payment", require_review_payment)
+    with pytest.raises(ConflictException):
+        await registrations.NispRegistrationService().review(admin_id=admin, registration_id=rid, data=NispReviewDecisionRequest(decision="approved"))
+
+
+@pytest.mark.parametrize("vendor", ["h3c", "nisp", "renshe"])
+async def test_batch_list_finance_filters_and_public_summary(context, vendor):
+    id, uid, admin, rid = await seed_registration(context, vendor)
+    await context.submit(id, uid)
+    async with context.db() as db:
+        order = await db.get(Order, id)
+        plan_id = order.plan_id
+    async def query(state):
+        if vendor == "h3c":
+            from app.services.h3c_registration import H3cRegistrationService
+            result = await H3cRegistrationService().list_admin_registrations(payment_state=state, keyword=None, registration_ids=[rid])
+            return result.items
+        if vendor == "nisp":
+            from app.services.nisp_admin import NispAdminService
+            from app.domain.nisp.src.index import NispRegistration
+            async with context.db() as db:
+                batch_id = (await db.get(NispRegistration, rid)).batch_id
+            rows, _ = await NispAdminService().list_registrations(batch_id=batch_id, payment_state=state)
+            return rows
+        from app.services.renshe_review import RensheReviewService
+        result = await RensheReviewService().list_applications(plan_id=plan_id, status=None, payment_state=state, keyword=str(rid), page=1, page_size=20)
+        return result.items
+    rows = await query("under_review")
+    assert len(rows) == 1 and rows[0].payment_summary.offline_status == "under_review"
+    assert not rows[0].payment_summary.review_payment_allowed
+    await context.service.decide(id, admin, confirmation(), "confirm")
+    rows = await query("confirmed")
+    assert len(rows) == 1 and rows[0].payment_summary.review_payment_allowed
+    assert not await query("under_review")
+    await context.service.decide(id, admin, DecisionInput(expected_version=1, request_key=uuid4().hex, note="资金异常"), "exception")
+    assert not await query("confirmed")
+    rows = await query("exception")
+    assert len(rows) == 1 and not rows[0].payment_summary.review_payment_allowed

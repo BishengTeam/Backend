@@ -241,14 +241,14 @@ def validate_row(values: list, info: dict, policy: dict, *, config: dict | None 
         raise ConflictException("模板出生日期格式不正确") from exc
 
 
-async def validate_snapshot(db, plan, form: dict) -> dict:
+async def validate_snapshot(db, plan, form: dict, *, config: dict | None = None) -> dict:
     # Current exports read material snapshots, never historical export policies.
     if not isinstance(form.get("reporting_info"), dict):
         raise ConflictException("该报名版本缺少模板填报信息，请补正后重新初审并导出")
     from app.services.renshe_employment import is_employment
     from app.services.renshe_project import batch_configuration
     from app.services.renshe_graduated import validate_admission
-    config = batch_configuration(plan)
+    config = batch_configuration(plan) if config is None else config
     validate_reporting(form["reporting_info"], {}, config=config)
     if is_employment(config):
         try:

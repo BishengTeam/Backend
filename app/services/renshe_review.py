@@ -1,6 +1,8 @@
+from app.services.renshe_review_requirements import resolve_requirements, checklist_snapshot, version_configuration
+from app.services.registration_payment_guard import payment_summary, require_review_payment
 from datetime import datetime, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import String, cast, func, or_, select
 
 from app.adapter.database import get_db_ctx
 from app.domain.order.src.index import Order
@@ -54,6 +56,7 @@ class RensheReviewService:
         page: int,
         page_size: int,
         payment_status: str | None = None,
+        payment_state: str | None = None,
         keyword: str | None = None,
         submitted_at_start: datetime | None = None,
         submitted_at_end: datetime | None = None,
@@ -85,6 +88,9 @@ class RensheReviewService:
                 base = base.where(RensheApplication.plan_id == plan_id)
             if status is not None:
                 base = base.where(RensheApplication.status == status)
+            if payment_state:
+                from app.services.registration_payment_guard import payment_filter
+                base = base.where(payment_filter(payment_state))
             if payment_status is not None:
                 if payment_status not in {"pending", "paid", "completed", "refunded", "closed"}:
                     raise ConflictException("不支持的订单状态筛选")
@@ -97,6 +103,7 @@ class RensheReviewService:
                 term = f"%{keyword.strip()}%"
                 base = base.where(
                     or_(
+                        cast(RensheApplication.id, String).ilike(term),
                         RensheApplicationVersion.realname_snapshot["real_name"]
                         .as_string()
                         .ilike(term),
@@ -156,6 +163,7 @@ class RensheReviewService:
                         contact_phone_masked=self._mask_phone(phone),
                         payment_order_id=order.id if order else None,
                         payment_status=order.status if order else None,
+                        payment_summary=await payment_summary(db, order, application),
                         submitted_at=application.submitted_at,
                         frozen_at=application.frozen_at,
                         created_at=application.created_at,
@@ -238,11 +246,14 @@ class RensheReviewService:
                 .limit(1)
             )
             plan = await db.get(Plan, application.plan_id)
+            requirements_by_version = {version.id: await resolve_requirements(db, plan, version, materials_by_version.get(version.id, [])) for version in versions}
             payload = RensheAdminApplicationDetailResponse(
                 **RensheApplicationResponse.model_validate(application).model_dump(),
                 plan=RensheApplicationPlanSummary.model_validate(plan),
                 versions=[
                     RensheAdminVersionDetailResponse(
+                        project_config_id=version.project_config_id,
+                        review_requirements=requirements_by_version[version.id],
                         id=version.id,
                         version_no=version.version_no,
                         submitted_at=version.submitted_at,
@@ -261,6 +272,7 @@ class RensheReviewService:
                     )
                     for version in versions
                 ],
+                payment_summary=await payment_summary(db, order, application),
                 current_order_id=order.id if order else None,
                 current_order_status=order.status if order else None,
             )
@@ -303,8 +315,8 @@ class RensheReviewService:
                 select(Order)
                 .where(
                     Order.application_id == application_id,
-                    Order.status.in_(("paid", "completed")),
                 )
+                .order_by(Order.id.desc())
                 .with_for_update()
                 .limit(1)
             )
@@ -321,9 +333,10 @@ class RensheReviewService:
                 raise ConflictException("当前报名状态不允许执行该审核")
             if application.current_version_id is None:
                 raise ConflictException("报名缺少当前提交版本")
+            if data.expected_version_id is not None and data.expected_version_id != application.current_version_id:
+                raise ConflictException("报名材料版本已变化，请刷新后重新审核")
 
-            if order is None:
-                raise ConflictException("只有已支付报名可以审核")
+            await require_review_payment(db, order, application)
 
             export_item = None
             if stage == "external":
@@ -337,16 +350,19 @@ class RensheReviewService:
                     raise ConflictException("当前资料版本尚未成功导出，不能登记外审通过")
 
             now = self._now()
-            from app.services.renshe_project import batch_configuration
             from app.services.renshe_graduated import is_self_reported, validate_review
             plan = await db.get(Plan, application.plan_id)
-            if is_self_reported(batch_configuration(plan)):
-                validate_review(data, stage=stage, now=now, version_id=application.current_version_id, config=batch_configuration(plan))
+            version = await db.get(RensheApplicationVersion, application.current_version_id)
+            materials = list(await db.scalars(select(RensheMaterial).where(RensheMaterial.version_id == version.id)))
+            requirements = await resolve_requirements(db, plan, version, materials)
+            validate_review(data, stage=stage, now=now, version_id=version.id, requirements=requirements)
+            config = await version_configuration(db, plan, version)
+            if is_self_reported(config):
                 if stage == "initial" and data.decision == "approved":
                     from app.services.renshe_reporting import validate_snapshot, validate_reporting
                     version = await db.get(RensheApplicationVersion, application.current_version_id)
-                    policy = await validate_snapshot(db, plan, version.form_data)
-                    validate_reporting(version.form_data.get("reporting_info"), policy, config=batch_configuration(plan))
+                    policy = await validate_snapshot(db, plan, version.form_data, config=config)
+                    validate_reporting(version.form_data.get("reporting_info"), policy, config=config)
             application.correction_due_at = data.correction_due_at if data.decision == "rejected" else None
             review = RensheReview(
                 application_id=application.id,
@@ -357,6 +373,7 @@ class RensheReviewService:
                 required_changes=data.required_changes,
                 correction_due_at=data.correction_due_at if data.decision == "rejected" else None,
                 checklist=data.checklist,
+                checklist_snapshot=checklist_snapshot(requirements) if stage == "initial" and data.decision == "approved" else None,
                 reviewer_id=reviewer_id,
                 reviewed_at=now,
                 export_item_id=export_item.id if export_item else None,
@@ -400,6 +417,7 @@ class RensheReviewService:
             raise ValidationException("打回补正只能选择驳回")
         allowed_statuses = {"pending_external_review", "external_approved"}
         async with get_db_ctx() as db:
+            order = await db.scalar(select(Order).where(Order.application_id == application_id).order_by(Order.id.desc()).limit(1).with_for_update())
             application = await db.scalar(
                 select(RensheApplication)
                 .where(RensheApplication.id == application_id)
@@ -409,18 +427,22 @@ class RensheReviewService:
                 raise NotFoundException("人社报名")
             if application.frozen_at is not None:
                 raise ConflictException("退款处理中，不能打回补正")
+            await require_review_payment(db, order, application)
             if application.status not in allowed_statuses:
                 raise ConflictException("当前报名状态不能打回补正")
             if application.current_version_id is None:
                 raise ConflictException("报名缺少当前提交版本")
+            if data.expected_version_id is not None and data.expected_version_id != application.current_version_id:
+                raise ConflictException("报名材料版本已变化，请刷新后重新审核")
 
             from_status = application.status
             now = self._now()
-            from app.services.renshe_project import batch_configuration
-            from app.services.renshe_graduated import is_self_reported, validate_review
+            from app.services.renshe_graduated import validate_review
             plan = await db.get(Plan, application.plan_id)
-            if is_self_reported(batch_configuration(plan)):
-                validate_review(data, stage="initial", now=now, version_id=application.current_version_id, config=batch_configuration(plan))
+            version = await db.get(RensheApplicationVersion, application.current_version_id)
+            materials = list(await db.scalars(select(RensheMaterial).where(RensheMaterial.version_id == version.id)))
+            requirements = await resolve_requirements(db, plan, version, materials)
+            validate_review(data, stage="initial", now=now, version_id=version.id, requirements=requirements)
             application.correction_due_at = data.correction_due_at
             review = RensheReview(
                 application_id=application.id,
@@ -480,6 +502,14 @@ class RensheReviewService:
         results: list[RensheBatchExternalReviewResult] = []
         for target in data.targets:
             try:
+                if data.decision == "approved":
+                    async with get_db_ctx() as db:
+                        order = await db.scalar(select(Order).where(Order.application_id == target.application_id).order_by(Order.id.desc()).limit(1).with_for_update())
+                        application = await db.scalar(select(RensheApplication).where(RensheApplication.id == target.application_id).with_for_update())
+                        await require_review_payment(db, order, application)
+                        if application is not None and application.status == "external_approved" and application.current_version_id == target.version_id:
+                            results.append(RensheBatchExternalReviewResult(application_id=target.application_id, success=True, status="skipped", reason="当前版本已外审通过，本次跳过"))
+                            continue
                 review = await self.review(
                     reviewer_id=reviewer_id,
                     application_id=target.application_id,
@@ -518,6 +548,11 @@ class RensheReviewService:
         data: RensheReviewCorrectionCreate,
     ) -> RensheReviewCorrectionResponse:
         async with get_db_ctx() as db:
+            refs = await db.get(RensheReview, review_id)
+            if refs is None:
+                raise NotFoundException("人社审核记录")
+            order = await db.scalar(select(Order).where(Order.application_id == refs.application_id).order_by(Order.id.desc()).limit(1).with_for_update())
+            await db.scalar(select(RensheApplication).where(RensheApplication.id == refs.application_id).with_for_update())
             review = await db.scalar(
                 select(RensheReview)
                 .where(RensheReview.id == review_id)
@@ -534,12 +569,18 @@ class RensheReviewService:
                 raise NotFoundException("人社报名")
             if application.frozen_at is not None:
                 raise ConflictException("退款处理中，不能更正审核结果")
+            await require_review_payment(db, order, application)
             if application.current_version_id != review.version_id:
                 raise ConflictException("该审核版本已被后续重提替代，不能更正")
             from app.services.renshe_project import batch_configuration
             from app.services.renshe_graduated import is_self_reported
             if is_self_reported(batch_configuration(await db.get(Plan, application.plan_id))):
                 raise ConflictException("本申报路径请使用打回补正和逐项重新初审，以保留完整核验与期限记录")
+
+            if data.to_decision == "approved" and review.stage == "initial":
+                snapshot = review.checklist_snapshot
+                if not snapshot or snapshot.get("version_id") != review.version_id or set(review.checklist or {}) != {item["key"] for item in snapshot.get("checks", [])} or not all(value is True for value in (review.checklist or {}).values()):
+                    raise ConflictException("该记录缺少完整逐项核验快照，请补正后重新初审，不能直接更正为通过")
 
             latest_correction = await db.scalar(
                 select(RensheReviewCorrection)
