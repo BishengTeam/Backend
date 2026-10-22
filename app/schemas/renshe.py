@@ -452,6 +452,7 @@ class RensheRefundDecision(BaseModel):
 
 
 class RensheRefundResponse(BaseModel):
+    payment_channel: str = "unknown"
     id: int
     application_id: int
     order_id: int

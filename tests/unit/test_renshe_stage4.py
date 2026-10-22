@@ -194,8 +194,8 @@ async def test_approval_persists_one_stable_refund_number_before_provider_io(
     refund = _refund()
     order = _order()
     application = _application()
-    first = _Session(scalars=(refund, order, application))
-    second = _Session(scalars=(refund, order, application))
+    first = _Session(scalars=(refund, order, application, refund))
+    second = _Session(scalars=(refund, order, application, refund))
     _install_sessions(monkeypatch, refund_module, (first, second))
     monkeypatch.setattr(RensheRefundService, "_now", staticmethod(lambda: NOW))
     service = RensheRefundService(_wechat())
@@ -419,7 +419,7 @@ async def test_provider_field_mismatch_fails_closed_without_mutation(
     )
     order = _order()
     application = _application()
-    session = _Session(scalars=(refund, order, application))
+    session = _Session(scalars=(refund, order, application, refund))
     _install_sessions(monkeypatch, refund_module, (session,))
     service = RensheRefundService(_wechat())
 
@@ -496,7 +496,7 @@ async def test_refund_worker_isolates_one_item_failure_and_continues(monkeypatch
 @pytest.mark.asyncio
 async def test_worker_automatically_submits_batch_generated_refund(monkeypatch) -> None:
     refund = _refund(status="requested", request_kind="batch_cancel")
-    lookup = _Session(scalars=(refund,))
+    lookup = _Session(scalars=(refund, _order()))
     _install_sessions(monkeypatch, refund_module, (lookup,))
     service = RensheRefundService(_wechat())
     expected = RensheRefundResponse.model_validate(refund)
@@ -516,7 +516,7 @@ async def test_failed_refund_is_automatically_retried_by_reconciliation(monkeypa
         retry_count=1,
     )
     service = RensheRefundService(_wechat())
-    _install_sessions(monkeypatch, refund_module, (_Session(scalars=(refund,)),))
+    _install_sessions(monkeypatch, refund_module, (_Session(scalars=(refund, _order())),))
     prepared = PreparedRensheRefund(
         refund_id=refund.id,
         out_refund_no=refund.out_refund_no,

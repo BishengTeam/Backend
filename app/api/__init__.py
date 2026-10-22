@@ -15,6 +15,7 @@ from app.api.classroom import router as classroom_router
 from app.api.h3c import order_router as h3c_order_router
 from app.api.h3c import router as h3c_router
 from app.api.job import router as job_router
+from app.api.offline_payment import router as offline_payment_router
 from app.api.orders import router as orders_router
 from app.api.nisp import router as nisp_router
 from app.api.plans import router as plans_router
@@ -45,6 +46,7 @@ router.include_router(classroom_router)
 router.include_router(h3c_router)
 router.include_router(h3c_order_router)
 router.include_router(plans_router)
+router.include_router(offline_payment_router)
 router.include_router(orders_router)
 router.include_router(nisp_router)
 router.include_router(payment_router)

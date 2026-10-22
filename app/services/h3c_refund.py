@@ -179,6 +179,7 @@ class H3cRefundService:
             items: list[H3cRefundResponse] = []
             for refund, registration, plan, order, product in rows:
                 response = self._response(refund, hide_error=False)
+                response.payment_channel = order.payment_channel
                 response.out_trade_no = order.out_trade_no
                 response.candidate_name = (
                     registration.candidate_snapshot.get("candidate_name")
@@ -231,6 +232,15 @@ class H3cRefundService:
                 raise ConflictException("H3C 退款、订单和报名关联不一致")
             if refund.amount_cents != order.price:
                 raise ConflictException("退款金额与订单价格不一致")
+            if getattr(order, "payment_channel", "unknown") == "bank_transfer":
+                if order.status not in {"paid", "completed"}:
+                    raise ConflictException("订单不是可退款状态")
+                refund.status = "approved"
+                refund.approved_by_admin_id = admin_id
+                refund.approved_at = datetime.now(timezone.utc)
+                refund.last_error = None
+                await db.commit()
+                return self._response(refund)
             if refund.amount_cents > 0:
                 if order.status not in {"paid", "completed"}:
                     raise ConflictException("H3C 订单不是可退款状态")
@@ -312,6 +322,9 @@ class H3cRefundService:
             refund = await db.get(H3cRefundRequest, refund_id)
             if refund is None:
                 raise NotFoundException("H3C 退款任务")
+            channel_order = await db.get(Order, refund.order_id)
+            if channel_order is not None and getattr(channel_order, "payment_channel", "unknown") == "bank_transfer":
+                return self._response(refund)
             if refund.status == "failed" and not refund.out_refund_no:
                 raise ConflictException("H3C 退款缺少商户退款号")
             out_refund_no = refund.out_refund_no
@@ -327,6 +340,9 @@ class H3cRefundService:
             refund = await db.get(H3cRefundRequest, refund_id)
             if refund is None:
                 raise NotFoundException("H3C 退款任务")
+            channel_order = await db.get(Order, refund.order_id)
+            if channel_order is not None and getattr(channel_order, "payment_channel", "unknown") == "bank_transfer":
+                return self._response(refund)
             if refund.status == "succeeded":
                 return self._response(refund)
             if refund.status not in {"approved", "processing", "failed"}:
@@ -419,6 +435,8 @@ class H3cRefundService:
         order: Order,
         provider_refund: WechatPayRefund,
     ) -> None:
+        if getattr(order, "payment_channel", "unknown") == "bank_transfer":
+            raise ConflictException("银行转账订单不接受微信退款结果")
         if not order.out_trade_no or provider_refund.out_trade_no != order.out_trade_no:
             raise ConflictException("H3C 退款商户订单号不一致")
         if not order.transaction_id or provider_refund.transaction_id != order.transaction_id:

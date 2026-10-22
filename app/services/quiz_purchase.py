@@ -23,6 +23,7 @@ class QuizPurchaseService:
 
     async def purchase(self, user_id: int, library_id: int) -> dict:
         """购买题库：创建 pending_payment 订单"""
+        raise BusinessException("题库现金购买已关闭，请使用积分兑换")
         async with get_db_ctx() as db:
             async with db.begin():
                 library = await db.get(QuizLibrary, library_id)

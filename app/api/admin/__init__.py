@@ -16,6 +16,7 @@ from app.api.admin.courses import router as courses_router
 from app.api.admin.classrooms import router as classrooms_router
 from app.api.admin.course_uploads import router as course_uploads_router
 from app.api.admin.documents import router as documents_router
+from app.api.offline_payment import admin_router as offline_payment_router
 from app.api.admin.orders import router as orders_router
 from app.api.admin.points_mall import router as points_mall_router
 from app.api.admin.popups import router as popups_router
@@ -45,6 +46,7 @@ router.include_router(banners_router)
 router.include_router(cert_products_router)
 router.include_router(consultation_groups_router)
 router.include_router(users_router)
+router.include_router(offline_payment_router)
 router.include_router(orders_router)
 router.include_router(points_mall_router)
 router.include_router(nisp_router)

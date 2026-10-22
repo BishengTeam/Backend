@@ -51,7 +51,7 @@ def batch(**kwargs):
 def plan(**kwargs):
     fields = dict(id=2, product_type='NISP-1', status='published', capacity=10,
                   apply_start=NOW-timedelta(days=1),
-                  apply_end=NOW+timedelta(days=1), exam_date=None, exam_location=None)
+                  apply_end=NOW+timedelta(days=1), exam_date=None, exam_location=None, contact_name=None, contact_phone=None)
     return NS(**(fields | kwargs))
 
 
@@ -110,6 +110,10 @@ async def test_new_order_has_plan_and_database_id_registration_number(monkeypatc
     db.get = AsyncMock(return_value=NS(is_active=True))
     monkeypatch.setattr('app.services.agreement_template.ensure_accepted', AsyncMock())
     service = NispRegistrationService()
+    from app.models.offline_payment import OfflinePaymentSettings
+    from app.schemas.offline_payment import SettingsInput
+    config = OfflinePaymentSettings(id=1, version=1, data=SettingsInput(account_name='测试账户', bank_name='测试银行', account_number='6222000000000000', contact_name='测试联系', contact_phone='13800000000').model_dump(exclude={'version'}))
+    db.get = AsyncMock(side_effect=lambda model, id: config if model is OfflinePaymentSettings else plan() if model.__name__ == 'Plan' else NS(is_active=True))
     service._bind_material = AsyncMock()
     service._response = AsyncMock(return_value='ok')
 

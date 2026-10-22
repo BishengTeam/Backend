@@ -132,6 +132,8 @@ class OrderService:
                 )
                 db.add(order)
                 await db.flush()
+                from app.services.offline_payment import OfflinePaymentService
+                await OfflinePaymentService.initialize(db, order)
                 if inventory_id is not None:
                     add_inventory_record(
                         db,
@@ -140,6 +142,14 @@ class OrderService:
                         action=INVENTORY_LOCK_ACTION,
                         reason="order_created",
                     )
+                if order.price == 0:
+                    from app.domain.order.src.index import confirm_inventory_sale
+                    apply_order_status_transition(order, "paid")
+                    order.paid_at = datetime.now(timezone.utc)
+                    order.expires_at = None
+                    await confirm_inventory_sale(db, order, reason="zero_price_order")
+                    await self.fulfillment.on_paid(db, order)
+                await db.flush()
                 await db.refresh(order)
             return OrderResponse.model_validate(order)
 
@@ -183,6 +193,8 @@ class OrderService:
                 ).scalar_one_or_none()
                 if order is None:
                     raise NotFoundException("订单")
+                from app.services.offline_payment import assert_cancellable
+                assert_cancellable(order)
                 if order.status != "pending":
                     raise ConflictException("仅待支付订单可以取消")
 
@@ -205,7 +217,7 @@ class OrderService:
             db,
             order_id=order.id,
             user_id=order.user_id,
-            coupon_code=order.coupon_code,
+            coupon_code=getattr(order, "coupon_code", None),
         )
 
     async def apply_coupon_to_order(
@@ -232,8 +244,12 @@ class OrderService:
                 ).scalar_one_or_none()
                 if order is None:
                     raise NotFoundException("订单")
+                from app.services.offline_payment import assert_cancellable
+                assert_cancellable(order)
                 if order.status != "pending":
                     raise BusinessException("只能对待支付订单使用优惠券")
+                if order.payment_channel == "bank_transfer" and order.expires_at and order.expires_at <= datetime.now(timezone.utc):
+                    raise BusinessException("订单已过期，请重新报名")
 
                 # Remove coupon: restore original price
                 if not coupon_code:

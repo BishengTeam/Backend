@@ -52,6 +52,8 @@ class PaymentRefundService:
         cls, db: AsyncSession, order: Order
     ) -> PaymentRefundTask | None:
         """Create an idempotent refund task inside the payment transaction."""
+        if getattr(order, "payment_channel", "unknown") == "bank_transfer":
+            raise ConflictException("银行转账订单不能创建微信退款任务")
         if order.status != "closed" or order.price <= 0:
             return None
         if not order.out_trade_no or not order.transaction_id:

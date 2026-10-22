@@ -209,6 +209,11 @@ class RensheBatchService:
                 application.close_reason = "batch_cancelled"
                 continue
             if order.status == "pending":
+                from app.services.offline_payment import protected_payment
+                if protected_payment(order):
+                    order.offline_status = "exception"
+                    order.expires_at = None
+                    continue
                 apply_order_status_transition(order, "closed")
                 order.closed_at = now
                 order.close_reason = "batch_cancelled"

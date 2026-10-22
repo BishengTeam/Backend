@@ -13,6 +13,8 @@ from sqlalchemy import CheckConstraint, MetaData, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.adapter.database import Base
+from app.models.offline_payment import OfflinePaymentSettings
+from app.schemas.offline_payment import SettingsInput
 from app.domain.order.src.index import Order
 from app.domain.plan.src.index import Plan
 from app.domain.renshe.src.index import (
@@ -56,7 +58,7 @@ async def isolated(monkeypatch, tmp_path):
         "order",
         "cert_consultation_group",
     }
-    names.update(name for name in Base.metadata.tables if name.startswith("renshe_"))
+    names.update(name for name in Base.metadata.tables if name.startswith(("renshe_", "offline_")))
     metadata = MetaData()
     for table in Base.metadata.tables.values():
         table.to_metadata(metadata)
@@ -118,6 +120,10 @@ async def isolated(monkeypatch, tmp_path):
     template_dir = Path(__file__).parents[2] / "docs" / "renshe"
     monkeypatch.setattr(settings, "RENSHE_TEMPLATE_DIR", str(template_dir))
     async with context() as db:
+        db.add(OfflinePaymentSettings(id=1, version=1, data=SettingsInput(
+            account_name="测试收款人", bank_name="测试银行", account_number="6222000000000000",
+            contact_name="测试管理员", contact_phone="13800000000"
+        ).model_dump(exclude={"version"})))
         db.add(
             AdminUser(
                 id=1,
@@ -237,6 +243,8 @@ async def enroll(env, batch):
     async with env.db() as db:
         order = await db.get(Order, submission.order_id)
         assert order.product_type == batch.product_type
+        # This fixture exercises historical provider settlement; offline settlement has PostgreSQL coverage.
+        order.payment_channel = "wechat"
         order.status, order.transaction_id, order.paid_at = (
             "paid",
             f"transaction-{order.id}",

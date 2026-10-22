@@ -12,6 +12,7 @@ from sqlalchemy import and_, or_, select
 
 from app.adapter.database import get_db_ctx
 from app.domain.renshe.src.index import RensheRefundRequest
+from app.domain.order.src.index import Order
 from app.port.config import settings
 from app.services.renshe_refund import RensheRefundService, SYSTEM_REFUND_KINDS
 from app.services.refund_recovery import refund_retry_is_due
@@ -58,7 +59,9 @@ class RensheRefundReconciliationService:
         query_cutoff = now - timedelta(
             seconds=settings.WECHAT_PAY_REFUND_RECONCILE_AFTER_SECONDS
         )
-        return or_(
+        return and_(
+            RensheRefundRequest.order_id.in_(select(Order.id).where(Order.payment_channel.in_(("wechat", "unknown")))),
+            or_(
             and_(
                 RensheRefundRequest.status == "requested",
                 RensheRefundRequest.request_kind.in_(SYSTEM_REFUND_KINDS),
@@ -72,6 +75,7 @@ class RensheRefundReconciliationService:
                 RensheRefundRequest.status == "failed",
                 RensheRefundRequest.out_refund_no.is_not(None),
                 RensheRefundRequest.updated_at <= query_cutoff,
+            ),
             ),
         )
 

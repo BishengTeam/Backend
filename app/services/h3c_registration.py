@@ -322,6 +322,8 @@ class H3cRegistrationService:
                 )
                 db.add(order)
                 await db.flush()
+                from app.services.offline_payment import OfflinePaymentService
+                await OfflinePaymentService.initialize(db, order)
 
                 registration = H3cRegistration(
                     batch_id=batch.id,
@@ -580,6 +582,8 @@ class H3cRegistrationService:
                     raise ConflictException("仅待支付报名可以取消")
                 if order is None or order.status != "pending":
                     raise ConflictException("订单状态不允许取消")
+                from app.services.offline_payment import assert_cancellable
+                assert_cancellable(order)
                 apply_order_status_transition(order, "closed")
                 order.closed_at = _now()
                 order.close_reason = "user_cancelled"
@@ -1002,6 +1006,8 @@ class H3cRegistrationService:
                     raise ConflictException("当前 H3C 报名状态不能关闭")
                 now = _now()
                 if order.status == "pending":
+                    from app.services.offline_payment import assert_cancellable
+                    assert_cancellable(order)
                     apply_order_status_transition(order, "closed")
                     order.closed_at = now
                     order.close_reason = "admin_closed"

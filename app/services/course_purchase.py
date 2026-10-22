@@ -119,6 +119,7 @@ class CoursePurchaseService:
                     await CourseEntitlementService.grant_for_enrollment(db, enrollment, now=self._now())
                     return self._response(enrollment)
 
+                raise BusinessException("课程现金购买已关闭，请使用积分兑换")
                 expires_at = self._now() + timedelta(
                     minutes=ORDER_PAYMENT_EXPIRE_MINUTES
                 )

@@ -2,7 +2,7 @@ from datetime import date as calendar_date
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, or_
 
 from app.adapter.database import get_db_ctx
 from app.port.config import settings
@@ -58,6 +58,8 @@ class AdminOrderService:
         before the provider has actually returned the money.
         """
 
+        if getattr(order, "payment_channel", "unknown") == "bank_transfer":
+            raise BusinessException("银行转账订单须登记线下退款，不得调用微信退款")
         if not order.transaction_id or not order.out_trade_no:
             raise BusinessException("订单缺少微信支付交易信息，无法退款")
         out_refund_no = f"RF{order.id}"
@@ -111,6 +113,17 @@ class AdminOrderService:
         async with get_db_ctx() as db:
             base = select(Order)
             if filters:
+                from app.models.offline_payment import OfflineBankEntry
+                if filters.payment_channel:
+                    base = base.where(Order.payment_channel == filters.payment_channel)
+                if filters.offline_status:
+                    base = base.where(Order.offline_status == filters.offline_status)
+                if filters.plan_id:
+                    base = base.where(Order.plan_id == filters.plan_id)
+                if filters.keyword:
+                    pattern = f"%{filters.keyword.strip()}%"
+                    base = base.where(or_(Order.out_trade_no.ilike(pattern), Order.candidate_name.ilike(pattern),
+                        Order.candidate_phone.ilike(pattern), Order.id.in_(select(OfflineBankEntry.order_id).where(OfflineBankEntry.bank_reference.ilike(pattern)))))
                 if filters.status:
                     base = base.where(Order.status == filters.status)
                 if filters.product_type:
@@ -244,11 +257,14 @@ class AdminOrderService:
             )
             result = await db.execute(stmt)
             orders = result.scalars().all()
-            order_total = sum(o.price for o in orders if o.status != "refunded")
+            order_total = sum(o.price for o in orders if o.status in {"paid", "completed", "refunded"})
             refund_total = sum(o.price for o in orders if o.status == "refunded")
             net_income = order_total - refund_total
             order_count = len(orders)
             return {
+                "bank_transfer_total": sum(o.price for o in orders if getattr(o, "payment_channel", "unknown") == "bank_transfer" and o.status in {"paid", "completed"}),
+                "wechat_total": sum(o.price for o in orders if getattr(o, "payment_channel", "unknown") == "wechat" and o.status in {"paid", "completed"}),
+                "date": target_date.isoformat(),
                 "order_total": order_total,
                 "refund_total": refund_total,
                 "net_income": net_income,
@@ -267,6 +283,17 @@ class AdminOrderService:
         async with get_db_ctx() as db:
             base = select(Order)
             if filters:
+                from app.models.offline_payment import OfflineBankEntry
+                if filters.payment_channel:
+                    base = base.where(Order.payment_channel == filters.payment_channel)
+                if filters.offline_status:
+                    base = base.where(Order.offline_status == filters.offline_status)
+                if filters.plan_id:
+                    base = base.where(Order.plan_id == filters.plan_id)
+                if filters.keyword:
+                    pattern = f"%{filters.keyword.strip()}%"
+                    base = base.where(or_(Order.out_trade_no.ilike(pattern), Order.candidate_name.ilike(pattern),
+                        Order.candidate_phone.ilike(pattern), Order.id.in_(select(OfflineBankEntry.order_id).where(OfflineBankEntry.bank_reference.ilike(pattern)))))
                 if filters.status:
                     base = base.where(Order.status == filters.status)
                 if filters.product_type:

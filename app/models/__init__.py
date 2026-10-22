@@ -1,3 +1,5 @@
+from app.models.offline_payment import (OfflinePaymentSettings, OfflinePayment, OfflinePaymentMaterial,
+    OfflinePaymentSubmission, OfflineBankEntry, OfflinePaymentAudit)
 from app.domain.content.src.index import (
     Activity, ActivityRegistration, ActivityReminder,
     Agreement, Ticket, Zone,

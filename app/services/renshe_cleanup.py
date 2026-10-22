@@ -146,6 +146,9 @@ class RensheCleanupService:
                 .where(
                     RensheCleanupRun.status == "paused",
                     ~active_refund_exists,
+                    ~exists(select(Order.id).where(Order.plan_id == RensheCleanupRun.plan_id,
+                        Order.payment_channel == "bank_transfer",
+                        Order.offline_status.in_(("under_review", "returned", "exception")))),
                 )
                 .order_by(RensheCleanupRun.id)
                 .with_for_update(skip_locked=True)
@@ -560,21 +563,14 @@ class RensheCleanupService:
 
     @staticmethod
     async def _active_refund_count(db, plan_id: int) -> int:
-        return (
-            await db.scalar(
-                select(func.count())
-                .select_from(RensheRefundRequest)
-                .join(
-                    RensheApplication,
-                    RensheApplication.id == RensheRefundRequest.application_id,
-                )
-                .where(
-                    RensheApplication.plan_id == plan_id,
-                    RensheRefundRequest.status.in_(ACTIVE_REFUND_STATUSES),
-                )
-            )
-            or 0
-        )
+        refunds = select(func.count()).select_from(RensheRefundRequest).join(
+            RensheApplication, RensheApplication.id == RensheRefundRequest.application_id
+        ).where(RensheApplication.plan_id == plan_id,
+            RensheRefundRequest.status.in_(ACTIVE_REFUND_STATUSES)).scalar_subquery()
+        funds = select(func.count()).select_from(Order).where(Order.plan_id == plan_id,
+            Order.payment_channel == "bank_transfer",
+            Order.offline_status.in_(("under_review", "returned", "exception"))).scalar_subquery()
+        return await db.scalar(select(refunds + funds)) or 0
 
     @staticmethod
     async def _active_export_count(db, plan_id: int) -> int:

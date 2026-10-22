@@ -691,7 +691,7 @@ def _payment_service_with_store(monkeypatch, store):
 
 
 @pytest.mark.asyncio
-async def test_prepay_retry_reuses_existing_business_order(monkeypatch) -> None:
+async def test_prepay_rejects_retries_without_contacting_wechat(monkeypatch) -> None:
     order = _order(out_trade_no="stable-order-1001")
     store = _SharedOrderStore(order)
 
@@ -714,15 +714,12 @@ async def test_prepay_retry_reuses_existing_business_order(monkeypatch) -> None:
     service = PaymentService()
     service.wechat_pay = SimpleNamespace(create_jsapi_prepay=remote_prepay)
 
-    first = await service.create_prepay(51, PaymentPrepayRequest(order_id=1001))
-    second = await service.create_prepay(51, PaymentPrepayRequest(order_id=1001))
-
-    assert first.order_id == second.order_id == 1001
-    assert first.out_trade_no == second.out_trade_no == "stable-order-1001"
-    assert remote_prepay.await_count == 2
-    assert {
-        call.kwargs["out_trade_no"] for call in remote_prepay.await_args_list
-    } == {"stable-order-1001"}
+    for _ in range(2):
+        with pytest.raises(BusinessException, match="微信支付入口已停用"):
+            await service.create_prepay(51, PaymentPrepayRequest(order_id=1001))
+    assert order.out_trade_no == "stable-order-1001"
+    assert order.status == "pending"
+    remote_prepay.assert_not_awaited()
 
 
 @pytest.mark.asyncio

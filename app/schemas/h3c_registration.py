@@ -437,6 +437,7 @@ class H3cRefundConfirmRequest(BaseModel):
 
 
 class H3cRefundResponse(BaseModel):
+    payment_channel: str = "unknown"
     id: int
     registration_id: int
     order_id: int

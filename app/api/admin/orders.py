@@ -41,13 +41,17 @@ async def list_orders(
     ),
     product_type: str | None = Query(None, description="按商品类型筛选"),
     phone: str | None = Query(None, description="按考生手机号筛选"),
+    payment_channel: str | None = Query(None),
+    offline_status: str | None = Query(None),
+    keyword: str | None = Query(None, max_length=128),
+    plan_id: int | None = Query(None),
     start_time: datetime | None = Query(None, description="创建时间起，ISO 8601"),
     end_time: datetime | None = Query(None, description="创建时间止，ISO 8601"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     _admin=Depends(require_permission("order:list")),
 ) -> APIResponse[PaginatedData[OrderResponse]]:
-    filters = OrderFilter(status=status, product_type=product_type, phone=phone) if (status or product_type or phone) else None
+    filters = OrderFilter(status=status, product_type=product_type, phone=phone, payment_channel=payment_channel, offline_status=offline_status, keyword=keyword, plan_id=plan_id)
     result = await AdminOrderService().list_orders(filters, start_time, end_time, page, page_size)
     return success(data=result)
 
@@ -76,11 +80,15 @@ async def export_orders(
     status: OrderStatus | None = Query(None, description="按状态筛选"),
     product_type: str | None = Query(None, description="按商品类型筛选"),
     phone: str | None = Query(None, description="按考生手机号筛选"),
+    payment_channel: str | None = Query(None),
+    offline_status: str | None = Query(None),
+    keyword: str | None = Query(None, max_length=128),
+    plan_id: int | None = Query(None),
     start_time: datetime | None = Query(None, description="创建时间起，ISO 8601"),
     end_time: datetime | None = Query(None, description="创建时间止，ISO 8601"),
     _admin=Depends(require_permission("order:list")),
 ):
-    filters = OrderFilter(status=status, product_type=product_type, phone=phone) if (status or product_type or phone) else None
+    filters = OrderFilter(status=status, product_type=product_type, phone=phone, payment_channel=payment_channel, offline_status=offline_status, keyword=keyword, plan_id=plan_id)
     csv_content = await AdminOrderService().export_orders(filters, start_time, end_time)
     return Response(content=csv_content, media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=orders.csv"})

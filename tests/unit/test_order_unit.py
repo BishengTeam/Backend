@@ -332,7 +332,7 @@ class OrderSystemTests(unittest.TestCase):
         self.assertIn('Order.status == "pending"', source)
         self.assertIn("Order.expires_at.is_not(None)", source)
         self.assertIn("Order.expires_at <= closed_at", source)
-        self.assertIn("with_for_update(skip_locked=True)", source)
+        self.assertIn("with_for_update(of=Order, skip_locked=True)", source)
         self.assertIn("from app.port.exceptions import BusinessException", source)
         self.assertIn('raise BusinessException("limit must be greater than 0")', source)
         self.assertIn('raise BusinessException("close_reason must be 1-128 characters")', source)
@@ -356,26 +356,8 @@ class OrderSystemTests(unittest.TestCase):
         self.assertIn('order.close_reason = "expired"', source)
         self.assertIn("await self._release_inventory_lock(db, order)", source)
         self.assertIn("release_inventory_lock", source)
-        self.assertLess(
-            source.index("await self._ensure_order_payable_for_prepay(db, order, now)"),
-            source.index("await self.wechat_pay.create_jsapi_prepay("),
-        )
-        self.assertLess(
-            source.index("await self.wechat_pay.create_jsapi_prepay("),
-            source.rindex("await self._ensure_order_payable_for_prepay(db, order, now)"),
-        )
-        self.assertLess(
-            source.rindex("await self._ensure_order_payable_for_prepay(db, order, now)"),
-            source.index("return PaymentPrepayResponse("),
-        )
-        self.assertEqual(
-            source.count("await self._ensure_order_payable_for_prepay(db, order, now)"),
-            2,
-        )
-        self.assertLess(
-            source.index("if self._is_expiring_soon(order, now):"),
-            source.index("await self.wechat_pay.create_jsapi_prepay("),
-        )
+        self.assertIn("微信支付入口已停用", source)
+        self.assertNotIn("await self.wechat_pay.create_jsapi_prepay(", source)
 
     def test_order_model_declares_unique_transaction_id_index(self):
         source = (REPO_ROOT / "app/domain/order/src/model/order.py").read_text(encoding="utf-8")

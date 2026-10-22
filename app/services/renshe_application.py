@@ -266,6 +266,8 @@ class RensheApplicationService:
                     )
                     db.add(order)
                     await db.flush()
+                    from app.services.offline_payment import OfflinePaymentService
+                    await OfflinePaymentService.initialize(db, order)
                     payment_required = True
 
                 db.add(
@@ -650,6 +652,8 @@ class RensheApplicationService:
             if order is None:
                 raise ConflictException("待支付订单不存在")
             now = self._now()
+            from app.services.offline_payment import assert_cancellable
+            assert_cancellable(order)
             apply_order_status_transition(order, "closed")
             order.closed_at = now
             order.close_reason = "user_cancelled"

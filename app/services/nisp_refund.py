@@ -156,6 +156,7 @@ class NispRefundService:
             items: list[NispRefundResponse] = []
             for refund, registration, plan, order, product in rows:
                 response = self._response(refund)
+                response.payment_channel = order.payment_channel
                 response.out_trade_no = order.out_trade_no
                 response.candidate_name = (
                     registration.candidate_snapshot.get("name")
@@ -211,6 +212,15 @@ class NispRefundService:
             if refund.amount_cents != order.price:
                 raise ConflictException("退款金额与订单价格不一致")
 
+            if getattr(order, "payment_channel", "unknown") == "bank_transfer":
+                if order.status not in {"paid", "completed"}:
+                    raise ConflictException("订单不是可退款状态")
+                refund.status = "approved"
+                refund.approved_by_admin_id = admin_id
+                refund.approved_at = datetime.now(timezone.utc)
+                refund.last_error = None
+                await db.commit()
+                return self._response(refund)
             if refund.amount_cents > 0:
                 if order.status not in {"paid", "completed"}:
                     raise ConflictException("NISP 订单不是可退款状态")
@@ -311,6 +321,8 @@ class NispRefundService:
             if refund.status not in {"approved", "processing", "failed"} or not refund.out_refund_no:
                 return self._response(refund)
             order = await db.get(Order, refund.order_id)
+            if order is not None and getattr(order, "payment_channel", "unknown") == "bank_transfer":
+                return self._response(refund)
             expected_out_trade_no = order.out_trade_no if order else None
             expected_amount_total = order.price if order else None
             expected_amount_refund = refund.amount_cents
@@ -393,6 +405,8 @@ class NispRefundService:
                 db, refund_id
             )
 
+            if order is not None and getattr(order, "payment_channel", "unknown") == "bank_transfer":
+                raise ConflictException("银行转账订单不接受微信退款结果")
             if refund.status == "succeeded":
                 return self._response(refund)
 

@@ -41,7 +41,6 @@ from app.schemas.payment import (
 )
 from app.services.order_fulfillment import OrderFulfillmentService
 from app.services.payment_refund import PaymentRefundService
-from app.utils.payment import generate_out_trade_no
 
 logger = logging.getLogger(__name__)
 
@@ -147,58 +146,7 @@ class PaymentService:
                 raise NotFoundException("订单")
             now = self._now()
             await self._ensure_order_payable_for_prepay(db, order, now)
-            user = await db.get(User, user_id)
-            if user is None or not user.is_active:
-                raise NotFoundException("用户")
-            if not user.openid:
-                raise BusinessException("当前账号缺少微信身份，无法支付")
-            # Retrying prepay must keep the same merchant order number.  The
-            # WeChat V3 endpoint therefore remains idempotent even if the
-            # caller did not receive the first response.
-            if not order.out_trade_no:
-                order.out_trade_no = generate_out_trade_no("ORD")
-            prepay_order_id = order.id
-            prepay_out_trade_no = order.out_trade_no
-            prepay_description = f"{order.product_type} 订单服务费"
-            prepay_amount_total = order.price
-            prepay_expiration = self._normalized_expires_at(order)
-            prepay_attach = f"order:{order.id}"
-            user_openid = user.openid
-            await db.commit()
-
-        prepay = await self.wechat_pay.create_jsapi_prepay(
-            openid=user_openid,
-            out_trade_no=prepay_out_trade_no,
-            description=prepay_description,
-            amount_total=prepay_amount_total,
-            attach=prepay_attach,
-            time_expire=prepay_expiration,
-        )
-
-        async with get_db_ctx() as db:
-            order = (
-                await db.execute(
-                    select(Order)
-                    .where(Order.id == prepay_order_id, Order.user_id == user_id)
-                    .with_for_update()
-                )
-            ).scalar_one_or_none()
-            if order is None:
-                raise NotFoundException("订单")
-            now = self._now()
-            await self._ensure_order_payable_for_prepay(db, order, now)
-            if (
-                order.out_trade_no != prepay_out_trade_no
-                or order.price != prepay_amount_total
-            ):
-                raise ConflictException("预下单期间订单关键信息已变化")
-            await db.commit()
-
-        return PaymentPrepayResponse(
-            order_id=prepay_order_id,
-            out_trade_no=prepay_out_trade_no,
-            **prepay,
-        )
+            raise BusinessException("微信支付入口已停用，请使用银行转账；历史订单请联系管理员核实")
 
     async def handle_callback_raw(
         self, *, raw_body: bytes, headers: dict[str, str]
@@ -227,6 +175,8 @@ class PaymentService:
             ).scalar_one_or_none()
             if order is None:
                 raise NotFoundException("订单")
+            if getattr(order, "payment_channel", "unknown") in {"bank_transfer", "free"}:
+                raise BusinessException("该订单不使用微信查单，请刷新线下付款进度")
             if not order.out_trade_no:
                 raise BusinessException("订单尚未生成商户订单号")
             out_trade_no = order.out_trade_no
@@ -261,7 +211,7 @@ class PaymentService:
 
         async with get_db_ctx() as db:
             order = await db.get(Order, order_id)
-            if order is None or order.status != "pending" or not order.out_trade_no:
+            if order is None or getattr(order, "payment_channel", "unknown") in {"bank_transfer", "free"} or order.status != "pending" or not order.out_trade_no:
                 return None
             out_trade_no = order.out_trade_no
 
@@ -314,6 +264,8 @@ class PaymentService:
             raise BusinessException("微信支付 AppID 与订单配置不一致")
         if transaction.mchid != self.wechat_pay.mch_id:
             raise BusinessException("微信支付商户号与订单配置不一致")
+        if getattr(order, "payment_channel", "unknown") in {"bank_transfer", "free"}:
+            raise ConflictException("该订单不允许接收微信支付结果")
         if transaction.amount_total != order.price:
             raise BusinessException("支付金额与订单金额不一致")
         if transaction.currency != WECHAT_PAY_CURRENCY:
@@ -379,6 +331,8 @@ class PaymentService:
             order = await self._lock_order_for_transaction(db, filters)
             if order is None:
                 raise NotFoundException("订单")
+            if getattr(order, "payment_channel", "unknown") in {"bank_transfer", "free"}:
+                raise ConflictException("该订单不允许接收微信支付结果")
             if verify_provider_fields:
                 await self._validate_provider_transaction(db, order, transaction)
 
@@ -402,6 +356,9 @@ class PaymentService:
                 if duplicate_order is not None:
                     raise ConflictException("微信交易号已绑定其他订单")
 
+                if getattr(order, "payment_channel", "unknown") == "unknown":
+                    order.payment_channel = "wechat"
+                    metadata_changed = True
                 expires_at = self._normalized_expires_at(order)
                 paid_after_expiration = bool(
                     expires_at is not None

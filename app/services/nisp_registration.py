@@ -201,6 +201,8 @@ class NispRegistrationService:
             )
             db.add(order)
             await db.flush()
+            from app.services.offline_payment import OfflinePaymentService
+            await OfflinePaymentService.initialize(db, order)
 
             # Build snapshot (matching Excel export columns)
             snapshot = self._build_snapshot(data, batch, plan, identity)
@@ -353,6 +355,8 @@ class NispRegistrationService:
                     order.original_price = None
                     order.discount_amount = None
                     order.coupon_code = None
+                from app.services.offline_payment import assert_cancellable
+                assert_cancellable(order)
                 apply_order_status_transition(order, "closed")
                 order.closed_at = _now()
                 order.close_reason = "user_cancelled"

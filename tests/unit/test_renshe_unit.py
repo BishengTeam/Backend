@@ -356,7 +356,8 @@ def test_super_admin_guards_refund_decision_review_correction_and_batch_finalize
 def test_v3_payment_paths_serve_renshe_orders_without_legacy_branch():
     service_source = (ROOT / "app/services/payment.py").read_text(encoding="utf-8")
     client_source = (ROOT / "app/integrations/wechat_pay.py").read_text(encoding="utf-8")
-    assert "create_jsapi_prepay" in service_source
+    assert "微信支付入口已停用" in service_source
+    assert "create_jsapi_prepay" not in service_source
     assert "parse_payment_notification" in service_source
     assert "人社报名必须使用微信支付 API V3" not in service_source
     assert "拒绝使用微信支付 V2 回调处理人社订单" not in service_source

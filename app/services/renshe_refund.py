@@ -124,6 +124,8 @@ class RensheRefundService:
                 raise ConflictException("复审已通过，仅可按例外原因申请退款")
             if order is None:
                 raise ConflictException("报名没有可退款的已支付订单")
+            if order.price <= 0:
+                raise ConflictException("零元报名没有可退金额，请联系管理员处理报名关闭")
             plan = await db.get(Plan, application.plan_id)
             if plan is None or order.plan_id != plan.id or order.product_type != plan.product_type:
                 raise ConflictException("退款订单与报名项目或批次归属不一致")
@@ -316,6 +318,7 @@ class RensheRefundService:
             items: list[RensheRefundResponse] = []
             for refund, application, plan, order, product, version in rows:
                 response = RensheRefundResponse.model_validate(refund)
+                response.payment_channel = order.payment_channel
                 response.out_trade_no = order.out_trade_no
                 response.candidate_name = (
                     version.realname_snapshot.get("real_name")
@@ -349,7 +352,6 @@ class RensheRefundService:
                 reason=data.reason or "",
             )
 
-        self.wechat_pay.ensure_refund_configured()
         prepared = await self._prepare_submission(
             refund_id=refund_id,
             actor_type="admin",
@@ -363,7 +365,6 @@ class RensheRefundService:
     async def submit_system_refund(self, refund_id: int) -> RensheRefundResponse:
         """Submit an automatic cancel/finalize refund without human approval."""
 
-        self.wechat_pay.ensure_refund_configured()
         prepared = await self._prepare_submission(
             refund_id=refund_id,
             actor_type="system",
@@ -381,13 +382,15 @@ class RensheRefundService:
             refund = await db.get(RensheRefundRequest, refund_id)
             if refund is None:
                 raise NotFoundException("退款申请")
+            channel_order = await db.get(Order, refund.order_id)
+            if channel_order is not None and getattr(channel_order, "payment_channel", "unknown") == "bank_transfer":
+                return RensheRefundResponse.model_validate(refund)
             status = refund.status
             request_kind = refund.request_kind
             response = RensheRefundResponse.model_validate(refund)
         if status == "requested" and request_kind in SYSTEM_REFUND_KINDS:
             return await self.submit_system_refund(refund_id)
         if status == "approved":
-            self.wechat_pay.ensure_refund_configured()
             prepared = await self._prepare_submission(
                 refund_id=refund_id,
                 actor_type="system",
@@ -398,7 +401,6 @@ class RensheRefundService:
                 return prepared
             return await self._submit_prepared(prepared)
         if status == "failed":
-            self.wechat_pay.ensure_refund_configured()
             prepared = await self._prepare_submission(
                 refund_id=refund_id,
                 actor_type="system",
@@ -415,11 +417,13 @@ class RensheRefundService:
     async def sync_refund(self, refund_id: int) -> RensheRefundResponse:
         """Query one stable refund number and apply the signed provider result."""
 
-        self.wechat_pay.ensure_refund_configured()
         async with get_db_ctx() as db:
             refund = await db.get(RensheRefundRequest, refund_id)
             if refund is None:
                 raise NotFoundException("退款申请")
+            channel_order = await db.get(Order, refund.order_id)
+            if channel_order is not None and getattr(channel_order, "payment_channel", "unknown") == "bank_transfer":
+                return RensheRefundResponse.model_validate(refund)
             if refund.status == "succeeded":
                 return RensheRefundResponse.model_validate(refund)
             if refund.status != "processing" or not refund.out_refund_no:
@@ -469,11 +473,7 @@ class RensheRefundService:
         """Persist approval and the immutable merchant number before I/O."""
 
         async with get_db_ctx() as db:
-            refund = await db.scalar(
-                select(RensheRefundRequest)
-                .where(RensheRefundRequest.id == refund_id)
-                .with_for_update()
-            )
+            refund = await db.get(RensheRefundRequest, refund_id)
             if refund is None:
                 raise NotFoundException("退款申请")
             if system_only and refund.request_kind not in SYSTEM_REFUND_KINDS:
@@ -493,6 +493,10 @@ class RensheRefundService:
                 .where(RensheApplication.id == refund.application_id)
                 .with_for_update()
             )
+            refund = await db.scalar(select(RensheRefundRequest).where(
+                RensheRefundRequest.id == refund_id).with_for_update().execution_options(populate_existing=True))
+            if refund.status not in SUBMITTABLE_REFUND_STATUSES:
+                return RensheRefundResponse.model_validate(refund)
             if order is None:
                 raise NotFoundException("退款关联订单")
             if application is None:
@@ -505,6 +509,15 @@ class RensheRefundService:
                 raise ConflictException("退款、订单和报名关联不一致")
             if order.status not in {"paid", "completed"}:
                 raise ConflictException("订单不是可退款的已支付状态")
+            if getattr(order, "payment_channel", "unknown") == "bank_transfer":
+                if refund.amount_cents != order.price:
+                    raise ConflictException("退款金额与订单不一致")
+                refund.status = "approved"
+                refund.approved_by_admin_id = actor_id
+                refund.decided_at = self._now()
+                refund.last_error = None
+                await db.commit()
+                return RensheRefundResponse.model_validate(refund)
             if not order.out_trade_no or not order.transaction_id or not order.paid_at:
                 raise ConflictException("订单缺少微信支付成功凭证")
             if order.price <= 0 or refund.amount_cents != order.price:
@@ -792,6 +805,8 @@ class RensheRefundService:
         order: Order,
         provider_refund: WechatPayRefund,
     ) -> None:
+        if getattr(order, "payment_channel", "unknown") == "bank_transfer":
+            raise ConflictException("银行转账订单不接受微信退款结果")
         if refund.order_id != order.id or refund.application_id != order.application_id:
             raise ConflictException("退款、订单和报名关联不一致")
         if not order.out_trade_no or provider_refund.out_trade_no != order.out_trade_no:
@@ -883,18 +898,8 @@ class RensheRefundService:
         plan_id: int,
         resolved_at: datetime,
     ) -> int:
-        active_count = await db.scalar(
-            select(func.count())
-            .select_from(RensheRefundRequest)
-            .join(
-                RensheApplication,
-                RensheApplication.id == RensheRefundRequest.application_id,
-            )
-            .where(
-                RensheApplication.plan_id == plan_id,
-                RensheRefundRequest.status.in_(ACTIVE_REFUND_STATUSES),
-            )
-        )
+        from app.services.renshe_cleanup import RensheCleanupService
+        active_count = await RensheCleanupService._active_refund_count(db, plan_id)
         if active_count:
             return 0
         runs = (

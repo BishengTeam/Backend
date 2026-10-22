@@ -529,6 +529,7 @@ class NispSignedUrlResponse(BaseModel):
 
 
 class NispRefundResponse(BaseModel):
+    payment_channel: str = "unknown"
     id: int
     registration_id: int
     order_id: int

@@ -128,6 +128,8 @@ async def test_graduate_without_student_identity_full_revision_review_and_export
     result = await service.submit(1, draft.id)
     async with env.db() as db:
         order = await db.get(Order, result.order_id)
+        # This fixture exercises historical provider settlement; offline settlement has PostgreSQL coverage.
+        order.payment_channel = "wechat"
         order.status, order.transaction_id, order.paid_at = (
             "paid",
             "graduate-test",

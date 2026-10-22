@@ -59,6 +59,7 @@ class PaymentReconciliationService:
                     .select_from(Order)
                     .where(
                         Order.status == "pending",
+                        Order.payment_channel.in_(("wechat", "unknown")),
                         Order.out_trade_no.is_not(None),
                     )
                 )
@@ -81,6 +82,7 @@ class PaymentReconciliationService:
                         select(Order.id)
                         .where(
                             Order.status == "pending",
+                        Order.payment_channel.in_(("wechat", "unknown")),
                             Order.out_trade_no.is_not(None),
                             Order.id > after_id,
                         )

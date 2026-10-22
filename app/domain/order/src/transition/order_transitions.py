@@ -13,6 +13,8 @@ def apply_order_status_transition(order: Order, target_status: str) -> bool:
     if target_status not in allowed_targets:
         raise ConflictException(f"订单状态不允许从 {order.status} 变更为 {target_status}")
     order.status = target_status
+    if target_status in {"closed", "refunded"} and getattr(order, "payment_channel", None) == "bank_transfer":
+        order.offline_status = target_status
     return True
 
 DEFAULT_TIMEOUT_CLOSE_REASON = "payment_timeout"
@@ -24,6 +26,8 @@ def close_expired_pending_order(
     close_reason: str = DEFAULT_TIMEOUT_CLOSE_REASON,
 ) -> bool:
     """判断 pending 订单是否已超时，超时则关单。"""
+    if getattr(order, "payment_channel", None) == "bank_transfer" and getattr(order, "offline_status", None) not in {None, "awaiting_proof", "closed"}:
+        return False
     if order.status != "pending":
         return False
     if order.expires_at is None:

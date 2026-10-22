@@ -352,6 +352,11 @@ class NispAdminService:
                 if order is None:
                     raise ConflictException("NISP 报名缺少订单")
                 if order.status == "pending":
+                    from app.services.offline_payment import protected_payment
+                    if protected_payment(order):
+                        order.offline_status = "exception"
+                        order.expires_at = None
+                        continue
                     await release_order_coupon(db, order_id=order.id,
                                                user_id=order.user_id, coupon_code=order.coupon_code)
                     apply_order_status_transition(order, "closed")

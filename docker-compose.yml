@@ -82,6 +82,7 @@ services:
       - WECHAT_PAY_REFUND_RECONCILE_AFTER_SECONDS=${WECHAT_PAY_REFUND_RECONCILE_AFTER_SECONDS:-60}
       - WECHAT_PAY_SYNC_RATE_PER_MINUTE=${WECHAT_PAY_SYNC_RATE_PER_MINUTE:-10}
       # 文件存储
+      - BANK_TRANSFER_NEW_ORDERS_ENABLED=${BANK_TRANSFER_NEW_ORDERS_ENABLED:-true}
       - UPLOAD_DIR=/app/uploads
       # Legacy generic upload endpoints still use a dedicated non-sensitive
       # volume. Human-resources documents and quiz imports are OSS-only below.

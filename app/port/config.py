@@ -303,6 +303,8 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = []
 
     UPLOAD_DIR: str = "./uploads"
+    # Emergency stop for new cash orders; existing transfers/refunds stay operable.
+    BANK_TRANSFER_NEW_ORDERS_ENABLED: bool = True
     STORAGE_TYPE: str = "local"
 
     # Human-resources certification materials. Production is private Aliyun OSS.

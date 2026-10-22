@@ -48,6 +48,9 @@ class OrderCreate(BaseModel):
 
 class OrderResponse(BaseModel):
     id: int
+    payment_channel: str = "unknown"
+    offline_status: str | None = None
+    offline_submitted_at: datetime | None = None
     order_kind: str = Field(..., description="订单类型")
     product_type: str = Field(..., description="商品类型代码")
     plan_id: int | None = Field(None, description="报名批次 ID，历史订单可能为空")
@@ -74,6 +77,9 @@ class OrderResponse(BaseModel):
 
 class OrderDetailResponse(BaseModel):
     id: int
+    payment_channel: str = "unknown"
+    offline_status: str | None = None
+    offline_submitted_at: datetime | None = None
     order_kind: str = Field(..., description="订单类型")
     product_type: str = Field(..., description="商品类型代码")
     plan_id: int | None = Field(None, description="报名批次 ID，历史订单可能为空")
@@ -102,6 +108,10 @@ class OrderDetailResponse(BaseModel):
 
 
 class OrderFilter(BaseModel):
+    payment_channel: str | None = None
+    offline_status: str | None = None
+    keyword: str | None = Field(None, max_length=128)
+    plan_id: int | None = None
     status: OrderStatus | None = Field(None, description="按状态筛选：pending / paid / completed / refunded / closed")
     product_type: str | None = Field(None, description="按商品类型筛选")
     phone: str | None = Field(None, description="按考生手机号筛选")
