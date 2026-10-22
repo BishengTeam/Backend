@@ -83,6 +83,8 @@ class CompetitionService:
                     end_time=c.end_time,
                     registration_deadline=c.registration_deadline,
                     is_active=c.is_active,
+                    show_schedule=c.show_schedule,
+                    show_signup=c.show_signup,
                     custom_fields=c.custom_fields,
                     tracks=await _track_briefs(db, c.id),
                     created_at=c.created_at,
@@ -106,6 +108,8 @@ class CompetitionService:
                 end_time=competition.end_time,
                 registration_deadline=competition.registration_deadline,
                 is_active=competition.is_active,
+                show_schedule=competition.show_schedule,
+                show_signup=competition.show_signup,
                 custom_fields=competition.custom_fields,
                 attachments=[
                     CompetitionAttachment.model_validate(a)
@@ -130,6 +134,8 @@ class CompetitionService:
 
             if not competition.is_active:
                 raise BusinessException("赛事未发布，无法报名")
+            if not competition.show_signup:
+                raise BusinessException("该赛事未开放线上报名")
 
             now = datetime.now(timezone.utc)
             end_time = _as_utc(competition.end_time)

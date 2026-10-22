@@ -23,6 +23,9 @@ class Competition(Base, TimestampMixin):
     end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     registration_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # 详情页展示开关：关闭后小程序不渲染对应区块（时间仍参与截止判断；报名接口同步拒绝）
+    show_schedule: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    show_signup: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     custom_fields: Mapped[list | None] = mapped_column(JSONB, nullable=True, default=list, server_default="[]")
 
 

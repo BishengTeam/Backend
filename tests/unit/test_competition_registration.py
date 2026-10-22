@@ -148,6 +148,8 @@ def _make_competition(**overrides: Any) -> SimpleNamespace:
         end_time=now + timedelta(days=2),
         registration_deadline=now + timedelta(days=1),
         is_active=True,
+        show_schedule=True,
+        show_signup=True,
         custom_fields=[
             {"key": "student_id", "label": "学号", "type": "text",
              "required": True, "max_length": 20, "sort_order": 0},
@@ -261,6 +263,29 @@ async def test_update_deletes_removed_tracks(monkeypatch: pytest.MonkeyPatch) ->
     await AdminCompetitionService().update(1, payload)
 
     assert session.deleted == [track]
+
+
+@pytest.mark.asyncio
+async def test_signup_rejects_when_signup_hidden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """赛事关闭线上报名（show_signup=False）时直接拒绝，不进截止/名额判断。"""
+
+    competition = _make_competition(show_signup=False)
+    track = _make_track()
+    session = _FakeSession(
+        track_join_rows=[(track, competition)], tracks=[track],
+    )
+    _patch_db(monkeypatch, competition_module, session)
+
+    with pytest.raises(BusinessException, match="未开放线上报名"):
+        await CompetitionService().signup(
+            1,
+            CompetitionSignupRequest(
+                track_id=4, school="测试学校", real_name="张三", phone="13800138000",
+            ),
+        )
+    assert session.added == []
 
 
 @pytest.mark.asyncio

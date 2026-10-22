@@ -34,6 +34,9 @@ class CompetitionListItem(BaseModel):
     end_time: datetime | None = None
     registration_deadline: datetime | None = None
     is_active: bool = True
+    # 详情页展示开关（关闭后小程序不渲染对应区块）
+    show_schedule: bool = True
+    show_signup: bool = True
     tracks: list[CompetitionTrackBrief] = Field(default_factory=list)
     created_at: datetime
 
@@ -53,6 +56,9 @@ class CompetitionDetail(BaseModel):
     end_time: datetime | None = None
     registration_deadline: datetime | None = None
     is_active: bool = True
+    # 详情页展示开关（关闭后小程序不渲染对应区块）
+    show_schedule: bool = True
+    show_signup: bool = True
     custom_fields: list[dict] | None = None
     attachments: list[CompetitionAttachment] = Field(default_factory=list)
     tracks: list[CompetitionTrackBrief] = Field(default_factory=list)

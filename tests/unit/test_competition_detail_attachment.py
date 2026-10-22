@@ -91,6 +91,8 @@ def _make_competition(**overrides: Any) -> SimpleNamespace:
         end_time=now + timedelta(days=2),
         registration_deadline=now + timedelta(days=1),
         is_active=True,
+        show_schedule=True,
+        show_signup=True,
         custom_fields=[],
         created_at=now - timedelta(days=3),
     )
@@ -160,6 +162,28 @@ async def test_get_event_detail_rejects_inactive_or_missing(
     _patch_db(monkeypatch, competition_module, empty)
     with pytest.raises(NotFoundException):
         await CompetitionService().get_event_detail(999)
+
+
+async def test_get_event_detail_carries_display_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """详情透出 show_schedule/show_signup；关闭后小程序不渲染对应区块。"""
+    hidden = _detail_competition(show_schedule=False, show_signup=False)
+    session = _FakeSession(competitions=[hidden], tracks=[_make_track()])
+    _patch_db(monkeypatch, competition_module, session)
+
+    detail = await CompetitionService().get_event_detail(1)
+
+    assert detail.show_schedule is False
+    assert detail.show_signup is False
+
+    # 默认（历史赛事未显式配置）两个开关均为展示
+    visible = _detail_competition()
+    session = _FakeSession(competitions=[visible])
+    _patch_db(monkeypatch, competition_module, session)
+    detail = await CompetitionService().get_event_detail(1)
+    assert detail.show_schedule is True
+    assert detail.show_signup is True
 
 
 # ── 附件 PDF 渲染 ────────────────────────────────────────────
@@ -310,3 +334,22 @@ async def test_admin_update_persists_poster_and_attachments(
     ]
     assert item.poster_url == "/api/media/new-poster.jpg"
     assert item.attachments[0].title == "邀请函"
+
+
+async def test_admin_update_persists_display_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """管理端可按赛事关闭详情页比赛时间/赛道报名区块。"""
+    competition = _detail_competition()
+    session = _FakeSession(competitions=[competition], tracks=[_make_track()])
+    _patch_db(monkeypatch, admin_competition_module, session)
+
+    item = await AdminCompetitionService().update(
+        1,
+        AdminCompetitionUpdate(show_schedule=False, show_signup=False),
+    )
+
+    assert competition.show_schedule is False
+    assert competition.show_signup is False
+    assert item.show_schedule is False
+    assert item.show_signup is False

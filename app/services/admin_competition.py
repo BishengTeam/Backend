@@ -133,6 +133,7 @@ class AdminCompetitionService:
                             for k in (
                                 "id", "name", "description", "cover_url", "poster_url", "start_time",
                                 "end_time", "registration_deadline", "is_active",
+                                "show_schedule", "show_signup",
                                 "custom_fields", "attachments", "created_at",
                             )
                         },
@@ -156,6 +157,8 @@ class AdminCompetitionService:
                     end_time=data.end_time,
                     registration_deadline=data.registration_deadline,
                     is_active=data.is_active,
+                    show_schedule=data.show_schedule,
+                    show_signup=data.show_signup,
                     custom_fields=validate_custom_fields(
                         data.custom_fields if hasattr(data, "custom_fields") else None
                     ),
@@ -181,7 +184,8 @@ class AdminCompetitionService:
                     k: getattr(competition, k)
                     for k in (
                         "id", "name", "description", "cover_url", "poster_url", "start_time",
-                        "end_time", "registration_deadline", "is_active", "custom_fields",
+                        "end_time", "registration_deadline", "is_active",
+                        "show_schedule", "show_signup", "custom_fields",
                         "attachments", "created_at",
                     )
                 },
@@ -247,7 +251,8 @@ class AdminCompetitionService:
                     k: getattr(competition, k)
                     for k in (
                         "id", "name", "description", "cover_url", "poster_url", "start_time",
-                        "end_time", "registration_deadline", "is_active", "custom_fields",
+                        "end_time", "registration_deadline", "is_active",
+                        "show_schedule", "show_signup", "custom_fields",
                         "attachments", "created_at",
                     )
                 },
