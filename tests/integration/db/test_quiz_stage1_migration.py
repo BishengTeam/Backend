@@ -172,9 +172,9 @@ def test_quiz_rebuild_upgrade_downgrade_upgrade(
         assert all("WHERE" in definition for definition in partial_indexes)
         assert all("in_progress" in definition for definition in partial_indexes)
 
-    # Pay002 must stop any downgrade rehearsal before financial history can be
+    # rsh008 must stop any downgrade rehearsal before review history can be
     # removed; the quiz migration itself remains guarded by its backup test.
-    with pytest.raises(RuntimeError, match="Offline orders require"):
+    with pytest.raises(RuntimeError, match="审核快照须留存"):
         command.downgrade(config, "rsh001")
     assert "quiz_record" not in inspect(engine).get_table_names()
     engine.dispose()

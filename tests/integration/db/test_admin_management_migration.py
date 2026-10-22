@@ -306,9 +306,9 @@ def test_clean_install_upgrade_guards_and_downgrade_rehearsal(
                 digest="b" * 63,
             )
 
-    # pay002 deliberately makes the current financial schema irreversible.
+    # rsh008 deliberately preserves completed Renshe review snapshots.
     # Verify that a rehearsal cannot silently cross that boundary.
-    with pytest.raises(RuntimeError, match="Offline orders require"):
+    with pytest.raises(RuntimeError, match="审核快照须留存"):
         command.downgrade(config, "deploy001")
     assert "admin_security_audit" in inspect(engine).get_table_names()
     _assert_credential_idempotency_schema(inspect(engine))
