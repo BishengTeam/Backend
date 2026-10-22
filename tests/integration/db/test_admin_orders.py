@@ -199,6 +199,8 @@ async def _seed_order(
             candidate_phone=candidate_phone,
             price=price,
             status=status,
+            payment_channel="wechat",
+            paid_at=created_at or datetime.now(timezone.utc),
         )
         if created_at is not None:
             order.created_at = created_at
@@ -293,13 +295,14 @@ class TestAdminOrderReconciliation:
     async def test_reconciliation_returns_summary(
         self, session_factory, app_context, test_prefix
     ):
-        """Reconciliation aggregates today's orders by paid vs refunded."""
+        """Refunded status alone never invents a refund money event."""
         user_id = await _seed_user(session_factory, test_prefix)
-        date_str = datetime.now(SHANGHAI).strftime("%Y-%m-%d")
+        date_str = "2097-03-11"
+        stamp = datetime(2097, 3, 11, tzinfo=timezone.utc)
 
-        await _seed_order(session_factory, test_prefix, user_id, status="paid", price=100)
-        await _seed_order(session_factory, test_prefix, user_id, status="paid", price=200)
-        await _seed_order(session_factory, test_prefix, user_id, status="refunded", price=50)
+        await _seed_order(session_factory, test_prefix, user_id, status="paid", price=100, created_at=stamp)
+        await _seed_order(session_factory, test_prefix, user_id, status="paid", price=200, created_at=stamp)
+        await _seed_order(session_factory, test_prefix, user_id, status="refunded", price=50, created_at=stamp)
 
         result = await app_context.admin_order_module.AdminOrderService().reconciliation(date_str)
 
@@ -307,9 +310,9 @@ class TestAdminOrderReconciliation:
         for key in ("order_total", "refund_total", "net_income", "order_count"):
             assert key in result, f"Missing key: {key}"
         # Historical data may exist; verify at least our seeded test orders are included
-        assert result["order_total"] >= 300   # at least 100 + 200
-        assert result["refund_total"] >= 50
-        assert result["net_income"] >= 250    # at least 300 - 50
+        assert result["order_total"] >= 350
+        assert result["refund_total"] == 0
+        assert result["net_income"] >= 350
         assert result["order_count"] >= 3
 
     async def test_reconciliation_no_orders_returns_zeros(
@@ -378,11 +381,12 @@ class TestAdminOrderReconciliation:
             target_date
         )
         assert result == {
-            "bank_transfer_total": 0,
             "date": target_date,
+            "bank_transfer_total": 0,
+            "wechat_total": 30,
+            "timezone": "Asia/Shanghai",
             "order_total": 30,
             "refund_total": 0,
             "net_income": 30,
             "order_count": 2,
-            "wechat_total": 0,
         }

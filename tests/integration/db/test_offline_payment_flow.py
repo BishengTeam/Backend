@@ -3,14 +3,14 @@ import asyncio
 import importlib
 import os
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from fastapi import UploadFile
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -40,6 +40,7 @@ async def context(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
     monkeypatch.setattr(settings, "RENSHE_STORAGE_TYPE", "local")
     service = OfflinePaymentService()
+    created_order_ids = []
     config = await service.get_settings()
     await service.save_settings(101, SettingsInput(account_name="测试收款账户", bank_name="测试银行",
         account_number="6222000000000000", contact_name="测试管理员", contact_phone="13800000000",
@@ -54,6 +55,7 @@ async def context(monkeypatch, tmp_path):
             db.add(order); await db.flush()
             await service.initialize(db, order)
             order.offline_status = status
+            created_order_ids.append(order.id)
             return order.id, user.id
 
     async def submit(order_id, user_id, version=0):
@@ -63,8 +65,15 @@ async def context(monkeypatch, tmp_path):
         await service.submit(order_id, user_id, data)
         return data
 
-    yield SimpleNamespace(db=factory, service=service, create=create, submit=submit)
-    await engine.dispose()
+    try:
+        yield SimpleNamespace(db=factory, service=service, create=create, submit=submit)
+    finally:
+        # Money-day assertions must not inherit financial events from a prior run.
+        from app.domain.order.src.model.payment_refund import PaymentRefundTask
+        async with factory() as db, db.begin():
+            await db.execute(delete(OfflineBankEntry).where(OfflineBankEntry.order_id.in_(created_order_ids)))
+            await db.execute(delete(PaymentRefundTask).where(PaymentRefundTask.order_id.in_(created_order_ids)))
+        await engine.dispose()
 
 
 def confirmation(version=1, reference=None, **kwargs):
@@ -82,6 +91,69 @@ async def test_two_admins_same_order_and_replay(context):
     async with context.db() as db:
         assert await db.scalar(select(func.count()).select_from(OfflineBankEntry).where(OfflineBankEntry.order_id == id)) == 1
         assert (await db.get(Order, id)).transaction_id is None
+
+
+async def test_daily_money_uses_bank_day_not_creation_or_current_status(context, monkeypatch):
+    from app.services import admin_order
+
+    @asynccontextmanager
+    async def ctx():
+        async with context.db() as db:
+            yield db
+
+    monkeypatch.setattr(admin_order, "get_db_ctx", ctx)
+    order_id, _ = await context.create()
+    second_id, _ = await context.create()
+    async with context.db() as db, db.begin():
+        order = await db.get(Order, order_id)
+        order.created_at = datetime(2098, 10, 20, tzinfo=timezone.utc)
+        order.status = "refunded"
+        # Shanghai 22nd 00:00 and 23rd 00:00; registration happens today.
+        for oid, kind, amount, stamp in [
+            (order_id, "receipt", 10000, datetime(2098, 10, 21, 16, tzinfo=timezone.utc)),
+            (order_id, "refund", 10000, datetime(2098, 10, 22, 16, tzinfo=timezone.utc)),
+            (second_id, "receipt", 3000, datetime(2098, 10, 22, 15, 59, 59, tzinfo=timezone.utc)),
+        ]:
+            db.add(OfflineBankEntry(order_id=oid, kind=kind, amount_cents=amount,
+                bank_time=stamp, account_fingerprint="audit-day-test", bank_reference=uuid4().hex,
+                admin_id=101, submission_version=1, material_ids=[]))
+    service = admin_order.AdminOrderService()
+    before = await service.reconciliation("2098-10-21")
+    receipt = await service.reconciliation("2098-10-22")
+    refund = await service.reconciliation("2098-10-23")
+    assert before["order_total"] == before["refund_total"] == 0
+    assert (receipt["order_total"], receipt["refund_total"], receipt["bank_transfer_total"], receipt["order_count"]) == (13000, 0, 13000, 2)
+    assert (refund["order_total"], refund["refund_total"], refund["bank_transfer_total"], refund["order_count"]) == (0, 10000, -10000, 1)
+    async with context.db() as db, db.begin():
+        (await db.get(Order, order_id)).status = "closed"
+    assert await service.reconciliation("2098-10-22") == receipt
+
+
+async def test_daily_wechat_receipt_and_successful_refund_use_their_own_dates(context, monkeypatch):
+    from app.services import admin_order
+    from app.domain.order.src.model.payment_refund import PaymentRefundTask
+
+    @asynccontextmanager
+    async def ctx():
+        async with context.db() as db:
+            yield db
+
+    monkeypatch.setattr(admin_order, "get_db_ctx", ctx)
+    order_id, uid = await context.create()
+    async with context.db() as db, db.begin():
+        order = await db.get(Order, order_id)
+        order.payment_channel = "wechat"
+        order.status = "refunded"
+        order.paid_at = datetime(2096, 10, 22, tzinfo=timezone.utc)
+        db.add(PaymentRefundTask(order_id=order_id, user_id=uid, amount_cents=10000,
+            out_trade_no=order.out_trade_no, transaction_id=uuid4().hex,
+            out_refund_no=uuid4().hex, status="succeeded", next_attempt_at=now(),
+            succeeded_at=datetime(2096, 10, 23, tzinfo=timezone.utc)))
+    service = admin_order.AdminOrderService()
+    receipt = await service.reconciliation("2096-10-22")
+    refund = await service.reconciliation("2096-10-23")
+    assert (receipt["order_total"], receipt["refund_total"], receipt["wechat_total"]) == (10000, 0, 10000)
+    assert (refund["order_total"], refund["refund_total"], refund["wechat_total"]) == (0, 10000, -10000)
 
 
 async def test_one_bank_entry_cannot_settle_two_orders(context):

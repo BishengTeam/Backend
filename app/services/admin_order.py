@@ -2,7 +2,7 @@ from datetime import date as calendar_date
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select, or_
+from sqlalchemy import func, select, or_, literal, union_all, case
 
 from app.adapter.database import get_db_ctx
 from app.port.config import settings
@@ -251,23 +251,46 @@ class AdminOrderService:
             tzinfo=local_zone,
         ).astimezone(timezone.utc)
         async with get_db_ctx() as db:
-            stmt = select(Order).where(
-                Order.created_at >= date_start,
-                Order.created_at < date_end,
-            )
-            result = await db.execute(stmt)
-            orders = result.scalars().all()
-            order_total = sum(o.price for o in orders if o.status in {"paid", "completed", "refunded"})
-            refund_total = sum(o.price for o in orders if o.status == "refunded")
-            net_income = order_total - refund_total
-            order_count = len(orders)
+            from app.models.offline_payment import OfflineBankEntry
+            from app.domain.h3c.src.model.h3c import H3cRefundRequest
+            from app.domain.nisp.src.model.nisp import NispRefundRequest
+            from app.domain.renshe.src.model.renshe import RensheRefundRequest
+            from app.domain.order.src.model.payment_refund import PaymentRefundTask
+
+            # Aggregate immutable money events, never the order's present state.
+            events = [select(
+                OfflineBankEntry.order_id.label("order_id"),
+                literal("bank_transfer").label("channel"),
+                OfflineBankEntry.kind.label("kind"),
+                OfflineBankEntry.amount_cents.label("amount"),
+            ).where(OfflineBankEntry.bank_time >= date_start,
+                    OfflineBankEntry.bank_time < date_end)]
+            events.append(select(Order.id, literal("wechat"), literal("receipt"), Order.price)
+                .where(Order.payment_channel == "wechat", Order.paid_at >= date_start,
+                       Order.paid_at < date_end))
+            for refund in (H3cRefundRequest, NispRefundRequest, RensheRefundRequest, PaymentRefundTask):
+                events.append(select(refund.order_id, literal("wechat"), literal("refund"), refund.amount_cents)
+                    .join(Order, Order.id == refund.order_id)
+                    .where(Order.payment_channel == "wechat", refund.status == "succeeded",
+                           refund.succeeded_at >= date_start, refund.succeeded_at < date_end))
+            ledger = union_all(*events).subquery()
+            signed = case((ledger.c.kind == "receipt", ledger.c.amount), else_=-ledger.c.amount)
+            row = (await db.execute(select(
+                func.coalesce(func.sum(case((ledger.c.kind == "receipt", ledger.c.amount), else_=0)), 0),
+                func.coalesce(func.sum(case((ledger.c.kind == "refund", ledger.c.amount), else_=0)), 0),
+                func.coalesce(func.sum(case((ledger.c.channel == "bank_transfer", signed), else_=0)), 0),
+                func.coalesce(func.sum(case((ledger.c.channel == "wechat", signed), else_=0)), 0),
+                func.count(func.distinct(ledger.c.order_id)),
+            ))).one()
+            order_total, refund_total, bank_total, wechat_total, order_count = row
             return {
-                "bank_transfer_total": sum(o.price for o in orders if getattr(o, "payment_channel", "unknown") == "bank_transfer" and o.status in {"paid", "completed"}),
-                "wechat_total": sum(o.price for o in orders if getattr(o, "payment_channel", "unknown") == "wechat" and o.status in {"paid", "completed"}),
+                "bank_transfer_total": bank_total,
+                "wechat_total": wechat_total,
+                "timezone": settings.APP_TIMEZONE,
                 "date": target_date.isoformat(),
                 "order_total": order_total,
                 "refund_total": refund_total,
-                "net_income": net_income,
+                "net_income": order_total - refund_total,
                 "order_count": order_count,
             }
 
