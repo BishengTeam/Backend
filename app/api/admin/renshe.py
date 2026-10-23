@@ -3,7 +3,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Path, Query, Request, UploadFile
 from fastapi.responses import FileResponse
-from app.schemas.renshe_project import RensheProjectWrite, RensheProjectResponse
+from app.schemas.renshe_project import RensheProjectWrite, RensheProjectResponse, RensheCommitmentTemplateBinding
 from app.services.renshe_project import RensheProjectService
 from app.port.exceptions import BusinessException
 
@@ -111,6 +111,11 @@ async def list_projects(_admin=Depends(require_permission("content:list"))):
 async def create_project(body: RensheProjectWrite, admin=Depends(require_permission("content:write"))):
     assert_project_selection_payload(body, creating=True)
     return success(data=await RensheProjectService().save(body, admin_id=admin.id))
+
+
+@router.put("/projects/{project_id}/commitment-template", response_model=APIResponse[RensheProjectResponse])
+async def save_project_commitment_template(project_id: int, body: RensheCommitmentTemplateBinding, admin=Depends(require_permission("content:write"))):
+    return success(data=await RensheProjectService().save_commitment_template(project_id, body, admin_id=admin.id))
 
 
 @router.put("/projects/{project_id}", response_model=APIResponse[RensheProjectResponse])

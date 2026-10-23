@@ -179,8 +179,7 @@ def activation_errors(config: dict) -> list[str]:
     return []
 
 
-def save_template(filename: str, content: bytes) -> dict:
-    """Content-addressed immutable assets shared by all batch versions."""
+def validate_template_content(filename: str, content: bytes) -> str:
     import io
     import zipfile
 
@@ -199,6 +198,31 @@ def save_template(filename: str, content: bytes) -> dict:
             raise BusinessException("承诺书模板DOCX格式不正确") from exc
     else:
         raise BusinessException("模板仅支持PDF或DOCX")
+    return extension
+
+
+def verified_template(info: dict) -> dict:
+    """Resolve the private stored file and derive binding metadata on the server."""
+    path = template_path({"commitment_template": info})
+    try:
+        content = path.read_bytes()
+    except OSError as exc:
+        raise _storage_unavailable("read", exc) from exc
+    extension = validate_template_content(path.name, content)
+    digest = hashlib.sha256(content).hexdigest()
+    if path.name != f"commitment_{digest}{extension}":
+        raise ConflictException("承诺书模板文件名与实际内容不一致，请重新上传")
+    # The original name is a display label only, never a storage path.
+    original = str(info.get("original_filename") or path.name).replace("\\", "/").split("/")[-1][:255]
+    if Path(original).suffix.lower() != extension:
+        original = f"承诺书模板{extension}"
+    return {"filename": path.name, "sha256": digest, "original_filename": original,
+            "size_bytes": len(content), "content_type": "application/pdf" if extension == ".pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+
+
+def save_template(filename: str, content: bytes) -> dict:
+    """Content-addressed immutable assets shared by all batch versions."""
+    extension = validate_template_content(filename, content)
     digest = hashlib.sha256(content).hexdigest()
     temporary = None
     try:
@@ -235,6 +259,8 @@ def save_template(filename: str, content: bytes) -> dict:
         "filename": path.name,
         "sha256": digest,
         "original_filename": Path(filename).name,
+        "size_bytes": len(content),
+        "content_type": "application/pdf" if extension == ".pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     }
 
 

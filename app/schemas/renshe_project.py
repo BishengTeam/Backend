@@ -84,3 +84,20 @@ class RensheProjectResponse(BaseModel):
     validation_errors: list[str] = Field(default_factory=list)
     batch_count: int = 0
     review_notices: list[str] = Field(default_factory=list)
+    commitment_template: dict | None = None
+    commitment_template_error: str | None = None
+
+
+class RensheCommitmentTemplateReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    filename: str = Field(pattern=r"^commitment_[a-f0-9]{64}\.(pdf|docx)$")
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    original_filename: str | None = Field(None, max_length=255)
+    size_bytes: int | None = Field(None, ge=1, le=10 * 1024 * 1024)
+    content_type: str | None = Field(None, max_length=128)
+
+
+class RensheCommitmentTemplateBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1)
+    commitment_template: RensheCommitmentTemplateReference

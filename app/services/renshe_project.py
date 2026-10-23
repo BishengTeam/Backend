@@ -385,7 +385,7 @@ class RensheProjectService:
             .limit(1)
         )
 
-    async def _response(self, db, product: CertProduct) -> RensheProjectResponse:
+    async def _response(self, db, product: CertProduct, *, include_template_metadata: bool = True) -> RensheProjectResponse:
         from app.services.renshe_export_definition import export_instructions
         version = await self.latest(db, product.id)
         config = (
@@ -393,6 +393,15 @@ class RensheProjectService:
             if version
             else {**default_configuration(), "occupation_name": "", "skill_level": ""}
         )
+        from app.services.renshe_graduated import commitment_policy, verified_template
+        from app.port.exceptions import StorageUnavailableException
+        template = commitment_policy(config)["commitment_template"]
+        template_error = None
+        if template and include_template_metadata:
+            try:
+                template = verified_template(template)
+            except (BusinessException, ConflictException, StorageUnavailableException) as exc:
+                template_error = exc.message
         return RensheProjectResponse(
             id=product.id,
             code=product.code,
@@ -414,6 +423,8 @@ class RensheProjectService:
             )
             or 0,
             review_notices=name_review_notices(product.chinese_name, config),
+            commitment_template=template,
+            commitment_template_error=template_error,
         )
 
     async def list_projects(
@@ -431,7 +442,32 @@ class RensheProjectService:
                     CertProduct.renshe_status == "available",
                 )
             products = (await db.execute(stmt)).scalars().all()
-            return [await self._response(db, product) for product in products]
+            return [await self._response(db, product, include_template_metadata=not public) for product in products]
+
+    async def save_commitment_template(self, product_id: int, data, *, admin_id: int) -> RensheProjectResponse:
+        from app.services.renshe_graduated import verified_template
+        async with get_db_ctx() as db:
+            product = await db.scalar(select(CertProduct).where(
+                CertProduct.id == product_id, CertProduct.type == "renshe").with_for_update())
+            if product is None:
+                raise NotFoundException("人社报考项目")
+            latest = await self.latest(db, product.id)
+            if latest is None:
+                raise ConflictException("请先完善并保存人社产品草稿")
+            if data.expected_version != latest.version:
+                raise ConflictException("产品配置已被其他管理员修改，请刷新后核对模板再保存")
+            template = verified_template(data.commitment_template.model_dump(exclude_none=True))
+            config = deepcopy(latest.config)
+            config["commitment_template"] = template
+            version_no = latest.version
+            if config != latest.config:
+                version_no += 1
+                db.add(RensheProjectConfig(product_id=product.id, version=version_no, config=config))
+            db.add(RensheAuditLog(actor_type="admin", actor_id=admin_id, action="project.commitment_template.update",
+                object_type="cert_product", object_id=product.id, result="succeeded",
+                summary={"version": version_no, "sha256": template["sha256"], "filename": template["filename"]}))
+            await db.commit()
+            return await self._response(db, product)
 
     async def save(
         self, data: RensheProjectWrite, *, product_id: int | None = None, admin_id: int
