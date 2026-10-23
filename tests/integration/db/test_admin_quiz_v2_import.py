@@ -30,7 +30,7 @@ from app.services.admin_quiz_v2 import AdminQuizV2Service
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
 
 
-async def test_v2_import_skips_duplicate_stems_and_succeeds(
+async def test_v2_import_imports_duplicate_stems_verbatim(
     monkeypatch, tmp_path: Path
 ) -> None:
     url = os.getenv("TEST_DATABASE_URL")
@@ -104,7 +104,8 @@ async def test_v2_import_skips_duplicate_stems_and_succeeds(
         assert persisted.status == "succeeded"
         assert persisted.error_count == 0
         assert persisted.total_rows == 3
-        assert persisted.created_count == 2
+        # 2026-10-22（修订）：行行入库，同题干的两行各自成题。
+        assert persisted.created_count == 3
 
         module = (
             await db.execute(
@@ -120,7 +121,12 @@ async def test_v2_import_skips_duplicate_stems_and_succeeds(
                 )
             ).scalars()
         )
-        assert len(created) == 2
+        assert len(created) == 3
+        same_stem = [
+            item for item in created if item.question_text == f"{prefix}重复题"
+        ]
+        assert len(same_stem) == 2
+        assert {item.correct_answer for item in same_stem} == {"A", "B"}
 
         # Cleanup
         for item in created:

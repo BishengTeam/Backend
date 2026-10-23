@@ -145,7 +145,6 @@ class ImportValidationResult:
     errors: list[dict[str, object]]
     missing_errors: list[dict[str, object]]
     impact: AdminQuizImportCategoryImpactResponse | None
-    skipped_duplicate_count: int = 0
 
 
 class AdminQuizService:
@@ -4307,8 +4306,6 @@ class AdminQuizService:
         candidates: list[
             tuple[int, AdminQuizImportQuestion, int | tuple[str, ...], str]
         ] = []
-        seen_hashes: set[str] = set()
-        skipped_duplicates = 0
 
         def location(locator: int) -> tuple[int, int]:
             return (locator, locator - 1) if source_type == "csv" else (locator, locator)
@@ -4382,13 +4379,8 @@ class AdminQuizService:
                     )
                 )
                 continue
-            if normalized.question_text_hash in seen_hashes:
-                # Relaxed per 2026-10-22 product decision: keep the first
-                # occurrence, silently skip later duplicates instead of
-                # failing the whole batch.
-                skipped_duplicates += 1
-                continue
-            seen_hashes.add(normalized.question_text_hash)
+            # 2026-10-22 (revised): import every row as-is — duplicate stems
+            # are kept, no in-batch or library-wide dedupe.
             candidates.append(
                 (locator, item, target, normalized.question_text_hash)
             )
@@ -4407,27 +4399,7 @@ class AdminQuizService:
                 valid=[], errors=errors, missing_errors=missing_errors, impact=None
             )
 
-        candidate_hashes = {item[3] for item in candidates}
-        existing_hashes: set[str] = set()
-        if candidate_hashes:
-            existing_hashes = set(
-                (
-                    await db.execute(
-                        select(QuizQuestion.question_text_hash).where(
-                            QuizQuestion.library_id == library_id,
-                            QuizQuestion.stem_reserved.is_(True),
-                            QuizQuestion.question_text_hash.in_(candidate_hashes),
-                        )
-                    )
-                ).scalars()
-            )
-        for locator, item, target, question_hash in candidates:
-            row_no, question_index = location(locator)
-            if question_hash in existing_hashes:
-                # Relaxed: stem already in library — skip the row instead of
-                # failing the import.
-                skipped_duplicates += 1
-                continue
+        for locator, item, target, _question_hash in candidates:
             valid.append((locator, item, target))
 
         impact = (
@@ -4446,7 +4418,6 @@ class AdminQuizService:
             errors=errors,
             missing_errors=missing_errors,
             impact=impact,
-            skipped_duplicate_count=skipped_duplicates,
         )
 
     def _build_v2_import_impact(
@@ -5210,10 +5181,6 @@ class AdminQuizService:
                     target_ids=[],
                     changed_fields={
                         "created_count": {"before": 0, "after": len(final)},
-                        "skipped_duplicate_count": {
-                            "before": 0,
-                            "after": validation.skipped_duplicate_count,
-                        },
                         "status": {"before": "importing", "after": "succeeded"},
                     },
                     permission="quiz:import",

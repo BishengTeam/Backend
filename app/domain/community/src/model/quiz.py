@@ -402,11 +402,11 @@ class QuizQuestion(Base, _QuizTimestampMixin):
             "id",
         ),
         Index("ix_quiz_question_updated", "updated_at", "id"),
+        # quiz017：同题库允许同题干共存（导入行行入库），唯一索引退化为普通索引。
         Index(
-            "uq_quiz_question_library_text_hash",
+            "ix_quiz_question_library_text_hash",
             "library_id",
             "question_text_hash",
-            unique=True,
             postgresql_where=text("library_id IS NOT NULL AND stem_reserved = true"),
             sqlite_where=text("library_id IS NOT NULL AND stem_reserved = true"),
         ),

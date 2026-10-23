@@ -11,7 +11,6 @@ import asyncio
 from collections import deque
 from types import SimpleNamespace
 
-from app.domain.community.src.rule.quiz import normalize_question_payload
 from app.schemas.admin_quiz_contract import AdminQuizImportQuestion
 from app.services.admin_quiz import AdminQuizService
 
@@ -60,21 +59,6 @@ def _item(text: str) -> AdminQuizImportQuestion:
     )
 
 
-def _hash(item: AdminQuizImportQuestion) -> str:
-    return normalize_question_payload(
-        question_type=item.question_type,
-        question_text=item.question_text,
-        options=item.options,
-        correct_answer=item.correct_answer,
-        explanation=item.explanation,
-        image_urls=item.image_urls,
-        option_image_urls=item.option_image_urls,
-        require_publishable=False,
-        score=item.score,
-        tags=item.tags,
-    ).question_text_hash
-
-
 def _library_module_point() -> tuple:
     library = SimpleNamespace(id=6, status="active")
     module = SimpleNamespace(
@@ -101,14 +85,13 @@ def _validate(db, rows):
     )
 
 
-def test_v2_import_skips_batch_duplicates_instead_of_failing() -> None:
+def test_v2_import_keeps_duplicate_stems_in_batch() -> None:
     library, module, point = _library_module_point()
     db = _FakeDB(
         [
             _Result(scalar=library),
             _Result(items=[module]),
             _Result(items=[point]),
-            _Result(items=[]),
         ]
     )
     rows = [
@@ -119,21 +102,19 @@ def test_v2_import_skips_batch_duplicates_instead_of_failing() -> None:
 
     result = _validate(db, rows)
 
+    # 2026-10-22（修订）：源文件多少行就导入多少，重复题干不跳过。
     assert result.errors == []
     assert result.missing_errors == []
-    assert result.skipped_duplicate_count == 1
-    assert [locator for locator, _, _ in result.valid] == [2, 4]
+    assert [locator for locator, _, _ in result.valid] == [2, 3, 4]
 
 
-def test_v2_import_skips_stems_already_in_library() -> None:
+def test_v2_import_keeps_stems_already_in_library() -> None:
     library, module, point = _library_module_point()
-    existing_hash = _hash(_item("库内已有题"))
     db = _FakeDB(
         [
             _Result(scalar=library),
             _Result(items=[module]),
             _Result(items=[point]),
-            _Result(items=[existing_hash]),
         ]
     )
     rows = [
@@ -144,8 +125,7 @@ def test_v2_import_skips_stems_already_in_library() -> None:
     result = _validate(db, rows)
 
     assert result.errors == []
-    assert result.skipped_duplicate_count == 1
-    assert [locator for locator, _, _ in result.valid] == [3]
+    assert [locator for locator, _, _ in result.valid] == [2, 3]
 
 
 def test_v2_import_accepts_disabled_modules_and_points() -> None:
@@ -166,7 +146,6 @@ def test_v2_import_accepts_disabled_modules_and_points() -> None:
 
     assert result.errors == []
     assert result.missing_errors == []
-    assert result.skipped_duplicate_count == 0
     assert [locator for locator, _, _ in result.valid] == [2]
     assert result.valid[0][2] == 22
 
@@ -191,7 +170,6 @@ def test_v2_import_flags_missing_structure_without_hard_error() -> None:
     assert [item["error_code"] for item in result.missing_errors] == [
         "category_missing"
     ]
-    assert result.skipped_duplicate_count == 0
     assert len(result.valid) == 1
     _, _, target = result.valid[0]
     assert isinstance(target, tuple) and target == ("模块", "知识点")
