@@ -339,20 +339,17 @@ async def test_batch_publish_and_disable_are_atomic(quiz_env) -> None:
     env = quiz_env
     category = await _category(env, "batch")
     valid = await _question(env, category.id, "valid")
-    incomplete = await _question(
-        env,
-        category.id,
-        "incomplete",
-        explanation=None,
-    )
+    # 解析已改为一律可选（2026-10-24）：无解析题必须能走完发布流程。
+    no_explanation = await _question(env, category.id, "no_explanation", explanation=None)
+    conflicting = await _question(env, category.id, "conflicting")
 
     failed_publish = await env.service.batch_publish_questions(
         AdminQuizBatchRequest(
             items=[
                 {"question_id": valid.id, "lock_version": valid.lock_version},
                 {
-                    "question_id": incomplete.id,
-                    "lock_version": incomplete.lock_version,
+                    "question_id": conflicting.id,
+                    "lock_version": conflicting.lock_version + 1,
                 },
             ]
         ),
@@ -360,41 +357,43 @@ async def test_batch_publish_and_disable_are_atomic(quiz_env) -> None:
     )
     assert failed_publish.succeeded is False
     assert failed_publish.updated_count == 0
+    assert any(error.code == 40201 for error in failed_publish.errors)
 
     async with env.factory() as db:
         assert (await db.get(QuizQuestion, valid.id)).status == "draft"
-        assert (await db.get(QuizQuestion, incomplete.id)).status == "draft"
+        assert (await db.get(QuizQuestion, no_explanation.id)).status == "draft"
+        assert (await db.get(QuizQuestion, conflicting.id)).status == "draft"
 
-    incomplete = await env.service.update_question(
-        incomplete.id,
-        AdminQuizQuestionUpdate(
-            lock_version=incomplete.lock_version,
-            explanation="补齐后的解析",
-        ),
-        admin_id=env.admin_id,
-    )
     published = await env.service.batch_publish_questions(
         AdminQuizBatchRequest(
             items=[
                 {"question_id": valid.id, "lock_version": valid.lock_version},
                 {
-                    "question_id": incomplete.id,
-                    "lock_version": incomplete.lock_version,
+                    "question_id": no_explanation.id,
+                    "lock_version": no_explanation.lock_version,
+                },
+                {
+                    "question_id": conflicting.id,
+                    "lock_version": conflicting.lock_version,
                 },
             ]
         ),
         admin_id=env.admin_id,
     )
     assert published.succeeded is True
-    assert published.updated_count == 2
+    assert published.updated_count == 3
 
     failed_disable = await env.service.batch_disable_questions(
         AdminQuizBatchRequest(
             items=[
                 {"question_id": valid.id, "lock_version": valid.lock_version + 1},
                 {
-                    "question_id": incomplete.id,
-                    "lock_version": incomplete.lock_version,
+                    "question_id": no_explanation.id,
+                    "lock_version": no_explanation.lock_version,
+                },
+                {
+                    "question_id": conflicting.id,
+                    "lock_version": conflicting.lock_version,
                 },
             ]
         ),
@@ -405,26 +404,24 @@ async def test_batch_publish_and_disable_are_atomic(quiz_env) -> None:
     assert any(error.code == 40201 for error in failed_disable.errors)
 
     async with env.factory() as db:
-        valid_row = await db.get(QuizQuestion, valid.id)
-        incomplete_row = await db.get(QuizQuestion, incomplete.id)
-        assert valid_row.status == incomplete_row.status == "published"
-        valid_version = valid_row.lock_version
-        incomplete_version = incomplete_row.lock_version
+        rows = {
+            question_id: await db.get(QuizQuestion, question_id)
+            for question_id in (valid.id, no_explanation.id, conflicting.id)
+        }
+        assert all(row.status == "published" for row in rows.values())
+        versions = {question_id: row.lock_version for question_id, row in rows.items()}
 
     disabled = await env.service.batch_disable_questions(
         AdminQuizBatchRequest(
             items=[
-                {"question_id": valid.id, "lock_version": valid_version},
-                {
-                    "question_id": incomplete.id,
-                    "lock_version": incomplete_version,
-                },
+                {"question_id": question_id, "lock_version": versions[question_id]}
+                for question_id in (valid.id, no_explanation.id, conflicting.id)
             ]
         ),
         admin_id=env.admin_id,
     )
     assert disabled.succeeded is True
-    assert disabled.updated_count == 2
+    assert disabled.updated_count == 3
 
 
 async def test_category_impact_preview_is_read_only_and_reports_blockers(quiz_env) -> None:
