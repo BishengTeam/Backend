@@ -6,6 +6,7 @@ from app.services.registration_payment_guard import payment_summary, require_rev
 import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from pydantic import ValidationError as PydanticValidationError
 
 from sqlalchemy import func, or_, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,6 +56,7 @@ from app.schemas.h3c_registration import (
     H3cUserExamBatchResponse,
     H3cCorrectionRequestResponse,
     H3cRegistrationVersionResponse,
+    H3cStudentQualification,
 )
 from app.services.agreement_template import ensure_accepted
 from app.services.consultation_group import ConsultationGroupService
@@ -85,7 +87,17 @@ H3C_VISIBLE_PLAN_STATUSES = (
     "registration_closed",
     "finalized",
 )
-H3C_CORRECTABLE_FIELDS = {"phone", "email", "school", "address", "verify_code"}
+H3C_CORRECTABLE_FIELDS = {"phone", "email", "school", "address", "verify_code", "student_verification_method"}
+
+
+def student_correction_scope(registration_type, fields, materials):
+    fields, materials = set(fields or []), set(materials or [])
+    if registration_type == "student" and (
+        fields & {"verify_code", "student_verification_method"} or "student_proof" in materials
+    ):
+        fields.update({"verify_code", "student_verification_method"})
+        materials.add("student_proof")
+    return fields, materials
 
 
 def _utc(value: datetime | None) -> datetime | None:
@@ -142,6 +154,7 @@ class H3cRegistrationService:
                     .where(
                         Plan.status.in_(H3C_VISIBLE_PLAN_STATUSES),
                         CertProduct.type == "h3c",
+                        CertProduct.is_active.is_(True),
                     )
                     .order_by(Plan.sort_order.desc(), Plan.id.desc())
                 )
@@ -448,6 +461,8 @@ class H3cRegistrationService:
             "last_name_en": data.last_name_en,
             "coupon_code": data.coupon_code,
             "verify_code": data.verify_code,
+            **({"student_verification_method": data.student_verification_method}
+               if data.registration_type == "student" else {}),
             "birth_date": _birth_date_from_idcard(identity.id_card_number),
             "identity_verification": verified_identity_snapshot(identity),
             "candidate_no": None,
@@ -652,8 +667,9 @@ class H3cRegistrationService:
                 if correction is None:
                     raise ConflictException("未找到待补正请求")
 
-                allowed_fields = set(correction.allowed_fields or [])
-                allowed_materials = set(correction.allowed_material_types or [])
+                allowed_fields, allowed_materials = student_correction_scope(
+                    registration.registration_type, correction.allowed_fields, correction.allowed_material_types,
+                )
                 submitted_fields = {
                     key: value
                     for key, value in {
@@ -662,8 +678,12 @@ class H3cRegistrationService:
                         "school": data.school,
                         "address": data.address,
                         "verify_code": data.verify_code,
+                        "student_verification_method": data.student_verification_method,
                     }.items()
-                    if value is not None
+                    if value is not None or (
+                        key == "verify_code" and key in data.model_fields_set
+                        and registration.registration_type == "student" and key in allowed_fields
+                    )
                 }
                 submitted_materials = {
                     key: value
@@ -679,11 +699,22 @@ class H3cRegistrationService:
                     raise ValidationException("请且只能提交管理员允许修改的信息")
                 if set(submitted_materials) != allowed_materials:
                     raise ValidationException("请且只能重新上传管理员指定材料")
-                if "verify_code" in submitted_fields and registration.registration_type != "student":
+                if set(submitted_fields) & {"verify_code", "student_verification_method"} and registration.registration_type != "student":
                     raise ValidationException("仅学生报名允许补正学籍验证码")
 
                 snapshot = dict(registration.candidate_snapshot or {})
                 snapshot.update(submitted_fields)
+                if "student_verification_method" in submitted_fields:
+                    try:
+                        qualification = H3cStudentQualification.model_validate({
+                            **snapshot, "student_proof_key": submitted_materials.get("student_proof"),
+                        })
+                    except PydanticValidationError as exc:
+                        raise ValidationException(exc.errors()[0]["msg"].removeprefix("Value error, ")) from exc
+                    if qualification.student_verification_method == "stamped_certificate" and data.verify_code is not None:
+                        raise ValidationException("切换为盖章学籍证时须显式清空验证码")
+                    if "verify_code" not in data.model_fields_set:
+                        raise ValidationException("请明确提交本次核验方式对应的验证码或空值")
                 for key, value in submitted_materials.items():
                     upload_rows = await self._material_uploads(
                         db, user_id=user_id, keys={key: value}
@@ -700,6 +731,11 @@ class H3cRegistrationService:
                             .with_for_update()
                         )
                     ).scalars().all()
+                    previous_method = (registration.candidate_snapshot or {}).get("student_verification_method") or "online_code"
+                    if key == "student_proof" and snapshot.get("student_verification_method") != previous_method and any(
+                        old.storage_key == value for old in old_rows
+                    ):
+                        raise ValidationException("切换核验方式后请重新上传对应材料")
                     for old in old_rows:
                         old.is_current = False
                     next_material_version = 1 + len(
@@ -862,10 +898,13 @@ class H3cRegistrationService:
                     registration.approved_at = now
                     registration.resubmission_due_at = None
                 else:
-                    allowed_fields = list(dict.fromkeys(decision_data.allowed_fields))
-                    allowed_materials = list(
-                        dict.fromkeys(decision_data.rejected_material_types or [])
+                    field_scope, material_scope = student_correction_scope(
+                        registration.registration_type, decision_data.allowed_fields,
+                        decision_data.rejected_material_types,
                     )
+                    allowed_fields, allowed_materials = sorted(field_scope), sorted(material_scope)
+                    if field_scope & {"verify_code", "student_verification_method"} and registration.registration_type != "student":
+                        raise ValidationException("仅学生报名允许补正学生核验信息")
                     if any(
                         key == "coupon_proof" and registration.registration_type != "coupon"
                         for key in allowed_materials
@@ -1343,6 +1382,15 @@ class H3cRegistrationService:
         payment = await payment_summary(db, order, registration)
         if not payment.review_payment_allowed:
             final_review_ready, final_review_block_reason = False, payment.review_block_reason
+        pending_correction_response = None
+        if pending_correction is not None:
+            fields, materials = student_correction_scope(
+                registration.registration_type, pending_correction.allowed_fields,
+                pending_correction.allowed_material_types,
+            )
+            pending_correction_response = H3cCorrectionRequestResponse.model_validate(pending_correction).model_copy(
+                update={"allowed_fields": sorted(fields), "allowed_material_types": sorted(materials)},
+            )
         return H3cRegistrationResponse(
             payment_summary=payment,
             id=registration.id,
@@ -1376,11 +1424,7 @@ class H3cRegistrationService:
                 if latest_review is not None
                 else None
             ),
-            pending_correction=(
-                H3cCorrectionRequestResponse.model_validate(pending_correction)
-                if pending_correction is not None
-                else None
-            ),
+            pending_correction=pending_correction_response,
             versions=[
                 H3cRegistrationVersionResponse.model_validate(row)
                 for row in versions

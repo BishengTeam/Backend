@@ -31,7 +31,25 @@ H3cRejectionReasonCode = Literal[
     "verify_code_invalid",
     "suspected_forged_material",
 ]
-H3cCorrectionFieldType = Literal["phone", "email", "school", "address", "verify_code"]
+H3cCorrectionFieldType = Literal["phone", "email", "school", "address", "verify_code", "student_verification_method"]
+H3cEducation = Literal["本科", "中职", "高职", "硕士", "博士"]
+H3cStudentVerificationMethod = Literal["online_code", "stamped_certificate"]
+
+
+class H3cStudentQualification(BaseModel):
+    student_verification_method: H3cStudentVerificationMethod
+    verify_code: str | None = None
+    student_proof_key: str = Field(..., min_length=1, max_length=512)
+
+    @model_validator(mode="after")
+    def validate_qualification(self):
+        if not self.student_proof_key.strip():
+            raise ValueError("请上传对应的学生核验图片")
+        if self.student_verification_method == "online_code" and not (self.verify_code or "").strip():
+            raise ValueError("有学信网在线验证码时，必须提供验证码和身份证人像面图片")
+        if self.student_verification_method == "stamped_certificate" and self.verify_code:
+            raise ValueError("无学信网在线验证码时，请清空验证码并上传学院盖章的学籍证图片")
+        return self
 
 
 class H3cProfileDefaults(BaseModel):
@@ -202,20 +220,28 @@ class H3cOrderCreate(BaseModel):
     address: str = Field(..., min_length=1, max_length=256)
     phone: str = Field(..., min_length=5, max_length=20)
     email: str = Field(..., min_length=3, max_length=128)
-    education: str = Field(..., min_length=1, max_length=32)
+    education: H3cEducation
     first_name_en: str = Field(..., min_length=1, max_length=64)
     last_name_en: str = Field(..., min_length=1, max_length=64)
     coupon_code: str | None = Field(None, min_length=1, max_length=64)
     verify_code: str | None = Field(None, min_length=1, max_length=64)
     coupon_proof_key: str | None = Field(None, min_length=1, max_length=512)
     student_proof_key: str | None = Field(None, min_length=1, max_length=512)
+    student_verification_method: H3cStudentVerificationMethod | None = None
+
+    @field_validator("verify_code", mode="before")
+    @classmethod
+    def trim_code(cls, value):
+        return (value.strip() or None) if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def validate_type_materials(self):
         if self.registration_type == "coupon" and (not self.coupon_code or not self.coupon_proof_key):
             raise ValueError("考券报名必须提供考券号和优惠券证明图片")
-        if self.registration_type == "student" and (not self.verify_code or not self.student_proof_key):
-            raise ValueError("学生报名必须提供学信网在线验证码和学生证明图片")
+        if self.registration_type == "student":
+            H3cStudentQualification.model_validate(self.model_dump())
+        elif self.student_verification_method is not None:
+            raise ValueError("仅学生报名允许选择学生资格核验方式")
         if self.registration_type == "full":
             if any((self.coupon_code, self.verify_code, self.coupon_proof_key, self.student_proof_key)):
                 raise ValueError("全额报名不能提交考券或学生证明材料")
@@ -335,12 +361,15 @@ class H3cResubmissionCreate(BaseModel):
     verify_code: str | None = Field(None, min_length=1, max_length=64)
     coupon_proof_key: str | None = Field(None, min_length=1, max_length=512)
     student_proof_key: str | None = Field(None, min_length=1, max_length=512)
+    student_verification_method: H3cStudentVerificationMethod | None = None
+
+    _trim_code = field_validator("verify_code", mode="before")(H3cOrderCreate.trim_code.__func__)
 
     @model_validator(mode="after")
     def validate_nonempty(self):
         values = [
             self.phone, self.email, self.school, self.address, self.verify_code,
-            self.coupon_proof_key, self.student_proof_key,
+            self.coupon_proof_key, self.student_proof_key, self.student_verification_method,
         ]
         if not any(values):
             raise ValueError("请至少提交一项补正内容")
@@ -367,6 +396,15 @@ class H3cReviewDecision(BaseModel):
 class H3cRejectRefundRequest(BaseModel):
     reason_code: str = Field(..., min_length=1, max_length=64)
     reason_detail: str = Field(..., min_length=1, max_length=1000)
+
+    @field_validator("reason_detail", mode="before")
+    @classmethod
+    def trim_reason(cls, value):
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                raise ValueError("请填写拒绝及退款原因，该原因将向用户展示。")
+        return value
 
 
 class H3cFinalReviewRequest(BaseModel):

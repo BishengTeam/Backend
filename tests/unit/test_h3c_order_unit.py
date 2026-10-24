@@ -33,7 +33,7 @@ class H3cOrderTests(unittest.TestCase):
         self.assertNotIn("identity_tag", fields)
         self.assertIn("全额报名不能提交考券或学生证明材料", source)
         self.assertIn("考券报名必须提供考券号和优惠券证明图片", source)
-        self.assertIn("学生报名必须提供学信网在线验证码和学生证明图片", source)
+        self.assertIn("H3cStudentQualification.model_validate", source)
 
     def test_registration_service_uses_order_and_inventory_foundations(self):
         source = (REPO_ROOT / "app/services/h3c_registration.py").read_text("utf-8")

@@ -279,7 +279,7 @@ def _request(context, seed, *, registration_type="coupon"):
         address="成都市",
         phone="13800000001",
         email="user@example.com",
-        education="大学本科",
+        education="本科",
         first_name_en="Xiaoming",
         last_name_en="Wang",
         coupon_code="COUPON-001" if registration_type == "coupon" else None,
@@ -654,3 +654,105 @@ async def test_h3c_final_review_requires_effective_export_version(context):
             registration_id=created.id,
             data=H3cFinalReviewRequest(export_item_id=item_id),
         )
+
+
+async def test_inactive_product_cannot_return_through_legacy_or_public_batches(context, monkeypatch):
+    from app.domain.user.src.index import User, UserRealname
+    import app.services.certification as certification_module
+    from app.domain.certification.src.index import Certification
+    from app.models.cert_product import CertProduct
+    from app.schemas.certification import CertificationFilter
+    from app.port.exceptions import BusinessException, NotFoundException
+    from app.services.certification import CertificationService
+    from app.services.h3c_registration import H3cRegistrationService
+
+    monkeypatch.setattr(certification_module, "get_db_ctx", context.db_ctx)
+    seed = await _seed(context, product_source="cert_product")
+    service = H3cRegistrationService()
+    created = await service.create_order(seed.user_id, _request(context, seed))
+    async with context.factory() as db:
+        product = await db.scalar(select(CertProduct).where(CertProduct.code == seed.code))
+        product.is_active = False
+        legacy = Certification(id=product.id+100000, name=seed.code, chinese_name=seed.code, code=seed.code, vendor="H3C", is_active=True)
+        db.add(legacy)
+        await db.commit()
+        product_id, legacy_id = product.id, legacy.id
+    catalog = CertificationService()
+    for filters in [None, CertificationFilter(vendor="H3C")]:
+        assert seed.code not in {row.code for row in await catalog.list_certifications(filters)}
+    assert seed.batch_id not in {row.id for row in await service.list_user_batches()}
+    with pytest.raises(NotFoundException): await catalog.get_detail(product_id)
+    with pytest.raises(NotFoundException): await catalog.get_detail(legacy_id)
+    async with context.factory() as db:
+        second_user = User(openid=f"{context.prefix}_second", phone="13800000002")
+        db.add(second_user); await db.flush()
+        db.add(UserRealname(user_id=second_user.id, user_type="normal", real_name="另一人",
+                            id_card_number="510101200001010124", status="verified"))
+        await db.commit()
+    with pytest.raises(BusinessException, match="已下架"):
+        await service.create_order(second_user.id, _request(context, seed).model_copy(update={
+            "candidate_name":"另一人", "candidate_idcard":"510101200001010124",
+        }))
+    assert (await service.get_registration(seed.user_id, created.id)).id == created.id
+    # A code absent from the new table still uses its enabled legacy product.
+    async with context.factory() as db:
+        fallback = Certification(name=seed.code+"old", chinese_name="旧产品", code=seed.code+"old", vendor="H3C", is_active=True)
+        db.add(fallback); await db.commit()
+    assert seed.code+"old" in {row.code for row in await catalog.list_certifications()}
+    async with context.factory() as db:
+        product = await db.get(CertProduct, product_id)
+        product.is_active = True
+        await db.commit()
+    public_detail = await catalog.get_detail(product_id)
+    assert public_detail.is_active and public_detail.created_at and public_detail.updated_at
+    assert (await catalog.get_detail(legacy_id)).id == product_id
+    assert [row.code for row in await catalog.list_certifications()].count(seed.code) == 1
+
+
+@pytest.mark.parametrize("initial_method", ["online_code", "stamped_certificate"])
+async def test_student_method_corrections_are_atomic_and_versioned(context, initial_method):
+    from app.domain.h3c.src.index import H3cExamBatch, H3cMaterialUpload
+    from app.schemas.h3c_registration import H3cOrderCreate
+    from app.services.h3c_registration import H3cRegistrationService
+    from app.port.exceptions import ValidationException
+
+    seed = await _seed(context, product_source="cert_product")
+    original_key = f"h3c/materials/{seed.user_id}/{context.prefix}-student-original.jpg"
+    replacement_key = f"h3c/materials/{seed.user_id}/{context.prefix}-student-new.jpg"
+    async with context.factory() as db:
+        batch = await db.get(H3cExamBatch, seed.batch_id)
+        batch.student_price_cents = 0
+        for key, digest in [(original_key, "a"), (replacement_key, "b")]:
+            db.add(H3cMaterialUpload(user_id=seed.user_id, material_type="student_proof", storage_key=key,
+                                    original_filename="student.jpg", size_bytes=128, sha256=digest*64))
+        await db.commit()
+    values = _request(context, seed).model_dump()
+    values.update(registration_type="student", coupon_code=None, coupon_proof_key=None,
+                  student_verification_method=initial_method,
+                  verify_code="CODE" if initial_method == "online_code" else None, student_proof_key=original_key)
+    service = H3cRegistrationService()
+    created = await service.create_order(seed.user_id, H3cOrderCreate(**values))
+    assert created.candidate_snapshot["student_verification_method"] == initial_method
+    returned = await service.review(admin_id=seed.admin_id, registration_id=created.id, decision_data={
+        "decision":"rejected", "reason_code":"material_type_mismatch", "rejected_material_types":["student_proof"],
+    })
+    assert set(returned.pending_correction.allowed_fields) == {"student_verification_method", "verify_code"}
+    target = "stamped_certificate" if initial_method == "online_code" else "online_code"
+    changes = {"student_verification_method":target, "verify_code":None if target == "stamped_certificate" else "NEW-CODE", "student_proof_key":replacement_key}
+    for invalid in [
+        {key:value for key,value in changes.items() if key != "verify_code"},
+        {key:value for key,value in changes.items() if key != "student_proof_key"},
+        {**changes, "student_proof_key":original_key},
+    ]:
+        with pytest.raises(ValidationException): await service.resubmit_materials(seed.user_id, created.id, invalid)
+        unchanged = await service.get_registration(seed.user_id, created.id)
+        assert unchanged.status == "rejected_awaiting_resubmission"
+        assert unchanged.candidate_snapshot["student_verification_method"] == initial_method
+    updated = await service.resubmit_materials(seed.user_id, created.id, changes)
+    assert updated.status == "pending_review"
+    assert updated.order_id == created.order_id
+    assert updated.candidate_snapshot["verify_code"] == changes["verify_code"]
+    assert updated.candidate_snapshot["student_verification_method"] == target
+    assert len(updated.versions) == 2
+    assert next(version for version in updated.versions if version.version_no == 1).candidate_snapshot["student_verification_method"] == initial_method
+    assert {row.sha256 for row in updated.materials if row.is_current} == {"b"*64}

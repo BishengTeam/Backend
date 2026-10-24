@@ -43,7 +43,6 @@ class CertificationService:
     async def list_certifications(self, filters: CertificationFilter | None = None) -> list[CertificationResponse]:
         """优先返回新 cert_product（活跃），兼容旧 certification 补充"""
         async with get_db_ctx() as db:
-            seen_codes: set[str] = set()
             result_items: list[CertificationResponse] = []
             # 新表（按 type 筛选映射 vendor）
             new_stmt = select(CertProduct).where(CertProduct.is_active == True)
@@ -56,12 +55,11 @@ class CertificationService:
                     new_stmt = new_stmt.where(CertProduct.type == type_filter)
             new_certs = (await db.execute(new_stmt.order_by(CertProduct.type, CertProduct.id))).scalars().all()
             for cp in new_certs:
-                seen_codes.add(cp.code)
                 result_items.append(cert_product_response(cp))
             # 旧表补充（新表未覆盖的 code）
             old_stmt = select(Certification).where(
                 Certification.is_active == True,
-                ~Certification.code.in_(seen_codes) if seen_codes else True,
+                ~Certification.code.in_(select(CertProduct.code)),
             )
             if filters and filters.vendor:
                 old_stmt = old_stmt.where(Certification.vendor == filters.vendor)
@@ -75,14 +73,24 @@ class CertificationService:
             # 优先新表
             cp = await db.get(CertProduct, cert_id)
             if cp is not None:
+                if not cp.is_active:
+                    raise NotFoundException("认证项目")
                 base = cert_product_response(cp)
                 return CertificationDetailResponse(
                     **base.model_dump(),
-                    description=cp.description, price_normal=None, price_student=None,
+                    created_at=cp.created_at, updated_at=cp.updated_at, is_active=cp.is_active,
                 )
             cert = await db.get(Certification, cert_id)
-            if cert is None:
+            if cert is None or not cert.is_active:
                 raise NotFoundException("认证项目")
+            # 旧链接也必须遵守同编码新产品的上下架状态。
+            override = await db.scalar(select(CertProduct).where(CertProduct.code == cert.code))
+            if override is not None:
+                if not override.is_active:
+                    raise NotFoundException("认证项目")
+                base = cert_product_response(override)
+                return CertificationDetailResponse(**base.model_dump(), created_at=override.created_at,
+                                                   updated_at=override.updated_at, is_active=override.is_active)
             return CertificationDetailResponse.model_validate(cert)
 
     # ── P2 深信服/NISP ──────────────────────────────────────────
