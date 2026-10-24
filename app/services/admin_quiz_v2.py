@@ -88,6 +88,10 @@ _ACCESS_MODE_TRANSITIONS = {
     },
     QuizLibraryAccessMode.FREE: {QuizLibraryAccessMode.COURSE_ENTITLEMENT},
     QuizLibraryAccessMode.COURSE_ENTITLEMENT: {QuizLibraryAccessMode.FREE},
+    QuizLibraryAccessMode.PAID: {
+        QuizLibraryAccessMode.FREE,
+        QuizLibraryAccessMode.COURSE_ENTITLEMENT,
+    },
 }
 
 
