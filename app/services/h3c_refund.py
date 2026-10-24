@@ -26,7 +26,7 @@ from app.integrations.wechat_pay import (
 )
 from app.port.config import settings
 from app.port.exceptions import ConflictException, NotFoundException
-from app.schemas.common import PaginatedData
+from app.schemas.common import PaginatedData, PaginatedDataWithCounts
 from app.schemas.h3c_registration import H3cRefundResponse
 from app.services.refund_recovery import (
     format_refund_error,
@@ -110,7 +110,7 @@ class H3cRefundService:
         status: str | None = None,
         page: int = 1,
         page_size: int = 20,
-    ) -> PaginatedData[H3cRefundResponse]:
+    ) -> PaginatedDataWithCounts[H3cRefundResponse]:
         async with get_db_ctx() as db:
             stmt = (
                 select(H3cRefundRequest, H3cRegistration, Plan, Order, CertProduct)
@@ -191,7 +191,7 @@ class H3cRefundService:
                 response.batch_name = plan.name
                 response.product_label = product.chinese_name or plan.product_type
                 items.append(response)
-            return PaginatedData(
+            return PaginatedDataWithCounts(
                 items=items,
                 total=int(total),
                 page=page,

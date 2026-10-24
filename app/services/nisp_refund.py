@@ -87,7 +87,7 @@ class NispRefundService:
         page: int = 1,
         page_size: int = 20,
     ):
-        from app.schemas.common import PaginatedData
+        from app.schemas.common import PaginatedDataWithCounts
 
         async with get_db_ctx() as db:
             base = (
@@ -172,7 +172,7 @@ class NispRefundService:
                     else f"NISP · {'一级' if registration.level == '1' else '二级'}"
                 )
                 items.append(response)
-            return PaginatedData(
+            return PaginatedDataWithCounts(
                 items=items,
                 total=int(total),
                 page=page,

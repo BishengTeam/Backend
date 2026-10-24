@@ -430,7 +430,6 @@ async def test_own_application_list_supports_status_filter_and_skips_empty_fanou
         "total": 0,
         "page": 3,
         "page_size": 10,
-        "status_counts": {},
     }
     assert len(db.executed) == 2
     assert all("renshe_application.user_id" in str(item) for item in db.executed)

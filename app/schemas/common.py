@@ -16,6 +16,15 @@ class PaginatedData(BaseModel, Generic[T]):
     total: int
     page: int
     page_size: int
+
+
+class PaginatedDataWithCounts(PaginatedData[T]):
+    """Pagination envelope for list endpoints that also report per-status tallies.
+
+    Kept out of the generic envelope so the shared contract stays stable for
+    every other paginated consumer.
+    """
+
     status_counts: dict[str, int] = Field(default_factory=dict)
 
 

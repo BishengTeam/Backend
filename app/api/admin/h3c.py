@@ -7,7 +7,7 @@ from app.middleware.auth import (
     require_permission,
     require_reauthenticated_admin,
 )
-from app.schemas.common import APIResponse, PaginatedData, success
+from app.schemas.common import APIResponse, PaginatedData, PaginatedDataWithCounts, success
 from app.schemas.h3c_registration import (
     H3cCloseRequest,
     H3cExamBatchCreate,
@@ -356,7 +356,7 @@ async def close_registration_record(
 
 @router.get(
     "/refunds",
-    response_model=APIResponse[PaginatedData[H3cRefundResponse]],
+    response_model=APIResponse[PaginatedDataWithCounts[H3cRefundResponse]],
     summary="H3C 退款任务列表",
     **admin_error_contract("40001", "40100", "40101", "50000"),
 )
@@ -373,7 +373,7 @@ async def list_refunds(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     _admin=Depends(require_permission("h3c:refund")),
-) -> APIResponse[PaginatedData[H3cRefundResponse]]:
+) -> APIResponse[PaginatedDataWithCounts[H3cRefundResponse]]:
     return success(
         data=await H3cRefundService().list_refunds(
             registration_id=registration_id,

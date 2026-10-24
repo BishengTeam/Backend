@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 
 from app.middleware.auth import require_permission, require_reauthenticated_admin
-from app.schemas.common import APIResponse, PaginatedData, success
+from app.schemas.common import APIResponse, PaginatedData, PaginatedDataWithCounts, success
 from app.schemas.nisp import (
     NispExportCreate,
     NispExportItemResponse,
@@ -291,7 +291,7 @@ async def get_export_signed_url(
     return success(data=NispSignedUrlResponse(url=url, expires_at=expires_at))
 
 
-@router.get("/refunds", response_model=APIResponse[PaginatedData[NispRefundResponse]])
+@router.get("/refunds", response_model=APIResponse[PaginatedDataWithCounts[NispRefundResponse]])
 async def list_refunds(
     registration_id: int | None = Query(None, ge=1),
     batch_id: int | None = Query(None, ge=1),

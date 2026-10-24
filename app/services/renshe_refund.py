@@ -29,7 +29,7 @@ from app.integrations.wechat_pay import (
 )
 from app.port.config import settings
 from app.port.exceptions import ConflictException, NotFoundException
-from app.schemas.common import PaginatedData
+from app.schemas.common import PaginatedData, PaginatedDataWithCounts
 from app.schemas.renshe import (
     RensheRefundCreate,
     RensheRefundDecision,
@@ -233,7 +233,7 @@ class RensheRefundService:
         status: str | None,
         page: int,
         page_size: int,
-    ) -> PaginatedData[RensheRefundResponse]:
+    ) -> PaginatedDataWithCounts[RensheRefundResponse]:
         async with get_db_ctx() as db:
             base = (
                 select(
@@ -330,7 +330,7 @@ class RensheRefundService:
                 response.batch_name = plan.name
                 response.product_label = plan.project_name or (product.chinese_name if product is not None else "人社认证")
                 items.append(response)
-            return PaginatedData[RensheRefundResponse](
+            return PaginatedDataWithCounts[RensheRefundResponse](
                 items=items,
                 total=total,
                 page=page,

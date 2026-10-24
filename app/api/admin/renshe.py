@@ -9,7 +9,7 @@ from app.port.exceptions import BusinessException
 
 from app.middleware.auth import require_permission, require_super_admin
 from app.middleware.rate_limit import limiter
-from app.schemas.common import APIResponse, PaginatedData, success
+from app.schemas.common import APIResponse, PaginatedData, PaginatedDataWithCounts, success
 from app.schemas.renshe import (
     RensheAdminApplicationDetailResponse,
     RensheAdminApplicationListItem,
@@ -315,7 +315,7 @@ async def correct_review(
 
 @router.get(
     "/refunds",
-    response_model=APIResponse[PaginatedData[RensheRefundResponse]],
+    response_model=APIResponse[PaginatedDataWithCounts[RensheRefundResponse]],
     summary="退款申请工作台",
 )
 async def list_refunds(
@@ -331,7 +331,7 @@ async def list_refunds(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     _admin=Depends(require_permission("order:list")),
-) -> APIResponse[PaginatedData[RensheRefundResponse]]:
+) -> APIResponse[PaginatedDataWithCounts[RensheRefundResponse]]:
     from app.services.renshe_refund import RensheRefundService
 
     result = await RensheRefundService().list_refunds(
