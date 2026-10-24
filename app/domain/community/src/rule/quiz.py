@@ -674,11 +674,13 @@ def normalize_question_payload(
                 "答案空数必须与题干空位数量一致",
                 code="fill_blank_placeholder_count_mismatch",
             )
+    # 解析（explanation）始终可选：发布与导入不再强制要求（2026-10-24 产品决策），
+    # 学生端展示处已对空解析做了隐藏处理。
     normalized_explanation = _clean_text(
         explanation,
         field="explanation",
         max_length=1024,
-        required=require_publishable,
+        required=False,
     )
     normalized_image_urls = normalize_image_urls(image_urls)
     normalized_option_image_urls = normalize_option_image_urls(
