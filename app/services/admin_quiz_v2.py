@@ -2115,12 +2115,7 @@ class AdminQuizV2Service:
             library, _module, point = await self._active_point(
                 db, data.knowledge_point_id
             )
-            if await self._stem_taken(
-                db,
-                library_id=int(library.id),
-                question_text_hash=normalized.question_text_hash,
-            ):
-                raise ValidationException("同一题库内规范化题干不能重复")
+            # 同库题干唯一性已随 quiz017 降级索引废除（2026-10-24 产品决策：同题干多版本共存）。
             question = QuizQuestion(
                 library_id=library.id,
                 knowledge_point_id=point.id,
@@ -2241,13 +2236,6 @@ class AdminQuizV2Service:
                 ),
                 require_publishable=bool(question.ever_published),
             )
-            if await self._stem_taken(
-                db,
-                library_id=int(question.library_id),
-                question_text_hash=normalized.question_text_hash,
-                exclude_id=int(question.id),
-            ):
-                raise ValidationException("同一题库内规范化题干不能重复")
             before = self._question_fields(question)
             if target_point is not None:
                 question.knowledge_point_id = target_point.id
@@ -2345,13 +2333,6 @@ class AdminQuizV2Service:
                 option_image_urls=pending.option_image_urls,
                 require_publishable=True,
             )
-            if await self._stem_taken(
-                db,
-                library_id=int(question.library_id),
-                question_text_hash=normalized.question_text_hash,
-                exclude_id=question_id,
-            ):
-                raise ValidationException("同一题库内规范化题干不能重复")
             before = self._question_fields(question)
             now = self._now()
             if question.current_revision_id is not None:
@@ -2515,9 +2496,6 @@ class AdminQuizV2Service:
                         )
                     except ValidationException as exc:
                         errors.append(AdminQuizBatchItemError(question_id=item.question_id, code=40001, field=None, message=exc.message))
-                        continue
-                    if await self._stem_taken(db, library_id=int(question.library_id), question_text_hash=normalized.question_text_hash, exclude_id=int(question.id)):
-                        errors.append(AdminQuizBatchItemError(question_id=item.question_id, code=40001, field="question_text", message="同一题库内规范化题干不能重复"))
                         continue
                     pending_revisions[item.question_id] = pending
                 elif action == "disable" and question.status != "published":
