@@ -1155,15 +1155,21 @@ async def test_quiz_attempt_milestones_award_per_100_attempts(quiz_practice_env)
     category = await _create_category(env, "amile")
     await _create_questions(env, category, 1, suffix="amile")
 
-    session = await env.service.create_session(env.user.id, _normal_session(category.id))
-    session_question_id = session.questions[0].session_question_id
-
-    for index in range(99):
+    async def answer_once(index: int) -> None:
+        # 单题会话首答即完成（first_answered >= actual_count），已完成会话不能续答；
+        # 产品里「同题重做」= 新会话再答同题（_select_normal_questions 有已答 fallback），
+        # 里程碑按用户维度跨会话累计作答次数。
+        session = await env.service.create_session(
+            env.user.id, _normal_session(category.id, count=1)
+        )
         await env.service.submit_attempt(
             env.user.id,
             session.id,
-            _attempt(session_question_id, f"amile-{index:04d}"),
+            _attempt(session.questions[0].session_question_id, f"amile-{index:04d}"),
         )
+
+    for index in range(99):
+        await answer_once(index)
 
     async with env.factory() as db:
         account = (
@@ -1186,12 +1192,8 @@ async def test_quiz_attempt_milestones_award_per_100_attempts(quiz_practice_env)
     assert int(milestone_count) == 0
 
     # 第 100 次作答：+1 里程碑；第 101 次不再发
-    await env.service.submit_attempt(
-        env.user.id, session.id, _attempt(session_question_id, "amile-0099")
-    )
-    await env.service.submit_attempt(
-        env.user.id, session.id, _attempt(session_question_id, "amile-0100")
-    )
+    await answer_once(99)
+    await answer_once(100)
 
     async with env.factory() as db:
         account = (
