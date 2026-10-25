@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select, text
@@ -23,9 +25,10 @@ from app.schemas.points import (
 
 CLAIM_SCENE_POINTS: dict[str, int] = {
     "daily_checkin": 1,
-    "new_user": 20,
     "activity": 10,
 }
+
+logger = logging.getLogger(__name__)
 
 
 class PointsService:
@@ -125,6 +128,43 @@ class PointsService:
             balance=history.balance_after,
             history_id=history.id,
         )
+
+    async def grant_milestones_in_session(
+        self,
+        db: AsyncSession,
+        *,
+        user_id: int,
+        action_type: str,
+        amount: int,
+        milestones: tuple[int, ...],
+        source_prefix: str,
+        describe_milestone: Callable[[int], str],
+    ) -> None:
+        """结算里程碑奖励：逐档按幂等键补发，SAVEPOINT 隔离，失败只记日志不阻断业务。
+
+        调用方可重复触发（每次业务动作都全量结算），已发过的档位由
+        _grant_points_in_session 的 source 去重自动跳过。
+        """
+        for milestone in milestones:
+            try:
+                async with db.begin_nested():
+                    await self._grant_points_in_session(
+                        db,
+                        user_id=user_id,
+                        amount=amount,
+                        action_type=action_type,
+                        description=describe_milestone(milestone),
+                        source_type="points_claim",
+                        source_id=f"{source_prefix}:{user_id}:{milestone}",
+                    )
+            except Exception:
+                logger.warning(
+                    "points milestone grant failed: user_id=%s rule=%s milestone=%s",
+                    user_id,
+                    action_type,
+                    milestone,
+                    exc_info=True,
+                )
 
     @staticmethod
     async def _validate_activity_claim(
@@ -323,8 +363,6 @@ class PointsService:
             # 必须与 quiz_practice 自动打卡发分的 source_id 格式完全一致（按用户 + 业务时区自然日），
             # 否则同一天自动打卡与手动领取会绕过幂等检查重复发放积分。
             return f"{scene}:{user_id}:{today().isoformat()}"
-        if scene == "new_user":
-            return "new_user:once"
         if scene == "activity":
             if not source_id:
                 raise BusinessException("activity 场景必须提供 source_id")

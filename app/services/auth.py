@@ -8,7 +8,6 @@ from app.adapter.security import create_access_token, create_refresh_token, deco
 from app.integrations.wechat import WechatClient
 from app.domain.user.src.index import DeletedOpenid, User
 from app.domain.user.src.index import UserProfile as DomainUserProfile
-from app.services.points import PointsService
 from app.schemas.user import LoginResponse, RefreshResponse, UserProfile
 from app.services.renshe_audit import record_best_effort_audit
 
@@ -55,19 +54,7 @@ class AuthService:
                 db.add(user)
                 await db.flush()
                 db.add(DomainUserProfile(user_id=user.id))
-                # New user bonus points (idempotent per user).
-                try:
-                    await PointsService()._grant_points_in_session(
-                        db,
-                        user_id=user.id,
-                        amount=20,
-                        action_type="claim_new_user",
-                        description="新用户注册 +20积分",
-                        source_type="points_claim",
-                        source_id=f"new_user:{user.id}",
-                    )
-                except Exception:
-                    pass  # Points failure must not block registration.
+                # 2026-10-24 起新用户注册不再赠送积分（积分规则 v2，见 points_rules.py）。
             elif not user.is_active:
                 raise UnauthorizedException("账号已注销，如需恢复请联系客服")
             else:

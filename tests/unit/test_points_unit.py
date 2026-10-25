@@ -22,7 +22,7 @@ EXPECTED_POINTS_ENDPOINTS = (
     ("POST", "/api/points/redeem"),
 )
 
-CLAIM_SCENES = ("daily_checkin", "new_user", "activity")
+CLAIM_SCENES = ("daily_checkin", "activity")
 REDEEM_TYPES = ("exam_discount", "course")
 ROUTE_METHODS = {"api_route", "delete", "get", "head", "options", "patch", "post", "put"}
 FORBIDDEN_HTTP_TYPES = {
@@ -183,6 +183,9 @@ class PointsSystemTests(unittest.TestCase):
         # quiz_task 已按产品决策移除：练习奖励只保留每日打卡 +5
         with self.assertRaises(ValidationError):
             claim_model(scene="quiz_task")
+        # 2026-10-24 起注册不再赠送积分，new_user 领取场景同步移除
+        with self.assertRaises(ValidationError):
+            claim_model(scene="new_user")
 
         activity = claim_model(scene="activity", source_id="activity-2026")
         self.assertEqual(activity.source_id, "activity-2026")

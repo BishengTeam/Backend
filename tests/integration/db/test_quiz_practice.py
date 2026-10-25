@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.adapter.security import create_access_token
@@ -1059,3 +1059,155 @@ async def test_http_auth_validation_ownership_and_answer_visibility(
     finally:
         app.dependency_overrides.clear()
         app.dependency_overrides.update(previous_overrides)
+
+
+async def test_checkin_milestones_award_once_per_threshold(quiz_practice_env) -> None:
+    """累计签到满 7/15/30 天各一次性 +5；只统计生效日后新增打卡，结算可重复触发。"""
+    from app.domain.user.src.index import PointsHistory, UserPoints
+    from app.services.points_rules import POINTS_RULES_V2_STARTED_AT
+
+    env = quiz_practice_env
+    release_day = POINTS_RULES_V2_STARTED_AT.date()
+
+    async def _seed_checkins(user_id: int, days: list[date]) -> None:
+        async with env.factory() as db:
+            for offset, day in enumerate(days, start=1):
+                db.add(
+                    QuizCheckin(
+                        user_id=user_id,
+                        checkin_date=day,
+                        questions_completed=1,
+                        consecutive_days=offset,
+                        first_attempt_id=None,
+                    )
+                )
+            await db.commit()
+
+    async def _settle(user_id: int) -> None:
+        async with env.factory() as db:
+            await env.service._settle_checkin_milestones(db, user_id=user_id)
+            await db.commit()
+
+    async def _balance(user_id: int) -> int:
+        async with env.factory() as db:
+            account = (
+                await db.execute(select(UserPoints).where(UserPoints.user_id == user_id))
+            ).scalar_one_or_none()
+        return int(account.balance) if account is not None else 0
+
+    # 前 6 天：未达 7 天档，无里程碑
+    await _seed_checkins(env.user.id, [release_day + timedelta(days=i) for i in range(1, 7)])
+    await _settle(env.user.id)
+    assert await _balance(env.user.id) == 0
+
+    # 第 7 天：+5，且重复结算不重复发
+    await _seed_checkins(env.user.id, [release_day + timedelta(days=7)])
+    await _settle(env.user.id)
+    assert await _balance(env.user.id) == 5
+    await _settle(env.user.id)
+    assert await _balance(env.user.id) == 5
+
+    # 补到 15 天：再 +5；补到 30 天：再 +5；40 天不再多发
+    await _seed_checkins(
+        env.user.id, [release_day + timedelta(days=i) for i in range(8, 16)]
+    )
+    await _settle(env.user.id)
+    assert await _balance(env.user.id) == 10
+    await _seed_checkins(
+        env.user.id, [release_day + timedelta(days=i) for i in range(16, 31)]
+    )
+    await _settle(env.user.id)
+    assert await _balance(env.user.id) == 15
+    await _seed_checkins(
+        env.user.id, [release_day + timedelta(days=i) for i in range(31, 41)]
+    )
+    await _settle(env.user.id)
+    assert await _balance(env.user.id) == 15
+
+    async with env.factory() as db:
+        milestones = (
+            await db.execute(
+                select(PointsHistory).where(
+                    PointsHistory.user_id == env.user.id,
+                    PointsHistory.action_type == "claim_checkin_milestone",
+                )
+            )
+        ).scalars().all()
+    assert sorted(row.source_id for row in milestones) == sorted(
+        f"checkin_milestone:{env.user.id}:{threshold}" for threshold in (7, 15, 30)
+    )
+    assert all(row.amount == 5 for row in milestones)
+
+    # 存量口径：生效日之前的打卡不计入（另一用户 10 天全部在生效日前）
+    await _seed_checkins(
+        env.other_user.id, [release_day - timedelta(days=i) for i in range(1, 11)]
+    )
+    status = await env.service.manual_checkin(env.other_user.id)
+    assert status.checked_in is True
+    assert await _balance(env.other_user.id) == 1  # 仅当日打卡 +1，无里程碑
+
+
+async def test_quiz_attempt_milestones_award_per_100_attempts(quiz_practice_env) -> None:
+    """每满 100 次作答 +1（含同题重做），不满 100 次不发。"""
+    from app.domain.user.src.index import PointsHistory, UserPoints
+
+    env = quiz_practice_env
+    category = await _create_category(env, "amile")
+    await _create_questions(env, category, 1, suffix="amile")
+
+    session = await env.service.create_session(env.user.id, _normal_session(category.id))
+    session_question_id = session.questions[0].session_question_id
+
+    for index in range(99):
+        await env.service.submit_attempt(
+            env.user.id,
+            session.id,
+            _attempt(session_question_id, f"amile-{index:04d}"),
+        )
+
+    async with env.factory() as db:
+        account = (
+            await db.execute(
+                select(UserPoints).where(UserPoints.user_id == env.user.id)
+            )
+        ).scalar_one()
+        milestone_count = (
+            await db.execute(
+                select(func.count())
+                .select_from(PointsHistory)
+                .where(
+                    PointsHistory.user_id == env.user.id,
+                    PointsHistory.action_type == "claim_quiz_attempts",
+                )
+            )
+        ).scalar()
+    # 99 次作答：只有首答触发的打卡 1 分，无刷题里程碑
+    assert int(account.balance) == 1
+    assert int(milestone_count) == 0
+
+    # 第 100 次作答：+1 里程碑；第 101 次不再发
+    await env.service.submit_attempt(
+        env.user.id, session.id, _attempt(session_question_id, "amile-0099")
+    )
+    await env.service.submit_attempt(
+        env.user.id, session.id, _attempt(session_question_id, "amile-0100")
+    )
+
+    async with env.factory() as db:
+        account = (
+            await db.execute(
+                select(UserPoints).where(UserPoints.user_id == env.user.id)
+            )
+        ).scalar_one()
+        milestones = (
+            await db.execute(
+                select(PointsHistory).where(
+                    PointsHistory.user_id == env.user.id,
+                    PointsHistory.action_type == "claim_quiz_attempts",
+                )
+            )
+        ).scalars().all()
+    assert int(account.balance) == 2  # 打卡 1 + 里程碑 1
+    assert len(milestones) == 1
+    assert milestones[0].amount == 1
+    assert milestones[0].source_id == f"quiz_attempts:{env.user.id}:1"

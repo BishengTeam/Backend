@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-PointsClaimScene = Literal["daily_checkin", "new_user", "activity"]
+PointsClaimScene = Literal["daily_checkin", "activity"]
 PointsRedeemType = Literal["exam_discount", "course"]
 
 

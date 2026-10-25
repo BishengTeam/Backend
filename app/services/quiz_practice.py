@@ -51,6 +51,14 @@ from app.domain.community.src.rule.quiz import (
 from app.domain.user.src.index import User
 from app.port.config import settings
 from app.services.points import CLAIM_SCENE_POINTS, PointsService
+from app.services.points_rules import (
+    CHECKIN_MILESTONE_POINTS,
+    POINTS_RULES_V2_STARTED_AT,
+    QUIZ_ATTEMPTS_MILESTONE_POINTS,
+    QUIZ_ATTEMPTS_PER_POINT,
+    checkin_milestone_hits,
+    quiz_attempt_milestone_hits,
+)
 from app.port.exceptions import (
     BusinessException,
     ConflictException,
@@ -1021,6 +1029,8 @@ class QuizPracticeService:
                 idempotency_key=data.idempotency_key,
                 now=now,
             )
+            # 每满 100 次作答 +1 积分：幂等结算，见 points_rules.py。
+            await self._settle_quiz_attempt_milestones(db, user_id=user_id)
             if attempt.is_first_attempt:
                 first_answered = (
                     await db.execute(
@@ -1166,6 +1176,9 @@ class QuizPracticeService:
                     now=now,
                     stats=stats,
                 )
+            if answered:
+                # 交卷批量记答后统一结算一次刷题里程碑（幂等）。
+                await self._settle_quiz_attempt_milestones(db, user_id=user_id)
 
             session.status = _PRACTICE_COMPLETED
             session.completed_at = now
@@ -1300,6 +1313,8 @@ class QuizPracticeService:
         # SAVEPOINT 隔离积分发放：失败只回滚发放本身，不污染练习提交事务；
         # 失败必须留下日志，便于事后审计漏发（quiz_checkin 与 points_history 对账）。
         await self._award_checkin_points(db, user_id=user_id, local_day=local_day)
+        # 仅在真正新增打卡日时结算里程碑（当天后续作答走上方 early-return，不重算）。
+        await self._settle_checkin_milestones(db, user_id=user_id)
 
     async def _award_checkin_points(self, db, *, user_id: int, local_day: date) -> None:
         """Idempotently award or repair points for an existing check-in day."""
@@ -1321,6 +1336,61 @@ class QuizPracticeService:
                 local_day.isoformat(),
                 exc_info=True,
             )
+
+    async def _settle_checkin_milestones(self, db, *, user_id: int) -> None:
+        """新增打卡日时结算累计签到里程碑（满 7/15/30 天各 +5）。
+
+        「只算新增长」：只统计规则生效日（points_rules.POINTS_RULES_V2_STARTED_AT）
+        之后的新增打卡，存量天数不回溯。发放幂等，可安全重复结算。
+        """
+        started_day = POINTS_RULES_V2_STARTED_AT.date()
+        days = (
+            await db.execute(
+                select(func.count())
+                .select_from(QuizCheckin)
+                .where(
+                    QuizCheckin.user_id == user_id,
+                    QuizCheckin.checkin_date >= started_day,
+                )
+            )
+        ).scalar() or 0
+        await PointsService().grant_milestones_in_session(
+            db,
+            user_id=user_id,
+            action_type="claim_checkin_milestone",
+            amount=CHECKIN_MILESTONE_POINTS,
+            milestones=checkin_milestone_hits(int(days)),
+            source_prefix="checkin_milestone",
+            describe_milestone=lambda m: f"累计签到满{m}天奖励 +{CHECKIN_MILESTONE_POINTS}积分",
+        )
+
+    async def _settle_quiz_attempt_milestones(self, db, *, user_id: int) -> None:
+        """结算练习作答里程碑（每满 100 次作答 +1，不设上限）。
+
+        「只算新增长」：只统计规则生效日之后的新增作答（含同题重做）；
+        竞赛、模拟考走独立考试体系，天然不计入。
+        """
+        attempts = (
+            await db.execute(
+                select(func.count())
+                .select_from(QuizPracticeAttempt)
+                .where(
+                    QuizPracticeAttempt.user_id == user_id,
+                    QuizPracticeAttempt.submitted_at >= POINTS_RULES_V2_STARTED_AT,
+                )
+            )
+        ).scalar() or 0
+        await PointsService().grant_milestones_in_session(
+            db,
+            user_id=user_id,
+            action_type="claim_quiz_attempts",
+            amount=QUIZ_ATTEMPTS_MILESTONE_POINTS,
+            milestones=quiz_attempt_milestone_hits(int(attempts)),
+            source_prefix="quiz_attempts",
+            describe_milestone=lambda m: (
+                f"练习刷题满{m * QUIZ_ATTEMPTS_PER_POINT}次奖励 +{QUIZ_ATTEMPTS_MILESTONE_POINTS}积分"
+            ),
+        )
 
     async def _apply_wrong_book(
         self,
@@ -1932,6 +2002,7 @@ class QuizPracticeService:
             # 与 _upsert_checkin 一致：发分统一走 _award_checkin_points（SAVEPOINT 隔离，
             # 失败只回滚发放本身，不阻断手动打卡；日志用于事后对账补发）。
             await self._award_checkin_points(db, user_id=user_id, local_day=local_day)
+            await self._settle_checkin_milestones(db, user_id=user_id)
             await db.commit()
             return QuizCheckinStatusResponse(
                 checkin_date=local_day,
