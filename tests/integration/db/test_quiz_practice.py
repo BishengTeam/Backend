@@ -1148,28 +1148,40 @@ async def test_checkin_milestones_award_once_per_threshold(quiz_practice_env) ->
 
 
 async def test_quiz_attempt_milestones_award_per_100_attempts(quiz_practice_env) -> None:
-    """每满 100 次作答 +1（含同题重做），不满 100 次不发。"""
+    """每满 100 次作答 +1（同题重做跨会话累计），不满 100 次不发。"""
     from app.domain.user.src.index import PointsHistory, UserPoints
 
     env = quiz_practice_env
     category = await _create_category(env, "amile")
-    await _create_questions(env, category, 1, suffix="amile")
+    await _create_questions(env, category, 10, suffix="amile")
 
-    async def answer_once(index: int) -> None:
-        # 单题会话首答即完成（first_answered >= actual_count），已完成会话不能续答；
-        # 产品里「同题重做」= 新会话再答同题（_select_normal_questions 有已答 fallback），
-        # 里程碑按用户维度跨会话累计作答次数。
-        session = await env.service.create_session(
-            env.user.id, _normal_session(category.id, count=1)
-        )
+    # 会话约束：question_count 下限 10，10 题首答齐即完成；已完成会话不能续答，
+    # 「同题重做」= 新会话再答同题（_select_normal_questions 有已答 fallback），
+    # 里程碑按用户维度跨会话累计作答次数。
+    key_no = 0
+
+    async def new_session():
+        return await env.service.create_session(env.user.id, _normal_session(category.id))
+
+    async def answer(session, question) -> None:
+        nonlocal key_no
         await env.service.submit_attempt(
             env.user.id,
             session.id,
-            _attempt(session.questions[0].session_question_id, f"amile-{index:04d}"),
+            _attempt(question.session_question_id, f"amile-{key_no:04d}"),
         )
+        key_no += 1
 
-    for index in range(99):
-        await answer_once(index)
+    # 9 个整会话 × 10 题首答 = 90 次
+    for _ in range(9):
+        session = await new_session()
+        for question in session.questions:
+            await answer(session, question)
+
+    # 第 10 个会话只答 9 题：累计 99 次，无里程碑
+    partial = await new_session()
+    for question in partial.questions[:9]:
+        await answer(partial, question)
 
     async with env.factory() as db:
         account = (
@@ -1191,9 +1203,10 @@ async def test_quiz_attempt_milestones_award_per_100_attempts(quiz_practice_env)
     assert int(account.balance) == 1
     assert int(milestone_count) == 0
 
-    # 第 100 次作答：+1 里程碑；第 101 次不再发
-    await answer_once(99)
-    await answer_once(100)
+    # 第 100 次作答（该会话最后一题）：+1 里程碑；第 101 次（新会话再答）不再发
+    await answer(partial, partial.questions[9])
+    extra = await new_session()
+    await answer(extra, extra.questions[0])
 
     async with env.factory() as db:
         account = (
