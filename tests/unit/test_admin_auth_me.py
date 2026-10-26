@@ -82,4 +82,6 @@ class TestRolePermissions:
             "nisp:final_review",
             "renshe:review",
             "renshe:export",
+            "sangfor:review",
+            "sangfor:export",
         }
