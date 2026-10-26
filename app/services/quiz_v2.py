@@ -284,9 +284,10 @@ class QuizV2Service:
             module_count=module_count,
         )
 
-    async def list_libraries(self, user_id: int) -> list[QuizLibraryCatalogItem]:
+    async def list_libraries(self, user_id: int | None) -> list[QuizLibraryCatalogItem]:
         async with get_db_ctx() as db:
-            await self._require_user(db, user_id)
+            if user_id is not None:
+                await self._require_user(db, user_id)
             libraries = list(
                 (
                     await db.execute(
@@ -294,7 +295,7 @@ class QuizV2Service:
                         .where(
                             QuizLibrary.v2_enabled.is_(True),
                             QuizLibrary.status == "published",
-                            self._visible_clause(user_id),
+                            self._visible_clause(user_id) if user_id is not None else True,
                         )
                         .order_by(QuizLibrary.sort_order.asc(), QuizLibrary.id.asc())
                     )
@@ -502,11 +503,16 @@ class QuizV2Service:
         return changed
 
     async def get_library(
-        self, user_id: int, library_id: int
+        self, user_id: int | None, library_id: int
     ) -> QuizLibraryCatalogDetail:
         async with get_db_ctx() as db:
-            await self._require_user(db, user_id)
-            library = await self._require_accessible_library(db, user_id, library_id)
+            if user_id is None:
+                library = await db.get(QuizLibrary, library_id)
+                if library is None or library.status != "published" or not library.v2_enabled:
+                    raise self._not_found()
+            else:
+                await self._require_user(db, user_id)
+                library = await self._require_accessible_library(db, user_id, library_id)
             modules = list(
                 (
                     await db.execute(

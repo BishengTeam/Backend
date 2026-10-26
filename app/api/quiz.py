@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Path, Query, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_current_user_optional
 from app.middleware.rate_limit import limiter, quiz_user_key
 from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, PaginatedData, success
@@ -167,9 +167,9 @@ async def quiz_stats_query(
     summary="当前用户可见的 V2 题库",
 )
 async def list_quiz_libraries(
-    current_user: User = Depends(get_current_user),
+    current_user: User | None = Depends(get_current_user_optional),
 ) -> APIResponse[list[QuizLibraryCatalogItem]]:
-    return success(data=await QuizV2Service().list_libraries(current_user.id))
+    return success(data=await QuizV2Service().list_libraries(current_user.id if current_user else None))
 
 
 @router.post(
@@ -195,10 +195,10 @@ async def purchase_quiz_library(
 )
 async def get_quiz_library(
     library_id: int = Path(..., ge=1),
-    current_user: User = Depends(get_current_user),
+    current_user: User | None = Depends(get_current_user_optional),
 ) -> APIResponse[QuizLibraryCatalogDetail]:
     return success(
-        data=await QuizV2Service().get_library(current_user.id, library_id)
+        data=await QuizV2Service().get_library(current_user.id if current_user else None, library_id)
     )
 
 

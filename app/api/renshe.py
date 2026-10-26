@@ -28,7 +28,7 @@ MAX_MATERIAL_READ_BYTES = 20 * 1024 * 1024 + 1
 
 
 @router.get("/projects")
-async def list_projects(current_user: User = Depends(get_current_user)):
+async def list_projects():
     from app.services.renshe_project import RensheProjectService
     # Public responses contain only business data; no internal code or mappings.
     projects = await RensheProjectService().list_projects(public=True)
@@ -45,9 +45,10 @@ async def list_projects(current_user: User = Depends(get_current_user)):
 
 
 @router.get("/batches")
-async def list_batches(project_id: int | None = Query(None, ge=1), current_user: User = Depends(get_current_user)):
+async def list_batches(project_id: int | None = Query(None, ge=1)):
     from app.services.plan import PlanService
-    return success(data=await PlanService().list_renshe_plans(public=True, project_id=project_id))
+    from app.schemas.renshe_public import public_plan
+    return success(data=[public_plan(plan) for plan in await PlanService().list_renshe_plans(public=True, project_id=project_id)])
 
 
 def _client_ip(request: Request) -> str | None:

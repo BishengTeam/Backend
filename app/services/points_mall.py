@@ -221,7 +221,7 @@ class PointsMallService:
 
     # ── User: mall ──
 
-    async def user_list_items(self, user_id: int) -> list[UserPointsMallItemResponse]:
+    async def user_list_items(self, user_id: int | None) -> list[UserPointsMallItemResponse]:
         async with get_db_ctx() as db:
             items = (
                 await db.execute(
@@ -232,7 +232,7 @@ class PointsMallService:
             ).scalars().all()
             balance = await db.scalar(
                 select(UserPoints.balance).where(UserPoints.user_id == user_id)
-            ) or 0
+            ) or 0 if user_id is not None else None
 
             results = []
             for item in items:
@@ -241,11 +241,13 @@ class PointsMallService:
                         PointsMallRedemption.user_id == user_id,
                         PointsMallRedemption.item_id == item.id,
                     )
-                ) or 0
+                ) or 0 if user_id is not None else None
                 remaining = _remaining_stock(item)
                 blocked = None
                 if remaining == 0:
                     blocked = "已兑完"
+                elif user_id is None:
+                    blocked = "登录后兑换"
                 elif item.per_user_limit > 0 and user_redeemed >= item.per_user_limit:
                     blocked = "已达限兑次数"
                 elif balance < item.points_cost:

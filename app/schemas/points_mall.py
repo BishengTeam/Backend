@@ -88,7 +88,7 @@ class UserPointsMallItemResponse(BaseModel):
     points_cost: int
     remaining_stock: int
     per_user_limit: int
-    user_redeemed_count: int
+    user_redeemed_count: int | None
     can_redeem: bool
     redeem_blocked_reason: str | None
 

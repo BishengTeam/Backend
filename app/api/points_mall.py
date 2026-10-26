@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, get_current_user_optional
 from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.points_mall import (
@@ -23,9 +23,9 @@ _service = PointsMallService()
 
 @router.get("/items", response_model=APIResponse[list[UserPointsMallItemResponse]])
 async def list_items(
-    current_user: User = Depends(get_current_user),
+    current_user: User | None = Depends(get_current_user_optional),
 ) -> APIResponse[list[UserPointsMallItemResponse]]:
-    return success(data=await _service.user_list_items(current_user.id))
+    return success(data=await _service.user_list_items(current_user.id if current_user else None))
 
 
 @router.post("/redeem", response_model=APIResponse[MyCouponResponse])

@@ -1150,3 +1150,22 @@ async def test_admin_user_practice_stats_filter_student_library_and_range(
                 date_to=today,
             )
         )
+
+
+async def test_anonymous_catalog_exposes_metadata_without_granting_practice(quiz_v2_catalog_env):
+    env = quiz_v2_catalog_env
+    public = await env.user_service.list_libraries(None)
+    assert env.library.id in {item.id for item in public}
+    detail = await env.user_service.get_library(None, env.library.id)
+    assert detail.modules[0].knowledge_points[0].id == env.point.id
+    assert "questions" not in detail.model_dump()
+    assert "answers" not in str(detail.model_dump()).lower()
+    with pytest.raises(QuizV2Exception):
+        await env.user_service.preview_practice_scope(env.user_id, "library", env.library.id, "full")
+    async with env.factory() as db:
+        library = await db.get(QuizLibrary, env.library.id)
+        library.status = "draft"
+        library.published_at = None
+        await db.commit()
+    assert env.library.id not in {item.id for item in await env.user_service.list_libraries(None)}
+    with pytest.raises(QuizV2Exception): await env.user_service.get_library(None, env.library.id)

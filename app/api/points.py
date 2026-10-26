@@ -126,11 +126,10 @@ async def redeem_points(
 async def list_virtual_products(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(get_current_user),
 ):
     return success(
         data=await _virtual_service.list_products_for_user(
-            current_user.id, page=page, page_size=page_size
+            None, page=page, page_size=page_size
         )
     )
 

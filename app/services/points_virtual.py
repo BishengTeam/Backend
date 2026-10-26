@@ -316,7 +316,7 @@ class PointsVirtualService:
     # ── User: catalog and redemption ──
 
     async def list_products_for_user(
-        self, user_id: int, *, page: int = 1, page_size: int = 20
+        self, user_id: int | None, *, page: int = 1, page_size: int = 20
     ) -> PaginatedData[PointsVirtualProductResponse]:
         async with get_db_ctx() as db:
             base = select(PointsVirtualProduct).where(

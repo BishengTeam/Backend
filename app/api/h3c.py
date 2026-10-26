@@ -38,9 +38,7 @@ async def get_h3c_profile_defaults(
     response_model=APIResponse[list[H3cUserExamBatchResponse]],
     summary="获取 H3C 考试批次卡片",
 )
-async def list_exam_batches(
-    current_user: User = Depends(get_current_user),
-) -> APIResponse[list[H3cUserExamBatchResponse]]:
+async def list_exam_batches() -> APIResponse[list[H3cUserExamBatchResponse]]:
     return success(data=await H3cRegistrationService().list_user_batches())
 
 
