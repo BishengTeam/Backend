@@ -93,6 +93,11 @@ PUBLIC_CALLBACK_PATHS = {
     "/api/payment/callback",
     "/api/payment/refund-callback",
 }
+# 游客浏览：认证报名项目/批次目录为公开接口（不带 Bearer，但仍是普通错误码语义）
+PUBLIC_CATALOG_PATHS = {
+    "/api/renshe/projects",
+    "/api/renshe/batches",
+}
 
 EXPECTED_MATERIAL_KINDS = [
     "id_card_front",
@@ -126,10 +131,12 @@ def build_report() -> tuple[dict, list[str]]:
             if operation is None:
                 errors.append(f"missing operation: {method.upper()} {path}")
                 continue
-            if path not in PUBLIC_CALLBACK_PATHS and not operation.get("security"):
+            if path not in PUBLIC_CALLBACK_PATHS and path not in PUBLIC_CATALOG_PATHS and not operation.get("security"):
                 errors.append(f"missing Bearer security: {method.upper()} {path}")
             if path in PUBLIC_CALLBACK_PATHS and operation.get("security"):
                 errors.append(f"callback must not require Bearer security: {method.upper()} {path}")
+            if path in PUBLIC_CATALOG_PATHS and operation.get("security"):
+                errors.append(f"public catalog must not require Bearer security: {method.upper()} {path}")
             if "200" not in operation.get("responses", {}):
                 errors.append(f"missing success response: {method.upper()} {path}")
             if operation.get("x-contract-version") != "2026-08-10":
