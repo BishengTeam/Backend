@@ -170,6 +170,8 @@ class AdminOrderService:
             if order is None:
                 raise NotFoundException("订单")
             await self._reject_dedicated_certification_order(db, order)
+            if (order.extra_data or {}).get("business_type") == "sangfor":
+                raise BusinessException("请在深信服批次工作台审核报名；退款继续通过线下收退款办理")
             if order.status != "paid":
                 raise BusinessException("仅已支付订单可审核")
 

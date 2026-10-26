@@ -327,6 +327,12 @@ class PlanService:
                 exam_date=plan.exam_date,
                 require_window=True,
             )
+            product = await db.scalar(select(CertProduct).where(CertProduct.code == plan.product_type).with_for_update())
+            if product is not None and product.type == "sangfor":
+                from app.services.sangfor_catalog import require_direction
+                require_direction(product.code)
+                if not product.is_active or plan.exam_date is None:
+                    raise BusinessException("深信服批次发布需启用产品并配置考试时间")
             if await is_renshe_plan(db, plan):
                 self._validate_renshe_publish_fields(plan)
             plan.status = "published"
@@ -447,6 +453,20 @@ class PlanService:
             else:
                 if plan.status != "published":
                     raise BusinessException("仅已发布状态的批次可取消")
+                product = await db.scalar(select(CertProduct).where(CertProduct.code == plan.product_type))
+                if product is not None and product.type == "sangfor":
+                    orders = list(await db.scalars(select(Order).where(Order.plan_id == plan.id,
+                        Order.status.in_(("pending", "paid", "completed"))).order_by(Order.id).with_for_update()))
+                    from app.services.offline_payment import assert_cancellable
+                    for order in orders:
+                        if order.status != "pending":
+                            raise BusinessException("该深信服批次已有收款报名，请先完成退款，再取消批次")
+                        assert_cancellable(order)
+                    from app.domain.order.src.index import apply_order_status_transition
+                    for order in orders:
+                        apply_order_status_transition(order, "closed")
+                        order.closed_at = datetime.now(timezone.utc)
+                        order.close_reason = "batch_cancelled"
                 plan.status = "cancelled"
             await db.commit()
             await db.refresh(plan)

@@ -80,6 +80,8 @@ async def resolve_dedicated_certification_vendor(
     if product is not None:
         if product.type == "renshe":
             raise BusinessException("人社订单只能通过人社报名提交接口创建")
+        if product.type == "sangfor":
+            raise BusinessException("深信服订单只能通过深信服批次报名接口创建")
         if product.type == "h3c":
             return "H3C"
         if product.type == "nisp":
@@ -90,6 +92,8 @@ async def resolve_dedicated_certification_vendor(
         )
         if legacy is not None:
             vendor = legacy.vendor.strip().upper()
+            if vendor == "深信服":
+                raise BusinessException("深信服订单只能通过深信服批次报名接口创建")
             if vendor == "H3C":
                 return "H3C"
             if vendor == "NISP":

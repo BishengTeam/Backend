@@ -27,6 +27,8 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
         "nisp:final_review",
         "renshe:review",
         "renshe:export",
+        "sangfor:review",
+        "sangfor:export",
     ],
     "course_admin": [
         "course:read",

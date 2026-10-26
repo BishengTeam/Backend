@@ -169,6 +169,12 @@ class AdminCertProductService:
     ) -> list[CertProductCatalogResponse]:
         """列出产品目录，标记是否已创建为产品（供选择框过滤）"""
         async with get_db_ctx() as db:
+            if type == "sangfor":
+                from app.services.sangfor_catalog import DIRECTIONS, SOURCE
+                codes = set(await db.scalars(select(CertProduct.code)))
+                optional = {key: None for key in ("duration_minutes", "question_count", "total_score", "pass_score", "cert_validity_years", "retake_count", "prerequisite", "remark")}
+                return [CertProductCatalogResponse(id=0, type="sangfor", code=code, name=name, source=SOURCE,
+                         instantiated=code in codes, prices=[], **optional) for code, name in DIRECTIONS.items()]
             stmt = select(CertProductCatalog).order_by(CertProductCatalog.code.asc())
             if type:
                 stmt = stmt.where(CertProductCatalog.type == type)
@@ -235,6 +241,9 @@ class AdminCertProductService:
         """创建认证产品"""
         if data.type == "renshe":
             raise BusinessException("请使用人社报考项目接口创建项目，系统自动维护内部标识")
+        if data.type == "sangfor" and data.is_active:
+            from app.services.sangfor_catalog import require_direction
+            require_direction(data.code)
         async with get_db_ctx() as db:
             async with db.begin():
                 if data.catalog_id is not None:
@@ -280,6 +289,12 @@ class AdminCertProductService:
             async with db.begin():
                 product = await self._get_or_404(db, code)
                 update_data = data.model_dump(exclude_unset=True)
+                if product.type == "sangfor":
+                    from app.services.sangfor_catalog import require_direction
+                    if update_data.get("is_active", product.is_active):
+                        require_direction(update_data.get("code", product.code))
+                    if update_data.get("code", product.code) != product.code and await db.scalar(select(Plan.id).where(Plan.product_type == product.code).limit(1)):
+                        raise BusinessException("产品已有批次，不能更换报考方向，请创建新产品")
                 if product.type == "renshe":
                     if "is_active" in update_data:
                         raise BusinessException("请在报考项目中调整配置状态")

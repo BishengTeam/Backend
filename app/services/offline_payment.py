@@ -158,6 +158,10 @@ class OfflinePaymentService:
                         business_link = {"vendor": vendor, "registration_id": registration.id, "batch_id": registration.batch_id}
                         break
             business = business_link["vendor"] if business_link else "order"
+            if (order.extra_data or {}).get("business_type") == "sangfor":
+                business_link = {"vendor": "sangfor", "registration_id": order.id, "batch_id": order.plan_id}
+                # Sangfor reuses the existing generic bank refund approval and ledger.
+                business = "order"
             status = "refunded" if order.status == "refunded" else "closed" if order.status == "closed" and order.offline_status != "exception" else order.offline_status
             return {"order_id": order_id, "order_status": order.status, "out_trade_no": order.out_trade_no,
                 "product_type": order.product_type, "amount_cents": order.price,
