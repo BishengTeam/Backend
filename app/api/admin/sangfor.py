@@ -25,8 +25,8 @@ async def batch(batch_id: int, admin=Depends(require_permission("content:read"))
 @router.post("/batches")
 async def create_batch(body: SangforBatchCreate, admin=Depends(require_permission("content:write"))):
     await service.require_product(body.product_code)
-    await PlanService().create_plan(body.product_code, PlanCreate.model_validate(body.model_dump(exclude={"product_code"})), admin_id=admin.id)
-    return success(message="草稿批次已创建")
+    plan = await PlanService().create_plan(body.product_code, PlanCreate.model_validate(body.model_dump(exclude={"product_code"})), admin_id=admin.id)
+    return success(data={"id": plan.id}, message="草稿批次已创建")
 
 
 @router.put("/batches/{batch_id}")
@@ -49,9 +49,9 @@ async def close_batch(batch_id: int, admin=Depends(require_permission("content:w
 
 @router.get("/registrations")
 async def registrations(batch_id: int | None = None, state: str | None = None, keyword: str | None = Query(None, max_length=64),
-                        payment_state: str | None = None, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
+                        payment_state: str | None = None, refund_only: bool = False, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
                         admin=Depends(require_permission("order:list"))):
-    return success(data=await service.registrations(batch_id=batch_id, state=state, keyword=keyword, payment_state=payment_state, page=page, page_size=page_size))
+    return success(data=await service.registrations(batch_id=batch_id, state=state, keyword=keyword, payment_state=payment_state, refund_only=refund_only, page=page, page_size=page_size))
 
 
 @router.get("/registrations/{registration_id}")
@@ -66,6 +66,11 @@ async def review(registration_id: int, body: SangforDecision, admin=Depends(requ
 
 @router.post("/batches/{batch_id}/export")
 async def export(batch_id: int, body: SangforExport, admin=Depends(require_permission("sangfor:export")), reauth=Depends(require_reauthenticated_admin)):
-    content = await service.export(batch_id, body.registration_ids, admin.id)
+    content = await service.export(batch_id, body.registration_ids, admin.id, body.expected_versions)
     return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="sangfor_batch_{batch_id}.xlsx"'})
+
+
+@router.get("/batches/{batch_id}/exports")
+async def export_records(batch_id: int, admin=Depends(require_permission("sangfor:export"))):
+    return success(data=await service.export_records(batch_id))

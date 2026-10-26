@@ -95,7 +95,9 @@ async def test_public_batch_projection_and_owner_only_identity(context):
     batches = await context.service.batches(public=True)
     batch = next(row for row in batches if row["id"] == context.plan_id)
     assert not {"candidate_snapshot", "id_card", "exam_voucher_code", "contact_phone", "renshe_config"} & set(batch)
+    assert "registration_counts" not in batch
     order = await context.create()
+    assert (await context.service.get_batch(context.plan_id))["registration_counts"] == {"pending_payment": 1}
     assert order["status"] == "pending_payment" and order["price_cents"] == 12345
     assert order["candidate_snapshot"]["name"] == "实名考生"
     assert context.agreement_calls == [(context.uid, "cert_registration")]
@@ -129,8 +131,14 @@ async def test_payment_correction_current_export_and_final_review(context):
     assert load_workbook(BytesIO(content))["Sheet1"]["H3"].value == "Xiao Fu"
     exported = await context.service.detail(order["id"])
     assert exported["exports"][-1]["version"] == 2
+    records = await context.service.export_records(context.plan_id)
+    assert records[0]["people_count"] == 1 and records[0]["people"][0]["version"] == 2
+    assert records[0]["people"][0]["is_current"]
+    with pytest.raises(ConflictException, match="版本已变化"):
+        await context.service.export(context.plan_id, [order["id"]], 101, {order["id"]: 1})
     result = await context.service.review(order["id"], 101, SangforDecision(expected_revision=exported["revision"], action="final_approve"))
     assert result["status"] == "final_approved" and result["order_status"] == "completed"
+    assert (await context.service.get_batch(context.plan_id))["registration_counts"] == {"final_approved": 1}
     page = await context.service.registrations(user_id=context.uid, state="final_approved", page_size=1)
     assert page["total"] == 1 and page["items"][0]["id"] == order["id"]
 
@@ -155,6 +163,8 @@ async def test_external_return_invalidates_export_and_concurrent_reviews_keep_on
     corrected = await context.service.resubmit(order["id"], context.uid, SangforResubmit(expected_revision=returned["revision"], **values(exam_voucher_code="NEW-VENDOR-CODE")))
     approved = await context.service.review(order["id"], 101, SangforDecision(expected_revision=corrected["revision"], action="approve"))
     assert len(approved["exports"]) == 1 and approved["exports"][0]["version"] == 1
+    history = await context.service.export_records(context.plan_id)
+    assert history[0]["people"][0]["version"] == 1 and not history[0]["people"][0]["is_current"]
     with pytest.raises(ConflictException, match="成功导出"):
         await context.service.review(order["id"], 101, SangforDecision(expected_revision=approved["revision"], action="final_approve"))
 
@@ -176,6 +186,9 @@ async def test_refund_approval_freezes_reviews_and_uses_existing_bank_refund(con
     await context.bank.approve_generic_refund(order["id"], 101, DecisionInput(expected_version=1, request_key=uuid4().hex, note="同意全额线下退款"))
     frozen = await context.service.detail(order["id"])
     assert frozen["status"] == "refund_processing" and not frozen["payment_summary"]["review_payment_allowed"]
+    assert (await context.service.get_batch(context.plan_id))["registration_counts"] == {"refund_processing": 1}
+    refunds = await context.service.registrations(batch_id=context.plan_id, refund_only=True)
+    assert refunds["total"] == 1 and refunds["items"][0]["status"] == "refund_processing"
     with pytest.raises(ConflictException, match="退款已审批"):
         await context.service.review(order["id"], 101, SangforDecision(expected_revision=1, action="approve"))
     proof = await context.bank.upload(order["id"], UploadFile(filename="退款凭证.pdf", file=BytesIO(b"%PDF-1.4 test")), admin_id=101)

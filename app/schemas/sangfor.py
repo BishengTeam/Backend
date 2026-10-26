@@ -56,6 +56,7 @@ class SangforDecision(BaseModel):
 class SangforExport(BaseModel):
     model_config = ConfigDict(extra="forbid")
     registration_ids: list[int] = Field(min_length=1, max_length=500)
+    expected_versions: dict[int, int] | None = None
 
     @field_validator("registration_ids")
     @classmethod

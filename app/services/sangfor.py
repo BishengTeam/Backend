@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from io import BytesIO
 from zoneinfo import ZoneInfo
+from uuid import uuid4
 
 from openpyxl import load_workbook
 from sqlalchemy import and_, case, func, select
@@ -46,6 +47,15 @@ def registration_status(order):
     if order.status == "pending":
         return "pending_payment"
     return (order.extra_data or {}).get("registration_state", "pending_review")
+
+
+def registration_status_expression():
+    refund = select(OfflinePaymentAudit.id).where(OfflinePaymentAudit.order_id == Order.id,
+        OfflinePaymentAudit.action == "admin.generic_refund_approved").exists()
+    return case((Order.status == "closed", "cancelled"), (Order.status == "refunded", "refunded_closed"),
+        (Order.status == "pending", "pending_payment"),
+        (and_(Order.status.in_(("paid", "completed")), refund), "refund_processing"),
+        else_=func.coalesce(Order.extra_data["registration_state"].as_string(), "pending_review"))
 
 
 def export_workbook(snapshots):
@@ -97,15 +107,27 @@ class SangforService:
             raise NotFoundException("深信服考试批次")
         return pair
 
+    async def batch_statistics(self, db, ids, *, public=False):
+        occupied = dict((await db.execute(select(Order.plan_id, func.count()).where(Order.plan_id.in_(ids),
+            Order.status.in_(("pending", "paid", "completed"))).group_by(Order.plan_id))).all())
+        counts = {}
+        if not public and ids:
+            statuses = self.query().with_only_columns(Order.plan_id, registration_status_expression().label("state")).where(Order.plan_id.in_(ids)).subquery()
+            for plan_id, state, count in (await db.execute(select(statuses.c.plan_id, statuses.c.state, func.count()).group_by(statuses.c.plan_id, statuses.c.state))).all():
+                counts.setdefault(plan_id, {})[state] = count
+        return occupied, counts
+
     @staticmethod
-    async def batch_response(db, plan, product):
-        enrolled = await db.scalar(select(func.count()).select_from(Order).where(Order.plan_id == plan.id, Order.status.in_(("pending", "paid", "completed"))))
-        return {"id": plan.id, "product_code": product.code, "product_name": product.chinese_name,
+    def batch_response(plan, product, *, enrolled=0, counts=None):
+        result = {"id": plan.id, "product_code": product.code, "product_name": product.chinese_name,
                 "description": plan.description or product.description, "name": plan.name, "status": plan.status,
                 "exam_direction": DIRECTIONS.get(product.code, product.code), "apply_start": plan.apply_start,
                 "apply_end": plan.apply_end, "exam_date": plan.exam_date, "exam_location": plan.exam_location,
                 "price_cents": plan.price_cents, "capacity": plan.capacity, "enrolled": enrolled,
                 "remaining_count": max(0, plan.capacity - enrolled) if plan.capacity else -1}
+        if counts is not None:
+            result["registration_counts"] = counts
+        return result
 
     async def batches(self, *, public=False, product_code=None):
         async with get_db_ctx() as db:
@@ -115,11 +137,14 @@ class SangforService:
             if product_code:
                 query = query.where(Plan.product_type == product_code)
             pairs = (await db.execute(query.order_by(Plan.id.desc()))).all()
-            return [await self.batch_response(db, plan, product) for plan, product in pairs]
+            occupied, counts = await self.batch_statistics(db, [plan.id for plan, _ in pairs], public=public)
+            return [self.batch_response(plan, product, enrolled=occupied.get(plan.id, 0), counts=None if public else counts.get(plan.id, {})) for plan, product in pairs]
 
     async def get_batch(self, batch_id, *, public=False):
         async with get_db_ctx() as db:
-            return await self.batch_response(db, *(await self.batch(db, batch_id, public=public)))
+            plan, product = await self.batch(db, batch_id, public=public)
+            occupied, counts = await self.batch_statistics(db, [batch_id], public=public)
+            return self.batch_response(plan, product, enrolled=occupied.get(batch_id, 0), counts=None if public else counts.get(batch_id, {}))
 
     @staticmethod
     async def refund_approved(db, order_id):
@@ -184,7 +209,7 @@ class SangforService:
         async with get_db_ctx() as db:
             return await self.response(db, await self.lock_order(db, order_id, user_id))
 
-    async def registrations(self, *, user_id=None, batch_id=None, state=None, keyword=None, payment_state=None, page=1, page_size=20):
+    async def registrations(self, *, user_id=None, batch_id=None, state=None, keyword=None, payment_state=None, refund_only=False, page=1, page_size=20):
         async with get_db_ctx() as db:
             query = self.query()
             if user_id is not None:
@@ -197,13 +222,9 @@ class SangforService:
             if payment_state:
                 query = query.where(payment_filter(payment_state))
             if state:
-                refund = select(OfflinePaymentAudit.id).where(OfflinePaymentAudit.order_id == Order.id,
-                    OfflinePaymentAudit.action == "admin.generic_refund_approved").exists()
-                derived_state = case((Order.status == "closed", "cancelled"), (Order.status == "refunded", "refunded_closed"),
-                    (Order.status == "pending", "pending_payment"),
-                    (and_(Order.status.in_(("paid", "completed")), refund), "refund_processing"),
-                    else_=func.coalesce(Order.extra_data["registration_state"].as_string(), "pending_review"))
-                query = query.where(derived_state == state)
+                query = query.where(registration_status_expression() == state)
+            if refund_only:
+                query = query.where(registration_status_expression().in_(("refund_processing", "refunded_closed")))
             total = await db.scalar(select(func.count()).select_from(query.subquery()))
             rows = list((await db.scalars(query.order_by(Order.id.desc()).offset((page - 1) * page_size).limit(page_size))).all())
             return {"items": [await self.response(db, row, brief=True) for row in rows], "total": total, "page": page, "page_size": page_size}
@@ -276,7 +297,21 @@ class SangforService:
                 await db.refresh(order)
                 return await self.response(db, order)
 
-    async def export(self, batch_id, ids, admin_id):
+    async def export_records(self, batch_id):
+        async with get_db_ctx() as db:
+            await self.batch(db, batch_id)
+            rows = list(await db.scalars(self.query().where(Order.plan_id == batch_id).order_by(Order.id)))
+            records = {}
+            for order in rows:
+                for entry in order.extra_data.get("exports", []):
+                    key = entry.get("export_id") or entry["sha256"]
+                    record = records.setdefault(key, {"id": key, "sha256": entry["sha256"], "created_at": entry["created_at"], "people": []})
+                    record["created_at"] = min(record["created_at"], entry["created_at"])
+                    record["people"].append({"registration_id": order.id, "registration_no": order.out_trade_no,
+                        "name": order.candidate_name, "version": entry["version"], "is_current": entry["version"] == order.extra_data["current_version"]})
+            return [record | {"people_count": len(record["people"])} for record in sorted(records.values(), key=lambda item: item["created_at"], reverse=True)]
+
+    async def export(self, batch_id, ids, admin_id, expected_versions=None):
         async with get_db_ctx() as db:
             async with db.begin():
                 await self.batch(db, batch_id)
@@ -285,6 +320,8 @@ class SangforService:
                     raise ConflictException("选择中包含不存在或属于其他批次的报名")
                 snapshots = []
                 for order in orders:
+                    if expected_versions is not None and expected_versions.get(order.id) != order.extra_data["current_version"]:
+                        raise ConflictException("所选报名资料版本已变化，请刷新名单后重新选择")
                     await self.editable(db, order)
                     if registration_status(order) not in {"approved", "final_approved"}:
                         raise ConflictException(f"{order.candidate_name}尚未初审通过，不能报送")
@@ -294,10 +331,12 @@ class SangforService:
                     snapshots.append(snapshot)
                 content = export_workbook(snapshots)
                 checksum = sha256(content).hexdigest()
+                export_id = uuid4().hex
+                exported_at = now().isoformat()
                 for order in orders:
                     extra = deepcopy(order.extra_data)
                     extra["exported_version"] = extra["current_version"]
                     extra["revision"] += 1
-                    extra["exports"].append({"version": extra["current_version"], "sha256": checksum, "admin_id": admin_id, "created_at": now().isoformat()})
+                    extra["exports"].append({"export_id": export_id, "version": extra["current_version"], "sha256": checksum, "admin_id": admin_id, "created_at": exported_at})
                     order.extra_data = extra
                 return content

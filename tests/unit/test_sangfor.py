@@ -84,3 +84,18 @@ def test_sangfor_http_only_opens_public_batches(monkeypatch):
     assert client.get("/api/sangfor/registrations/1").status_code == 401
     assert client.post("/api/sangfor/registrations", json=submission()).status_code == 401
     assert client.post("/api/sangfor/registrations/1/resubmit", json={}).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_admin_create_batch_returns_draft_id_for_publish_retry(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from app.api.admin.sangfor import create_batch, service, PlanService
+    from app.schemas.sangfor import SangforBatchCreate
+
+    monkeypatch.setattr(service, "require_product", AsyncMock())
+    create = AsyncMock(return_value=SimpleNamespace(id=17))
+    monkeypatch.setattr(PlanService, "create_plan", create)
+    result = await create_batch(SangforBatchCreate(product_code="SCSA-T", name="测试批次", price_cents=100), admin=SimpleNamespace(id=1))
+    assert result.data == {"id": 17}
+    assert create.call_args.kwargs["admin_id"] == 1
