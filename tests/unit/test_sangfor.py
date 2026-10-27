@@ -86,6 +86,68 @@ def test_sangfor_http_only_opens_public_batches(monkeypatch):
     assert client.post("/api/sangfor/registrations/1/resubmit", json={}).status_code == 401
 
 
+def test_admin_refunds_uses_order_list_permission_and_validates_filters(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.adapter.database import get_db
+    from app.api.admin.sangfor import router, service
+    from app.middleware.auth import require_normal_admin
+    from app.policy.permissions import ROLE_PERMISSIONS
+    from app.middleware.error_handler import app_exception_handler
+    from app.port.exceptions import AppException
+
+    app = FastAPI()
+    app.include_router(router, prefix="/admin")
+    app.add_exception_handler(AppException, app_exception_handler)
+    async def db():
+        yield SimpleNamespace()
+    app.dependency_overrides[get_db] = db
+    result = {"items": [], "total": 0, "page": 1, "page_size": 20, "status_counts": {"approved": 2}}
+    mocked = AsyncMock(return_value=result)
+    monkeypatch.setattr(service, "refunds", mocked)
+    monkeypatch.setattr(service, "refund_batches", AsyncMock(return_value=[{"id": 7, "name": "批次"}]))
+    client = TestClient(app)
+    url = "/admin/cert-products/sangfor/refunds"
+    assert client.get(url).status_code == 401
+    assert client.get("/admin/cert-products/sangfor/refund-batches").status_code == 401
+    app.dependency_overrides[require_normal_admin] = lambda: SimpleNamespace(id=101, role="course_admin")
+    assert client.get(url).status_code == 403
+    assert client.get("/admin/cert-products/sangfor/refund-batches").status_code == 403
+    mocked.assert_not_awaited()
+    # A ledger-only role needs no content permission for its batch selector.
+    monkeypatch.setitem(ROLE_PERMISSIONS, "ledger_reader", ["order:list"])
+    app.dependency_overrides[require_normal_admin] = lambda: SimpleNamespace(id=101, role="ledger_reader")
+    assert client.get("/admin/cert-products/sangfor/batches").status_code == 403
+    assert client.get("/admin/cert-products/sangfor/refund-batches").json()["data"] == [{"id": 7, "name": "批次"}]
+    response = client.get(url, params={"batch_id": 7, "registration_id": 8, "request_kind": "exception", "group": "abnormal",
+        "keyword": "考生", "requested_at_start": "2026-10-01T00:00:00+08:00", "page_size": 20})
+    assert response.status_code == 200
+    assert response.json()["data"]["status_counts"] == {"approved": 2}
+    assert mocked.call_args.kwargs["registration_id"] == 8
+    assert mocked.call_args.kwargs["group"] == "abnormal"
+    assert mocked.call_args.kwargs["requested_at_start"].utcoffset().total_seconds() == 28800
+    for params in ({"page": 0}, {"page_size": 101}, {"page_size": 0}, {"batch_id": 0}, {"registration_id": -1},
+                   {"group": "other"}, {"status": "requested"}, {"request_kind": "batch_cancel"},
+                   {"requested_at_start": "not-a-date"}):
+        assert client.get(url, params=params).status_code == 422, params
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("params", [
+    {"page": 0}, {"page_size": 101}, {"batch_id": -1}, {"registration_id": 0},
+    {"group": "other"}, {"status": "requested"}, {"request_kind": "invalid"},
+    {"requested_at_start": datetime(2026, 10, 1)},
+    {"requested_at_start": datetime.fromisoformat("2026-10-02T00:00:00+08:00"),
+     "requested_at_end": datetime.fromisoformat("2026-10-01T00:00:00+08:00")},
+])
+async def test_refund_filters_fail_before_database_access(params):
+    from app.services.sangfor import SangforService
+    with pytest.raises(BusinessException):
+        await SangforService().refunds(**params)
+
+
 @pytest.mark.asyncio
 async def test_admin_create_batch_returns_draft_id_for_publish_retry(monkeypatch):
     from types import SimpleNamespace

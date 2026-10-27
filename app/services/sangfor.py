@@ -11,14 +11,15 @@ from zoneinfo import ZoneInfo
 from uuid import uuid4
 
 from openpyxl import load_workbook
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 
 from app.adapter.database import get_db_ctx
 from app.domain.order.src.index import Order, apply_order_status_transition
 from app.domain.plan.src.index import Plan
 from app.models.cert_product import CertProduct
-from app.models.offline_payment import OfflinePaymentAudit
+from app.models.offline_payment import OfflineBankEntry, OfflinePayment, OfflinePaymentAudit, OfflinePaymentSubmission
 from app.port.config import settings
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.sangfor import SangforCreate, SangforDecision, SangforResubmit, SangforSubmission
@@ -146,6 +147,13 @@ class SangforService:
             occupied, counts = await self.batch_statistics(db, [batch_id], public=public)
             return self.batch_response(plan, product, enrolled=occupied.get(batch_id, 0), counts=None if public else counts.get(batch_id, {}))
 
+    async def refund_batches(self):
+        """Minimal batch selector for ledger readers, without content permissions."""
+        async with get_db_ctx() as db:
+            rows = (await db.execute(select(Plan.id, Plan.name).join(CertProduct,
+                CertProduct.code == Plan.product_type).where(CertProduct.type == "sangfor").order_by(Plan.id.desc()))).mappings().all()
+            return [dict(row) for row in rows]
+
     @staticmethod
     async def refund_approved(db, order_id):
         return bool(await db.scalar(select(OfflinePaymentAudit.id).where(OfflinePaymentAudit.order_id == order_id,
@@ -228,6 +236,121 @@ class SangforService:
             total = await db.scalar(select(func.count()).select_from(query.subquery()))
             rows = list((await db.scalars(query.order_by(Order.id.desc()).offset((page - 1) * page_size).limit(page_size))).all())
             return {"items": [await self.response(db, row, brief=True) for row in rows], "total": total, "page": page, "page_size": page_size}
+
+    async def refunds(self, *, batch_id=None, registration_id=None, keyword=None, request_kind=None,
+                      requested_at_start=None, requested_at_end=None, group=None, status=None, page=1, page_size=20):
+        """Project the existing bank ledger without inventing refund requests.
+
+        Ordinary paid orders enter this list only after refund approval. Unallocated
+        transfers use their own exception path, including completed returns whose
+        order is closed rather than refunded. All joins remain one row per order.
+        """
+        if page < 1 or not 1 <= page_size <= 100:
+            raise BusinessException("分页参数不正确，页码须大于零，每页最多100条")
+        if any(value is not None and value <= 0 for value in (batch_id, registration_id)):
+            raise BusinessException("请选择有效的批次或报名记录")
+        for value in (requested_at_start, requested_at_end):
+            if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+                raise BusinessException("退款日期筛选须包含时区")
+        if requested_at_start and requested_at_end and requested_at_start > requested_at_end:
+            raise BusinessException("开始时间不能晚于结束时间")
+        if group not in {None, "pending", "processing", "abnormal"} or status not in {None, "approved", "exception", "succeeded"}:
+            raise BusinessException("退款状态筛选不正确")
+        if request_kind not in {None, "normal", "exception"}:
+            raise BusinessException("退款类型筛选不正确")
+
+        audit = OfflinePaymentAudit
+        is_approval = audit.action == "admin.generic_refund_approved"
+        is_mismatch = and_(audit.action == "admin.confirm", audit.summary["result"].as_string() == "exception")
+        is_exception = or_(audit.action.in_(("user.exception", "admin.exception")), is_mismatch)
+        events = select(
+            audit.order_id.label("order_id"),
+            func.min(case((is_approval, audit.created_at))).label("approved_at"),
+            func.max(case((is_approval, audit.id))).label("approval_id"),
+            func.min(case((is_exception, audit.created_at))).label("exception_at"),
+            func.max(case((is_exception, audit.id))).label("exception_id"),
+            func.max(case((is_mismatch, audit.id))).label("mismatch_id"),
+            func.max(case((audit.action == "admin.exception_refund", audit.id))).label("resolution_id"),
+        ).where(audit.order_id.is_not(None)).group_by(audit.order_id).subquery("sangfor_refund_events")
+        approval, exception, mismatch, resolution = (aliased(audit) for _ in range(4))
+        receipt, refund = aliased(OfflineBankEntry), aliased(OfflineBankEntry)
+        active_exception = and_(Order.status.in_(("pending", "closed")), Order.offline_status == "exception", refund.id.is_(None))
+        exception_kind = or_(active_exception, events.c.resolution_id.is_not(None))
+        state = case((refund.id.is_not(None), "succeeded"), (active_exception, "exception"), else_="approved")
+        requested_at = case((exception_kind, func.coalesce(events.c.exception_at, refund.created_at,
+            Order.offline_submitted_at, Order.created_at)), else_=func.coalesce(events.c.approved_at, refund.created_at, Order.created_at))
+        # A mismatched confirmation records an actual verified amount in its audit,
+        # whereas the current submission contains only the user's declared amount.
+        verified_exception_amount = case((mismatch.summary["version"].as_integer() == OfflinePayment.current_version,
+                                          mismatch.summary["amount_cents"].as_integer()))
+        amount = func.coalesce(refund.amount_cents, receipt.amount_cents,
+            case((exception_kind, func.coalesce(verified_exception_amount,
+                OfflinePaymentSubmission.data["amount_cents"].as_integer())), else_=Order.price))
+        amount_source = case((or_(refund.amount_cents.is_not(None), receipt.amount_cents.is_not(None)), "ledger"),
+            (and_(exception_kind, verified_exception_amount.is_not(None)), "verified"),
+            (and_(exception_kind, OfflinePaymentSubmission.data["amount_cents"].as_integer().is_not(None)), "submission"),
+            (~exception_kind, "order"), else_="unknown")
+        base = select(
+            Order.id.label("id"), Order.id.label("registration_id"), Order.id.label("order_id"),
+            Order.plan_id.label("batch_id"), Plan.name.label("batch_name"),
+            func.coalesce(CertProduct.chinese_name, Order.product_type).label("product_label"),
+            Order.payment_channel.label("payment_channel"), Order.out_trade_no.label("out_trade_no"),
+            Order.out_trade_no.label("registration_no"), Order.candidate_name.label("candidate_name"),
+            case((exception_kind, "exception"), else_="normal").label("request_kind"), state.label("status"),
+            amount.label("amount_cents"), amount_source.label("amount_source"),
+            case((exception_kind, func.coalesce(resolution.summary["note"].as_string(),
+                exception.summary["note"].as_string(), OfflinePayment.message)),
+                else_=approval.summary["note"].as_string()).label("reason_detail"),
+            requested_at.label("requested_at"),
+            case((~exception_kind, events.c.approved_at)).label("approved_at"),
+            refund.created_at.label("succeeded_at"),
+        ).select_from(Order).join(OfflinePayment, OfflinePayment.order_id == Order.id).join(Plan, Plan.id == Order.plan_id
+        ).outerjoin(CertProduct, CertProduct.code == Order.product_type
+        ).outerjoin(events, events.c.order_id == Order.id
+        ).outerjoin(approval, approval.id == events.c.approval_id
+        ).outerjoin(exception, exception.id == events.c.exception_id
+        ).outerjoin(mismatch, mismatch.id == events.c.mismatch_id
+        ).outerjoin(resolution, resolution.id == events.c.resolution_id
+        ).outerjoin(receipt, and_(receipt.order_id == Order.id, receipt.kind == "receipt")
+        ).outerjoin(refund, and_(refund.order_id == Order.id, refund.kind == "refund")
+        ).outerjoin(OfflinePaymentSubmission, and_(OfflinePaymentSubmission.order_id == Order.id,
+            OfflinePaymentSubmission.version == OfflinePayment.current_version)
+        ).where(Order.order_kind == "certification", Order.extra_data["business_type"].as_string() == "sangfor",
+            Order.payment_channel == "bank_transfer", or_(active_exception,
+                and_(events.c.approval_id.is_not(None), Order.status.in_(("paid", "completed"))),
+                and_(refund.id.is_not(None), or_(Order.status == "refunded", events.c.resolution_id.is_not(None)))))
+        if batch_id is not None:
+            base = base.where(Order.plan_id == batch_id)
+        if registration_id is not None:
+            base = base.where(Order.id == registration_id)
+        if keyword and keyword.strip():
+            pattern = f"%{keyword.strip()}%"
+            base = base.where(or_(Order.candidate_name.ilike(pattern), Order.candidate_phone.ilike(pattern),
+                Order.out_trade_no.ilike(pattern)))
+        projection = base.subquery("sangfor_refunds")
+        filtered = select(projection)
+        if request_kind:
+            filtered = filtered.where(projection.c.request_kind == request_kind)
+        if requested_at_start is not None:
+            filtered = filtered.where(projection.c.requested_at >= requested_at_start)
+        if requested_at_end is not None:
+            filtered = filtered.where(projection.c.requested_at <= requested_at_end)
+        stats = filtered.subquery()
+        async with get_db_ctx() as db:
+            counts = (await db.execute(select(stats.c.status, func.count()).group_by(stats.c.status))).all()
+            if status:
+                filtered = filtered.where(projection.c.status == status)
+            elif group == "processing":
+                filtered = filtered.where(projection.c.status == "approved")
+            elif group == "abnormal":
+                filtered = filtered.where(projection.c.status == "exception")
+            elif group == "pending":
+                filtered = filtered.where(False)
+            total = await db.scalar(select(func.count()).select_from(filtered.subquery())) or 0
+            rows = (await db.execute(filtered.order_by(projection.c.requested_at.asc(), projection.c.id.asc())
+                .offset((page - 1) * page_size).limit(page_size))).mappings().all()
+            return {"items": [dict(row) | {"last_error": None} for row in rows], "total": int(total),
+                "page": page, "page_size": page_size, "status_counts": {key: int(value) for key, value in counts}}
 
     async def editable(self, db, order):
         await require_review_payment(db, order)

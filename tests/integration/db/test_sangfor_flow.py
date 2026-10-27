@@ -210,3 +210,182 @@ async def test_inactive_product_and_expired_correction_block(context):
     assert not any(row["id"] == context.plan_id for row in await context.service.batches(public=True))
     with pytest.raises(ConflictException, match="期限"):
         await context.service.resubmit(order["id"], context.uid, SangforResubmit(expected_revision=returned["revision"], **values()))
+
+
+@pytest.fixture
+async def refund_records(context):
+    """Ledger fixtures exercise projections without creating a new refund model."""
+    stamp = datetime(2026, 10, 20, 2, tzinfo=timezone.utc)
+    ids = {}
+    async with context.db() as db, db.begin():
+        other_plan = Plan(product_type="SCSA-T", name="跨批次退款测试", status="published", price_cents=12345)
+        db.add(other_plan)
+        await db.flush()
+        other_plan_id = other_plan.id
+
+        async def record(key, *, status="closed", offline_status="exception", user_id=None, batch_id=None,
+                         approval=False, exception=False, mismatch=None, submitted=None, refunded=None,
+                         receipt=None, resolved=False, channel="bank_transfer", business="sangfor"):
+            order = Order(user_id=user_id or context.uid, order_kind="certification", product_type="SCSA-T",
+                plan_id=batch_id or context.plan_id, price=12345, status=status, offline_status=offline_status,
+                payment_channel=channel, candidate_name=f"考生{key}", candidate_phone="13800000000",
+                out_trade_no=f"SFR-{uuid4().hex}", extra_data={"business_type": business}, created_at=stamp)
+            db.add(order)
+            await db.flush()
+            ids[key] = order.id
+            fingerprint = uuid4().hex
+            db.add(OfflinePayment(order_id=order.id, account_snapshot={}, account_fingerprint=fingerprint,
+                current_version=1 if submitted is not None else 0))
+            if submitted is not None:
+                db.add(OfflinePaymentSubmission(order_id=order.id, version=1,
+                    data={"amount_cents": submitted}, status="exception", created_at=stamp))
+            def audit(action, **summary):
+                db.add(OfflinePaymentAudit(order_id=order.id, actor_id=101, action=action, request_key=uuid4().hex,
+                    payload_hash="0" * 64, summary={"version": 1, "note": f"{key}处理依据", **summary}, created_at=stamp))
+            if approval:
+                audit("admin.generic_refund_approved")
+            if exception:
+                audit("user.exception")
+            if mismatch is not None:
+                audit("admin.confirm", result="exception", amount_cents=mismatch)
+            if resolved:
+                audit("admin.exception_refund", amount_cents=refunded)
+            for kind, amount in (("receipt", receipt), ("refund", refunded)):
+                if amount is not None:
+                    db.add(OfflineBankEntry(order_id=order.id, kind=kind, amount_cents=amount,
+                        account_fingerprint=fingerprint, bank_reference=uuid4().hex, bank_time=stamp,
+                        admin_id=101, submission_version=1, material_ids=[], created_at=stamp + timedelta(hours=1)))
+
+        await record("approved", status="paid", offline_status="confirmed", approval=True, receipt=12345)
+        await record("normal_done", status="refunded", offline_status="refunded", approval=True, receipt=12345, refunded=12345)
+        await record("verified_exception", exception=True, submitted=9900, mismatch=8800)
+        await record("declared_exception", exception=True, submitted=7700)
+        await record("exception_done", offline_status="closed", exception=True, submitted=5500, receipt=6600, refunded=6600, resolved=True)
+        await record("unknown_exception", exception=True)
+        await record("unapproved", status="paid", user_id=context.other_id, offline_status="exception", receipt=12345)
+        await record("other_business", business="not-sangfor", exception=True, submitted=12345)
+        await record("other_channel", channel="wechat", exception=True, submitted=12345)
+        await record("other_batch", batch_id=other_plan_id, exception=True, submitted=4400)
+    try:
+        yield SimpleNamespace(ids=ids, stamp=stamp, other_plan_id=other_plan_id)
+    finally:
+        # The parent fixture owns the original batch. Only this fixture's extra
+        # batch and its dependent ledger rows are removed here.
+        async with context.db() as db, db.begin():
+            orders = select(Order.id).where(Order.plan_id == other_plan_id)
+            for model in (OfflineBankEntry, OfflinePaymentSubmission, OfflinePaymentMaterial, OfflinePaymentAudit, OfflinePayment):
+                await db.execute(delete(model).where(model.order_id.in_(orders)))
+            await db.execute(delete(Order).where(Order.plan_id == other_plan_id))
+            await db.execute(delete(Plan).where(Plan.id == other_plan_id))
+
+
+async def test_refund_projection_covers_bank_approvals_exceptions_and_actual_amounts(context, refund_records):
+    result = await context.service.refunds(batch_id=context.plan_id)
+    rows = {row["id"]: row for row in result["items"]}
+    fixture = refund_records.ids
+    assert result["total"] == 6
+    assert result["status_counts"] == {"approved": 1, "exception": 3, "succeeded": 2}
+    assert rows[fixture["approved"]]["status"] == "approved"
+    assert rows[fixture["approved"]]["amount_cents"] == 12345
+    assert rows[fixture["approved"]]["amount_source"] == "ledger"
+    assert rows[fixture["normal_done"]]["request_kind"] == "normal"
+    assert rows[fixture["normal_done"]]["succeeded_at"] == refund_records.stamp + timedelta(hours=1)
+    assert rows[fixture["verified_exception"]]["amount_cents"] == 8800
+    assert rows[fixture["verified_exception"]]["amount_source"] == "verified"
+    assert rows[fixture["declared_exception"]]["amount_cents"] == 7700
+    assert rows[fixture["declared_exception"]]["amount_source"] == "submission"
+    assert rows[fixture["exception_done"]]["status"] == "succeeded"
+    assert rows[fixture["exception_done"]]["request_kind"] == "exception"
+    assert rows[fixture["exception_done"]]["amount_cents"] == 6600
+    assert rows[fixture["exception_done"]]["approved_at"] is None
+    assert rows[fixture["unknown_exception"]]["amount_cents"] is None
+    assert rows[fixture["unknown_exception"]]["amount_source"] == "unknown"
+    for key in ("unapproved", "other_business", "other_channel", "other_batch"):
+        assert fixture[key] not in rows
+    assert all(row["id"] == row["registration_id"] == row["order_id"] for row in rows.values())
+    assert not any("candidate_snapshot" in row or "account_snapshot" in row for row in rows.values())
+    # New evidence supersedes a verification of an older submission version.
+    async with context.db() as db, db.begin():
+        payment = await db.scalar(select(OfflinePayment).where(OfflinePayment.order_id == fixture["verified_exception"]))
+        payment.current_version = 2
+        db.add(OfflinePaymentSubmission(order_id=fixture["verified_exception"], version=2,
+            data={"amount_cents": 7000}, status="exception"))
+    updated = await context.service.refunds(registration_id=fixture["verified_exception"])
+    assert updated["items"][0]["amount_cents"] == 7000
+    assert updated["items"][0]["amount_source"] == "submission"
+    # An older completed bank return may predate the approval audit trail.
+    async with context.db() as db, db.begin():
+        await db.execute(delete(OfflinePaymentAudit).where(OfflinePaymentAudit.order_id == fixture["normal_done"],
+            OfflinePaymentAudit.action == "admin.generic_refund_approved"))
+    legacy = await context.service.refunds(registration_id=fixture["normal_done"])
+    assert legacy["items"][0]["requested_at"] == refund_records.stamp + timedelta(hours=1)
+    assert legacy["items"][0]["approved_at"] is None
+
+
+async def test_refund_filters_counts_dates_and_pagination(context, refund_records):
+    scope = {"batch_id": context.plan_id}
+    page = await context.service.refunds(**scope, group="processing", page_size=1)
+    assert page["total"] == 1 and page["items"][0]["status"] == "approved"
+    assert page["status_counts"] == {"approved": 1, "exception": 3, "succeeded": 2}
+    second_page = await context.service.refunds(**scope, page=2, page_size=2)
+    assert second_page["total"] == 6 and len(second_page["items"]) == 2
+    assert (await context.service.refunds(**scope, page=20))["items"] == []
+    assert (await context.service.refunds(**scope, group="pending"))["total"] == 0
+    assert (await context.service.refunds(**scope, group="abnormal"))["total"] == 3
+    # Explicit status matches the existing workbench's precedence over group.
+    explicit = await context.service.refunds(**scope, group="processing", status="succeeded", request_kind="exception")
+    assert explicit["total"] == 1
+    assert explicit["status_counts"] == {"exception": 3, "succeeded": 1}
+    selected = await context.service.refunds(**scope, registration_id=refund_records.ids["declared_exception"], keyword="declared_exception")
+    assert selected["total"] == 1 and selected["status_counts"] == {"exception": 1}
+    assert (await context.service.refunds(batch_id=refund_records.other_plan_id))["total"] == 1
+    assert (await context.service.refunds(**scope, requested_at_start=refund_records.stamp, requested_at_end=refund_records.stamp))["total"] == 6
+    assert (await context.service.refunds(**scope, requested_at_start=refund_records.stamp + timedelta(seconds=1)))["total"] == 0
+
+
+async def test_refund_http_read_permission_and_date_validation(context, refund_records, monkeypatch):
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    from app.api.admin.sangfor import router
+    from app.middleware.auth import require_normal_admin
+    from app.middleware.error_handler import app_exception_handler
+    from app.policy.permissions import ROLE_PERMISSIONS
+    from app.port.exceptions import AppException
+
+    app = FastAPI()
+    app.include_router(router, prefix="/admin")
+    app.add_exception_handler(AppException, app_exception_handler)
+    app.dependency_overrides[require_normal_admin] = lambda: SimpleNamespace(id=101, role="course_admin")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        url = "/admin/cert-products/sangfor/refunds"
+        assert (await client.get(url)).status_code == 403
+        monkeypatch.setitem(ROLE_PERMISSIONS, "ledger_reader", ["order:list"])
+        app.dependency_overrides[require_normal_admin] = lambda: SimpleNamespace(id=101, role="ledger_reader")
+        assert (await client.get("/admin/cert-products/sangfor/batches")).status_code == 403
+        batches = await client.get("/admin/cert-products/sangfor/refund-batches")
+        assert batches.status_code == 200
+        assert {"id": context.plan_id, "name": next(row["batch_name"] for row in
+            (await context.service.refunds(batch_id=context.plan_id))["items"])} in batches.json()["data"]
+        response = await client.get(url, params={"batch_id": context.plan_id, "group": "abnormal"})
+        assert response.status_code == 200
+        assert response.json()["data"]["total"] == 3
+        assert (await client.get(url, params={"requested_at_start": "2026-10-01T00:00:00"})).status_code == 422
+        assert (await client.get(url, params={"requested_at_start": "2026-10-02T00:00:00Z", "requested_at_end": "2026-10-01T00:00:00Z"})).status_code == 422
+
+
+async def test_refund_projection_has_constant_query_count(context, refund_records):
+    from sqlalchemy import event
+
+    queries = []
+    engine = context.db.kw["bind"].sync_engine
+    def collect_queries(connection, cursor, statement, parameters, event_context, executemany):
+        queries.append(statement)
+    event.listen(engine, "before_cursor_execute", collect_queries)
+    try:
+        await context.service.refunds(batch_id=context.plan_id, page_size=1)
+        first_page_count = len(queries)
+        queries.clear()
+        await context.service.refunds(batch_id=context.plan_id, page_size=100)
+        assert first_page_count > 0 and len(queries) == first_page_count
+    finally:
+        event.remove(engine, "before_cursor_execute", collect_queries)

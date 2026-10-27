@@ -64,3 +64,26 @@ class SangforExport(BaseModel):
         if any(item <= 0 for item in value) or len(set(value)) != len(value):
             raise ValueError("请选择有效且不重复的报名记录")
         return value
+
+
+class SangforRefundResponse(BaseModel):
+    """A read-only projection of an order's bank refund, not a new request."""
+    id: int
+    registration_id: int
+    order_id: int
+    batch_id: int
+    batch_name: str
+    product_label: str
+    payment_channel: Literal["bank_transfer"]
+    out_trade_no: str
+    registration_no: str
+    candidate_name: str | None
+    request_kind: Literal["normal", "exception"]
+    status: Literal["approved", "exception", "succeeded"]
+    amount_cents: int | None
+    amount_source: Literal["ledger", "verified", "submission", "order", "unknown"]
+    reason_detail: str | None
+    requested_at: datetime
+    approved_at: datetime | None
+    succeeded_at: datetime | None
+    last_error: str | None
