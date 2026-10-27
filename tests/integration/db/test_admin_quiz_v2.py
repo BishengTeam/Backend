@@ -469,7 +469,9 @@ async def test_library_publication_gate_and_safe_delete_restore(quiz_v2_env) -> 
         AdminQuizLibraryCreate(name=f"{env.prefix}发布题库"),
         admin_id=env.admin_id,
     )
-    with pytest.raises(BusinessException, match="封面"):
+    # 封面与简介自 2026-10-27 起可选：发布门禁不再校验它们，
+    # 空题库仍会被访问模式等其余门禁项拦下。
+    with pytest.raises(BusinessException, match="访问模式"):
         await env.service.transition_library(
             library.id,
             AdminQuizLibraryStatusUpdate(

@@ -681,10 +681,9 @@ class AdminQuizV2Service:
 
     async def _publication_blockers(self, db, library: QuizLibrary) -> list[str]:
         blockers: list[str] = []
-        if not library.cover_url:
-            blockers.append("缺少封面")
-        if not library.description:
-            blockers.append("缺少简介")
+        # Relaxed per 2026-10-27 product decision: cover and description are
+        # optional — the miniprogram renders a placeholder for empty covers
+        # and the public catalog coerces both fields to "".
         if library.access_mode == "access_mode_pending":
             blockers.append("访问模式未确认")
         open_issues = int(
