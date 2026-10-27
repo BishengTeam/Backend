@@ -694,11 +694,14 @@ async def test_inactive_product_cannot_return_through_legacy_or_public_batches(c
             "candidate_name":"另一人", "candidate_idcard":"510101200001010124",
         }))
     assert (await service.get_registration(seed.user_id, created.id)).id == created.id
-    # A code absent from the new table still uses its enabled legacy product.
+    # Managed vendors never fall back to enabled legacy-only products.
     async with context.factory() as db:
         fallback = Certification(name=seed.code+"old", chinese_name="旧产品", code=seed.code+"old", vendor="H3C", is_active=True)
         db.add(fallback); await db.commit()
-    assert seed.code+"old" in {row.code for row in await catalog.list_certifications()}
+        fallback_id = fallback.id
+    assert seed.code+"old" not in {row.code for row in await catalog.list_certifications()}
+    with pytest.raises(NotFoundException):
+        await catalog.get_detail(fallback_id)
     async with context.factory() as db:
         product = await db.get(CertProduct, product_id)
         product.is_active = True

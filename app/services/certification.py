@@ -8,6 +8,7 @@ from app.adapter.database import get_db_ctx
 from app.domain.certification.src.index import Certification
 from app.models.cert_product import CertProduct
 from app.port.exceptions import NotFoundException
+from app.services.sangfor_catalog import DIRECTIONS
 
 from app.schemas.certification import (
     CertificationDetailResponse,
@@ -22,6 +23,17 @@ CERT_PRODUCT_VENDOR_MAP = {
     "sangfor": "深信服",
     "nisp": "NISP",
 }
+
+
+def is_public_cert_product(product: CertProduct) -> bool:
+    """Use the same product eligibility as the dedicated registration catalogs."""
+    if not product.is_active:
+        return False
+    if product.type == "renshe":
+        return product.renshe_status == "available"
+    if product.type == "sangfor":
+        return product.code in DIRECTIONS
+    return True
 
 
 def cert_product_response(cert_product: CertProduct) -> CertificationResponse:
@@ -41,7 +53,7 @@ def cert_product_response(cert_product: CertProduct) -> CertificationResponse:
 class CertificationService:
 
     async def list_certifications(self, filters: CertificationFilter | None = None) -> list[CertificationResponse]:
-        """优先返回新 cert_product（活跃），兼容旧 certification 补充"""
+        """四类认证由产品管理控制；仅其他厂商保留旧目录兼容。"""
         async with get_db_ctx() as db:
             result_items: list[CertificationResponse] = []
             # 新表（按 type 筛选映射 vendor）
@@ -55,10 +67,12 @@ class CertificationService:
                     new_stmt = new_stmt.where(CertProduct.type == type_filter)
             new_certs = (await db.execute(new_stmt.order_by(CertProduct.type, CertProduct.id))).scalars().all()
             for cp in new_certs:
-                result_items.append(cert_product_response(cp))
-            # 旧表补充（新表未覆盖的 code）
+                if is_public_cert_product(cp):
+                    result_items.append(cert_product_response(cp))
+            # 专用认证不能从旧表重新出现在公开目录，避免绕过当前产品管理。
             old_stmt = select(Certification).where(
                 Certification.is_active == True,
+                Certification.vendor.not_in(tuple(CERT_PRODUCT_VENDOR_MAP.values())),
                 ~Certification.code.in_(select(CertProduct.code)),
             )
             if filters and filters.vendor:
@@ -73,7 +87,7 @@ class CertificationService:
             # 优先新表
             cp = await db.get(CertProduct, cert_id)
             if cp is not None:
-                if not cp.is_active:
+                if not is_public_cert_product(cp):
                     raise NotFoundException("认证项目")
                 base = cert_product_response(cp)
                 return CertificationDetailResponse(
@@ -86,11 +100,13 @@ class CertificationService:
             # 旧链接也必须遵守同编码新产品的上下架状态。
             override = await db.scalar(select(CertProduct).where(CertProduct.code == cert.code))
             if override is not None:
-                if not override.is_active:
+                if not is_public_cert_product(override):
                     raise NotFoundException("认证项目")
                 base = cert_product_response(override)
                 return CertificationDetailResponse(**base.model_dump(), created_at=override.created_at,
                                                    updated_at=override.updated_at, is_active=override.is_active)
+            if cert.vendor in CERT_PRODUCT_VENDOR_MAP.values():
+                raise NotFoundException("认证项目")
             return CertificationDetailResponse.model_validate(cert)
 
     # ── P2 深信服/NISP ──────────────────────────────────────────
