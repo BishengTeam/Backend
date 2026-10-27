@@ -993,6 +993,7 @@ class NispRegistrationService:
             id=registration.id,
             registration_no=registration.registration_no,
             batch_id=registration.batch_id,
+            batch_name=plan.name if plan is not None else None,
             plan_id=registration.plan_id,
             order_id=registration.order_id,
             level=registration.level,

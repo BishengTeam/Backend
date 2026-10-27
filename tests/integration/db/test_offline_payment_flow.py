@@ -219,8 +219,12 @@ async def test_ownership_private_content_and_account_snapshot(context):
     content, type, filename = await context.service.content(id, data.material_ids[0], uid)
     assert content.startswith(b"%PDF") and type == "application/pdf" and filename.endswith(".pdf")
     settings = await context.service.get_settings()
-    await context.service.save_settings(101, SettingsInput(**{**settings, "account_number": "6222111111111111"}))
+    await context.service.save_settings(101, SettingsInput(**{**settings, "account_number": "6222111111111111", "submit_hours": 72, "correction_hours": 96}))
     assert (await context.service.detail(id, uid))["account"]["account_number"] == "6222000000000000"
+    assert (await context.service.detail(id, uid))["account"]["submit_hours"] == 24
+    new_order, new_user = await context.create()
+    new_snapshot = (await context.service.detail(new_order, new_user))["account"]
+    assert (new_snapshot["account_number"], new_snapshot["submit_hours"], new_snapshot["correction_hours"]) == ("6222111111111111", 72, 96)
     async with context.db() as db:
         change = await db.scalar(select(OfflinePaymentAudit).where(OfflinePaymentAudit.action == "settings.update").order_by(OfflinePaymentAudit.id.desc()).limit(1))
         assert change.summary["previous_account"]["account_number"] == "6222000000000000"

@@ -141,6 +141,151 @@ async def applicant(context, batch):
             id_card_both_sides_key=keys['id_card_both_sides'], portrait_photo_key=keys['portrait_photo'])
 
 
+async def test_review_batch_options_include_history_and_search_every_page(context, monkeypatch):
+    statuses = ['draft', 'published', 'registration_closed', 'cancelled', 'finalized', 'archived']
+    async with context.factory() as db:
+        for index in range(125):
+            level = '2' if index == 1 else '1'
+            plan = Plan(
+                id=1000 + index,
+                product_type=f'NISP-{level}',
+                name='同名历史批次' if index < 2 else f'历史批次 {index}',
+                status=statuses[index % len(statuses)],
+            )
+            db.add(plan)
+            await db.flush()
+            db.add(NispExamBatch(id=18 + index, plan_id=plan.id, level=level))
+        # A non-NISP plan without a batch never becomes a review option.
+        db.add(Plan(product_type='other', name='不应出现', status='published'))
+        await db.commit()
+
+    full_response = AsyncMock(side_effect=AssertionError('options must use a lightweight projection'))
+    monkeypatch.setattr(NispAdminService, '_response', full_response)
+    service = NispAdminService()
+    first, total = await service.list_review_batch_options()
+    assert total == 125
+    assert [item.id for item in first] == list(range(142, 122, -1))
+    assert set(first[0].model_dump()) == {'id', 'name', 'level', 'status'}
+    assert {item.status for item in first} == set(statuses)
+
+    first_page, first_total = await service.list_review_batch_options(page_size=100)
+    second_page, second_total = await service.list_review_batch_options(page=2, page_size=100)
+    assert first_total == second_total == 125
+    assert [item.id for item in first_page + second_page] == list(range(142, 17, -1))
+    empty_page, empty_total = await service.list_review_batch_options(page=3, page_size=100)
+    assert empty_page == [] and empty_total == 125
+
+    same_name, count = await service.list_review_batch_options(keyword='  同名历史  ')
+    assert count == 2
+    assert [(item.id, item.name, item.level) for item in same_name] == [
+        (19, '同名历史批次', '2'), (18, '同名历史批次', '1'),
+    ]
+    for keyword in ['18', '#18', '  #18  ']:
+        matches, count = await service.list_review_batch_options(keyword=keyword)
+        # Numeric searches also retain ordinary name matching.
+        expected = [136, 36, 18] if keyword == '18' else [18]
+        assert [item.id for item in matches] == expected
+        assert count == len(expected)
+    for keyword in ['1000', '#1000', '不存在的批次', '2147483648', '9' * 64]:
+        matches, count = await service.list_review_batch_options(keyword=keyword)
+        assert matches == [] and count == 0
+    blank, count = await service.list_review_batch_options(keyword='   ')
+    assert count == total and blank == first
+    full_response.assert_not_awaited()
+
+
+async def test_review_batch_name_and_existing_registration_filters_intersect(context):
+    from app.domain.nisp.src import NispExportItem, NispExportJob
+    from app.schemas.nisp import NispRegistrationResponse
+
+    batch, admin_id = await seed(context)
+    other_batch, _ = await seed(context)
+    now = datetime.now(timezone.utc)
+    examples = [
+        ('target', batch, 'approved', '张三', 'confirmed', True),
+        ('other_batch', other_batch, 'approved', '张三', 'confirmed', True),
+        ('other_status', batch, 'pending_review', '张三', 'confirmed', True),
+        ('other_name', batch, 'approved', '李四', 'confirmed', True),
+        ('other_payment', batch, 'approved', '张三', 'under_review', True),
+        ('no_export', batch, 'approved', '张三', 'confirmed', False),
+    ]
+    ids = {}
+    async with context.factory() as db:
+        plan = await db.get(Plan, batch.plan_id)
+        plan.name = '审核所属批次'
+        plan.status = 'archived'
+        for key, selected_batch, status, name, payment_state, exported in examples:
+            user = User(openid=uuid4().hex)
+            db.add(user)
+            await db.flush()
+            order = Order(
+                user_id=user.id, plan_id=selected_batch.plan_id,
+                product_type='NISP-1', price=0,
+                payment_channel='free' if payment_state == 'confirmed' else 'bank_transfer',
+                status='paid' if payment_state == 'confirmed' else 'pending',
+                offline_status=None if payment_state == 'confirmed' else payment_state,
+                paid_at=now if payment_state == 'confirmed' else None,
+            )
+            db.add(order)
+            await db.flush()
+            registration = NispRegistration(
+                batch_id=selected_batch.id, plan_id=selected_batch.plan_id,
+                user_id=user.id, order_id=order.id, registration_no=uuid4().hex,
+                level='1', status=status, candidate_idcard=f'{user.id:018d}',
+                candidate_snapshot={'name': name},
+            )
+            db.add(registration)
+            await db.flush()
+            ids[key] = registration.id
+            if key == 'target':
+                target_user_id = user.id
+            if exported:
+                job = NispExportJob(
+                    batch_id=selected_batch.id, level='1', requested_by_admin_id=admin_id,
+                    include_statuses=['approved'], status='succeeded', registration_count=1,
+                )
+                db.add(job)
+                await db.flush()
+                db.add(NispExportItem(job_id=job.id, registration_id=registration.id))
+        await db.commit()
+
+    filters = dict(batch_id=batch.id, level='1', status='approved', keyword='张',
+                   payment_state='confirmed', has_valid_export=True)
+    service = NispAdminService()
+    rows, total = await service.list_registrations(**filters)
+    assert total == 1 and [row.id for row in rows] == [ids['target']]
+    assert rows[0].batch_name == '审核所属批次'
+    assert rows[0].batch_id == batch.id
+    assert rows[0].plan_id == batch.plan_id
+
+    for key, changed_filter in [
+        ('other_batch', {'batch_id': other_batch.id}),
+        ('other_status', {'status': 'pending_review'}),
+        ('other_name', {'keyword': '李'}),
+        ('other_payment', {'payment_state': 'under_review'}),
+        ('no_export', {'has_valid_export': False}),
+    ]:
+        rows, total = await service.list_registrations(**(filters | changed_filter))
+        assert total == 1 and [row.id for row in rows] == [ids[key]]
+    rows, total = await service.list_registrations(**(filters | {'level': '2'}))
+    assert total == 0 and rows == []
+    rows, total = await service.list_registrations(batch_id=batch.id, page=2, page_size=2)
+    assert total == 5 and len(rows) == 2
+    assert all(row.batch_id == batch.id and row.batch_name == '审核所属批次' for row in rows)
+
+    # The shared response remains usable by the user list/detail and older DTO inputs.
+    user_service = NispRegistrationService()
+    detail = await user_service.get_registration(target_user_id, ids['target'])
+    listing = await user_service.list_user_registrations(target_user_id)
+    assert detail.batch_name == listing['items'][0].batch_name == '审核所属批次'
+    old_payload = detail.model_dump(exclude={'batch_name'})
+    assert NispRegistrationResponse.model_validate(old_payload).batch_name is None
+    async with context.factory() as db:
+        assert (await db.get(Plan, batch.plan_id)).status == 'archived'
+        for key, _, status, _, _, _ in examples:
+            assert (await db.get(NispRegistration, ids[key])).status == status
+
+
 async def test_nisp_rejects_proxy_registration_and_freezes_verified_identity(context):
     from app.domain.user.src.index import User
     from app.port.exceptions import BusinessException, ConflictException

@@ -20,6 +20,7 @@ from app.schemas.nisp import (
     NispExamBatchResponse,
     NispExamBatchUpdate,
     NispRegistrationResponse,
+    NispReviewBatchOption,
     NispReviewDecisionRequest,
 )
 from app.services.nisp_registration import NispRegistrationService
@@ -257,6 +258,43 @@ class NispAdminService:
                 )
             ).scalars().all()
             return [await self._response(db, row) for row in rows], total
+
+    async def list_review_batch_options(
+        self,
+        *,
+        keyword: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[NispReviewBatchOption], int]:
+        """List lightweight batch choices, including all historical plan states."""
+        async with get_db_ctx() as db:
+            stmt = select(
+                NispExamBatch.id,
+                Plan.name,
+                NispExamBatch.level,
+                Plan.status,
+            ).join(Plan, Plan.id == NispExamBatch.plan_id)
+            cleaned_keyword = (keyword or "").strip()
+            if cleaned_keyword:
+                conditions = [Plan.name.ilike(f"%{cleaned_keyword}%")]
+                batch_number = cleaned_keyword.removeprefix("#")
+                if batch_number.isascii() and batch_number.isdecimal():
+                    # Batch IDs use PostgreSQL integer; ignore an overflowing ID.
+                    batch_id = int(batch_number)
+                    if batch_id <= 2147483647:
+                        conditions.append(NispExamBatch.id == batch_id)
+                stmt = stmt.where(or_(*conditions))
+            total = await db.scalar(
+                select(func.count()).select_from(stmt.subquery())
+            ) or 0
+            rows = (
+                await db.execute(
+                    stmt.order_by(NispExamBatch.id.desc())
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                )
+            ).mappings().all()
+            return [NispReviewBatchOption.model_validate(row) for row in rows], total
 
     async def publish_batch(self, batch_id: int) -> NispExamBatchResponse:
         async with get_db_ctx() as db:

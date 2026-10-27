@@ -16,6 +16,7 @@ from app.schemas.nisp import (
     NispExamBatchResponse,
     NispExamBatchUpdate,
     NispRegistrationResponse,
+    NispReviewBatchOption,
     NispReviewDecisionRequest,
     NispRejectRefundRequest,
     NispFinalReviewRequest,
@@ -108,6 +109,21 @@ async def cancel_batch(
     _admin=Depends(require_permission("nisp:batch_manage")),
 ) -> APIResponse[NispExamBatchResponse]:
     return success(data=await _service.cancel_batch(batch_id))
+
+
+@router.get("/review-batch-options", response_model=APIResponse[PaginatedData[NispReviewBatchOption]])
+async def list_review_batch_options(
+    keyword: str | None = Query(None, max_length=64),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    _admin=Depends(require_permission("nisp:review")),
+) -> APIResponse[PaginatedData[NispReviewBatchOption]]:
+    items, total = await _service.list_review_batch_options(
+        keyword=keyword,
+        page=page,
+        page_size=page_size,
+    )
+    return success(data=PaginatedData(items=items, total=total, page=page, page_size=page_size))
 
 
 @router.get("/registrations", response_model=APIResponse[PaginatedData[NispRegistrationResponse]])

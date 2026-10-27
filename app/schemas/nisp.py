@@ -146,6 +146,13 @@ class NispExamBatchResponse(BaseModel):
     updated_at: datetime
 
 
+class NispReviewBatchOption(BaseModel):
+    id: int
+    name: str
+    level: NispLevel
+    status: str
+
+
 # ── User: batch listing ──
 
 class NispBatchListItem(BaseModel):
@@ -201,6 +208,7 @@ class NispRegistrationResponse(BaseModel):
     id: int
     registration_no: str
     batch_id: int
+    batch_name: str | None = None
     plan_id: int
     order_id: int
     level: NispLevel
