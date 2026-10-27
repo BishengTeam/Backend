@@ -68,7 +68,10 @@ class CertProductCreate(BaseModel):
     home_cover_url: str | None = Field(None, max_length=512, description="首页认证专区通栏大图（1404×640）")
     is_active: bool = Field(True)
     sort_order: int = Field(0, ge=0)
-    prices: list[CertProductPrice] = Field(default_factory=list)
+    prices: list[CertProductPrice] | None = Field(
+        None,
+        description="可选历史标准价格；省略或 null 保持现有参考价，空列表显式停用。H3C 报名实收由批次三档价格决定",
+    )
 
 
 class CertProductUpdate(BaseModel):
@@ -79,7 +82,10 @@ class CertProductUpdate(BaseModel):
     home_cover_url: str | None = Field(None, max_length=512, description="首页认证专区通栏大图（1404×640）")
     is_active: bool | None = None
     sort_order: int | None = Field(None, ge=0)
-    prices: list[CertProductPrice] | None = None
+    prices: list[CertProductPrice] | None = Field(
+        None,
+        description="省略或 null 保持现有标准价格，空列表显式停用；H3C 产品参考价不决定批次报名实收",
+    )
 
 
 class CertProductStats(BaseModel):

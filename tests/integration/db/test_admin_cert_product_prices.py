@@ -55,7 +55,7 @@ async def price_context(monkeypatch, session_factory):
 
     monkeypatch.setattr(service_module, "get_db_ctx", test_db_ctx)
 
-    code = f"PRC{uuid4().hex[:10].upper()}"
+    code = f"GB0T{uuid4().hex[:10].upper()}"
     try:
         yield code
     finally:
@@ -66,6 +66,10 @@ async def price_context(monkeypatch, session_factory):
             )
             await db.execute(
                 text("DELETE FROM cert_product WHERE code = :c"),
+                {"c": code},
+            )
+            await db.execute(
+                text("DELETE FROM cert_product_catalog WHERE code = :c"),
                 {"c": code},
             )
             await db.commit()
@@ -144,3 +148,73 @@ async def test_list_products_returns_prices(price_context) -> None:
     assert [(p.user_type, p.price_cents) for p in mine[0].prices] == [
         ("student", 25900)
     ]
+
+
+async def test_h3c_create_without_prices_needs_no_price_configuration(price_context) -> None:
+    from app.schemas.admin_cert_product import CertProductCreate
+    from app.services.admin_cert_product import AdminCertProductService
+
+    created = await AdminCertProductService().create(CertProductCreate(
+        type="h3c", code=price_context, name=price_context.lower(), chinese_name="仅展示信息的认证产品",
+    ))
+    assert created.code == price_context
+    assert created.prices == []
+
+
+async def test_h3c_create_and_edit_without_prices_preserve_imported_references(price_context, session_factory) -> None:
+    from io import BytesIO
+    from openpyxl import Workbook
+    from sqlalchemy import select
+    from app.domain.order.src.index import PriceConfig
+    from app.schemas.admin_cert_product import CertProductCreate, CertProductUpdate
+    from app.services.admin_cert_product import AdminCertProductService
+
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "新华三考试详情"
+    sheet.append([None, None, "目录参考价测试", None, price_context, "原价", 1200,
+        1, "无", 60, 50, 1000, 600, 3, None, "厂商参考价"])
+    sheet.append([None, None, None, None, None, "网院优惠券", 500])
+    content = BytesIO()
+    book.save(content)
+    service = AdminCertProductService()
+    imported = await service.import_h3c_catalog(content=content.getvalue(), source="reference-test.xlsx")
+    assert imported.price_upserted_count == 2
+
+    created = await service.create(CertProductCreate(type="h3c", code=price_context,
+        name=price_context.lower(), chinese_name="创建后保留历史参考价"))
+    expected = {"normal": 120000, "student": 50000}
+    assert {row.user_type: row.price_cents for row in created.prices} == expected
+    updated = await service.update(price_context, CertProductUpdate(chinese_name="仅更新产品介绍", description="收费请在批次设置"))
+    assert {row.user_type: row.price_cents for row in updated.prices} == expected
+    async with session_factory() as db:
+        rows = (await db.scalars(select(PriceConfig).where(PriceConfig.product_type == price_context))).all()
+        assert {row.user_type: (row.price, row.is_active) for row in rows} == {
+            tier: (value, True) for tier, value in expected.items()
+        }
+
+
+async def test_explicit_empty_prices_retains_legacy_deactivation_semantics(price_context, session_factory) -> None:
+    from sqlalchemy import select
+    from app.domain.order.src.index import PriceConfig
+    from app.schemas.admin_cert_product import CertProductPrice, CertProductUpdate
+    from app.services.admin_cert_product import AdminCertProductService
+
+    await _create_with_prices(price_context, [CertProductPrice(user_type="normal", price_cents=120000)])
+    updated = await AdminCertProductService().update(price_context, CertProductUpdate(prices=[]))
+    assert updated.prices == []
+    async with session_factory() as db:
+        row = await db.scalar(select(PriceConfig).where(PriceConfig.product_type == price_context))
+        assert row.price == 120000 and row.is_active is False
+
+
+async def test_other_vendor_explicit_prices_remain_supported(price_context) -> None:
+    from app.schemas.admin_cert_product import CertProductCreate, CertProductPrice, CertProductUpdate
+    from app.services.admin_cert_product import AdminCertProductService
+
+    service = AdminCertProductService()
+    created = await service.create(CertProductCreate(type="nisp", code=price_context,
+        name="nisp-price-test", chinese_name="其他认证价格兼容", prices=[CertProductPrice(user_type="normal", price_cents=45000)]))
+    assert [(row.user_type, row.price_cents) for row in created.prices] == [("normal", 45000)]
+    updated = await service.update(price_context, CertProductUpdate(prices=[CertProductPrice(user_type="normal", price_cents=55000)]))
+    assert [(row.user_type, row.price_cents) for row in updated.prices] == [("normal", 55000)]

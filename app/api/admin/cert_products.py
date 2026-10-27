@@ -48,10 +48,11 @@ async def list_catalog(
 @router.post(
     "/catalog/import",
     response_model=APIResponse[CertProductCatalogImportResponse],
-    summary="导入 H3C 厂商价格表",
+    summary="从 H3C 厂商价格表导入产品目录",
     description=(
         "仅超级管理员可上传厂商价格表 xlsx。系统会更新受控产品目录，"
-        "并同步原价/网院优惠券两个标准价格档；不会自动创建认证产品。"
+        "并兼容保留原价/网院优惠券两档历史参考价；不会自动创建认证产品，"
+        "不会修改已创建批次或订单金额。H3C 实际报名费用请在考试批次中设置。"
     ),
 )
 async def import_catalog(
@@ -71,7 +72,7 @@ async def import_catalog(
         content=content,
         source=filename[-128:],
     )
-    return success(data=result, message="价格表目录已更新")
+    return success(data=result, message="产品目录及历史参考价已更新，H3C 报名费用请在考试批次中设置")
 
 
 @router.get(

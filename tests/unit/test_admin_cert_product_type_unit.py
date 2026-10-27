@@ -4,7 +4,7 @@ from typing import get_args
 
 from pydantic import ValidationError
 
-from app.schemas.admin_cert_product import CertProductCreate, CertType
+from app.schemas.admin_cert_product import CertProductCreate, CertProductUpdate, CertType
 from app.services.admin_cert_product import TYPE_LABELS
 
 
@@ -25,6 +25,14 @@ def _payload(cert_type: str) -> dict:
 
 
 class AdminCertProductTypeTests(unittest.TestCase):
+    def test_omitted_prices_preserve_reference_data_and_empty_is_explicit(self):
+        payload = {key: value for key, value in _payload("h3c").items() if key != "prices"}
+        self.assertIsNone(CertProductCreate(**payload).prices)
+        self.assertIsNone(CertProductCreate(**payload, prices=None).prices)
+        self.assertEqual(CertProductCreate(**payload, prices=[]).prices, [])
+        self.assertIsNone(CertProductUpdate(chinese_name="仅更新展示名称").prices)
+        self.assertEqual(CertProductUpdate(prices=[]).prices, [])
+
     def test_product_admin_accepts_all_current_certification_vendors(self):
         expected = {"h3c", "renshe", "nisp", "sangfor"}
         self.assertEqual(set(get_args(CertType)), expected)
