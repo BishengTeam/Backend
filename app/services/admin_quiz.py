@@ -3891,10 +3891,17 @@ class AdminQuizService:
             raise ValueError(f"无效题型: {type_text}")
         enum_type = QuizQuestionType(question_type)
 
+        category_parts = [
+            part.strip()
+            for part in re.split(r"[，,、/]", values.get("category", ""))
+            if part.strip()
+        ]
+        if len(category_parts) == 1:
+            # Vendor workbooks often ship a single-level category (e.g. SR);
+            # copy it as the knowledge point to satisfy the strict two-level V2 path.
+            category_parts.append(category_parts[0])
         item: dict[str, object] = {
-            "category_path": [
-                part for part in re.split(r"[，,、/]", values.get("category", "")) if part.strip()
-            ],
+            "category_path": category_parts,
             "question_type": type_text,
             "question_text": question_text,
             "explanation": values.get("explanation", "") or None,
@@ -3934,6 +3941,14 @@ class AdminQuizService:
             item["correct_answer"] = self._normalize_judge_answer_text(answer_text)
         elif enum_type is QuizQuestionType.FILL_BLANK:
             item["options"] = None
+            # Vendors write 2-3 underscore blanks (e.g. __); the domain rule
+            # requires exactly 4+. Single underscores (identifiers) and runs
+            # of 4+ must stay untouched.
+            item["question_text"] = re.sub(
+                r"_+",
+                lambda match: "____" if len(match.group()) in (2, 3) else match.group(),
+                question_text,
+            )
             groups = [
                 [candidate.strip() for candidate in cell.split("|") if candidate.strip()]
                 for cell in option_values
