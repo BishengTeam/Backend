@@ -285,7 +285,7 @@ async def test_daily_checkin_claim_does_not_duplicate_auto_checkin_grant(
         user_id,
         amount=1,
         action_type="claim_daily_checkin",
-        description="每日答题打卡 +1积分",
+        description="每日签到 +1积分",
         source_type="points_claim",
         source_id=f"daily_checkin:{user_id}:{today().isoformat()}",
     )

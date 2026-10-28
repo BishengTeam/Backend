@@ -1325,7 +1325,7 @@ class QuizPracticeService:
                     user_id=user_id,
                     amount=_CHECKIN_POINTS,
                     action_type="claim_daily_checkin",
-                    description=f"每日答题打卡 +{_CHECKIN_POINTS}积分",
+                    description=f"每日签到 +{_CHECKIN_POINTS}积分",
                     source_type="points_claim",
                     source_id=f"daily_checkin:{user_id}:{local_day.isoformat()}",
                 )
