@@ -226,6 +226,16 @@ class NispExportService:
             if data.registration_ids is not None:
                 stmt = stmt.where(NispRegistration.id.in_(data.registration_ids))
             else:
+                if data.payment_state:
+                    from app.services.registration_payment_guard import payment_filter
+                    from app.domain.order.src.index import Order
+                    stmt = stmt.join(Order, Order.id == NispRegistration.order_id).where(payment_filter(data.payment_state))
+                if data.has_valid_export is not None:
+                    valid_export_exists = select(NispExportItem.id).join(NispExportJob, NispExportJob.id == NispExportItem.job_id).where(
+                        NispExportItem.registration_id == NispRegistration.id,
+                        NispExportItem.is_valid.is_(True),
+                        or_(NispExportJob.status == "succeeded", (NispExportJob.status == "failed") & (NispExportJob.last_error == "expired") & NispExportJob.storage_key.is_(None))).exists()
+                    stmt = stmt.where(valid_export_exists if data.has_valid_export else ~valid_export_exists)
                 if data.status:
                     stmt = stmt.where(NispRegistration.status == data.status)
                 if data.keyword:

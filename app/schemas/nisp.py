@@ -455,7 +455,9 @@ class NispExportCreate(BaseModel):
 class NispExportPrecheckRequest(BaseModel):
     batch_id: int
     registration_ids: list[int] | None = Field(None)
-    status: NispRegistrationStatus | None = "approved"
+    status: NispRegistrationStatus | None = None
+    payment_state: str | None = None
+    has_valid_export: bool | None = None
     keyword: str | None = Field(None, max_length=64)
 
     @field_validator("registration_ids")

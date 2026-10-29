@@ -549,7 +549,9 @@ class H3cExportPrecheckRequest(BaseModel):
     batch_id: int = Field(..., gt=0)
     registration_ids: list[int] | None = Field(None)
     registration_type: H3cRegistrationType | None = None
-    status: H3cRegistrationStatus | None = "approved"
+    status: H3cRegistrationStatus | None = None
+    payment_state: str | None = None
+    has_valid_export: bool | None = None
     keyword: str | None = Field(None, max_length=64)
 
     @field_validator("registration_ids")

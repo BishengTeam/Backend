@@ -98,6 +98,15 @@ class H3cExportService:
         if data.registration_ids is not None:
             stmt = stmt.where(H3cRegistration.id.in_(data.registration_ids))
         else:
+            if data.payment_state:
+                from app.services.registration_payment_guard import payment_filter
+                from app.domain.order.src.index import Order
+                stmt = stmt.join(Order, Order.id == H3cRegistration.order_id).where(payment_filter(data.payment_state))
+            if data.has_valid_export is not None:
+                valid_export_exists = select(H3cExportItem.id).join(H3cExportJob, H3cExportJob.id == H3cExportItem.job_id).where(
+                    H3cExportItem.registration_id == H3cRegistration.id,
+                    H3cExportItem.is_valid.is_(True), H3cExportJob.status == "succeeded").exists()
+                stmt = stmt.where(valid_export_exists if data.has_valid_export else ~valid_export_exists)
             if data.registration_type:
                 stmt = stmt.where(
                     H3cRegistration.registration_type == data.registration_type
