@@ -197,14 +197,6 @@ class RensheExportService:
             if active_job is not None:
                 if active_job.definition_fingerprint != definition_fingerprint(*current_templates):
                     raise ConflictException("存在旧规则在途任务，请先处理该任务后再新建当前规则导出")
-                volumes = (
-                    await db.execute(
-                        select(RensheExportVolume)
-                        .where(RensheExportVolume.job_id == active_job.id)
-                        .order_by(RensheExportVolume.volume_no)
-                    )
-                ).scalars().all()
-                return self._job_response(active_job, volumes)
 
             candidates = await self._eligible_candidate_rows(db, plan_id)
             if application_ids is not None:
@@ -221,6 +213,23 @@ class RensheExportService:
                 candidates = [item for item in candidates if item[0] in selected_set]
             if not candidates:
                 raise BusinessException("当前批次没有可导出的考生")
+            if active_job is not None:
+                active_items = (await db.execute(
+                    select(RensheExportItem.application_id, RensheExportItem.version_id)
+                    .where(RensheExportItem.job_id == active_job.id)
+                )).all()
+                requested_versions = {(application_id, version_id) for application_id, version_id, _ in candidates}
+                active_versions = {(item.application_id, item.version_id) for item in active_items}
+                if active_versions != requested_versions:
+                    raise ConflictException("当前批次已有不同人员或资料版本的导出任务，请等待该任务完成后重新提交")
+                volumes = (
+                    await db.execute(
+                        select(RensheExportVolume)
+                        .where(RensheExportVolume.job_id == active_job.id)
+                        .order_by(RensheExportVolume.volume_no)
+                    )
+                ).scalars().all()
+                return self._job_response(active_job, volumes)
             await self._preflight(db, plan, candidates)
             generation_no = (
                 await db.scalar(

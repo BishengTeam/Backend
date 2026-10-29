@@ -11,9 +11,9 @@ from openpyxl import load_workbook
 from sqlalchemy import select
 
 from app.domain.order.src.index import Order
-from app.domain.renshe.src.index import RensheExportVolume
+from app.domain.renshe.src.index import RensheExportVolume, RensheExportJob, RensheExportItem
 from app.port.config import settings
-from app.port.exceptions import ConflictException
+from app.port.exceptions import BusinessException, ConflictException
 from app.schemas.renshe import RensheReviewCreate
 from app.schemas.renshe_project import RensheProjectWrite
 from app.services.order_fulfillment import OrderFulfillmentService
@@ -61,6 +61,44 @@ async def approved(env, monkeypatch):
         ),
     )
     return project, batch, result
+
+
+@pytest.mark.asyncio
+async def test_identical_active_export_scope_reuses_job_and_rejects_empty_selection(isolated, monkeypatch):
+    _, batch, application = await approved(isolated, monkeypatch)
+    exporter = RensheExportService(isolated.storage)
+    first = await exporter.create_job(plan_id=batch.id, admin_id=1, application_ids=[application.application.id])
+    repeated = await exporter.create_job(plan_id=batch.id, admin_id=1, application_ids=[application.application.id, application.application.id])
+    all_eligible = await exporter.create_job(plan_id=batch.id, admin_id=1)
+    assert repeated.id == all_eligible.id == first.id
+    with pytest.raises(BusinessException, match="请选择"):
+        await exporter.create_job(plan_id=batch.id, admin_id=1, application_ids=[])
+    async with isolated.db() as db:
+        assert len(list(await db.scalars(select(RensheExportJob)))) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["version", "additional_person", "different_person"])
+async def test_active_export_never_reuses_different_people_or_versions(isolated, monkeypatch, change):
+    _, batch, application = await approved(isolated, monkeypatch)
+    exporter = RensheExportService(isolated.storage)
+    first = await exporter.create_job(plan_id=batch.id, admin_id=1, application_ids=[application.application.id])
+    async with isolated.db() as db:
+        original = await db.scalar(select(RensheExportItem).where(RensheExportItem.job_id == first.id))
+        application_id, version_id = original.application_id, original.version_id
+    # Feed a changed eligibility snapshot into the real persisted-job comparison.
+    changed = {
+        "version": [(application_id, version_id + 1000, 0)],
+        "additional_person": [(application_id, version_id, 0), (application_id + 1000, version_id + 1000, 0)],
+        "different_person": [(application_id + 1000, version_id + 1000, 0)],
+    }[change]
+    monkeypatch.setattr(exporter, "_eligible_candidate_rows", AsyncMock(return_value=changed))
+    with pytest.raises(ConflictException, match="不同人员或资料版本"):
+        await exporter.create_job(plan_id=batch.id, admin_id=1, application_ids=[row[0] for row in changed])
+    async with isolated.db() as db:
+        assert len(list(await db.scalars(select(RensheExportJob)))) == 1
+        frozen = await db.scalar(select(RensheExportItem).where(RensheExportItem.job_id == first.id))
+        assert (frozen.application_id, frozen.version_id) == (application_id, version_id)
 
 
 @pytest.mark.asyncio
