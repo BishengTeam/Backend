@@ -161,7 +161,7 @@ def test_question_rules_allow_incomplete_drafts_but_reject_invalid_publish() -> 
     )
     assert draft.correct_answer is None
 
-    with pytest.raises(QuizRuleViolation, match="3 至 6"):
+    with pytest.raises(QuizRuleViolation, match="3 至 8"):
         normalize_question_payload(
             question_type="single_choice",
             question_text="不能发布",

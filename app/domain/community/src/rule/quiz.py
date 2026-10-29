@@ -14,7 +14,7 @@ from typing import TypeAlias
 
 
 QuizAnswer: TypeAlias = str | list[str] | list[list[str]]
-_OPTION_KEYS = ("A", "B", "C", "D", "E", "F")
+_OPTION_KEYS = ("A", "B", "C", "D", "E", "F", "G", "H")
 _OPTION_COUNT_MAX = len(_OPTION_KEYS)
 _WHITESPACE_RE = re.compile(r"\s+")
 _FILL_BLANK_PLACEHOLDER_RE = re.compile(r"_{4,}")
@@ -305,7 +305,7 @@ def _normalize_option_key(value: object, *, field: str) -> str:
         raise QuizRuleViolation(field, "选项键必须是字符串")
     key = value.strip().upper()
     if key not in _OPTION_KEYS:
-        raise QuizRuleViolation(field, "选项键只能为 A、B、C、D、E、F")
+        raise QuizRuleViolation(field, "选项键只能为 A~H")
     return key
 
 
@@ -337,7 +337,7 @@ def _normalize_options(
             raise QuizRuleViolation("options", "发布前必须填写选项")
         return None
     if not isinstance(options, Mapping):
-        raise QuizRuleViolation("options", "必须是以 A-F 为键的对象")
+        raise QuizRuleViolation("options", "必须是以 A-H 为键的对象")
 
     normalized = _normalize_options_mapping(options)
     keys = tuple(normalized)
@@ -348,17 +348,23 @@ def _normalize_options(
     count = len(normalized)
     if question_type is QuizQuestionType.SINGLE_CHOICE:
         if require_publishable and not 3 <= count <= _OPTION_COUNT_MAX:
-            raise QuizRuleViolation("options", "单选题发布时必须有 3 至 6 个选项")
+            raise QuizRuleViolation(
+                "options", f"单选题发布时必须有 3 至 {_OPTION_COUNT_MAX} 个选项"
+            )
         if count > _OPTION_COUNT_MAX:
             raise QuizRuleViolation("options", f"单选题最多 {_OPTION_COUNT_MAX} 个选项")
     elif question_type is QuizQuestionType.MULTIPLE_CHOICE:
         if require_publishable and not 3 <= count <= _OPTION_COUNT_MAX:
-            raise QuizRuleViolation("options", "多选题发布时必须有 3 至 6 个选项")
+            raise QuizRuleViolation(
+                "options", f"多选题发布时必须有 3 至 {_OPTION_COUNT_MAX} 个选项"
+            )
         if count > _OPTION_COUNT_MAX:
             raise QuizRuleViolation("options", f"多选题最多 {_OPTION_COUNT_MAX} 个选项")
     elif question_type is QuizQuestionType.UNCERTAIN_CHOICE:
         if require_publishable and not 3 <= count <= _OPTION_COUNT_MAX:
-            raise QuizRuleViolation("options", "不定项选择题发布时必须有 3 至 6 个选项")
+            raise QuizRuleViolation(
+                "options", f"不定项选择题发布时必须有 3 至 {_OPTION_COUNT_MAX} 个选项"
+            )
         if count > _OPTION_COUNT_MAX:
             raise QuizRuleViolation("options", f"不定项选择题最多 {_OPTION_COUNT_MAX} 个选项")
     elif question_type is QuizQuestionType.MATCHING:

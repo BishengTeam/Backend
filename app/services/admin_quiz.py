@@ -60,7 +60,7 @@ from app.domain.community.src.rule.quiz import (
     normalize_question_payload,
 )
 
-_OPTION_COLUMNS = ("A", "B", "C", "D", "E", "F")
+_OPTION_COLUMNS = ("A", "B", "C", "D", "E", "F", "G", "H")
 
 
 def _xlsx_cell_text(value: object) -> str:
@@ -3796,7 +3796,7 @@ class AdminQuizService:
             if not header:
                 continue
             header = self._XLSX_REQUIRED_TEXT_MARK_RE.sub("", header)
-            match = re.fullmatch(r"选项([A-Fa-f])", header)
+            match = re.fullmatch(r"选项([A-Ha-h])", header)
             if match:
                 option_columns[ord(match.group(1).upper()) - 65] = index
                 continue

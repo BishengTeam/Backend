@@ -20,7 +20,7 @@ from app.services.admin_quiz import AdminQuizService
 
 TEMPLATE_HEADER = [
     "题目（必填）", "题型（必填）", "选项A（必填）", "选项B（必填）",
-    "选项C", "选项D", "选项E", "选项F", "正确答案（必填）",
+    "选项C", "选项D", "选项E", "选项F", "选项G", "选项H", "正确答案（必填）",
     "解析", "分数（必填）", "分类（必填）", "标签",
 ]
 
@@ -148,19 +148,25 @@ def test_ordering_requires_permutation_of_options() -> None:
         )
 
 
-def test_option_keys_accept_e_and_f_but_not_g() -> None:
+def test_option_keys_accept_up_to_h_but_not_i() -> None:
     normalized = normalize_question_payload(
         question_type="single_choice",
-        question_text="六选项",
-        options={"A": "1", "B": "2", "C": "3", "D": "4", "E": "5", "F": "6"},
-        correct_answer="F",
+        question_text="八选项",
+        options={
+            "A": "1", "B": "2", "C": "3", "D": "4",
+            "E": "5", "F": "6", "G": "7", "H": "8",
+        },
+        correct_answer="H",
     )
-    assert normalized.correct_answer == "F"
-    with pytest.raises(QuizRuleViolation, match="A、B、C、D、E、F"):
+    assert normalized.correct_answer == "H"
+    with pytest.raises(QuizRuleViolation, match="A~H"):
         normalize_question_payload(
             question_type="single_choice",
-            question_text="七选项",
-            options={"A": "1", "B": "2", "C": "3", "D": "4", "E": "5", "F": "6", "G": "7"},
+            question_text="九选项",
+            options={
+                "A": "1", "B": "2", "C": "3", "D": "4",
+                "E": "5", "F": "6", "G": "7", "H": "8", "I": "9",
+            },
             correct_answer="A",
         )
 
@@ -193,15 +199,15 @@ def test_normalize_payload_carries_score_and_tags() -> None:
 
 def test_parse_full_template_all_eight_types() -> None:
     rows, errors = _parse([
-        ["食醋是什么味道的？", "单选题", "酸", "甜", "苦", "辣", None, None, "A", None, 8, "趣味知识测验", "简单"],
-        ["一年中有几个季节？", "多选题", "春", "夏", "秋", "冬", None, None, "ABCD", None, 8, "趣味知识测验", "简单"],
-        ["下列哪些对？", "不定项选择题", "1", "2", "3", "4", "5", None, "ABCDE", None, 6, "测试", None],
-        ["荔枝多吃上火？", "判断题", "对", "错", None, None, None, None, "A", None, 8, "常识", None],
-        ["马铃薯是果实？", "判断题", "√", "×", None, None, None, None, "错", "马铃薯是蔬菜", 8, "常识", "较难"],
-        ["一年有_____个月，有_____个季节？", "填空题", "12", "4|四", None, None, None, None, None, None, 6, "常识", None],
-        ["中国的情人节是哪一天？", "问答题", None, None, None, None, None, None, "七夕", None, 12, "常识", "必知必会"],
-        ["请把下列的诗句匹配对应", "配对题", "红豆生南国  ->天涯若比邻", "海内存知己  ->更上一层楼", "床前明月光  ->春来发几枝", "欲穷千里目  ->疑是地上霜", None, None, "CADB", None, 12, "常识", None],
-        ["请根据时间的先后，一一对应排序", "排序题", "中秋节", "端午节", "重阳节", "元宵节", None, None, "DBAC", None, 12, "常识", None],
+        ["食醋是什么味道的？", "单选题", "酸", "甜", "苦", "辣", None, None, None, None, "A", None, 8, "趣味知识测验", "简单"],
+        ["一年中有几个季节？", "多选题", "春", "夏", "秋", "冬", None, None, None, None, "ABCD", None, 8, "趣味知识测验", "简单"],
+        ["下列哪些对？", "不定项选择题", "1", "2", "3", "4", "5", "6", "7", None, "ABCDEFG", None, 6, "测试", None],
+        ["荔枝多吃上火？", "判断题", "对", "错", None, None, None, None, None, None, "A", None, 8, "常识", None],
+        ["马铃薯是果实？", "判断题", "√", "×", None, None, None, None, None, None, "错", "马铃薯是蔬菜", 8, "常识", "较难"],
+        ["一年有_____个月，有_____个季节？", "填空题", "12", "4|四", None, None, None, None, None, None, None, None, 6, "常识", None],
+        ["中国的情人节是哪一天？", "问答题", None, None, None, None, None, None, None, None, "七夕", None, 12, "常识", "必知必会"],
+        ["请把下列的诗句匹配对应", "配对题", "红豆生南国  ->天涯若比邻", "海内存知己  ->更上一层楼", "床前明月光  ->春来发几枝", "欲穷千里目  ->疑是地上霜", None, None, None, None, "CADB", None, 12, "常识", None],
+        ["请根据时间的先后，一一对应排序", "排序题", "中秋节", "端午节", "重阳节", "元宵节", None, None, None, None, "DBAC", None, 12, "常识", None],
     ])
     assert errors == []
     assert len(rows) == 9
@@ -219,8 +225,8 @@ def test_parse_full_template_all_eight_types() -> None:
 
     uncertain = parsed["下列哪些对？"]
     assert uncertain.question_type.value == "uncertain_choice"
-    assert uncertain.correct_answer == ["A", "B", "C", "D", "E"]
-    assert set(uncertain.options) == {"A", "B", "C", "D", "E"}
+    assert uncertain.correct_answer == ["A", "B", "C", "D", "E", "F", "G"]
+    assert set(uncertain.options) == {"A", "B", "C", "D", "E", "F", "G"}
 
     judge_letter = parsed["荔枝多吃上火？"]
     assert judge_letter.question_type.value == "judge"
@@ -264,11 +270,11 @@ def test_parse_rejects_missing_required_headers() -> None:
 
 def test_parse_row_level_errors_do_not_abort_batch() -> None:
     rows, errors = _parse([
-        ["好题", "单选题", "酸", "甜", None, None, None, None, "A", None, 8, "分类", None],
-        ["坏题型", "选择题", "酸", "甜", None, None, None, None, "A", None, 8, "分类", None],
-        ["坏答案", "单选题", "酸", "甜", None, None, None, None, "Z", None, 8, "分类", None],
-        ["坏配对", "配对题", "左", None, None, None, None, None, "A", None, 8, "分类", None],
-        ["超分数", "单选题", "酸", "甜", "苦", None, None, None, "A", None, 120, "分类", None],
+        ["好题", "单选题", "酸", "甜", None, None, None, None, None, None, "A", None, 8, "分类", None],
+        ["坏题型", "选择题", "酸", "甜", None, None, None, None, None, None, "A", None, 8, "分类", None],
+        ["坏答案", "单选题", "酸", "甜", None, None, None, None, None, None, "Z", None, 8, "分类", None],
+        ["坏配对", "配对题", "左", None, None, None, None, None, None, None, "A", None, 8, "分类", None],
+        ["超分数", "单选题", "酸", "甜", "苦", None, None, None, None, None, "A", None, 120, "分类", None],
     ])
     assert len(rows) == 1
     assert len(errors) == 4

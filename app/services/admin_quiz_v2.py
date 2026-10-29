@@ -2045,19 +2045,20 @@ class AdminQuizV2Service:
         sheet.title = "试题导入"
         sheet.append([
             "题目（必填）", "题型（必填）", "选项A（必填）", "选项B（必填）",
-            "选项C", "选项D", "选项E", "选项F", "正确答案（必填）",
+            "选项C", "选项D", "选项E", "选项F", "选项G", "选项H", "正确答案（必填）",
             "解析", "分数（必填）", "分类（必填）", "标签",
         ])
         for question in questions:
             cells = option_cells(question)
-            cells += [""] * (6 - len(cells))
+            cells += [""] * (8 - len(cells))
             score = question.score
             sheet.append([
                 question.question_text,
                 self._TEMPLATE_TYPE_LABELS.get(
                     question.question_type, question.question_type
                 ),
-                cells[0], cells[1], cells[2], cells[3], cells[4], cells[5],
+                cells[0], cells[1], cells[2], cells[3],
+                cells[4], cells[5], cells[6], cells[7],
                 answer_cell(question),
                 question.explanation or "",
                 float(score) if score is not None else None,
