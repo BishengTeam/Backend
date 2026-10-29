@@ -120,6 +120,7 @@ class OfflinePaymentService:
         audit = OfflinePaymentAudit(order_id=order.id, actor_id=actor_id, action=action,
             request_key=data.request_key, payload_hash=digest(payload), summary={
                 "version": data.expected_version, "expected_version": data.expected_version, "note": data.note,
+                "expected_amount_cents": order.price,
                 "amount_cents": getattr(data, "amount_cents", None),
                 "bank_reference": payload.get("bank_reference"), "bank_time": payload.get("bank_time"),
                 "deadline": payload.get("deadline")})
@@ -293,7 +294,8 @@ class OfflinePaymentService:
                     if action == "exception" and (order.status in {"paid", "completed"} or (order.status == "closed" and order.offline_status == "exception")):
                         order.offline_status = "exception"
                         payment.message = data.note
-                        audit.summary = {**audit.summary, "result": "exception"}
+                        audit.summary = {**audit.summary, "result": "exception",
+                            "reason_code": "manual_exception", "reason": data.note}
                         return {"status": order.offline_status}
                     if order.status != "pending" or order.offline_status not in {"under_review", "returned", "exception"}:
                         raise ConflictException("当前订单不能核账；已关闭订单需按资金异常人工处理")
@@ -339,7 +341,12 @@ class OfflinePaymentService:
                     payment.message = payment.message[:1000]
                     if submission:
                         submission.reason = payment.message
-                    audit.summary = {**audit.summary, "result": order.offline_status}
+                    audit.summary = {**audit.summary, "result": order.offline_status,
+                        "reason_code": "amount_mismatch" if action == "confirm" and data.amount_cents != order.price
+                            else "returned_for_correction" if action == "return"
+                            else "manual_exception" if action == "exception" else None,
+                        "reason": "实际到账金额与应付金额不一致" if action == "confirm" and data.amount_cents != order.price
+                            else data.note if order.offline_status in {"exception", "returned"} else None}
                     order.expires_at = None
                     return {"status": order.offline_status}
         except IntegrityError as exc:
