@@ -87,6 +87,10 @@ async def test_context(monkeypatch):
                 {"pl": pl},
             )
             await db.execute(
+                text('DELETE FROM deleted_openid WHERE openid LIKE :pl'),
+                {"pl": pl},
+            )
+            await db.execute(
                 text('DELETE FROM "user" WHERE openid LIKE :pl'),
                 {"pl": pl},
             )
@@ -251,3 +255,62 @@ async def test_get_user_conversations_returns_session_list(test_context):
     conv = conversations[0]
     assert conv.session_id == f"{prefix}_session"
     assert conv.backend_type == "manual"
+
+
+# ---------------------------------------------------------------------------
+# 5. PATCH /admin/users/{id}/status — 启用注销用户必须清除注销黑名单
+# ---------------------------------------------------------------------------
+
+
+async def test_toggle_activate_clears_deleted_openid(test_context):
+    """Login checks deleted_openid before is_active, so activating a
+    deactivated user must remove the blacklist row in the same transaction."""
+    from app.domain.user.src.index import DeletedOpenid, User
+    from app.services.admin_user import AdminUserService
+
+    factory, prefix = test_context
+
+    async with factory() as db:
+        user = User(openid=f"{prefix}_unlock", is_active=False)
+        db.add(user)
+        await db.flush()
+        db.add(DeletedOpenid(openid=user.openid))
+        await db.commit()
+        uid = user.id
+
+    await AdminUserService().toggle_user_status(uid, True)
+
+    async with factory() as db:
+        row = (
+            await db.execute(
+                select(DeletedOpenid).where(DeletedOpenid.openid == f"{prefix}_unlock")
+            )
+        ).scalar_one_or_none()
+        assert row is None, "deleted_openid must be cleared on activation"
+        user = (await db.execute(select(User).where(User.id == uid))).scalar_one()
+        assert user.is_active is True
+
+
+async def test_toggle_deactivate_keeps_blacklist_untouched(test_context):
+    """Disabling a user must not create or resurrect deleted_openid rows."""
+    from app.domain.user.src.index import DeletedOpenid, User
+    from app.services.admin_user import AdminUserService
+
+    factory, prefix = test_context
+
+    async with factory() as db:
+        user = User(openid=f"{prefix}_disable", is_active=True)
+        db.add(user)
+        await db.flush()
+        uid = user.id
+        await db.commit()
+
+    await AdminUserService().toggle_user_status(uid, False)
+
+    async with factory() as db:
+        count = (
+            await db.execute(
+                select(DeletedOpenid).where(DeletedOpenid.openid == f"{prefix}_disable")
+            )
+        ).scalars().all()
+        assert count == [], "deactivation must not write deleted_openid"

@@ -1,7 +1,7 @@
 """管理端用户服务"""
 from datetime import date, datetime, timezone
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import ConflictException, NotFoundException, ValidationException
@@ -9,7 +9,7 @@ from app.domain.community.src.index import Conversation
 from app.domain.order.src.index import Order
 from app.domain.renshe.src.index import RensheAuditLog
 from app.domain.user.src.index import (
-    User, UserProfile, UserRealname, UserStudent, UserEnterprise,
+    DeletedOpenid, User, UserProfile, UserRealname, UserStudent, UserEnterprise,
 )
 from app.schemas.admin import (
     AdminIdentityReview,
@@ -343,6 +343,12 @@ class AdminUserService:
                 raise NotFoundException("用户")
             if not is_active and user.is_active:
                 await _assert_account_closure_allowed(db, user_id)
+            if is_active:
+                # 登录闸门先查注销黑名单再看 is_active（auth._login），
+                # 启用必须同事务清掉 deleted_openid，否则恢复的用户仍无法登录。
+                await db.execute(
+                    delete(DeletedOpenid).where(DeletedOpenid.openid == user.openid)
+                )
             user.is_active = is_active
             db.add(
                 RensheAuditLog(
