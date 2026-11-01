@@ -93,6 +93,31 @@ async def test_oversized_receipt_cannot_replace_current_material():
 
 
 @pytest.mark.asyncio
+async def test_legacy_material_without_size_metadata_can_still_be_bound():
+    material = SimpleNamespace(
+        user_id=1,
+        material_type="portrait_photo",
+        registration_id=None,
+        size_bytes=None,
+        version_no=None,
+        is_current=False,
+        bound_at=None,
+    )
+    db = SimpleNamespace(scalar=AsyncMock(side_effect=[material, 0]))
+
+    bound = await NispRegistrationService()._bind_material(
+        db, user_id=1, registration_id=1, material_type="portrait_photo",
+        storage_key="nisp/materials/1/legacy.jpg",
+    )
+
+    assert bound is material
+    assert material.registration_id == 1
+    assert material.version_no == 1
+    assert material.is_current is True
+    assert material.bound_at is not None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stored_limit", [5 * 1024 * 1024, 20 * 1024 * 1024])
 async def test_batch_responses_advertise_actual_limit_for_legacy_rows(monkeypatch, stored_limit):
     import app.adapter.database as database

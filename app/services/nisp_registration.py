@@ -852,7 +852,9 @@ class NispRegistrationService:
             raise BusinessException("材料类型与报名材料不匹配")
         if material.registration_id is not None:
             raise BusinessException("报名材料已绑定其他报名记录")
-        if material.size_bytes > NISP_MAX_MATERIAL_BYTES:
+        # Historical material rows may lack size metadata. New uploads are still
+        # enforced by NispObjectStorage; do not block legacy replacements here.
+        if material.size_bytes is not None and material.size_bytes > NISP_MAX_MATERIAL_BYTES:
             raise BusinessException("报名材料超过大小限制（10MB），请重新上传")
 
         if replace_current:
