@@ -166,8 +166,12 @@ class H3cAdminBatchService:
                 payload = data.model_dump(exclude_unset=True)
                 if "certification_code" in payload:
                     raise BusinessException("H3C 批次不支持修改认证类型")
+                old_capacity = plan.capacity
                 for field, value in payload.items():
-                    if field in {
+                    if field == "capacity":
+                        # Apply capacity only after locking and validating inventory.
+                        continue
+                    elif field in {
                         "coupon_price_cents", "student_price_cents", "full_price_cents"
                     }:
                         setattr(batch, field, value)
@@ -181,17 +185,10 @@ class H3cAdminBatchService:
                     raise BusinessException("报名开始时间必须早于截止时间")
                 if plan.exam_date and plan.apply_end and plan.exam_date < plan.apply_end:
                     raise BusinessException("考试时间不能早于报名截止时间")
-                if "capacity" in payload and payload["capacity"] != plan.capacity:
-                    inventory = await db.scalar(
-                        select(Inventory)
-                        .where(
-                            Inventory.inventory_type == "h3c_batch",
-                            Inventory.ref_code == f"h3c-batch-{batch.id}",
-                        )
-                        .with_for_update()
+                if "capacity" in payload and payload["capacity"] != old_capacity:
+                    inventory = await self._lock_consistent_inventory(
+                        db, batch_id=batch.id, capacity=old_capacity,
                     )
-                    if inventory is None:
-                        raise ConflictException("H3C 批次库存不存在")
                     linked_orders = await db.scalar(
                         select(func.count())
                         .select_from(Order)
@@ -200,10 +197,14 @@ class H3cAdminBatchService:
                             Order.status.in_(("pending", "paid", "completed")),
                         )
                     ) or 0
-                    if linked_orders:
+                    if linked_orders or inventory.locked_quota or inventory.sold_quota:
                         raise ConflictException("已有报名时不能修改批次总名额")
-                    old_capacity = plan.capacity
                     new_capacity = int(payload["capacity"])
+                    before_total = inventory.total_quota
+                    before_available = inventory.available_quota
+                    before_locked = inventory.locked_quota
+                    before_sold = inventory.sold_quota
+                    plan.capacity = new_capacity
                     inventory.total_quota = new_capacity
                     inventory.available_quota = new_capacity
                     db.add(
@@ -211,10 +212,10 @@ class H3cAdminBatchService:
                             inventory_id=inventory.id,
                             action="adjust",
                             quantity=new_capacity - old_capacity,
-                            before_total_quota=before.before_total_quota,
-                            before_available_quota=before.before_available_quota,
-                            before_locked_quota=0,
-                            before_sold_quota=0,
+                            before_total_quota=before_total,
+                            before_available_quota=before_available,
+                            before_locked_quota=before_locked,
+                            before_sold_quota=before_sold,
                             after_total_quota=new_capacity,
                             after_available_quota=new_capacity,
                             after_locked_quota=0,
@@ -403,6 +404,12 @@ class H3cAdminBatchService:
                         raise BusinessException("考试时间不能早于报名截止时间")
                     if plan.apply_end <= _now():
                         raise BusinessException("报名截止时间必须晚于当前时间")
+                if target == "published":
+                    # Prevent publishing legacy drafts whose capacity was changed
+                    # without synchronizing inventory by earlier versions.
+                    await self._lock_consistent_inventory(
+                        db, batch_id=batch.id, capacity=plan.capacity,
+                    )
                 now = _now()
                 plan.status = target
                 if target == "published":
@@ -421,6 +428,23 @@ class H3cAdminBatchService:
                     summary={"batch_id": batch.id, "status": target},
                 )
                 return await self._response(db, batch)
+
+    @staticmethod
+    async def _lock_consistent_inventory(
+        db: AsyncSession, *, batch_id: int, capacity: int,
+    ) -> Inventory:
+        inventory = await db.scalar(
+            select(Inventory).where(
+                Inventory.inventory_type == "h3c_batch",
+                Inventory.ref_code == f"h3c-batch-{batch_id}",
+            ).with_for_update()
+        )
+        if inventory is None:
+            raise ConflictException("H3C 批次库存不存在")
+        balanced_total = inventory.available_quota + inventory.locked_quota + inventory.sold_quota
+        if inventory.total_quota != capacity or balanced_total != inventory.total_quota:
+            raise ConflictException("H3C 批次名额与库存不一致，请先核对库存")
+        return inventory
 
     @staticmethod
     async def _lock(db: AsyncSession, batch_id: int) -> tuple[H3cExamBatch, Plan]:

@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.adapter.database import Base, TimestampMixin
+from app.domain.nisp.src.constants import NISP_MAX_MATERIAL_BYTES
 
 
 NISP_LEVELS = ("1", "2")
@@ -42,6 +43,7 @@ NISP_REGISTRATION_STATUSES = (
     "pending_refund_confirmation",
     "refund_processing",
     "approved",
+    "final_approved",
     "refunded_closed",
     "cancelled",
 )
@@ -109,8 +111,9 @@ class NispExamBatch(Base, TimestampMixin):
     max_resubmissions: Mapped[int] = mapped_column(
         Integer, nullable=False, default=2
     )
+    # Retain legacy values for compatibility; runtime policy is fixed at 10MB.
     max_material_bytes: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=10 * 1024 * 1024
+        Integer, nullable=False, default=NISP_MAX_MATERIAL_BYTES
     )
 
 

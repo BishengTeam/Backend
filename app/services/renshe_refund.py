@@ -267,15 +267,8 @@ class RensheRefundService:
                 base = base.where(RensheRefundRequest.requested_at <= requested_at_end)
             if keyword and keyword.strip():
                 pattern = f"%{keyword.strip()}%"
-                version_name = (
-                    select(RensheApplicationVersion.realname_snapshot["real_name"].as_string())
-                    .where(
-                        RensheApplicationVersion.id == RensheApplication.current_version_id
-                    )
-                    .scalar_subquery()
-                )
                 base = base.where(or_(
-                    version_name.ilike(pattern),
+                    RensheApplicationVersion.realname_snapshot["real_name"].as_string().ilike(pattern),
                     Order.out_trade_no.ilike(pattern),
                     RensheRefundRequest.out_refund_no.ilike(pattern),
                 ))

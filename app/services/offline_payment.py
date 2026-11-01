@@ -443,7 +443,11 @@ class OfflinePaymentService:
                     if not await self.command(db, order, admin_id, "admin.refund", data):
                         return {"status": order.status, "replayed": True}
                     self.version(payment, data)
-                    if order.status not in {"paid", "completed"} or data.amount_cents != order.price:
+                    if order.status == "refunded":
+                        raise ConflictException("该订单已完成退款，请勿重复登记")
+                    if order.status not in {"paid", "completed"}:
+                        raise ConflictException("当前订单状态不允许登记退款，请刷新核对")
+                    if data.amount_cents != order.price:
                         raise ConflictException("实际退款金额与已付款订单不一致")
                     if data.refund_kind == "order":
                         from app.services.admin_order import AdminOrderService

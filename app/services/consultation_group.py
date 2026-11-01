@@ -19,13 +19,14 @@ from app.schemas.consultation_group import (
 USER_VISIBLE_PLAN_STATUSES = {"published", "registration_closed", "finalized"}
 
 USER_VISIBLE_REGISTRATION_STATUSES = {
-    # H3C / NISP shared dedicated-flow statuses
+    # H3C / NISP / Renshe dedicated-flow statuses
     "pending_initial_review",
     "initial_rejected",
     "pending_review",
     "rejected_awaiting_resubmission",
     "pending_external_review",
     "external_rejected",
+    "external_approved",
     "approved",
     "final_approved",
     # Refund follow-up remains visible.

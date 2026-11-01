@@ -32,9 +32,9 @@ from app.domain.h3c.src.index import (
 )
 from app.domain.user.src.model.admin_user import AdminUser
 from app.domain.plan.src.index import Plan
-from app.integrations.h3c_storage import H3cObjectStorage
+from app.integrations.h3c_storage import H3cObjectStorage, validate_h3c_jpeg
 from app.port.config import settings
-from app.port.exceptions import BusinessException, ConflictException, NotFoundException, ThirdPartyException
+from app.port.exceptions import BusinessException, ConflictException, NotFoundException, ThirdPartyException, ValidationException
 from app.schemas.common import PaginatedData
 from app.schemas.h3c_registration import (
     H3cExportCreate,
@@ -736,7 +736,6 @@ class H3cExportService:
             from openpyxl.drawing.image import Image as XlsxImage
             from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, TwoCellAnchor
             from openpyxl.utils import get_column_letter
-            from PIL import Image as PillowImage
         except ImportError as exc:
             raise ThirdPartyException("H3C Excel 导出依赖未安装") from exc
 
@@ -804,8 +803,15 @@ class H3cExportService:
                 if material is not None:
                     material_path = material_dir / f"{row.registration.id}-{material.id}.jpg"
                     await self.storage.download_file(material.storage_key, material_path)
-                    with PillowImage.open(material_path) as image:
-                        width, height = image.size
+                    image_data = await asyncio.to_thread(material_path.read_bytes)
+                    try:
+                        width, height = await asyncio.to_thread(validate_h3c_jpeg, image_data)
+                    except ValidationException as exc:
+                        label = "考券证明" if registration_type == "coupon" else "学生证明"
+                        raise BusinessException(
+                            f"报名 {row.registration.registration_no} 的{label}无法导出："
+                            f"{exc.message}；请打回补正后重新导出"
+                        ) from exc
                     picture = XlsxImage(str(material_path))
                     material_column_width = worksheet.column_dimensions["L"].width or 8.43
                     material_cell_width_px = self._excel_column_width_pixels(

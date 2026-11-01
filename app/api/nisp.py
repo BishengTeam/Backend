@@ -18,6 +18,7 @@ from app.schemas.nisp import (
 )
 from app.services.nisp_registration import NispRegistrationService
 from app.services.nisp_lifecycle import occupied_count
+from app.domain.nisp.src.constants import NISP_MAX_MATERIAL_BYTES
 
 router = APIRouter(prefix="/nisp", tags=["NISP认证"])
 _service = NispRegistrationService()
@@ -78,7 +79,7 @@ async def list_batches(
                 level1_price_cents=batch.level1_price_cents,
                 level2_price_cents=batch.level2_price_cents,
                 payment_timeout_minutes=batch.payment_timeout_minutes,
-                max_material_bytes=batch.max_material_bytes,
+                max_material_bytes=NISP_MAX_MATERIAL_BYTES,
             ))
         return success(data=items)
 

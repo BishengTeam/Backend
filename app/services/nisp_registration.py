@@ -9,6 +9,7 @@ from sqlalchemy import func, or_, select, update as sa_update
 
 from app.adapter.database import get_db_ctx
 from app.domain.order.src.index import Order
+from app.domain.nisp.src.constants import NISP_MAX_MATERIAL_BYTES
 from app.domain.nisp.src import (
     NispExamBatch,
     NispMaterialFile,
@@ -851,6 +852,8 @@ class NispRegistrationService:
             raise BusinessException("材料类型与报名材料不匹配")
         if material.registration_id is not None:
             raise BusinessException("报名材料已绑定其他报名记录")
+        if material.size_bytes > NISP_MAX_MATERIAL_BYTES:
+            raise BusinessException("报名材料超过大小限制（10MB），请重新上传")
 
         if replace_current:
             current_rows = (

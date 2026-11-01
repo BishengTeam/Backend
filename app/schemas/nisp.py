@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.consultation_group import ConsultationGroupUserResponse
+from app.domain.nisp.src.constants import NISP_MAX_MATERIAL_BYTES
 
 NispLevel = Literal["1", "2"]
 NispRegistrationStatus = Literal[
@@ -41,7 +42,12 @@ class NispExamBatchBase(BaseModel):
     payment_timeout_minutes: int = Field(default=30, ge=1, le=1440)
     resubmission_window_hours: int = Field(default=72, ge=1, le=720)
     max_resubmissions: int = Field(default=2, ge=0, le=10)
-    max_material_bytes: int = Field(default=10485760, ge=1, le=20971520)
+    # Keep the legacy input field, but do not advertise a limit upload cannot honor.
+    max_material_bytes: int = Field(
+        default=NISP_MAX_MATERIAL_BYTES,
+        ge=NISP_MAX_MATERIAL_BYTES,
+        le=NISP_MAX_MATERIAL_BYTES,
+    )
     consultation_group_qrcode_url: str | None = Field(None, max_length=512)
 
 
@@ -183,7 +189,7 @@ class NispOrderCreate(BaseModel):
     major: str = Field(min_length=1, max_length=64)
     school: str = Field(min_length=1, max_length=128)
     id_card: str = Field(min_length=18, max_length=18)
-    phone: str = Field(min_length=11, max_length=11)
+    phone: str = Field(min_length=11, max_length=11, pattern=r"^1[3-9][0-9]{9}$")
     email: str = Field(min_length=3, max_length=128)
     province: str = Field(min_length=1, max_length=32)
 
@@ -192,7 +198,7 @@ class NispOrderCreate(BaseModel):
     age: int | None = Field(None, ge=16, le=80)
     education: str | None = Field(None, max_length=32)
     address: str | None = Field(None, max_length=256)
-    zip_code: str | None = Field(None, max_length=6)
+    zip_code: str | None = Field(None, min_length=6, max_length=6, pattern=r"^[0-9]{6}$")
 
     # Material keys (uploaded to OSS beforehand)
     id_card_both_sides_key: str = Field(min_length=1, max_length=512)
@@ -304,7 +310,7 @@ class NispReviewDecisionRequest(BaseModel):
 
 class NispResubmitRequest(BaseModel):
     pinyin: str | None = Field(None, min_length=1, max_length=128)
-    phone: str | None = Field(None, min_length=11, max_length=11)
+    phone: str | None = Field(None, min_length=11, max_length=11, pattern=r"^1[3-9][0-9]{9}$")
     email: str | None = Field(None, min_length=3, max_length=128)
     school: str | None = Field(None, min_length=1, max_length=128)
     major: str | None = Field(None, min_length=1, max_length=64)
@@ -313,7 +319,7 @@ class NispResubmitRequest(BaseModel):
     age: int | None = Field(None, ge=16, le=80)
     education: str | None = Field(None, min_length=1, max_length=32)
     address: str | None = Field(None, min_length=1, max_length=256)
-    zip_code: str | None = Field(None, min_length=6, max_length=6)
+    zip_code: str | None = Field(None, min_length=6, max_length=6, pattern=r"^[0-9]{6}$")
     id_card_both_sides_key: str | None = Field(None, min_length=1, max_length=512)
     portrait_photo_key: str | None = Field(None, min_length=1, max_length=512)
     xuexin_report_key: str | None = Field(None, min_length=1, max_length=512)

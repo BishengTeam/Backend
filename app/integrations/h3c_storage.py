@@ -7,13 +7,39 @@ import hashlib
 import shutil
 import urllib.parse
 import uuid
+import warnings
+from io import BytesIO
 from pathlib import Path
+
+from PIL import Image, UnidentifiedImageError
 
 from app.port.config import settings
 from app.port.exceptions import ThirdPartyException, ValidationException
 
 
 H3C_PREFIX = "h3c"
+# A 20-megapixel proof is ample for readable documents while bounding decoding.
+H3C_MAX_IMAGE_PIXELS = 20_000_000
+
+
+def validate_h3c_jpeg(data: bytes) -> tuple[int, int]:
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(BytesIO(data)) as image:
+                if image.format != "JPEG":
+                    raise ValidationException("H3C 证明材料必须为 JPG 图片")
+                if image.width * image.height > H3C_MAX_IMAGE_PIXELS:
+                    raise ValidationException("H3C 证明图片分辨率过高，请压缩至2000万像素以内")
+                image.verify()
+            # verify() checks structure; loading also catches truncated pixel data.
+            with Image.open(BytesIO(data)) as image:
+                image.load()
+                return image.size
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        raise ValidationException("H3C 证明图片分辨率过高，请压缩至2000万像素以内") from exc
+    except (UnidentifiedImageError, OSError, ValueError, SyntaxError) as exc:
+        raise ValidationException("H3C 证明图片损坏或无法读取，请重新上传完整的 JPG 图片") from exc
 
 
 def source_prefix(user_id: int) -> str:
@@ -48,6 +74,7 @@ class H3cObjectStorage:
             raise ValidationException("H3C 证明图片超过大小限制")
         if len(data) < 4 or data[:3] != b"\xff\xd8\xff":
             raise ValidationException("H3C 证明图片格式无效")
+        await asyncio.to_thread(validate_h3c_jpeg, data)
 
         storage_key = f"{source_prefix(user_id)}{uuid.uuid4().hex}.jpg"
         await self._put(storage_key, data, "image/jpeg")

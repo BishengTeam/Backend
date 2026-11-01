@@ -10,12 +10,13 @@ from pathlib import Path
 
 from app.port.config import settings
 from app.port.exceptions import ThirdPartyException, ValidationException
+from app.domain.nisp.src.constants import NISP_MAX_MATERIAL_BYTES
 
 
 NISP_PREFIX = "nisp"
 NISP_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".pdf"}
 NISP_ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/jpg", "application/pdf"}
-NISP_MAX_BYTES = 10 * 1024 * 1024
+NISP_MAX_BYTES = NISP_MAX_MATERIAL_BYTES
 NISP_MATERIAL_RULES = {
     "id_card_both_sides": (".pdf", "application/pdf", "PDF"),
     "portrait_photo": (".jpg", "image/jpeg", "JPG"),

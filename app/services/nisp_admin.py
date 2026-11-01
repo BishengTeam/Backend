@@ -6,6 +6,7 @@ from sqlalchemy import func, or_, select
 
 from app.adapter.database import get_db_ctx
 from app.domain.nisp.src import NispExamBatch, NispExportItem, NispExportJob, NispRegistration
+from app.domain.nisp.src.constants import NISP_MAX_MATERIAL_BYTES
 from app.domain.plan.src.index import Plan
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.domain.order.src.index import Order, apply_order_status_transition
@@ -589,7 +590,7 @@ class NispAdminService:
             payment_timeout_minutes=batch.payment_timeout_minutes,
             resubmission_window_hours=batch.resubmission_window_hours,
             max_resubmissions=batch.max_resubmissions,
-            max_material_bytes=batch.max_material_bytes,
+            max_material_bytes=NISP_MAX_MATERIAL_BYTES,
             registration_counts={status: int(count) for status, count in count_rows},
             created_at=batch.created_at,
             updated_at=batch.updated_at,

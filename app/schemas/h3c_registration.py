@@ -218,7 +218,7 @@ class H3cOrderCreate(BaseModel):
     candidate_idcard: str = Field(..., min_length=18, max_length=18)
     school: str = Field(..., min_length=1, max_length=128)
     address: str = Field(..., min_length=1, max_length=256)
-    phone: str = Field(..., min_length=5, max_length=20)
+    phone: str = Field(..., min_length=11, max_length=11, pattern=r"^1[3-9][0-9]{9}$")
     email: str = Field(..., min_length=3, max_length=128)
     education: H3cEducation
     first_name_en: str = Field(..., min_length=1, max_length=64)
@@ -354,7 +354,7 @@ class H3cCorrectionRequestResponse(BaseModel):
 
 
 class H3cResubmissionCreate(BaseModel):
-    phone: str | None = Field(None, min_length=5, max_length=20)
+    phone: str | None = Field(None, min_length=11, max_length=11, pattern=r"^1[3-9][0-9]{9}$")
     email: str | None = Field(None, min_length=3, max_length=128)
     school: str | None = Field(None, min_length=1, max_length=128)
     address: str | None = Field(None, min_length=1, max_length=256)
