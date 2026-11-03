@@ -487,7 +487,7 @@ async def test_practice_requires_activation(activation_env):
                 db, env.student_a, env.library.id
             )
     assert locked.value.http_status_code == 403
-    assert locked.value.reason == "quiz_activation_required"
+    assert locked.value.detail["reason"] == "quiz_activation_required"
 
 
 async def test_session_state_follows_activation(activation_env):
@@ -524,7 +524,9 @@ async def test_session_state_follows_activation(activation_env):
     await env.codes.redeem(env.student_a, env.library.id, display)
     async with env.factory() as db:
         stored = await db.get(QuizPracticeSession, session_id)
-        state, reason, _at = await env.catalog._session_access_state(db, stored, now)
+        state, reason, _at = await env.catalog._session_access_state(
+            db, stored, datetime.now(timezone.utc)
+        )
     assert (state, reason) == ("active", None)
 
 

@@ -426,13 +426,15 @@ class QuizV2Service:
     ) -> QuizLibrary:
         """详情页闸门：目录公开的库（free / 激活码库）对登录用户开放目录浏览。"""
 
-        if include_activation:
-            library = await db.get(QuizLibrary, library_id)
-            if library is not None and library.access_mode == "activation_code":
-                # 与匿名口径一致：已发布的激活码库详情对所有人开放，练习仍走权益闸门。
-                if library.status != "published" or not library.v2_enabled:
-                    raise self._not_found()
-                return library
+        library = await db.get(QuizLibrary, library_id)
+        if library is not None and library.access_mode == "activation_code":
+            if not include_activation:
+                # 旧契约对激活码库按不存在处理（不得泄漏新模式，也不得给 403 提示）。
+                raise self._not_found()
+            # 与匿名口径一致：已发布的激活码库详情对所有人开放，练习仍走权益闸门。
+            if library.status != "published" or not library.v2_enabled:
+                raise self._not_found()
+            return library
         return await self._require_accessible_library(db, user_id, library_id)
 
     @classmethod
