@@ -205,7 +205,7 @@ async def activation_env(monkeypatch):
                 knowledge_point_id=point.id,
                 question_type="single_choice",
                 question_text=f"{prefix} 激活码题库题目？",
-                options={"A": "是", "B": "否"},
+                options={"A": "是", "B": "否", "C": "不确定"},
                 correct_answer="A",
                 explanation="激活码集成测试题目。",
             ),
