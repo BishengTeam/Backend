@@ -48,6 +48,7 @@ x-backend-environment: &backend_environment
   UPLOAD_DIR: /app/uploads
   STORAGE_TYPE: local
   RENSHE_STORAGE_TYPE: ${RENSHE_STORAGE_TYPE:-disabled}
+  COURSE_DOCUMENT_UPLOADS_ENABLED: ${COURSE_DOCUMENT_UPLOADS_ENABLED:-false}
   ALIYUN_OSS_ENDPOINT: ${ALIYUN_OSS_ENDPOINT:-}
   ALIYUN_OSS_BUCKET: ${ALIYUN_OSS_BUCKET:-}
   ALIYUN_OSS_ACCESS_KEY_ID_FILE: /run/secrets/aliyun_oss_access_key_id

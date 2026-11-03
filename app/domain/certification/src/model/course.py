@@ -139,17 +139,17 @@ class CourseUpload(Base, TimestampMixin):
     __tablename__ = "course_upload"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('cover', 'chapter_video')", name="ck_course_upload_kind"
+            "kind IN ('cover', 'chapter_video', 'chapter_file')", name="ck_course_upload_kind"
         ),
         CheckConstraint(
-            "status IN ('pending', 'completed', 'bound', 'aborted', 'expired')",
+            "status IN ('pending', 'validating', 'failed', 'completed', 'bound', 'retired', 'aborted', 'expired')",
             name="ck_course_upload_status",
         ),
         CheckConstraint("size_bytes > 0", name="ck_course_upload_size_positive"),
         CheckConstraint("part_size > 0", name="ck_course_upload_part_size_positive"),
         CheckConstraint(
             "(kind = 'cover' AND title IS NULL AND duration IS NULL AND sort_order IS NULL) "
-            "OR (kind = 'chapter_video' AND title IS NOT NULL "
+            "OR kind = 'chapter_file' OR (kind = 'chapter_video' AND title IS NOT NULL "
             "AND duration IS NOT NULL AND sort_order IS NOT NULL)",
             name="ck_course_upload_kind_fields",
         ),
@@ -169,7 +169,7 @@ class CourseUpload(Base, TimestampMixin):
     oss_upload_id: Mapped[str] = mapped_column(String(256), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(256), nullable=False)
     content_type: Mapped[str] = mapped_column(String(128), nullable=False)
-    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     part_size: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="pending", server_default="pending"
@@ -177,6 +177,11 @@ class CourseUpload(Base, TimestampMixin):
     title: Mapped[str | None] = mapped_column(String(256))
     duration: Mapped[int | None] = mapped_column(Integer)
     sort_order: Mapped[int | None] = mapped_column(Integer)
+    resource_type: Mapped[str | None] = mapped_column(String(16))
+    page_count: Mapped[int | None] = mapped_column(Integer)
+    chapter_id: Mapped[int | None] = mapped_column(Integer)
+    expected_resource_version: Mapped[int | None] = mapped_column(Integer)
+    validation_error: Mapped[str | None] = mapped_column(String(1024))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 

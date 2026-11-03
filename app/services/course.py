@@ -15,7 +15,7 @@ from app.domain.certification.src.index import (
 )
 from app.domain.community.src.index import QuizCourseLibraryBinding, QuizLibrary
 from app.domain.user.src.index import User
-from app.port.exceptions import ForbiddenException, NotFoundException, ThirdPartyException
+from app.port.exceptions import ForbiddenException, NotFoundException, ThirdPartyException, ConflictException, ValidationException
 from app.schemas.common import PaginatedData
 from app.schemas.course import (
     ChapterPlaybackResponse,
@@ -58,13 +58,14 @@ class CourseService:
 
     @staticmethod
     def _chapter_response(
-        chapter: CourseChapter, *, can_play_course: bool, has_access: bool, preview_count: int
+        chapter: CourseChapter, *, can_play_course: bool, has_access: bool, preview_count: int, rank: int | None = None
     ) -> ChapterResponse:
-        is_preview = can_play_course or chapter.sort_order <= preview_count
+        is_preview = can_play_course or (rank if rank is not None else chapter.sort_order) <= preview_count
         return ChapterResponse(
             id=chapter.id,
             title=chapter.title,
             duration=chapter.duration,
+            resource_type=chapter.resource_type, resource_version=chapter.resource_version, page_count=chapter.page_count,
             sort_order=chapter.sort_order,
             is_preview=is_preview and not has_access,
             can_play=is_preview,
@@ -126,7 +127,7 @@ class CourseService:
                 )
             )
             has_access = enrollment is not None
-            can_play_course = has_access or course.price == 0
+            can_play_course = has_access
             bound_libraries = list(
                 await db.scalars(
                     select(QuizLibrary)
@@ -159,7 +160,7 @@ class CourseService:
                 has_access=has_access,
                 enrollment_id=enrollment.id if enrollment else None,
                 preview_chapter_count=(
-                    0 if course.price == 0 else course.preview_chapter_count
+                    course.preview_chapter_count
                 ),
                 chapter_count=len(chapters),
                 chapters=[
@@ -167,9 +168,9 @@ class CourseService:
                         chapter,
                         can_play_course=can_play_course,
                         has_access=has_access,
-                        preview_count=course.preview_chapter_count,
+                        preview_count=course.preview_chapter_count, rank=rank,
                     )
-                    for chapter in chapters
+                    for rank, chapter in enumerate(chapters, 1)
                 ],
                 included_quiz_libraries=[
                     CourseQuizLibrarySummary(
@@ -271,26 +272,32 @@ class CourseService:
                     .order_by(CourseChapter.sort_order, CourseChapter.id)
                 )
             )
-            can_play_course = has_access or course.price == 0
+            can_play_course = has_access
             progress = await self._build_progress(db, user_id, course_id) if user_id else None
             return CourseChaptersResponse(
                 preview_chapter_count=(
-                    0 if course.price == 0 else course.preview_chapter_count
+                    course.preview_chapter_count
                 ),
                 chapters=[
                     self._chapter_response(
                         row,
                         can_play_course=can_play_course,
                         has_access=has_access,
-                        preview_count=course.preview_chapter_count,
+                        preview_count=course.preview_chapter_count, rank=rank,
                     )
-                    for row in rows
+                    for rank, row in enumerate(rows, 1)
                 ],
                 progress=progress,
             )
 
-    async def issue_playback(
-        self, user_id: int, course_id: int, chapter_id: int
+    @staticmethod
+    async def _is_preview(db, chapter, count):
+        rank = await db.scalar(select(func.count()).select_from(CourseChapter).where(
+            CourseChapter.course_id == chapter.course_id, CourseChapter.sort_order <= chapter.sort_order))
+        return rank <= count
+
+    async def issue_resource(
+        self, user_id: int, course_id: int, chapter_id: int, *, video_only=False
     ) -> ChapterPlaybackResponse:
         async with get_db_ctx() as db:
             user = await db.get(User, user_id)
@@ -300,16 +307,19 @@ class CourseService:
             chapter = await db.get(CourseChapter, chapter_id)
             if course is None or chapter is None or chapter.course_id != course_id:
                 raise NotFoundException("课程章节")
+            if course.status != "published" or not course.is_active:
+                raise ForbiddenException("课程已下线")
+            if video_only and chapter.resource_type != "video":
+                raise ValidationException("文档章节请使用通用资源接口")
             has_access = await self._has_learning_access(db, user_id, course_id)
             can_play = (
                 has_access
-                or course.price == 0
-                or chapter.sort_order <= course.preview_chapter_count
+                or await self._is_preview(db, chapter, course.preview_chapter_count)
             )
             if not can_play:
                 raise ForbiddenException("无课程学习权限")
-            if not await self.storage.object_exists(chapter.video_storage_key):
-                raise ThirdPartyException("课程视频文件不存在，请重新上传视频")
+            if not await self.storage.object_exists(chapter.resource_storage_key):
+                raise ThirdPartyException("课程文件不存在，请联系管理员")
             from app.domain.certification.src.index import CourseAuditLog
 
             db.add(
@@ -327,12 +337,16 @@ class CourseService:
         expires_at = int(time()) + 300
         return ChapterPlaybackResponse(
             chapter_id=chapter_id,
+            resource_version=chapter.resource_version,
             url=await self.storage.signed_url(
-                chapter.video_storage_key,
+                chapter.resource_storage_key,
                 download_filename=chapter.original_filename,
             ),
             expires_at=expires_at,
         )
+
+    async def issue_playback(self, user_id: int, course_id: int, chapter_id: int):
+        return await self.issue_resource(user_id, course_id, chapter_id, video_only=True)
 
     async def get_progress(
         self, user_id: int, course_id: int
@@ -344,9 +358,20 @@ class CourseService:
         self, user_id: int, course_id: int, data: ChapterProgressUpsert
     ) -> ChapterProgressResponse:
         async with get_db_ctx() as db:
-            chapter = await db.get(CourseChapter, data.chapter_id)
+            chapter = await db.scalar(select(CourseChapter).where(CourseChapter.id == data.chapter_id).with_for_update())
             if chapter is None or chapter.course_id != course_id:
                 raise NotFoundException("课程章节")
+            course = await db.get(Course, course_id)
+            if not course or not course.is_active or course.status != "published" or not (
+                await self._has_learning_access(db, user_id, course_id) or await self._is_preview(db, chapter, course.preview_chapter_count)):
+                raise ForbiddenException("无课程学习权限")
+            if data.resource_version != chapter.resource_version:
+                raise ConflictException("章节内容已更新，请刷新后继续学习")
+            if chapter.resource_type == "document":
+                if data.last_position_seconds or data.last_page > chapter.page_count:
+                    raise ValidationException("文档页码无效")
+            elif data.last_page != 1 or data.last_position_seconds > chapter.duration:
+                raise ValidationException("视频进度无效")
             row = (
                 await db.execute(
                     select(UserChapterProgress).where(
@@ -366,10 +391,13 @@ class CourseService:
                 )
                 db.add(row)
             else:
+                if row.resource_version != chapter.resource_version:
+                    row.last_position_seconds, row.is_completed = 0, False
                 row.last_position_seconds = max(
                     row.last_position_seconds, data.last_position_seconds
                 )
                 row.is_completed = row.is_completed or data.is_completed
+            row.last_page, row.resource_version = data.last_page, chapter.resource_version
             await db.commit()
             return await self._build_progress(db, user_id, course_id)
 
@@ -378,7 +406,8 @@ class CourseService:
     ) -> ChapterProgressResponse:
         rows = (
             await db.execute(
-                select(UserChapterProgress).where(
+                select(UserChapterProgress).join(CourseChapter, CourseChapter.id == UserChapterProgress.chapter_id).where(
+                    UserChapterProgress.resource_version == CourseChapter.resource_version,
                     UserChapterProgress.user_id == user_id,
                     UserChapterProgress.course_id == course_id,
                 )
@@ -388,6 +417,7 @@ class CourseService:
         return ChapterProgressResponse(
             last_chapter_id=last.chapter_id if last else None,
             last_position_seconds=last.last_position_seconds if last else 0,
+            last_page=last.last_page if last else 1, resource_version=last.resource_version if last else 1,
             completed_chapter_ids=[row.chapter_id for row in rows if row.is_completed],
         )
 

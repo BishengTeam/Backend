@@ -89,6 +89,7 @@ services:
       - STORAGE_TYPE=local
       # 人社材料与导出 — 生产环境强制私有阿里云 OSS
       - RENSHE_STORAGE_TYPE=aliyun_oss
+      - COURSE_DOCUMENT_UPLOADS_ENABLED=${COURSE_DOCUMENT_UPLOADS_ENABLED:-false}
       - ALIYUN_OSS_ENDPOINT=${ALIYUN_OSS_ENDPOINT:?ALIYUN_OSS_ENDPOINT is required}
       - ALIYUN_OSS_BUCKET=${ALIYUN_OSS_BUCKET:?ALIYUN_OSS_BUCKET is required}
       - ALIYUN_OSS_ACCESS_KEY_ID_FILE=/run/secrets/aliyun_oss_access_key_id
@@ -169,6 +170,7 @@ services:
       - WECHAT_PAY_PUBLIC_KEY_FILE=/run/secrets/wechat_pay_public_key
       - WECHAT_PAY_PUBLIC_KEY_ID=${WECHAT_PAY_PUBLIC_KEY_ID:-}
       - RENSHE_STORAGE_TYPE=aliyun_oss
+      - COURSE_DOCUMENT_UPLOADS_ENABLED=${COURSE_DOCUMENT_UPLOADS_ENABLED:-false}
       - ALIYUN_OSS_ENDPOINT=${ALIYUN_OSS_ENDPOINT:?ALIYUN_OSS_ENDPOINT is required}
       - ALIYUN_OSS_BUCKET=${ALIYUN_OSS_BUCKET:?ALIYUN_OSS_BUCKET is required}
       - ALIYUN_OSS_ACCESS_KEY_ID_FILE=/run/secrets/aliyun_oss_access_key_id

@@ -292,6 +292,7 @@ class AdminCourseService:
                         teacher_name=course.teacher_name,
                         teacher_contact=course.teacher_contact,
                         preview_chapter_count=course.preview_chapter_count,
+                        **await self._chapter_counts(db, course.id),
                         status=course.status,
                         bound_quiz_library_count=bound_count,
                         enrollment_count=enrollment_count,
@@ -405,6 +406,12 @@ class AdminCourseService:
                 await db.refresh(course)
                 return await self._list_item(db, course)
 
+    @staticmethod
+    async def _chapter_counts(db, course_id):
+        rows = dict((await db.execute(select(CourseChapter.resource_type, func.count()).where(
+            CourseChapter.course_id == course_id).group_by(CourseChapter.resource_type))).all())
+        return {"chapter_count": sum(rows.values()), "video_count": rows.get("video", 0), "document_count": rows.get("document", 0)}
+
     async def _list_item(self, db, course: Course) -> AdminCourseListItem:
         bound_count = int(
             await db.scalar(
@@ -439,6 +446,7 @@ class AdminCourseService:
             teacher_name=course.teacher_name,
             teacher_contact=course.teacher_contact,
             preview_chapter_count=course.preview_chapter_count,
+            **await self._chapter_counts(db, course.id),
             status=course.status,
             bound_quiz_library_count=bound_count,
             enrollment_count=enrollment_count,
@@ -456,7 +464,7 @@ class AdminCourseService:
                 course = await self._locked_course(db, course_id)
                 if course.status not in COURSE_LIFECYCLE_TARGETS[action]:
                     raise BusinessException("当前课程状态不允许该操作")
-                if action == "publish":
+                if action in {"publish", "restore"}:
                     chapter_count = int(
                         await db.scalar(
                             select(func.count()).select_from(CourseChapter).where(
@@ -466,9 +474,13 @@ class AdminCourseService:
                         or 0
                     )
                     if not course.cover_storage_key or chapter_count == 0:
-                        raise BusinessException("课程发布前必须上传封面和至少一个章节视频")
-                    if course.price > 0 and course.preview_chapter_count > chapter_count:
-                        raise BusinessException("试看集数不能超过章节数")
+                        raise BusinessException("课程发布前必须上传封面和至少一个可用章节")
+                    unfinished = await db.scalar(select(CourseUpload.id).where(CourseUpload.course_id == course_id,
+                        CourseUpload.status.in_(("pending", "validating", "failed", "completed"))).limit(1))
+                    if unfinished:
+                        raise BusinessException("请先完成或放弃未完成的文件上传任务")
+                    if course.preview_chapter_count > chapter_count:
+                        raise BusinessException("免费预览章节数不能超过实际章节数")
                 before = {"status": course.status}
                 if action == "publish":
                     course.status = "published"
@@ -539,6 +551,10 @@ class AdminCourseService:
                 course = await self._locked_course(db, course_id)
                 if course.status != "draft":
                     raise BusinessException("只有草稿课程可以删除")
+                unfinished = await db.scalar(select(CourseUpload.id).where(CourseUpload.course_id == course_id,
+                    CourseUpload.status.in_(("pending", "validating", "failed", "completed", "retired"))).limit(1))
+                if unfinished:
+                    raise BusinessException("课程仍有上传或待清理资源，请先取消任务并完成清理")
                 associated = int(
                     await db.scalar(
                         select(func.count()).select_from(CourseEnrollment).where(
@@ -600,13 +616,22 @@ class AdminCourseService:
     ) -> int:
         async with get_db_ctx() as db:
             async with db.begin():
-                count = 0
-                for item in items:
-                    row = await db.get(CourseChapter, item.id)
-                    if row is None or row.course_id != course_id:
-                        continue
-                    row.sort_order = item.sort_order
-                    count += 1
+                await self._locked_course(db, course_id)
+                unfinished = await db.scalar(select(CourseUpload.id).where(CourseUpload.course_id == course_id,
+                    CourseUpload.status.in_(("pending", "validating", "failed", "completed"))).limit(1))
+                if unfinished:
+                    raise BusinessException("请先完成或取消上传任务，再调整章节排序")
+                rows = list(await db.scalars(select(CourseChapter).where(CourseChapter.course_id == course_id).with_for_update()))
+                proposed = {item.id: item.sort_order for item in items}
+                if len(proposed) != len(items) or set(proposed) != {row.id for row in rows} or sorted(proposed.values()) != list(range(1, len(rows) + 1)):
+                    raise BusinessException("章节列表已变化，请刷新后重新排序")
+                maximum = max((row.sort_order for row in rows), default=0)
+                for offset, row in enumerate(rows, 1):
+                    row.sort_order = maximum + offset
+                await db.flush()
+                for row in rows:
+                    row.sort_order = proposed[row.id]
+                count = len(rows)
                 self._audit(
                     db,
                     admin_id=admin_id,
@@ -656,10 +681,10 @@ class AdminCourseService:
                 return AdminChapterResponse.model_validate(row)
 
     async def replace_chapter_video(
-        self, course_id: int, chapter_id: int, upload_id: int, *, admin_id: int
+        self, course_id: int, chapter_id: int, upload_id: int, *, admin_id: int, expected_resource_version: int = 1
     ) -> AdminChapterResponse:
         row = await self.uploads.replace_video(
-            course_id, chapter_id, upload_id, admin_id=admin_id
+            course_id, chapter_id, upload_id, admin_id=admin_id, expected_resource_version=expected_resource_version
         )
         return AdminChapterResponse.model_validate(row)
 
@@ -689,7 +714,7 @@ class AdminCourseService:
                             UserChapterProgress.chapter_id == chapter_id
                         )
                     )
-                object_key = row.video_storage_key
+                object_key = row.resource_storage_key
                 self._audit(
                     db,
                     admin_id=admin_id,

@@ -276,10 +276,24 @@ async def replace_chapter_video(
 ):
     return success(
         data=await AdminCourseService().replace_chapter_video(
-            course_id, chapter_id, body.upload_id, admin_id=admin.id
+            course_id, chapter_id, body.upload_id, admin_id=admin.id, expected_resource_version=body.expected_resource_version
         ),
         message="章节视频已替换",
     )
+
+
+@router.get("/{course_id}/chapters/{chapter_id}/resource", response_model=APIResponse)
+async def preview_resource(course_id: int, chapter_id: int, _admin=Depends(require_permission("course:read"))):
+    from app.adapter.database import get_db_ctx
+    from app.domain.certification.src.index import CourseChapter
+    from app.port.exceptions import NotFoundException
+    from app.services.course_storage import CourseStorage
+    async with get_db_ctx() as db:
+        chapter = await db.get(CourseChapter, chapter_id)
+        if chapter is None or chapter.course_id != course_id:
+            raise NotFoundException("课程章节")
+        url = await CourseStorage.signed_url(chapter.resource_storage_key, download_filename=chapter.original_filename)
+        return success(data={"url": url, "resource_type": chapter.resource_type, "resource_version": chapter.resource_version})
 
 
 @router.delete("/{course_id}/chapters/{chapter_id}", response_model=APIResponse)

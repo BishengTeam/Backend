@@ -30,7 +30,10 @@ class CourseListResponse(BaseModel):
 class ChapterResponse(BaseModel):
     id: int
     title: str
-    duration: int
+    duration: int | None
+    resource_type: Literal["video", "document"] = "video"
+    resource_version: int = 1
+    page_count: int | None = None
     sort_order: int
     is_preview: bool
     can_play: bool
@@ -39,6 +42,8 @@ class ChapterResponse(BaseModel):
 class ChapterProgressResponse(BaseModel):
     last_chapter_id: int | None = None
     last_position_seconds: int = 0
+    last_page: int = 1
+    resource_version: int = 1
     completed_chapter_ids: list[int] = Field(default_factory=list)
 
 
@@ -50,7 +55,9 @@ class CourseChaptersResponse(BaseModel):
 
 class ChapterProgressUpsert(BaseModel):
     chapter_id: int
-    last_position_seconds: int = Field(..., ge=0)
+    last_position_seconds: int = Field(0, ge=0)
+    last_page: int = Field(1, ge=1)
+    resource_version: int = Field(1, ge=1)
     is_completed: bool = False
 
     model_config = {"extra": "forbid"}
@@ -129,6 +136,7 @@ class CourseEnrollmentResponse(BaseModel):
 
 
 class ChapterPlaybackResponse(BaseModel):
+    resource_version: int = 1
     chapter_id: int
     url: str
     expires_at: int = Field(description="签名播放地址过期时间，Unix 秒")

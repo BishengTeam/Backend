@@ -108,6 +108,8 @@ async def test_chapter_update_refreshes_server_generated_timestamp_before_respon
             self.course_id = 1
             self.title = "old title"
             self.video_storage_key = "course/video.mp4"
+            self.resource_storage_key = self.video_storage_key
+            self.resource_type, self.resource_version, self.page_count = "video", 1, None
             self.original_filename = "video.mp4"
             self.content_type = "video/mp4"
             self.size_bytes = 1024
@@ -141,7 +143,7 @@ async def test_chapter_update_refreshes_server_generated_timestamp_before_respon
         def add(self, item):
             return None
 
-        async def get(self, model, item_id):
+        async def get(self, model, item_id, **kwargs):
             return self.row if item_id == self.row.id else None
 
         async def flush(self):
@@ -252,11 +254,14 @@ async def test_replace_course_video_flushes_binding_before_refresh_and_cleanup(
         def add(self, item):
             return None
 
-        async def get(self, model, item_id):
+        async def get(self, model, item_id, **kwargs):
             if model is CourseUpload and item_id == upload.id:
                 return upload
             if model is CourseChapter and item_id == chapter.id:
                 return chapter
+            return None
+
+        async def scalar(self, query):
             return None
 
         async def flush(self):
@@ -292,7 +297,9 @@ async def test_replace_course_video_flushes_binding_before_refresh_and_cleanup(
     assert result.video_storage_key == "course/new.mp4"
     assert upload.status == "bound"
     assert database.committed is True
-    assert storage.deleted == ["course/old.mp4"]
+    assert result.resource_version == 2
+    assert result.resource_type == "video"
+    assert storage.deleted == []  # Old resources are retained for delayed cleanup.
 
 
 @pytest.mark.asyncio
@@ -347,7 +354,7 @@ async def test_replace_course_video_blocks_cleanup_when_binding_does_not_persist
         def add(self, item):
             return None
 
-        async def get(self, model, item_id):
+        async def get(self, model, item_id, **kwargs):
             if model is CourseUpload and item_id == upload.id:
                 return upload
             if model is CourseChapter and item_id == chapter.id:

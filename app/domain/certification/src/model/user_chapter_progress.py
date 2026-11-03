@@ -22,4 +22,6 @@ class UserChapterProgress(Base, TimestampMixin):
         Integer, ForeignKey("course_chapter.id"), nullable=False
     )
     last_position_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    last_page: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    resource_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     is_completed: Mapped[bool] = mapped_column(default=False)

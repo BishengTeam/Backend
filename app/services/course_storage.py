@@ -15,10 +15,11 @@ from app.port.config import settings
 from app.port.exceptions import ThirdPartyException, ValidationException
 
 
-CourseUploadKind = Literal["cover", "chapter_video"]
+CourseUploadKind = Literal["cover", "chapter_video", "chapter_file"]
 
 COURSE_COVER_MAX_BYTES = 10 * 1024 * 1024
 COURSE_VIDEO_MAX_BYTES = 5 * 1024 * 1024 * 1024
+COURSE_PDF_MAX_BYTES = 50 * 1024 * 1024
 COURSE_UPLOAD_SIGN_TTL_SECONDS = 3600
 COURSE_PLAYBACK_TTL_SECONDS = 300
 COURSE_DEFAULT_PART_SIZE = 16 * 1024 * 1024
@@ -64,6 +65,12 @@ def validate_upload(
             raise ValidationException("课程封面文件类型无效")
         return extension
 
+    if kind == "chapter_file" and extension == ".pdf":
+        if not settings.COURSE_DOCUMENT_UPLOADS_ENABLED:
+            raise ValidationException("PDF 上传暂未开放，请联系管理员")
+        if size_bytes <= 0 or size_bytes > COURSE_PDF_MAX_BYTES:
+            raise ValidationException("PDF 文件大小必须在 50MB 以内")
+        return extension
     if size_bytes <= 0 or size_bytes > COURSE_VIDEO_MAX_BYTES:
         raise ValidationException("章节视频大小必须在 5GB 以内")
     if extension not in _VIDEO_EXTENSIONS:
@@ -73,6 +80,22 @@ def validate_upload(
 
 class CourseStorage:
     """Private OSS facade for course covers and chapter videos."""
+
+    @classmethod
+    async def validate_resource(cls, object_key: str, filename: str, size_bytes: int) -> dict:
+        """Download privately on the server; never trust browser MIME/duration."""
+        import tempfile
+        from app.services.course_resource_validation import inspect_resource
+
+        def inspect():
+            suffix = Path(filename).suffix.lower()
+            with tempfile.TemporaryDirectory(prefix="course-verify-") as directory:
+                path = Path(directory) / f"resource{suffix}"
+                cls._bucket().get_object_to_file(object_key, str(path))
+                if path.stat().st_size != size_bytes:
+                    raise ValidationException("课程文件大小与声明不一致")
+                return inspect_resource(path)
+        return await asyncio.to_thread(inspect)
 
     @staticmethod
     async def installation_id() -> str:
@@ -227,7 +250,17 @@ class CourseStorage:
                     size_bytes=int(head.content_length),
                     content_type=head.headers.get("Content-Type"),
                 )
-            raw_parts = cls._list_all_parts(bucket, object_key, oss_upload_id)
+            try:
+                raw_parts = cls._list_all_parts(bucket, object_key, oss_upload_id)
+            except Exception as error:
+                # The previous completion may have succeeded before losing its
+                # response. Accept it only after checking the actual object.
+                if getattr(error, "code", None) != "NoSuchUpload":
+                    raise
+                head = bucket.head_object(object_key)
+                if int(head.content_length) != expected_size:
+                    raise ValidationException("OSS 文件大小校验失败") from error
+                return CourseUploadedObject(object_key, expected_size, head.headers.get("Content-Type"))
             uploaded = sum(int(part.size) for part in raw_parts)
             if uploaded != expected_size:
                 raise ValidationException("视频分片大小与声明不一致")

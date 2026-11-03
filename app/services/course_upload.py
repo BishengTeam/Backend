@@ -13,9 +13,10 @@ from app.domain.certification.src.index import (
     CourseChapter,
     CourseUpload,
 )
-from app.port.exceptions import BusinessException, ForbiddenException, NotFoundException, ValidationException
+from app.port.exceptions import BusinessException, ConflictException, ForbiddenException, NotFoundException, ValidationException
 from app.schemas.course_upload import CourseUploadCreate
 from app.services.course_storage import COURSE_DEFAULT_PART_SIZE, CourseStorage
+from app.services.course_resource_upload import CourseResourceUploadMixin
 
 
 PENDING_UPLOAD_RETENTION = timedelta(days=7)
@@ -48,10 +49,12 @@ def _response(upload: CourseUpload, *, upload_url: str | None = None, parts=None
         expires_at=upload.expires_at,
         completed_at=upload.completed_at,
         parts=parts or [],
+        resource_type=upload.resource_type, page_count=upload.page_count, chapter_id=upload.chapter_id,
+        expected_resource_version=upload.expected_resource_version, validation_error=upload.validation_error,
     )
 
 
-class CourseUploadService:
+class CourseUploadService(CourseResourceUploadMixin):
     def __init__(self, storage: CourseStorage | None = None) -> None:
         self.storage = storage or CourseStorage()
 
@@ -61,6 +64,8 @@ class CourseUploadService:
         *,
         admin_id: int,
     ):
+        if data.kind == "chapter_file":
+            return await self.create_resource_upload(data, admin_id=admin_id)
         if data.kind == "cover":
             if data.course_id is not None or any(
                 (data.title, data.duration, data.sort_order)
@@ -176,11 +181,18 @@ class CourseUploadService:
 
     async def complete(self, upload_id: int, *, admin_id: int):
         row = await self.get(upload_id)
+        if row.kind == "chapter_file":
+            return await self.complete_resource_upload(upload_id, admin_id=admin_id)
         if row.status != "pending":
             raise BusinessException("上传任务已完成或已失效")
         uploaded = await self.storage.complete(
             row.object_key, row.oss_upload_id, row.size_bytes
         )
+        metadata = None
+        if row.kind == "chapter_video":
+            metadata = await self.storage.validate_resource(row.object_key, row.original_filename, row.size_bytes)
+            if metadata["resource_type"] != "video":
+                raise ValidationException("旧视频接口不支持文档")
         async with get_db_ctx() as db:
             async with db.begin():
                 current = await db.get(CourseUpload, upload_id)
@@ -189,6 +201,8 @@ class CourseUploadService:
                 current.status = "completed"
                 current.completed_at = _now()
                 current.expires_at = _now() + COMPLETED_UPLOAD_RETENTION
+                if metadata:
+                    current.duration = metadata["duration"]
                 if uploaded.content_type and uploaded.content_type not in {
                     "application/octet-stream"
                 }:
@@ -207,28 +221,21 @@ class CourseUploadService:
         return await self.detail(upload_id)
 
     async def abort(self, upload_id: int, *, admin_id: int) -> None:
-        row = await self.get(upload_id)
-        if row.status not in {"pending", "completed"}:
-            return
-        if row.status == "pending":
-            await self.storage.abort(row.object_key, row.oss_upload_id)
-        else:
-            await self.storage.delete(row.object_key)
-        async with get_db_ctx() as db:
-            current = await db.get(CourseUpload, upload_id)
-            if current is not None and current.status in {"pending", "completed"}:
-                current.status = "aborted"
-                db.add(
-                    CourseAuditLog(
-                        actor_type="admin",
-                        actor_id=admin_id,
-                        action="course.upload.aborted",
-                        object_type="course_upload",
-                        object_id=current.id,
-                        result="succeeded",
-                    )
-                )
-                await db.commit()
+        async with get_db_ctx() as db, db.begin():
+            row = await db.scalar(select(CourseUpload).where(CourseUpload.id == upload_id).with_for_update())
+            if row is None:
+                raise NotFoundException("上传任务")
+            if row.status == "validating":
+                raise BusinessException("文件正在验证，请待验证完成后处理")
+            if row.status not in {"pending", "completed", "failed"}:
+                return
+            if row.status == "pending" and row.oss_upload_id:
+                await self.storage.abort(row.object_key, row.oss_upload_id)
+            else:
+                await self.storage.delete(row.object_key)
+            row.status = "aborted"
+            db.add(CourseAuditLog(actor_type="admin", actor_id=admin_id, action="course.upload.aborted",
+                object_type="course_upload", object_id=row.id, result="succeeded"))
 
     async def list_course_uploads(self, course_id: int):
         async with get_db_ctx() as db:
@@ -237,7 +244,7 @@ class CourseUploadService:
                     select(CourseUpload)
                     .where(
                         CourseUpload.course_id == course_id,
-                        CourseUpload.status.in_(("pending", "completed")),
+                        CourseUpload.status.in_(("pending", "validating", "failed", "completed")),
                     )
                     .order_by(CourseUpload.sort_order.nulls_first(), CourseUpload.id)
                 )
@@ -245,35 +252,27 @@ class CourseUploadService:
             return [_response(row) for row in rows]
 
     async def cleanup_expired(self, *, batch_size: int = 100) -> int:
-        now = _now()
-        async with get_db_ctx() as db:
-            rows = (
-                await db.execute(
-                    select(CourseUpload)
-                    .where(
-                        CourseUpload.status.in_(("pending", "completed")),
-                        CourseUpload.expires_at < now,
-                    )
-                    .order_by(CourseUpload.expires_at)
-                    .limit(batch_size)
-                )
-            ).scalars().all()
-        cleaned = 0
-        for row in rows:
-            try:
-                if row.status == "pending":
-                    await self.storage.abort(row.object_key, row.oss_upload_id)
-                else:
-                    await self.storage.delete(row.object_key)
-            except Exception:
-                continue
-            async with get_db_ctx() as db:
-                current = await db.get(CourseUpload, row.id)
-                if current is not None and current.status in {"pending", "completed"}:
-                    current.status = "expired"
-                    await db.commit()
-                    cleaned += 1
-        return cleaned
+        # Hold the upload row until deletion commits. Binding locks the same row.
+        async with get_db_ctx() as db, db.begin():
+            rows = list(await db.scalars(select(CourseUpload).where(
+                CourseUpload.status.in_(("pending", "completed", "failed", "retired")),
+                CourseUpload.expires_at < _now()).order_by(CourseUpload.expires_at)
+                .limit(batch_size).with_for_update(skip_locked=True)))
+            cleaned = 0
+            for row in rows:
+                referenced = await db.scalar(select(CourseChapter.id).where(CourseChapter.resource_storage_key == row.object_key).limit(1))
+                if referenced:
+                    continue
+                try:
+                    if row.status == "pending" and row.oss_upload_id:
+                        await self.storage.abort(row.object_key, row.oss_upload_id)
+                    else:
+                        await self.storage.delete(row.object_key)
+                except Exception:
+                    continue
+                row.status = "expired"
+                cleaned += 1
+            return cleaned
 
     async def bind_cover(self, upload_id: int, course: Course) -> None:
         row = await self.get(upload_id)
@@ -352,6 +351,7 @@ class CourseUploadService:
                         course_id=course_id,
                         title=upload.title or upload.original_filename,
                         video_storage_key=upload.object_key,
+                        resource_storage_key=upload.object_key,
                         original_filename=upload.original_filename,
                         content_type=upload.content_type,
                         size_bytes=upload.size_bytes,
@@ -379,21 +379,27 @@ class CourseUploadService:
                 return created
 
     async def replace_video(
-        self, course_id: int, chapter_id: int, upload_id: int, *, admin_id: int
+        self, course_id: int, chapter_id: int, upload_id: int, *, admin_id: int, expected_resource_version: int = 1
     ) -> CourseChapter:
         row = await self.get(upload_id)
         if row.kind != "chapter_video" or row.course_id != course_id or row.status != "completed":
             raise ValidationException("替换视频尚未上传完成或不属于该课程")
         async with get_db_ctx() as db:
             async with db.begin():
-                chapter = await db.get(CourseChapter, chapter_id)
-                upload = await db.get(CourseUpload, upload_id)
+                chapter = await db.get(CourseChapter, chapter_id, with_for_update=True)
+                upload = await db.get(CourseUpload, upload_id, with_for_update=True)
                 if chapter is None or chapter.course_id != course_id:
                     raise NotFoundException("课程章节")
                 if upload is None or upload.status != "completed":
                     raise ValidationException("替换视频尚未上传完成")
-                old_key = chapter.video_storage_key
+                if (chapter.resource_version or 1) != expected_resource_version:
+                    raise ConflictException("章节内容已变化，请刷新后替换")
+                old_key = chapter.resource_storage_key or chapter.video_storage_key
                 chapter.video_storage_key = upload.object_key
+                chapter.resource_storage_key = upload.object_key
+                chapter.resource_type = "video"
+                chapter.page_count = None
+                chapter.resource_version = (chapter.resource_version or 1) + 1
                 chapter.original_filename = upload.original_filename
                 chapter.content_type = upload.content_type
                 chapter.size_bytes = upload.size_bytes
@@ -419,11 +425,8 @@ class CourseUploadService:
                 await db.refresh(chapter)
                 if chapter.video_storage_key != upload.object_key:
                     raise BusinessException("章节视频替换未生效，已阻止删除旧视频")
-            if old_key != upload.object_key:
-                try:
-                    await self.storage.delete(old_key)
-                except Exception:
-                    _logger.warning(
-                        "replaced course video cleanup failed; object remains for manual cleanup"
-                    )
+                old_upload = await db.scalar(select(CourseUpload).where(CourseUpload.object_key == old_key))
+                if old_upload:
+                    old_upload.status = "retired"
+                    old_upload.expires_at = _now() + COMPLETED_UPLOAD_RETENTION
             return chapter

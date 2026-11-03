@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-CourseUploadKind = Literal["cover", "chapter_video"]
+CourseUploadKind = Literal["cover", "chapter_video", "chapter_file"]
 
 
 class CourseUploadCreate(BaseModel):
@@ -16,6 +16,8 @@ class CourseUploadCreate(BaseModel):
     title: str | None = Field(None, min_length=1, max_length=256)
     duration: int | None = Field(None, gt=0)
     sort_order: int | None = Field(None, ge=1)
+    chapter_id: int | None = Field(None, gt=0)
+    expected_resource_version: int | None = Field(None, gt=0)
 
     model_config = {"extra": "forbid"}
 
@@ -44,7 +46,12 @@ class CourseUploadResponse(BaseModel):
     content_type: str
     size_bytes: int
     part_size: int
-    status: Literal["pending", "completed", "bound", "aborted", "expired"]
+    status: Literal["pending", "validating", "failed", "completed", "bound", "retired", "aborted", "expired"]
+    resource_type: str | None = None
+    page_count: int | None = None
+    chapter_id: int | None = None
+    expected_resource_version: int | None = None
+    validation_error: str | None = None
     title: str | None
     duration: int | None
     sort_order: int | None

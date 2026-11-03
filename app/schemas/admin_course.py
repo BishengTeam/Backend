@@ -58,6 +58,9 @@ class AdminCourseUpdate(BaseModel):
 
 
 class AdminCourseListItem(BaseModel):
+    chapter_count: int = 0
+    video_count: int = 0
+    document_count: int = 0
     id: int
     title: str
     category: str
@@ -97,6 +100,7 @@ class AdminChapterSortItem(BaseModel):
 
 class AdminChapterReplaceVideo(BaseModel):
     upload_id: int = Field(..., gt=0)
+    expected_resource_version: int = Field(1, gt=0)
 
     model_config = {"extra": "forbid"}
 
@@ -111,11 +115,15 @@ class AdminChapterResponse(BaseModel):
     id: int
     course_id: int
     title: str
-    video_storage_key: str
+    video_storage_key: str | None
+    resource_storage_key: str
+    resource_type: Literal["video", "document"]
+    resource_version: int
+    page_count: int | None
     original_filename: str
     content_type: str
     size_bytes: int
-    duration: int
+    duration: int | None
     sort_order: int
     created_at: datetime
     updated_at: datetime

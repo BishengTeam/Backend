@@ -133,6 +133,11 @@ async def issue_playback(
     )
 
 
+@router.post("/{course_id}/chapters/{chapter_id}/resource-url", response_model=APIResponse[ChapterPlaybackResponse])
+async def issue_resource(course_id: int, chapter_id: int, current_user: User = Depends(get_current_user)):
+    return success(data=await CourseService().issue_resource(current_user.id, course_id, chapter_id))
+
+
 @router.get(
     "/{course_id}/progress",
     response_model=APIResponse[ChapterProgressResponse],
