@@ -1,7 +1,7 @@
 {
   "admin_operation_count": 64,
-  "fingerprint_sha256": "d7c8b4a6948ed30a3db47ba4043a45faeed1ddafa48bcbfae37e6b252469ea05",
-  "operation_count": 97,
+  "fingerprint_sha256": "5f01cb0d6a3e0af3c70a9edf50071aa05071637bf1e7a5c9b2872ab6cbc45fd4",
+  "operation_count": 98,
   "operations": [
     {
       "auth": "admin",
@@ -586,6 +586,13 @@
     },
     {
       "auth": "user",
+      "method": "POST",
+      "path": "/api/quiz/libraries/{library_id}/redeem",
+      "permission": null,
+      "rate_limit_per_minute": 5
+    },
+    {
+      "auth": "user",
       "method": "GET",
       "path": "/api/quiz/practice-history",
       "permission": null,
@@ -736,5 +743,5 @@
     }
   ],
   "schema_version": 1,
-  "user_operation_count": 33
+  "user_operation_count": 34
 }
