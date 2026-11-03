@@ -22,6 +22,14 @@ CHECKIN_MILESTONE_POINTS = 5
 QUIZ_ATTEMPTS_PER_POINT = 100
 QUIZ_ATTEMPTS_MILESTONE_POINTS = 1
 
+# 积分自获得起 12 个月过期清零（按 365 天近似，批次账本见 PointsBatch）。
+POINTS_VALIDITY_DAYS = 365
+
+# 缴费返积分：每实付 10 元 = 1 积分（order.price 单位为分，10 元 = 1000 分），
+# 不足 10 元不计；挂在 OrderFulfillmentService.on_paid，真实付款订单统一生效。
+PAYMENT_POINTS_PER_YUAN_SPENT = 1
+PAYMENT_POINTS_CENTS_PER_STEP = 1000
+
 
 def checkin_milestone_hits(checkin_days: int) -> tuple[int, ...]:
     """返回已达标的签到里程碑档位；发放侧按 source_id 幂等去重，可重复结算。"""

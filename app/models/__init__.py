@@ -62,7 +62,7 @@ from app.domain.order.src.index import (
 )
 from app.domain.user.src.index import (
     AdminPasswordHistory, AdminSecurityAudit, AdminUser,
-    DeletedIdentityHash, DeletedOpenid, PointsHistory,
+    DeletedIdentityHash, DeletedOpenid, PointsBatch, PointsHistory,
     User, UserEnterprise, UserPoints, UserProfile, UserRealname, UserStudent, ADMIN_ROLES,
 )
 from app.domain.renshe.src.index import (
@@ -163,6 +163,7 @@ __all__ = [
     "SharePoster",
     "Plan",
     "PointsHistory",
+    "PointsBatch",
     "PriceConfig",
     "QuickQuestion",
     "QuizAdminAuditLog",

@@ -10,15 +10,20 @@ PointsClaimScene = Literal["daily_checkin", "activity"]
 PointsRedeemType = Literal["exam_discount", "course"]
 
 
+# 余额类字段一律允许负数：退款追扣缴费返积分时余额不足会扣至负数（欠分，
+# 见 PointsService._debit_points_in_session 的 allow_negative），后续获得先补亏空。
+# 响应模型不做 ge=0 校验，避免欠分用户签到/查询时序列化报错。
+
+
 class PointsBalanceResponse(BaseModel):
-    balance: int = Field(..., ge=0, description="积分余额")
+    balance: int = Field(..., description="积分余额，负数为追扣产生的欠分")
 
 
 class PointsHistoryResponse(BaseModel):
     id: int = Field(..., description="积分流水 ID")
     action_type: str = Field(..., description="积分动作类型")
     amount: int = Field(..., description="积分变动值，正数为获得，负数为消耗")
-    balance_after: int = Field(..., ge=0, description="变动后积分余额")
+    balance_after: int = Field(..., description="变动后积分余额，负数为欠分")
     description: str | None = Field(None, description="流水说明")
     source_type: str | None = Field(None, description="幂等来源类型")
     source_id: str | None = Field(None, description="幂等来源 ID")
@@ -42,7 +47,7 @@ class PointsClaimResponse(BaseModel):
     claimed: bool = Field(..., description="本次请求是否实际发放积分")
     scene: PointsClaimScene = Field(..., description="领取场景")
     amount: int = Field(..., gt=0, description="领取积分数")
-    balance: int = Field(..., ge=0, description="领取后积分余额")
+    balance: int = Field(..., description="领取后积分余额，负数为欠分")
     history_id: int = Field(..., description="积分流水 ID")
 
 
@@ -56,5 +61,5 @@ class PointsRedeemRequest(BaseModel):
 class PointsRedeemResponse(BaseModel):
     redeem_type: PointsRedeemType = Field(..., description="兑换类型")
     amount: int = Field(..., gt=0, description="消耗积分数")
-    balance: int = Field(..., ge=0, description="兑换后积分余额")
+    balance: int = Field(..., description="兑换后积分余额")
     history_id: int = Field(..., description="积分流水 ID")

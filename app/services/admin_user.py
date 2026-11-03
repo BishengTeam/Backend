@@ -367,6 +367,68 @@ class AdminUserService:
             payload.phone = self._mask_phone(payload.phone)
             return payload
 
+    async def adjust_points(
+        self,
+        user_id: int,
+        *,
+        amount: int,
+        reason: str,
+        actor_id: int | None = None,
+    ) -> int:
+        """手工调分（仅 super_admin）：正数发放、负数扣减，返回调整后余额。
+
+        扣减带 allow_negative=False，余额不足直接拒绝，防误操作扣出欠分；
+        系统侧退款追扣（允许负余额）不经过这里。每次调整独立幂等键，
+        原因写入流水与审计日志。
+        """
+        if amount == 0:
+            raise ValidationException("调整积分不能为 0")
+        from uuid import uuid4
+
+        from app.services.points import PointsService
+
+        async with get_db_ctx() as db:
+            user = await db.get(User, user_id)
+            if user is None:
+                raise NotFoundException("用户")
+            points_service = PointsService()
+            grant = amount > 0
+            if grant:
+                history, _granted = await points_service._grant_points_in_session(
+                    db,
+                    user_id=user_id,
+                    amount=amount,
+                    action_type="admin_adjust",
+                    description=f"管理员调整：{reason}",
+                    source_type="admin_manual",
+                    source_id=uuid4().hex,
+                )
+            else:
+                history = await points_service._debit_points_in_session(
+                    db,
+                    user_id=user_id,
+                    amount=-amount,
+                    action_type="admin_adjust",
+                    description=f"管理员调整：{reason}",
+                    source_type="admin_manual",
+                    source_id=uuid4().hex,
+                    allow_negative=False,
+                )
+            db.add(
+                RensheAuditLog(
+                    actor_type="admin",
+                    actor_id=actor_id,
+                    action="points.manual_adjust",
+                    object_type="user",
+                    object_id=user_id,
+                    result="succeeded",
+                    summary={"amount": amount, "reason": reason,
+                             "balance_after": history.balance_after},
+                )
+            )
+            await db.commit()
+            return history.balance_after
+
     async def batch_delete(
         self, user_ids: list[int], *, actor_id: int | None = None
     ) -> int:

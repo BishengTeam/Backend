@@ -169,6 +169,20 @@ class AdminUserStatusToggle(BaseModel):
     is_active: bool
 
 
+class AdminPointsAdjust(BaseModel):
+    """手工调分：正数发放、负数扣减；扣减不允许扣至负余额（防误操作）。
+
+    缴费返积分退款追扣场景的负余额由系统自动处理，不走此入口。
+    """
+
+    amount: int = Field(..., description="调整积分，正数发放、负数扣减，不能为 0")
+    reason: str = Field(..., min_length=2, max_length=200, description="调整原因，写入积分流水")
+
+
+class AdminPointsAdjustResponse(BaseModel):
+    balance: int = Field(..., description="调整后积分余额")
+
+
 class AdminProfileUpdate(BaseModel):
     """管理端只可编辑非认证基础资料。
 

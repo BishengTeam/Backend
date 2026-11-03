@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import BusinessException, NotFoundException
 from app.utils.quiz_helpers import today
-from app.domain.user.src.index import PointsHistory, User, UserPoints
+from app.domain.user.src.index import PointsBatch, PointsHistory, User, UserPoints
 from app.domain.content.src.index import Activity, ActivityRegistration
 from app.schemas.common import PaginatedData
 from app.schemas.points import (
@@ -22,6 +22,7 @@ from app.schemas.points import (
     PointsRedeemResponse,
     PointsRedeemType,
 )
+from app.services.points_rules import POINTS_VALIDITY_DAYS
 
 CLAIM_SCENE_POINTS: dict[str, int] = {
     "daily_checkin": 1,
@@ -29,6 +30,11 @@ CLAIM_SCENE_POINTS: dict[str, int] = {
 }
 
 logger = logging.getLogger(__name__)
+
+
+def batch_expiry(now: datetime | None = None) -> datetime:
+    """批次过期时间：自获得起 12 个月（365 天，口径见 points_rules）。"""
+    return (now or datetime.now(timezone.utc)) + timedelta(days=POINTS_VALIDITY_DAYS)
 
 
 class PointsService:
@@ -205,21 +211,16 @@ class PointsService:
 
         async with get_db_ctx() as db:
             await self._require_user(db, user_id)
-            account = await self._get_or_create_account_for_update(db, user_id)
-            if account.balance < data.amount:
-                raise BusinessException("积分余额不足")
-
-            account.balance -= data.amount
-            history = PointsHistory(
+            # 与商城兑换共用 FIFO 扣减；沿用旧行为不带幂等键（允许重复兑换）。
+            history = await self._debit_points_in_session(
+                db,
                 user_id=user_id,
+                amount=data.amount,
                 action_type=action_type,
-                amount=-data.amount,
-                balance_after=account.balance,
                 description=description,
                 source_type=None,
-                source_id=str(data.target_id) if data.target_id is not None else None,
+                source_id=None,
             )
-            db.add(history)
             await db.commit()
             await db.refresh(history)
 
@@ -230,6 +231,64 @@ class PointsService:
             history_id=history.id,
         )
 
+    async def settle_expired_points(self) -> int:
+        """清零所有已过期批次的剩余积分，逐用户事务结算；返回清零总积分。
+
+        幂等性靠批次状态迁移保证（remaining>0 → 0，行锁串行化），
+        重复触发只会找到空集。
+        """
+        async with get_db_ctx() as db:
+            rows = (
+                await db.execute(
+                    select(PointsBatch.user_id, func.sum(PointsBatch.remaining).label("expired"))
+                    .where(
+                        PointsBatch.remaining > 0,
+                        PointsBatch.expires_at <= func.now(),
+                    )
+                    .group_by(PointsBatch.user_id)
+                )
+            ).all()
+            # 聚合是只读快照：先结束它开启的自动事务，再逐用户开独立短事务。
+            await db.rollback()
+            total = 0
+            for user_id, _expired in rows:
+                async with db.begin():
+                    total += await self._expire_user_batches(db, user_id=user_id)
+        return total
+
+    async def _expire_user_batches(self, db: AsyncSession, *, user_id: int) -> int:
+        # 先锁账户（与发放/扣减路径一致的加锁顺序，避免死锁），再核销批次。
+        account = await self._get_or_create_account_for_update(db, user_id)
+        batches = (
+            await db.execute(
+                select(PointsBatch)
+                .where(
+                    PointsBatch.user_id == user_id,
+                    PointsBatch.remaining > 0,
+                    PointsBatch.expires_at <= func.now(),
+                )
+                .with_for_update()
+            )
+        ).scalars().all()
+        if not batches:
+            return 0
+        expired_total = sum(batch.remaining for batch in batches)
+        for batch in batches:
+            batch.remaining = 0
+        account.balance -= expired_total
+        history = PointsHistory(
+            user_id=user_id,
+            action_type="points_expire",
+            amount=-expired_total,
+            balance_after=account.balance,
+            description="积分到期清零",
+            source_type="points_expire",
+            source_id=None,
+        )
+        db.add(history)
+        await db.flush()
+        return expired_total
+
     async def _debit_points_in_session(
         self,
         db: AsyncSession,
@@ -238,9 +297,16 @@ class PointsService:
         amount: int,
         action_type: str,
         description: str,
-        source_type: str,
-        source_id: str,
+        source_type: str | None,
+        source_id: str | None,
+        allow_negative: bool = False,
     ) -> PointsHistory:
+        """会话内扣减积分：批次按先进先出核销，账户余额同步减少。
+
+        allow_negative=False（兑换/商城/手工扣分）：余额不足直接拒绝。
+        allow_negative=True（退款追扣）：批次与余额不足时扣至负数，
+        欠分不过期，后续获得先补亏空；兑换凭余额校验自然被拦截。
+        """
         if amount <= 0:
             raise BusinessException("消耗积分必须大于 0")
         existing = await self._get_source_history(
@@ -253,8 +319,9 @@ class PointsService:
         if existing is not None:
             return existing
         account = await self._get_or_create_account_for_update(db, user_id)
-        if account.balance < amount:
+        if not allow_negative and account.balance < amount:
             raise BusinessException("积分余额不足")
+        await self._consume_batches_fifo(db, user_id=user_id, amount=amount)
         account.balance -= amount
         history = PointsHistory(
             user_id=user_id,
@@ -268,6 +335,24 @@ class PointsService:
         db.add(history)
         await db.flush()
         return history
+
+    async def _consume_batches_fifo(self, db: AsyncSession, *, user_id: int, amount: int) -> None:
+        """按过期时间从早到晚核销批次；批次不足以覆盖时由欠分（负余额）承接。"""
+        remaining = amount
+        batches = (
+            await db.execute(
+                select(PointsBatch)
+                .where(PointsBatch.user_id == user_id, PointsBatch.remaining > 0)
+                .order_by(PointsBatch.expires_at.asc(), PointsBatch.id.asc())
+                .with_for_update()
+            )
+        ).scalars().all()
+        for batch in batches:
+            if remaining <= 0:
+                break
+            used = min(batch.remaining, remaining)
+            batch.remaining -= used
+            remaining -= used
 
     async def _grant_points_in_session(
         self,
@@ -302,6 +387,16 @@ class PointsService:
             source_id=source_id,
         )
         db.add(history)
+        db.add(PointsBatch(
+            user_id=user_id,
+            amount=amount,
+            remaining=amount,
+            expires_at=batch_expiry(),
+            action_type=action_type,
+            description=description,
+            source_type=source_type,
+            source_id=source_id,
+        ))
         await db.flush()
         return history, True
 

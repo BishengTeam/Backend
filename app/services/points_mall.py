@@ -7,7 +7,7 @@ from sqlalchemy import func, or_, select
 
 from app.adapter.database import get_db_ctx
 from app.domain.points_mall.src import PointsMallItem, PointsMallRedemption
-from app.domain.user.src.index import PointsHistory, UserPoints
+from app.domain.user.src.index import UserPoints
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.points_mall import (
     MyCouponResponse,
@@ -305,21 +305,20 @@ class PointsMallService:
             if item.validity_type == "fixed_date" and item.valid_until and item.valid_until <= _now():
                 raise ConflictException("该优惠券已过期")
 
-            # Deduct points
-            points = (
-                await db.execute(
-                    select(UserPoints)
-                    .where(UserPoints.user_id == user_id)
-                    .with_for_update()
-                )
-            ).scalar_one_or_none()
-            if points is None:
-                points = UserPoints(user_id=user_id, balance=0)
-                db.add(points)
-            if points.balance < item.points_cost:
-                raise BusinessException("积分不足")
+            # Deduct points：与签到/缴费返积分共用批次账本，先进先出核销。
+            # source_id 用券码，重放安全；余额不足（含欠分态）直接拒绝。
+            from app.services.points import PointsService
 
-            points.balance -= item.points_cost
+            coupon_code = _generate_coupon_code()
+            history = await PointsService()._debit_points_in_session(
+                db,
+                user_id=user_id,
+                amount=item.points_cost,
+                action_type="redeem_points_mall",
+                description=f"积分兑换优惠券：{item.name}",
+                source_type="points_mall_redemption",
+                source_id=coupon_code,
+            )
             item.total_redeemed += 1
 
             # Calculate expiry
@@ -330,7 +329,6 @@ class PointsMallService:
             else:
                 expires_at = _now() + timedelta(days=365)  # fallback
 
-            coupon_code = _generate_coupon_code()
             redemption = PointsMallRedemption(
                 user_id=user_id,
                 item_id=item.id,
@@ -345,17 +343,6 @@ class PointsMallService:
                 expires_at=expires_at,
             )
             db.add(redemption)
-            db.add(
-                PointsHistory(
-                    user_id=user_id,
-                    action_type="redeem_points_mall",
-                    amount=-item.points_cost,
-                    balance_after=points.balance,
-                    description=f"积分兑换优惠券：{item.name}",
-                    source_type="points_mall_redemption",
-                    source_id=coupon_code,
-                )
-            )
             await db.commit()
             await db.refresh(redemption)
             return self._coupon_response(redemption)

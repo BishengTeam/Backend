@@ -309,9 +309,36 @@ class PointsSystemTests(unittest.TestCase):
         self.assertIn("source_type=\"points_claim\"", source)
         self.assertIn("existing is not None", source)
         self.assertIn("return existing, False", source)
-        self.assertIn("if account.balance < data.amount:", source)
+        # 批次账本：扣减统一走 FIFO，余额不足仅在 allow_negative=False 时拒绝，
+        # 退款追扣（allow_negative=True）允许扣至负余额（欠分不过期）。
+        self.assertIn("async def _consume_batches_fifo", source)
+        self.assertIn("if not allow_negative and account.balance < amount:", source)
         self.assertIn('raise BusinessException("积分余额不足")', source)
-        self.assertIn("amount=-data.amount", source)
+        self.assertIn("allow_negative=True", source)
+
+    def test_points_batch_ledger_expiry_and_payment_points_wiring(self):
+        points_source = _read_text(_path("app/services/points.py"))
+        rules_source = _read_text(_path("app/services/points_rules.py"))
+        fulfillment_source = _read_text(_path("app/services/order_fulfillment.py"))
+        cleanup_source = _read_text(_path("app/services/cleanup.py"))
+
+        # 到期清零：worker 挂 cleanup_loop，批次核销 + 负流水
+        self.assertIn("async def settle_expired_points", points_source)
+        self.assertIn("action_type=\"points_expire\"", points_source)
+        self.assertIn("POINTS_EXPIRY_INTERVAL_SECONDS", cleanup_source)
+        self.assertIn("settle_expired_points()", cleanup_source)
+
+        # 有效期口径单一来源（12 个月按 365 天近似）
+        self.assertIn("POINTS_VALIDITY_DAYS", rules_source)
+        self.assertIn("POINTS_VALIDITY_DAYS", points_source)
+
+        # 缴费返积分：挂 on_paid 履约咽喉点，每实付 10 元 = 1 积分，退款追扣
+        self.assertIn("PAYMENT_POINTS_CENTS_PER_STEP", rules_source)
+        self.assertIn("async def _grant_payment_points", fulfillment_source)
+        self.assertIn("async def _revoke_payment_points", fulfillment_source)
+        self.assertIn('action_type="earn_order"', fulfillment_source)
+        self.assertIn('source_type="order_payment"', fulfillment_source)
+        self.assertIn("allow_negative=True", fulfillment_source)
 
     def test_daily_checkin_claim_key_matches_auto_grant_and_uses_business_timezone(self):
         points_source = _read_text(_path("app/services/points.py"))
@@ -330,18 +357,34 @@ class PointsSystemTests(unittest.TestCase):
 
     def test_points_model_and_migration_define_constraints(self):
         model_source = _read_text(_path("app/domain/user/src/model/points.py"))
-        migration_source = _read_text(
+        legacy_migration_source = _read_text(
             _path("alembic/versions/a4b5c6d7e8f9_add_points_constraints_and_source_fields.py")
         )
+        batch_migration_source = _read_text(
+            _path("alembic/versions/r60002_points_batch_ledger.py")
+        )
 
-        for source in (model_source, migration_source):
-            with self.subTest(source=source[:20]):
-                self.assertIn("ck_user_points_balance_non_negative", source)
-                self.assertIn("ck_points_history_amount_non_zero", source)
-                self.assertIn("ck_points_history_balance_after_non_negative", source)
-                self.assertIn("source_type", source)
-                self.assertIn("source_id", source)
-                self.assertIn("uq_points_history_user_source_action", source)
+        # 历史迁移保留原始非负约束（r60002 负责放开，欠分不过期）
+        self.assertIn("ck_user_points_balance_non_negative", legacy_migration_source)
+        self.assertIn("ck_points_history_balance_after_non_negative", legacy_migration_source)
+
+        # 新契约：模型不再定义非负约束，批次账本约束齐备
+        self.assertNotIn("ck_user_points_balance_non_negative", model_source)
+        self.assertNotIn("ck_points_history_balance_after_non_negative", model_source)
+        self.assertIn("ck_points_history_amount_non_zero", model_source)
+        self.assertIn("source_type", model_source)
+        self.assertIn("source_id", model_source)
+        self.assertIn("uq_points_history_user_source_action", model_source)
+        self.assertIn("ck_points_batch_amount_positive", model_source)
+        self.assertIn("ck_points_batch_remaining_non_negative", model_source)
+        self.assertIn("ck_points_batch_remaining_not_exceed_amount", model_source)
+        self.assertIn("ix_points_batch_fifo", model_source)
+
+        # r60002：建批次表 + 放开负余额 + 存量继承批次回填
+        self.assertIn("points_batch", batch_migration_source)
+        self.assertIn("ck_user_points_balance_non_negative", batch_migration_source)
+        self.assertIn("ck_points_history_balance_after_non_negative", batch_migration_source)
+        self.assertIn("legacy_migration", batch_migration_source)
 
     def test_coupon_removal_accepts_empty_coupon_code(self):
         body = OrderApplyCouponRequest(coupon_code="")
@@ -353,10 +396,10 @@ class PointsSystemTests(unittest.TestCase):
     def test_points_mall_redemption_records_points_history(self):
         source = _read_text(_path("app/services/points_mall.py"))
 
-        self.assertIn("PointsHistory(", source)
+        # 商城兑换统一走 PointsService 批次 FIFO 扣减，不再手写余额扣减
+        self.assertIn("_debit_points_in_session", source)
         self.assertIn('action_type="redeem_points_mall"', source)
-        self.assertIn("amount=-item.points_cost", source)
-        self.assertIn("balance_after=points.balance", source)
+        self.assertIn('description=f"积分兑换优惠券：{item.name}"', source)
         self.assertIn('source_type="points_mall_redemption"', source)
         self.assertIn("source_id=coupon_code", source)
 

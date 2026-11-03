@@ -10,7 +10,7 @@ from app.domain.user.src.model.admin_password_history import AdminPasswordHistor
 from app.domain.user.src.model.admin_security_audit import AdminSecurityAudit
 from app.domain.user.src.model.deleted_openid import DeletedOpenid
 from app.domain.user.src.model.deleted_identity_hash import DeletedIdentityHash
-from app.domain.user.src.model.points import PointsHistory, UserPoints
+from app.domain.user.src.model.points import PointsBatch, PointsHistory, UserPoints
 from app.domain.user.src.rule.admin_roles import ADMIN_ROLES
 
 __all__ = [
@@ -26,5 +26,6 @@ __all__ = [
     "DeletedIdentityHash",
     "UserPoints",
     "PointsHistory",
+    "PointsBatch",
     "ADMIN_ROLES",
 ]

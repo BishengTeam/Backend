@@ -10,7 +10,7 @@ from app.domain.community.src.index import Collection, Conversation, Share
 from app.domain.certification.src.index import CompetitionReg, CourseEnrollment
 from app.domain.order.src.index import InventoryRecord, Order, UserCoupon
 from app.domain.renshe.src.index import RensheApplication
-from app.domain.user.src.index import DeletedOpenid, PointsHistory, User, UserProfile, UserRealname, UserStudent, UserEnterprise, UserPoints
+from app.domain.user.src.index import DeletedOpenid, PointsBatch, PointsHistory, User, UserProfile, UserRealname, UserStudent, UserEnterprise, UserPoints
 from app.services.classroom_attachment import cleanup_classroom_attachments
 
 logger = logging.getLogger(__name__)
@@ -18,12 +18,25 @@ logger = logging.getLogger(__name__)
 CLEANUP_DAYS = 30
 CLEANUP_INTERVAL_SECONDS = 24 * 3600
 ORDER_TIMEOUT_INTERVAL_SECONDS = 60
+POINTS_EXPIRY_INTERVAL_SECONDS = 3600
 
 
 async def cleanup_loop():
     next_account_cleanup_at = 0.0
+    next_points_expiry_at = 0.0
     while True:
         now = time.monotonic()
+        if now >= next_points_expiry_at:
+            try:
+                from app.services.points import PointsService
+                settled = await PointsService().settle_expired_points()
+                if settled:
+                    logger.info("积分到期清零: %d 分", settled)
+            except Exception as exc:
+                logger.error(
+                    "积分到期清零失败: exception_type=%s", type(exc).__name__
+                )
+            next_points_expiry_at = now + POINTS_EXPIRY_INTERVAL_SECONDS
         if now >= next_account_cleanup_at:
             try:
                 await _cleanup_expired_accounts()
@@ -92,6 +105,7 @@ async def _cleanup_expired_accounts():
 
         # 4. 删除与 User 关联的叶子表
         for model in [
+            PointsBatch,
             PointsHistory,
             UserPoints,
             UserRealname,

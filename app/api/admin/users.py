@@ -3,11 +3,13 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Path, Query, Request
 from fastapi.responses import Response
 
-from app.middleware.auth import require_permission
+from app.middleware.auth import require_permission, require_super_admin
 from app.middleware.rate_limit import limiter
 from app.schemas.admin import (
     AdminBatchDeleteRequest,
     AdminIdentityReview,
+    AdminPointsAdjust,
+    AdminPointsAdjustResponse,
     AdminProfileUpdate,
     AdminUserConversationBrief,
     AdminUserFilter,
@@ -157,6 +159,29 @@ async def toggle_user_status(
         user_id, body.is_active, actor_id=_admin.id
     )
     return success(data=result, message="用户状态已更新")
+
+
+@router.post("/{user_id}/points-adjust",
+    response_model=APIResponse[AdminPointsAdjustResponse],
+    summary="手工调分（仅超级管理员）",
+    description="""
+管理后台 **用户管理** 页面使用。
+
+**使用场景**: 客诉补偿、作弊清零、线下报课补发等人工兜底调整积分。
+
+**规则**: 正数发放、负数扣减；原因必填并写入积分流水与审计日志；
+扣减不允许扣至负余额（退款追扣的负余额由系统自动处理，不走此入口）。
+    """,
+)
+async def adjust_points(
+    body: AdminPointsAdjust,
+    user_id: int = Path(..., description="用户 ID"),
+    admin=Depends(require_super_admin),
+) -> APIResponse[AdminPointsAdjustResponse]:
+    balance = await AdminUserService().adjust_points(
+        user_id, amount=body.amount, reason=body.reason.strip(), actor_id=admin.id
+    )
+    return success(data=AdminPointsAdjustResponse(balance=balance), message="积分已调整")
 
 
 @router.post("/batch-delete",

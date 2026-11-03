@@ -1,6 +1,7 @@
+import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.certification.src.index import CourseEnrollment
@@ -13,8 +14,12 @@ from app.domain.community.src.index import (
 )
 from app.domain.nisp.src.index import NispRegistration
 from app.domain.renshe.src.index import RensheApplication, RensheApplicationVersion
+from app.domain.user.src.index import PointsHistory
 from app.port.exceptions import ConflictException
+from app.services.points_rules import PAYMENT_POINTS_CENTS_PER_STEP
 from app.services.quiz_v2 import QuizV2Service
+
+logger = logging.getLogger(__name__)
 
 
 class OrderFulfillmentService:
@@ -210,9 +215,11 @@ class OrderFulfillmentService:
         processed = await self._on_paid_impl(db, order)
         if order.order_kind in {"course", "quiz_order"}:
             VideoWebService.schedule_issue_for_order(order.id)
+        await self._grant_payment_points(db, order)
         return processed
 
     async def on_refunded(self, db: AsyncSession, order: Order) -> bool:
+        await self._revoke_payment_points(db, order)
         application = await self._lock_renshe_application(db, order)
         if order.application_id is not None:
             if application is None:
@@ -240,6 +247,76 @@ class OrderFulfillmentService:
         enrollment.access_revoked_at = self._now()
         await self._revoke_quiz_entitlements(db, order)
         return True
+
+    async def _grant_payment_points(self, db: AsyncSession, order: Order) -> None:
+        """缴费返积分：每实付 10 元 = 1 积分，不足 10 元不计。
+
+        所有真实付款订单统一生效（当前唯一场景是认证报名缴费线下核账）。
+        按订单幂等（核账重放不重复发），SAVEPOINT 隔离，失败只记日志不阻断履约。
+        """
+        from app.services.points import PointsService
+
+        points = order.price // PAYMENT_POINTS_CENTS_PER_STEP
+        if points <= 0:
+            return
+        try:
+            async with db.begin_nested():
+                await PointsService()._grant_points_in_session(
+                    db,
+                    user_id=order.user_id,
+                    amount=points,
+                    action_type="earn_order",
+                    description="缴费返积分",
+                    source_type="order_payment",
+                    source_id=str(order.id),
+                )
+        except Exception:
+            logger.warning(
+                "payment points grant failed: order_id=%s user_id=%s",
+                order.id,
+                order.user_id,
+                exc_info=True,
+            )
+
+    async def _revoke_payment_points(self, db: AsyncSession, order: Order) -> None:
+        """退款追回该订单发放的缴费返积分。
+
+        先于各业务分支执行（多数分支会提前 return）；批次按先进先出核销，
+        余额不足扣至负数（欠分不过期，兑换被余额校验拦截）。失败只记日志不阻断退款。
+        """
+        from app.services.points import PointsService
+
+        granted = (
+            await db.execute(
+                select(func.coalesce(func.sum(PointsHistory.amount), 0)).where(
+                    PointsHistory.user_id == order.user_id,
+                    PointsHistory.action_type == "earn_order",
+                    PointsHistory.source_type == "order_payment",
+                    PointsHistory.source_id == str(order.id),
+                )
+            )
+        ).scalar_one()
+        if not granted or int(granted) <= 0:
+            return
+        try:
+            async with db.begin_nested():
+                await PointsService()._debit_points_in_session(
+                    db,
+                    user_id=order.user_id,
+                    amount=int(granted),
+                    action_type="refund_revoke",
+                    description="订单退款扣回积分",
+                    source_type="order_payment",
+                    source_id=f"refund:{order.id}",
+                    allow_negative=True,
+                )
+        except Exception:
+            logger.warning(
+                "payment points revoke failed: order_id=%s user_id=%s",
+                order.id,
+                order.user_id,
+                exc_info=True,
+            )
 
     async def on_closed(self, db: AsyncSession, order: Order) -> bool:
         from app.services.h3c_registration import H3cRegistrationService
