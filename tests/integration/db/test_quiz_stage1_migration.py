@@ -139,6 +139,7 @@ def test_quiz_rebuild_upgrade_downgrade_upgrade(
         "quiz_question_revision_stats",
         "quiz_course_library_binding",
         "quiz_library_entitlement",
+        "quiz_activation_code",
         "quiz_legacy_migration_map",
         "quiz_migration_issue",
     }
