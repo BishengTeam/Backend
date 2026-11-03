@@ -139,9 +139,16 @@ async def _seed_batch(
     remaining: int | None = None,
     expires_in_days: float = POINTS_VALIDITY_DAYS,
 ) -> int:
-    from app.domain.user.src.index import PointsBatch
+    from sqlalchemy import select
+
+    from app.domain.user.src.index import PointsBatch, UserPoints
 
     async with session_factory() as db:
+        account = await db.scalar(select(UserPoints).where(UserPoints.user_id == user_id))
+        if account is None:
+            account = UserPoints(user_id=user_id, balance=0)
+            db.add(account)
+        account.balance += amount
         batch = PointsBatch(
             user_id=user_id,
             amount=amount,
