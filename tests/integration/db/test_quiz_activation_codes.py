@@ -107,56 +107,7 @@ async def activation_env(monkeypatch):
         library=None,
     )
 
-    # 已发布 + v2 入口开启 + 激活码模式 + 至少一道已发布题（目录计数 > 0 才可见）。
-    library = await env.admin.create_library(
-        AdminQuizLibraryCreate(name=f"{prefix}激活码题库"),
-        admin_id=env.admin_id,
-    )
-    library = await env.admin.transition_library(
-        library.id,
-        AdminQuizLibraryStatusUpdate(
-            action="publish", lock_version=library.lock_version
-        ),
-        admin_id=env.admin_id,
-    )
-    library = await env.admin.update_library(
-        library.id,
-        AdminQuizLibraryUpdate(
-            lock_version=library.lock_version,
-            access_mode="activation_code",
-            v2_enabled=True,
-        ),
-        admin_id=env.admin_id,
-    )
-    module = await env.admin.create_module(
-        AdminQuizModuleCreate(library_id=library.id, name="激活码模块"),
-        admin_id=env.admin_id,
-    )
-    point = await env.admin.create_knowledge_point(
-        AdminQuizKnowledgePointCreate(module_id=module.id, name="激活码知识点"),
-        admin_id=env.admin_id,
-    )
-    question = await env.admin.create_question(
-        AdminQuizQuestionCreate(
-            knowledge_point_id=point.id,
-            question_type="single_choice",
-            question_text=f"{prefix} 激活码题库题目？",
-            options={"A": "是", "B": "否"},
-            correct_answer="A",
-            explanation="激活码集成测试题目。",
-        ),
-        admin_id=env.admin_id,
-    )
-    await env.admin.publish_question_revision(
-        question.id,
-        AdminQuizVersionRequest(lock_version=question.lock_version),
-        admin_id=env.admin_id,
-    )
-    env.library = await env.admin.get_library(library.id)
-
-    try:
-        yield env
-    finally:
+    async def _cleanup_env() -> None:
         async with factory() as db:
             library_ids = list(
                 (
@@ -231,6 +182,72 @@ async def activation_env(monkeypatch):
             await db.execute(delete(AdminUser).where(AdminUser.id == admin.id))
             await db.commit()
         await engine.dispose()
+
+    # 内容先建、再改访问模式、再发布、最后开 V2 入口：publish 门禁要求
+    # 非 pending 访问模式且存在「模块→知识点→已发布题」路径（2026.11.03.3 教训）。
+    # setup 阶段任何一步失败都必须内联清理，否则 super_admin 泄漏会
+    # 连锁打挂后续所有人社/题库集成测试（uq_admin_user_single_super_admin）。
+    try:
+        library = await env.admin.create_library(
+            AdminQuizLibraryCreate(name=f"{prefix}激活码题库"),
+            admin_id=env.admin_id,
+        )
+        module = await env.admin.create_module(
+            AdminQuizModuleCreate(library_id=library.id, name="激活码模块"),
+            admin_id=env.admin_id,
+        )
+        point = await env.admin.create_knowledge_point(
+            AdminQuizKnowledgePointCreate(module_id=module.id, name="激活码知识点"),
+            admin_id=env.admin_id,
+        )
+        question = await env.admin.create_question(
+            AdminQuizQuestionCreate(
+                knowledge_point_id=point.id,
+                question_type="single_choice",
+                question_text=f"{prefix} 激活码题库题目？",
+                options={"A": "是", "B": "否"},
+                correct_answer="A",
+                explanation="激活码集成测试题目。",
+            ),
+            admin_id=env.admin_id,
+        )
+        await env.admin.publish_question_revision(
+            question.id,
+            AdminQuizVersionRequest(lock_version=question.lock_version),
+            admin_id=env.admin_id,
+        )
+        library = await env.admin.update_library(
+            library.id,
+            AdminQuizLibraryUpdate(
+                lock_version=library.lock_version,
+                access_mode="activation_code",
+            ),
+            admin_id=env.admin_id,
+        )
+        library = await env.admin.transition_library(
+            library.id,
+            AdminQuizLibraryStatusUpdate(
+                action="publish", lock_version=library.lock_version
+            ),
+            admin_id=env.admin_id,
+        )
+        library = await env.admin.update_library(
+            library.id,
+            AdminQuizLibraryUpdate(
+                lock_version=library.lock_version,
+                v2_enabled=True,
+            ),
+            admin_id=env.admin_id,
+        )
+        env.library = library
+    except Exception:
+        await _cleanup_env()
+        raise
+
+    try:
+        yield env
+    finally:
+        await _cleanup_env()
 
 
 def test_normalize_strips_separators_and_uppercases():
