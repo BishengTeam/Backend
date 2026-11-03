@@ -475,8 +475,10 @@ async def test_get_library_schema_contract(activation_env):
     anonymous = await env.catalog.get_library(None, env.library.id, schema="2")
     assert anonymous.accessible is False
 
-    legacy_anonymous = await env.catalog.get_library(None, env.library.id)
-    assert legacy_anonymous.access_mode == "activation_code"  # 匿名详情本就全量开放
+    with pytest.raises(QuizV2Exception) as legacy_anonymous_exc:
+        await env.catalog.get_library(None, env.library.id)
+    # 旧契约对激活码库统一按不存在处理（含匿名），绝不吐出新模式枚举值。
+    assert legacy_anonymous_exc.value.http_status_code == 404
 
 
 async def test_practice_requires_activation(activation_env):
