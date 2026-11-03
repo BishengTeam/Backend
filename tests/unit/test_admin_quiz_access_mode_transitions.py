@@ -13,10 +13,11 @@ def test_every_access_mode_has_a_transition_entry():
     assert set(_ACCESS_MODE_TRANSITIONS) == set(QuizLibraryAccessMode)
 
 
-def test_paid_can_convert_to_free_and_course_entitlement():
+def test_paid_can_convert_out_to_every_open_mode():
     assert _ACCESS_MODE_TRANSITIONS[QuizLibraryAccessMode.PAID] == {
         QuizLibraryAccessMode.FREE,
         QuizLibraryAccessMode.COURSE_ENTITLEMENT,
+        QuizLibraryAccessMode.ACTIVATION_CODE,
     }
 
 
@@ -24,3 +25,20 @@ def test_pending_stays_restricted_to_non_paid_targets():
     assert QuizLibraryAccessMode.PAID not in _ACCESS_MODE_TRANSITIONS[
         QuizLibraryAccessMode.PENDING
     ]
+
+
+def test_activation_code_mode_is_reachable_and_exits_cleanly():
+    # quiz018：激活码模式可从任一既有模式转入（此前没有任何转 INTO 的路径，
+    # free→paid 只能走编辑表单的历史坑不得在 activation_code 上重演）。
+    for mode in (
+        QuizLibraryAccessMode.PENDING,
+        QuizLibraryAccessMode.FREE,
+        QuizLibraryAccessMode.COURSE_ENTITLEMENT,
+        QuizLibraryAccessMode.PAID,
+    ):
+        assert QuizLibraryAccessMode.ACTIVATION_CODE in _ACCESS_MODE_TRANSITIONS[mode]
+    assert _ACCESS_MODE_TRANSITIONS[QuizLibraryAccessMode.ACTIVATION_CODE] == {
+        QuizLibraryAccessMode.FREE,
+        QuizLibraryAccessMode.COURSE_ENTITLEMENT,
+        QuizLibraryAccessMode.PAID,
+    }

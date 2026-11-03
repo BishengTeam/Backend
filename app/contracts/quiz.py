@@ -72,6 +72,7 @@ from app.schemas.common import APIResponse, PaginatedData
 from app.schemas.quiz_contract import (
     QuizCategoryNode,
     QuizCheckinCalendarQuery,
+    QuizLibraryActivationResponse,
     QuizCheckinDay,
     QuizCheckinStatusResponse,
     QuizCollectionCreate,
@@ -184,6 +185,13 @@ QUIZ_API_CONTRACTS: tuple[QuizEndpointContract, ...] = (
     ),
     QuizEndpointContract(
         "GET", "/api/quiz/libraries/{library_id}", "user", APIResponse[QuizLibraryCatalogDetail]
+    ),
+    QuizEndpointContract(
+        "POST",
+        "/api/quiz/libraries/{library_id}/redeem",
+        "user",
+        APIResponse[QuizLibraryActivationResponse],
+        rate_limit_per_minute=5,
     ),
     QuizEndpointContract(
         "GET", "/api/quiz/libraries/{library_id}/progress", "user", APIResponse[QuizLibraryProgressResponse]

@@ -113,15 +113,38 @@ class QuizLibraryCatalogItem(QuizContractModel):
     name: str
     description: str
     cover_url: str
-    access_mode: Literal["free", "course_entitlement", "paid"]
+    access_mode: Literal["free", "course_entitlement", "paid", "activation_code"]
     vendor_tag: Literal["h3c", "nisp", "sangfor", "none"]
     question_count: int = Field(ge=1)
     module_count: int = Field(ge=1)
 
 
+class QuizLibraryCatalogItemV2(QuizLibraryCatalogItem):
+    """schema=2 目录项：新增 accessible 标记（旧契约绝不携带，见 quiz018）。"""
+
+    accessible: bool
+
+
 class QuizLibraryCatalogDetail(QuizLibraryCatalogItem):
     details: str | None = None
     modules: list[QuizModuleCatalogItem]
+
+
+class QuizLibraryCatalogDetailV2(QuizLibraryCatalogDetail):
+    """schema=2 详情：新增 accessible 标记。"""
+
+    accessible: bool
+
+
+class QuizLibraryActivationResponse(QuizContractModel):
+    """激活码兑换结果（幂等：重复兑换自己的码 activated 仍为 True）。"""
+
+    library_id: int
+    activated: bool
+
+
+class QuizLibraryRedeemRequest(QuizContractModel):
+    code: str = Field(min_length=4, max_length=64)
 
 
 class QuizScopeProgressBase(QuizContractModel):

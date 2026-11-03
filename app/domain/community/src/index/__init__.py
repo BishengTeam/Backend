@@ -1,6 +1,7 @@
 """domain/community 公开入口。"""
 
 from app.domain.community.src.model.quiz import (
+    QuizActivationCode,
     QuizAdminAuditLog,
     QuizCategory,
     QuizCheckin,
@@ -34,6 +35,7 @@ from app.domain.community.src.model.collection import Collection
 from app.domain.community.src.model.conversation import Conversation
 
 __all__ = [
+    "QuizActivationCode",
     "QuizAdminAuditLog",
     "QuizCategory",
     "QuizCheckin",

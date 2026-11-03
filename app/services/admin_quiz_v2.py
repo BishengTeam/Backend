@@ -85,12 +85,25 @@ _ACCESS_MODE_TRANSITIONS = {
     QuizLibraryAccessMode.PENDING: {
         QuizLibraryAccessMode.FREE,
         QuizLibraryAccessMode.COURSE_ENTITLEMENT,
+        QuizLibraryAccessMode.ACTIVATION_CODE,
     },
-    QuizLibraryAccessMode.FREE: {QuizLibraryAccessMode.COURSE_ENTITLEMENT},
-    QuizLibraryAccessMode.COURSE_ENTITLEMENT: {QuizLibraryAccessMode.FREE},
+    QuizLibraryAccessMode.FREE: {
+        QuizLibraryAccessMode.COURSE_ENTITLEMENT,
+        QuizLibraryAccessMode.ACTIVATION_CODE,
+    },
+    QuizLibraryAccessMode.COURSE_ENTITLEMENT: {
+        QuizLibraryAccessMode.FREE,
+        QuizLibraryAccessMode.ACTIVATION_CODE,
+    },
     QuizLibraryAccessMode.PAID: {
         QuizLibraryAccessMode.FREE,
         QuizLibraryAccessMode.COURSE_ENTITLEMENT,
+        QuizLibraryAccessMode.ACTIVATION_CODE,
+    },
+    QuizLibraryAccessMode.ACTIVATION_CODE: {
+        QuizLibraryAccessMode.FREE,
+        QuizLibraryAccessMode.COURSE_ENTITLEMENT,
+        QuizLibraryAccessMode.PAID,
     },
 }
 

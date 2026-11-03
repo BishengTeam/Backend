@@ -85,6 +85,13 @@ class QuizLibraryAccessMode(StrEnum):
     FREE = "free"
     COURSE_ENTITLEMENT = "course_entitlement"
     PAID = "paid"
+    ACTIVATION_CODE = "activation_code"
+
+
+class QuizActivationCodeStatus(StrEnum):
+    ISSUED = "issued"
+    REDEEMED = "redeemed"
+    REVOKED = "revoked"
 
 
 class QuizContentStatus(StrEnum):

@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from app.domain.community.src.rule.quiz import (
+    QuizActivationCodeStatus,
     QuizCategoryStatus,
     QuizImportSourceType,
     QuizImportStatus,
@@ -961,3 +962,32 @@ class AdminQuizMigrationReportResponse(QuizContractModel):
     mapped_category_count: int = Field(ge=0)
     mapped_question_count: int = Field(ge=0)
     issues: list[AdminQuizMigrationIssueResponse]
+
+
+class AdminQuizActivationCodeCreate(QuizContractModel):
+    """批量生成题库激活码（quiz018）。"""
+
+    quantity: int = Field(default=1, ge=1, le=500)
+    note: str | None = Field(default=None, max_length=512)
+
+
+class AdminQuizActivationCodeQuery(QuizContractModel):
+    library_id: int = Field(ge=1)
+    status: QuizActivationCodeStatus | None = None
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=100)
+
+
+class AdminQuizActivationCodeItem(QuizContractModel):
+    id: int
+    code: str  # 展示格式 XXXX-XXXX-XXXX-XXXX
+    status: QuizActivationCodeStatus
+    note: str | None = None
+    redeemed_by: int | None = None
+    redeemed_by_phone: str | None = None
+    redeemed_at: datetime | None = None
+    created_at: datetime
+
+
+class AdminQuizActivationCodeGenerateResponse(QuizContractModel):
+    codes: list[str] = Field(min_length=1)

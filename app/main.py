@@ -252,6 +252,7 @@ QUIZ_ERROR_CODES = {
 
 QUIZ_RATE_LIMITS = {
     ("get", "/api/quiz/questions"): 60,
+    ("post", "/api/quiz/libraries/{library_id}/redeem"): 5,
     ("put", "/api/quiz/practice-sessions/{session_id}/answers/{session_question_id}"): 120,
     ("post", "/api/quiz/practice-sessions/{session_id}/attempts"): 120,
     ("put", "/api/quiz/exams/{exam_id}/answers/{exam_question_id}"): 120,

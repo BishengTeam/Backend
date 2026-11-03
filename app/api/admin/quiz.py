@@ -3,6 +3,8 @@ from datetime import date, datetime
 from fastapi import APIRouter, Depends, File, Form, Path, Query, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import PlainTextResponse
+
+from app.utils.excel import export_csv
 from pydantic import ValidationError
 
 from app.port.exceptions import BusinessException
@@ -57,6 +59,10 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizCourseOptionResponse,
     AdminQuizCourseBindingResponse,
     AdminQuizCourseBindingStatusUpdate,
+    AdminQuizActivationCodeCreate,
+    AdminQuizActivationCodeGenerateResponse,
+    AdminQuizActivationCodeItem,
+    AdminQuizActivationCodeQuery,
     AdminQuizContentTreeResponse,
     AdminQuizKnowledgePointCreate,
     AdminQuizKnowledgePointResponse,
@@ -77,7 +83,12 @@ from app.schemas.common import APIResponse, PaginatedData, success
 from app.services.admin_quiz import AdminQuizService
 from app.services.quiz_image_upload import QuizImageUploadService
 from app.services.admin_quiz_v2 import AdminQuizV2Service
+from app.services.quiz_activation import (
+    ACTIVATION_CODE_CSV_HEADERS,
+    QuizActivationCodeService,
+)
 from app.domain.community.src.rule.quiz import (
+    QuizActivationCodeStatus,
     QuizCategoryStatus,
     QuizImportSourceType,
     QuizImportStatus,
@@ -211,6 +222,87 @@ async def convert_library_access_mode(
             library_id, body, admin_id=admin.id
         )
     )
+
+
+@router.post(
+    "/libraries/{library_id}/activation-codes",
+    response_model=APIResponse[AdminQuizActivationCodeGenerateResponse],
+    summary="批量生成题库激活码",
+    description="""
+管理后台 **题库管理** 使用：为激活码模式题库批量生成激活码（一次 ≤500），
+返回展示格式（XXXX-XXXX-XXXX-XXXX）码列表，可直接复制或走导出 CSV 交发放方。
+""",
+)
+async def create_activation_codes(
+    body: AdminQuizActivationCodeCreate,
+    library_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz_library_manage")),
+) -> APIResponse[AdminQuizActivationCodeGenerateResponse]:
+    codes = await QuizActivationCodeService().generate_codes(
+        library_id, body, admin_id=admin.id
+    )
+    return success(data=AdminQuizActivationCodeGenerateResponse(codes=codes))
+
+
+@router.get(
+    "/libraries/{library_id}/activation-codes",
+    response_model=APIResponse[PaginatedData[AdminQuizActivationCodeItem]],
+    summary="题库激活码列表",
+)
+async def list_activation_codes(
+    library_id: int = Path(..., ge=1),
+    status: str | None = Query(None, pattern="^(issued|redeemed|revoked)$"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    _admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[PaginatedData[AdminQuizActivationCodeItem]]:
+    query = _validated_query(
+        AdminQuizActivationCodeQuery,
+        {
+            "library_id": library_id,
+            "status": status,
+            "page": page,
+            "page_size": page_size,
+        },
+    )
+    return success(data=await QuizActivationCodeService().list_codes(query))
+
+
+@router.get(
+    "/libraries/{library_id}/activation-codes/export",
+    response_class=PlainTextResponse,
+    summary="导出题库激活码（CSV）",
+    description="按状态筛选导出激活码 CSV（UTF-8 BOM，Excel 可直接打开），供线下发放。",
+)
+async def export_activation_codes(
+    library_id: int = Path(..., ge=1),
+    status: str | None = Query(None, pattern="^(issued|redeemed|revoked)$"),
+    _admin=Depends(require_permission("quiz:list")),
+) -> Response:
+    status_filter = QuizActivationCodeStatus(status) if status else None
+    rows = await QuizActivationCodeService().export_rows(library_id, status_filter)
+    output = export_csv(ACTIVATION_CODE_CSV_HEADERS, rows)
+    return PlainTextResponse(
+        content=output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename=quiz_activation_codes_{library_id}.csv"
+        },
+    )
+
+
+@router.post(
+    "/activation-codes/{code_id}/revoke",
+    response_model=APIResponse,
+    summary="作废题库激活码",
+    description="仅未兑换（issued）的激活码可作废；已兑换码不可作废。",
+)
+async def revoke_activation_code(
+    code_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("quiz_library_manage")),
+) -> APIResponse:
+    await QuizActivationCodeService().revoke_code(code_id, admin_id=admin.id)
+    return success(message="激活码已作废")
 
 
 @router.get(

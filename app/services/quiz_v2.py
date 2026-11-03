@@ -30,7 +30,9 @@ from app.schemas.quiz_contract import (
     QuizKnowledgePointProgress,
     QuizKnowledgePointCatalogItem,
     QuizLibraryCatalogDetail,
+    QuizLibraryCatalogDetailV2,
     QuizLibraryCatalogItem,
+    QuizLibraryCatalogItemV2,
     QuizLibraryProgressResponse,
     QuizModuleCatalogItem,
     QuizModuleProgress,
@@ -172,6 +174,15 @@ class QuizV2Service:
         )
 
     @staticmethod
+    def _activation_required() -> QuizV2Exception:
+        return QuizV2Exception(
+            reason="quiz_activation_required",
+            message="该题库需激活码解锁，请先激活后再练习",
+            http_status_code=403,
+            code=40301,
+        )
+
+    @staticmethod
     def _session_expired() -> QuizV2Exception:
         return QuizV2Exception(
             reason="practice_session_expired",
@@ -192,7 +203,7 @@ class QuizV2Service:
     @staticmethod
     def _session_paused(reason: str) -> QuizV2Exception:
         if reason == "quiz_entitlement_inactive":
-            message = "课程题库权益当前不可用，练习有效期已暂停"
+            message = "题库权益当前不可用，练习有效期已暂停"
         else:
             reason = "quiz_library_suspended"
             message = "题库当前暂停开放，练习有效期已暂停"
@@ -222,11 +233,26 @@ class QuizV2Service:
         )
 
     @classmethod
-    def _visible_clause(cls, user_id: int):
+    def _visible_clause(cls, user_id: int, *, include_activation: bool = True):
+        """目录可见性：activation_code 库对所有人可见（练习仍需权益）。"""
+
+        modes = ["free"] + (["activation_code"] if include_activation else [])
+        return or_(
+            QuizLibrary.access_mode.in_(modes),
+            and_(
+                QuizLibrary.access_mode == "course_entitlement",
+                cls._entitlement_exists(user_id),
+            ),
+        )
+
+    @classmethod
+    def _accessible_clause(cls, user_id: int):
+        """练习级闸门：free 直接放行，受限模式需当前有效权益。"""
+
         return or_(
             QuizLibrary.access_mode == "free",
             and_(
-                QuizLibrary.access_mode == "course_entitlement",
+                QuizLibrary.access_mode.in_(("course_entitlement", "activation_code")),
                 cls._entitlement_exists(user_id),
             ),
         )
@@ -270,9 +296,12 @@ class QuizV2Service:
 
     @staticmethod
     def _summary(
-        library: QuizLibrary, question_count: int, module_count: int
+        library: QuizLibrary,
+        question_count: int,
+        module_count: int,
+        accessible: bool | None = None,
     ) -> QuizLibraryCatalogItem:
-        return QuizLibraryCatalogItem(
+        fields = dict(
             id=int(library.id),
             library_code=library.library_code,
             name=library.name,
@@ -283,8 +312,15 @@ class QuizV2Service:
             question_count=question_count,
             module_count=module_count,
         )
+        if accessible is None:
+            # 旧契约（schema 缺省）：绝不携带新字段，保证已发版客户端解析安全。
+            return QuizLibraryCatalogItem(**fields)
+        return QuizLibraryCatalogItemV2(**fields, accessible=accessible)
 
-    async def list_libraries(self, user_id: int | None) -> list[QuizLibraryCatalogItem]:
+    async def list_libraries(
+        self, user_id: int | None, *, schema: str | None = None
+    ) -> list[QuizLibraryCatalogItem]:
+        schema_v2 = schema == "2"
         async with get_db_ctx() as db:
             if user_id is not None:
                 await self._require_user(db, user_id)
@@ -295,18 +331,49 @@ class QuizV2Service:
                         .where(
                             QuizLibrary.v2_enabled.is_(True),
                             QuizLibrary.status == "published",
-                            self._visible_clause(user_id) if user_id is not None else True,
+                            self._visible_clause(user_id, include_activation=schema_v2)
+                            if user_id is not None
+                            else True,
                         )
                         .order_by(QuizLibrary.sort_order.asc(), QuizLibrary.id.asc())
                     )
                 ).scalars()
             )
             counts = await self._counts(db, [int(item.id) for item in libraries])
-            return [
-                self._summary(item, *counts[int(item.id)])
+            items = [
+                (item, counts[int(item.id)])
                 for item in libraries
                 if counts[int(item.id)][0] > 0
             ]
+            if not schema_v2:
+                return [self._summary(item, *count) for item, count in items]
+            accessible = await self._accessible_map(
+                db, user_id, [item for item, _count in items]
+            )
+            return [
+                self._summary(item, *count, accessible=accessible[int(item.id)])
+                for item, count in items
+            ]
+
+    async def _accessible_map(
+        self, db, user_id: int | None, libraries: list[QuizLibrary]
+    ) -> dict[int, bool]:
+        """按库判定当前用户是否有练习权益（schema=2 目录用）。"""
+
+        if user_id is None:
+            return {int(item.id): item.access_mode == "free" for item in libraries}
+        if not libraries:
+            return {}
+        rows = (
+            await db.execute(
+                select(QuizLibrary.id).where(
+                    QuizLibrary.id.in_([int(item.id) for item in libraries]),
+                    self._accessible_clause(user_id),
+                )
+            )
+        ).scalars()
+        accessible_ids = {int(row) for row in rows}
+        return {int(item.id): int(item.id) in accessible_ids for item in libraries}
 
     async def _require_accessible_library(
         self, db, user_id: int, library_id: int
@@ -314,20 +381,35 @@ class QuizV2Service:
         library = await db.get(QuizLibrary, library_id)
         if library is None:
             raise self._not_found()
-        # Deliberately evaluate entitlement before reporting lifecycle state so
-        # an unentitled caller cannot infer that a paid library exists.
-        entitled = bool(
-            (
-                await db.execute(
-                    select(QuizLibrary.id).where(
-                        QuizLibrary.id == library_id,
-                        self._visible_clause(user_id),
+        if library.access_mode == "activation_code":
+            # 激活码库本就在目录中对所有人可见，无需保密：未激活返回可区分的 403。
+            entitled = bool(
+                (
+                    await db.execute(
+                        select(QuizLibrary.id).where(
+                            QuizLibrary.id == library_id,
+                            self._entitlement_exists(user_id),
+                        )
                     )
-                )
-            ).scalar_one_or_none()
-        )
-        if not entitled:
-            raise self._not_found()
+                ).scalar_one_or_none()
+            )
+            if not entitled:
+                raise self._activation_required()
+        else:
+            # Deliberately evaluate entitlement before reporting lifecycle state so
+            # an unentitled caller cannot infer that a paid library exists.
+            entitled = bool(
+                (
+                    await db.execute(
+                        select(QuizLibrary.id).where(
+                            QuizLibrary.id == library_id,
+                            self._visible_clause(user_id, include_activation=False),
+                        )
+                    )
+                ).scalar_one_or_none()
+            )
+            if not entitled:
+                raise self._not_found()
         if library.status == "suspended":
             raise QuizV2Exception(
                 reason="quiz_library_suspended",
@@ -338,6 +420,20 @@ class QuizV2Service:
         if library.status != "published" or not library.v2_enabled:
             raise self._not_found()
         return library
+
+    async def _require_visible_or_accessible_library(
+        self, db, user_id: int, library_id: int, *, include_activation: bool
+    ) -> QuizLibrary:
+        """详情页闸门：目录公开的库（free / 激活码库）对登录用户开放目录浏览。"""
+
+        if include_activation:
+            library = await db.get(QuizLibrary, library_id)
+            if library is not None and library.access_mode == "activation_code":
+                # 与匿名口径一致：已发布的激活码库详情对所有人开放，练习仍走权益闸门。
+                if library.status != "published" or not library.v2_enabled:
+                    raise self._not_found()
+                return library
+        return await self._require_accessible_library(db, user_id, library_id)
 
     @classmethod
     async def _session_access_state(
@@ -370,7 +466,7 @@ class QuizV2Service:
             )
         if library.access_mode == "free":
             return "active", None, now
-        if library.access_mode != "course_entitlement":
+        if library.access_mode not in ("course_entitlement", "activation_code"):
             return "paused", "quiz_entitlement_inactive", now
 
         entitlements = list(
@@ -503,8 +599,9 @@ class QuizV2Service:
         return changed
 
     async def get_library(
-        self, user_id: int | None, library_id: int
+        self, user_id: int | None, library_id: int, *, schema: str | None = None
     ) -> QuizLibraryCatalogDetail:
+        schema_v2 = schema == "2"
         async with get_db_ctx() as db:
             if user_id is None:
                 library = await db.get(QuizLibrary, library_id)
@@ -512,7 +609,12 @@ class QuizV2Service:
                     raise self._not_found()
             else:
                 await self._require_user(db, user_id)
-                library = await self._require_accessible_library(db, user_id, library_id)
+                library = await self._require_visible_or_accessible_library(
+                    db, user_id, library_id, include_activation=schema_v2
+                )
+            if not schema_v2 and library.access_mode == "activation_code":
+                # 旧契约绝不吐出新模式（枚举值会炸已发版客户端的严格解析）。
+                raise self._not_found()
             modules = list(
                 (
                     await db.execute(
@@ -589,6 +691,17 @@ class QuizV2Service:
                 if by_module.get(int(module.id))
             ]
             question_count = sum(item.question_count for item in module_items)
+            if schema_v2:
+                summary = self._summary(
+                    library, question_count, len(module_items)
+                )
+                accessible_map = await self._accessible_map(db, user_id, [library])
+                return QuizLibraryCatalogDetailV2(
+                    **summary.model_dump(),
+                    accessible=accessible_map[int(library.id)],
+                    details=library.details,
+                    modules=module_items,
+                )
             return QuizLibraryCatalogDetail(
                 **self._summary(
                     library, question_count, len(module_items)

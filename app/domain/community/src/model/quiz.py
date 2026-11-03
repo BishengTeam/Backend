@@ -114,7 +114,7 @@ class QuizLibrary(Base, _QuizTimestampMixin):
             name="ck_quiz_library_status",
         ),
         CheckConstraint(
-            "access_mode IN ('access_mode_pending', 'free', 'course_entitlement', 'paid')",
+            "access_mode IN ('access_mode_pending', 'free', 'course_entitlement', 'paid', 'activation_code')",
             name="ck_quiz_library_access_mode",
         ),
         CheckConstraint(
@@ -571,6 +571,35 @@ class QuizCourseLibraryBinding(Base, _QuizTimestampMixin):
     )
 
 
+class QuizActivationCode(Base, _QuizTimestampMixin):
+    """Offline-distributed activation code that unlocks one quiz library (quiz018)."""
+
+    __tablename__ = "quiz_activation_code"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('issued', 'redeemed', 'revoked')",
+            name="ck_quiz_activation_code_status",
+        ),
+        Index("ix_quiz_activation_code_library", "library_id", "status", "id"),
+    )
+
+    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    library_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("quiz_library.id", ondelete="RESTRICT"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="issued", server_default="issued"
+    )
+    note: Mapped[str | None] = mapped_column(String(512))
+    redeemed_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("user.id", ondelete="SET NULL")
+    )
+    redeemed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("admin_user.id", ondelete="SET NULL")
+    )
+
+
 class QuizLibraryEntitlement(Base, _QuizTimestampMixin):
     __tablename__ = "quiz_library_entitlement"
     __table_args__ = (
@@ -579,13 +608,14 @@ class QuizLibraryEntitlement(Base, _QuizTimestampMixin):
             name="ck_quiz_library_entitlement_status",
         ),
         CheckConstraint(
-            "source_type IN ('course_order', 'course_enrollment', 'quiz_order', 'points_order')",
+            "source_type IN ('course_order', 'course_enrollment', 'quiz_order', 'points_order', 'activation_code')",
             name="ck_quiz_library_entitlement_source_type",
         ),
         CheckConstraint(
             "((source_type IN ('course_order', 'quiz_order') AND order_id IS NOT NULL) OR "
             "(source_type = 'course_enrollment' AND enrollment_id IS NOT NULL) OR "
-            "(source_type = 'points_order' AND points_order_id IS NOT NULL))",
+            "(source_type = 'points_order' AND points_order_id IS NOT NULL) OR "
+            "(source_type = 'activation_code' AND activation_code_id IS NOT NULL))",
             name="ck_quiz_library_entitlement_source_ref",
         ),
         CheckConstraint(
@@ -596,6 +626,13 @@ class QuizLibraryEntitlement(Base, _QuizTimestampMixin):
             "order_id",
             "library_id",
             name="uq_quiz_library_entitlement_order_library",
+        ),
+        Index(
+            "uq_quiz_library_entitlement_activation_code",
+            "activation_code_id",
+            unique=True,
+            postgresql_where=text("activation_code_id IS NOT NULL"),
+            sqlite_where=text("activation_code_id IS NOT NULL"),
         ),
         Index(
             "uq_quiz_library_entitlement_enrollment_library",
@@ -635,6 +672,11 @@ class QuizLibraryEntitlement(Base, _QuizTimestampMixin):
     points_order_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("points_virtual_order.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    activation_code_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("quiz_activation_code.id", ondelete="RESTRICT"),
         nullable=True,
     )
     source_type: Mapped[str] = mapped_column(

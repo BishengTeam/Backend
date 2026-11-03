@@ -70,6 +70,9 @@ REVIEW_MIGRATION_PATH = (
 )
 
 
+ACTIVATION_MIGRATION_PATH = REPO_ROOT / "alembic/versions/quiz018_quiz_activation_codes.py"
+
+
 def _load_migration(path: Path = MIGRATION_PATH):
     spec = importlib.util.spec_from_file_location(f"{path.stem}_migration", path)
     assert spec and spec.loader
@@ -398,6 +401,7 @@ def test_quiz_metadata_matches_the_rebuilt_domain() -> None:
         | set(v2_migration.V2_TABLES)
         | set(v2_practice_migration.V2_PRACTICE_TABLES)
         | set(_load_migration(REVIEW_MIGRATION_PATH).REVIEW_TABLES)
+        | set(_load_migration(ACTIVATION_MIGRATION_PATH).ACTIVATION_TABLES)
     )
     actual = {name for name in Base.metadata.tables if name.startswith("quiz_")}
     assert actual == expected

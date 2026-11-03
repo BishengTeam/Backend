@@ -2090,7 +2090,9 @@ class QuizPracticeService:
                 or_(
                     QuizLibrary.access_mode == "free",
                     and_(
-                        QuizLibrary.access_mode.in_(("course_entitlement", "paid")),
+                        QuizLibrary.access_mode.in_(
+                            ("course_entitlement", "paid", "activation_code")
+                        ),
                         select(QuizLibraryEntitlement.id).where(
                             QuizLibraryEntitlement.user_id == user_id,
                             QuizLibraryEntitlement.library_id == QuizLibrary.id,

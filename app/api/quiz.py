@@ -3,17 +3,22 @@ from __future__ import annotations
 from datetime import date
 
 from fastapi import APIRouter, Depends, Path, Query, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
 from app.middleware.auth import get_current_user, get_current_user_optional
 from app.middleware.rate_limit import limiter, quiz_user_key
+from app.services.quiz_activation import QuizActivationCodeService
 from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.quiz_contract import (
     QuizCategoryNode,
+    QuizLibraryActivationResponse,
     QuizLibraryCatalogDetail,
     QuizLibraryCatalogItem,
+    QuizLibraryRedeemRequest,
     QuizCheckinCalendarQuery,
     QuizCheckinDay,
     QuizCheckinStatusResponse,
@@ -165,11 +170,22 @@ async def quiz_stats_query(
     "/libraries",
     response_model=APIResponse[list[QuizLibraryCatalogItem]],
     summary="当前用户可见的 V2 题库",
+    description="""
+`schema=2`：返回项携带 `accessible`（当前用户是否有练习权益），且包含激活码模式题库；
+缺省时维持旧契约（无新字段、不含激活码库），保证已发版小程序严格解析兼容。
+响应模型按冻结契约声明为旧结构；schema=2 分支在服务端原样序列化超集字段。
+""",
 )
 async def list_quiz_libraries(
     current_user: User | None = Depends(get_current_user_optional),
+    schema: str | None = Query(default=None, pattern="^2$"),
 ) -> APIResponse[list[QuizLibraryCatalogItem]]:
-    return success(data=await QuizV2Service().list_libraries(current_user.id if current_user else None))
+    data = await QuizV2Service().list_libraries(
+        current_user.id if current_user else None, schema=schema
+    )
+    if schema == "2":
+        return JSONResponse(content=jsonable_encoder(success(data=data)))
+    return success(data=data)
 
 
 @router.post(
@@ -188,18 +204,56 @@ async def purchase_quiz_library(
     raise BusinessException("题库购买已下线，练习权益请通过认证报名获取")
 
 
+@router.post(
+    "/libraries/{library_id}/redeem",
+    response_model=APIResponse[QuizLibraryActivationResponse],
+    summary="题库激活码兑换",
+    description="""
+小程序 **激活码题库** 使用：输入发放方提供的激活码，兑换成功后获得该题库练习权益。
+
+**幂等**: 同一用户重复提交已兑换的码仍返回成功。
+**认证**: 需登录
+    """,
+)
+@limiter.limit(
+    "5/minute",
+    key_func=quiz_user_key,
+    error_message="激活码验证过于频繁，请稍后再试",
+)
+async def redeem_quiz_library_code(
+    request: Request,
+    body: QuizLibraryRedeemRequest,
+    library_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[QuizLibraryActivationResponse]:
+    return success(
+        data=await QuizActivationCodeService().redeem(
+            current_user.id, library_id, body.code
+        )
+    )
+
+
 @router.get(
     "/libraries/{library_id}",
     response_model=APIResponse[QuizLibraryCatalogDetail],
     summary="V2 题库固定层级目录",
+    description="""
+`schema=2`：返回项携带 `accessible`（当前用户是否有练习权益）；
+缺省时维持旧契约（无新字段、激活码库按不存在处理），保证已发版小程序严格解析兼容。
+响应模型按冻结契约声明为旧结构；schema=2 分支在服务端原样序列化超集字段。
+""",
 )
 async def get_quiz_library(
     library_id: int = Path(..., ge=1),
     current_user: User | None = Depends(get_current_user_optional),
+    schema: str | None = Query(default=None, pattern="^2$"),
 ) -> APIResponse[QuizLibraryCatalogDetail]:
-    return success(
-        data=await QuizV2Service().get_library(current_user.id if current_user else None, library_id)
+    data = await QuizV2Service().get_library(
+        current_user.id if current_user else None, library_id, schema=schema
     )
+    if schema == "2":
+        return JSONResponse(content=jsonable_encoder(success(data=data)))
+    return success(data=data)
 
 
 @router.get(
