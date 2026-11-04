@@ -142,6 +142,7 @@ def test_quiz_rebuild_upgrade_downgrade_upgrade(
         "quiz_activation_code",
         "quiz_legacy_migration_map",
         "quiz_migration_issue",
+        "quiz_publication_operation",
     }
     actual_tables = {
         table for table in inspector.get_table_names() if table.startswith("quiz_")
