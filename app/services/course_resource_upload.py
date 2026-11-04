@@ -2,12 +2,29 @@
 from datetime import timedelta
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.adapter.database import get_db_ctx
 from app.domain.certification.src.index import Course, CourseChapter, CourseUpload, CourseAuditLog
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException, ValidationException
 from app.services.course_storage import COURSE_DEFAULT_PART_SIZE
+
+
+# VideoWeb uses the same PostgreSQL advisory-lock key when saving learning
+# progress and notes. This serializes readers against resource replacement
+# without granting UPDATE on the Backend-owned course_chapter table.
+# The two-argument PostgreSQL advisory lock API takes one int4 key per part.
+COURSE_RESOURCE_VERSION_LOCK_NAMESPACE = 824_560_310
+
+
+async def lock_chapter_resource_version(db, chapter_id: int) -> None:
+    bind = getattr(db, "bind", None)
+    if bind is None or bind.dialect.name != "postgresql":
+        return
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(:namespace, :chapter_id)"),
+        {"namespace": COURSE_RESOURCE_VERSION_LOCK_NAMESPACE, "chapter_id": chapter_id},
+    )
 
 
 class CourseResourceUploadMixin:
@@ -83,6 +100,7 @@ class CourseResourceUploadMixin:
                 if not course or course.status == "archived" or row.status != "validating":
                     raise ConflictException("课程或上传任务状态已变化")
                 if row.chapter_id:
+                    await lock_chapter_resource_version(db, row.chapter_id)
                     chapter = await db.scalar(select(CourseChapter).where(CourseChapter.id == row.chapter_id).with_for_update())
                     if not chapter or chapter.course_id != course.id or chapter.resource_version != row.expected_resource_version:
                         raise ConflictException("章节已由其他管理员更新，请刷新后重新替换")

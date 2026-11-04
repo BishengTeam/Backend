@@ -16,7 +16,10 @@ from app.domain.certification.src.index import (
 from app.port.exceptions import BusinessException, ConflictException, ForbiddenException, NotFoundException, ValidationException
 from app.schemas.course_upload import CourseUploadCreate
 from app.services.course_storage import COURSE_DEFAULT_PART_SIZE, CourseStorage
-from app.services.course_resource_upload import CourseResourceUploadMixin
+from app.services.course_resource_upload import (
+    CourseResourceUploadMixin,
+    lock_chapter_resource_version,
+)
 
 
 PENDING_UPLOAD_RETENTION = timedelta(days=7)
@@ -386,6 +389,7 @@ class CourseUploadService(CourseResourceUploadMixin):
             raise ValidationException("替换视频尚未上传完成或不属于该课程")
         async with get_db_ctx() as db:
             async with db.begin():
+                await lock_chapter_resource_version(db, chapter_id)
                 chapter = await db.get(CourseChapter, chapter_id, with_for_update=True)
                 upload = await db.get(CourseUpload, upload_id, with_for_update=True)
                 if chapter is None or chapter.course_id != course_id:

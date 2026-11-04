@@ -72,3 +72,48 @@ async def test_lost_multipart_completion_response_requires_matching_actual_objec
     assert (await CourseStorage.complete('private/doc.pdf', 'lost-response', 100)).size_bytes == 100
     with pytest.raises(ValidationException):
         await CourseStorage.complete('private/doc.pdf', 'lost-response', 101)
+
+
+@pytest.mark.asyncio
+async def test_abort_treats_expired_oss_multipart_as_already_aborted(monkeypatch):
+    from types import SimpleNamespace
+
+    class ExpiredUpload(Exception):
+        status = 404
+        code = 'NoSuchUpload'
+
+    def missing_object(_key):
+        raise ExpiredUpload()
+
+    bucket = SimpleNamespace(
+        abort_multipart_upload=Mock(side_effect=ExpiredUpload()),
+        head_object=Mock(side_effect=missing_object),
+        delete_object=Mock(),
+    )
+    monkeypatch.setattr(CourseStorage, '_bucket', staticmethod(lambda: bucket))
+
+    await CourseStorage.abort('private/expired.mp4', 'expired-upload-id')
+
+    bucket.abort_multipart_upload.assert_called_once_with('private/expired.mp4', 'expired-upload-id')
+    bucket.head_object.assert_called_once_with('private/expired.mp4')
+    bucket.delete_object.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_abort_cleans_final_object_after_lost_completion_response(monkeypatch):
+    from types import SimpleNamespace
+
+    class ExpiredUpload(Exception):
+        status = 404
+        code = 'NoSuchUpload'
+
+    bucket = SimpleNamespace(
+        abort_multipart_upload=Mock(side_effect=ExpiredUpload()),
+        head_object=Mock(return_value=SimpleNamespace(content_length=100)),
+        delete_object=Mock(),
+    )
+    monkeypatch.setattr(CourseStorage, '_bucket', staticmethod(lambda: bucket))
+
+    await CourseStorage.abort('private/completed-but-pending.mp4', 'expired-upload-id')
+
+    bucket.delete_object.assert_called_once_with('private/completed-but-pending.mp4')

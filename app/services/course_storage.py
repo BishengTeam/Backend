@@ -285,7 +285,21 @@ class CourseStorage:
         def _abort() -> None:
             bucket = cls._bucket()
             if oss_upload_id:
-                bucket.abort_multipart_upload(object_key, oss_upload_id)
+                try:
+                    bucket.abort_multipart_upload(object_key, oss_upload_id)
+                except Exception as error:
+                    # OSS can expire an unused multipart upload. Treat a 404 as
+                    # already aborted; delete a final object defensively for a
+                    # lost completion response that left the DB row pending.
+                    if getattr(error, "status", None) != 404:
+                        raise
+                    try:
+                        bucket.head_object(object_key)
+                    except Exception as head_error:
+                        if getattr(head_error, "status", None) == 404:
+                            return
+                        raise
+                    bucket.delete_object(object_key)
             else:
                 bucket.delete_object(object_key)
 
