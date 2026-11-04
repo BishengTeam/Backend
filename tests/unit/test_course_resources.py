@@ -43,6 +43,16 @@ def test_pdf_limit_and_office_extensions_are_rejected():
     assert validate_upload(kind="chapter_file", filename="OK.PDF", content_type="application/pdf", size_bytes=50 * 1024 * 1024) == ".pdf"
 
 
+def test_pdf_upload_can_be_explicitly_paused_without_blocking_video(monkeypatch):
+    from app.port.config import settings
+    monkeypatch.setattr(settings, "COURSE_DOCUMENT_UPLOADS_ENABLED", False)
+    with pytest.raises(ValidationException, match="PDF 上传暂未开放"):
+        validate_upload(kind="chapter_file", filename="chapter.pdf", content_type="application/pdf", size_bytes=100)
+    assert validate_upload(kind="chapter_file", filename="chapter.mp4", content_type="video/mp4", size_bytes=100) == ".mp4"
+    monkeypatch.setattr(settings, "COURSE_DOCUMENT_UPLOADS_ENABLED", True)
+    assert validate_upload(kind="chapter_file", filename="chapter.pdf", content_type="application/pdf", size_bytes=100) == ".pdf"
+
+
 def test_a_renamed_pdf_does_not_pass_video_validation(tmp_path, monkeypatch):
     path = tmp_path / "renamed.mp4"
     path.write_bytes(b"%PDF-1.4 fake")

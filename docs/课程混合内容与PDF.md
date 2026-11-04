@@ -20,15 +20,19 @@
 
 Backend 进度使用 last_position_seconds、last_page、resource_version；写入必须携带当前修订号，文档仅允许合法页码，完成由用户主动标记。视频秒数与文档页码不能互用。读取时过滤旧修订号，新增章节自然改变完成比例。
 
-学习网站读取同一共享章节表，自己的 vw_chapter_progress/vw_chapter_note 由其 `scripts/003_document_progress.sql` 维护，不合并两套进度。网站资源接口为 `/api/courses/{course_id}/chapters/{chapter_id}/resource`，也沿用网站原权益验证，旧 playback 只处理视频。笔记保留原内容并记录资源修订号，内容更新时展示提示。旧版本延迟进度在章节行锁释放后仍须通过版本检查。
+学习网站读取同一共享章节表，自己的 vw_chapter_progress/vw_chapter_note 由网站的 `python -m app.migrations` 升级，不合并两套进度。该程序区分PostgreSQL和SQLite；原 `scripts/003_document_progress.sql` 仅适用于PostgreSQL。网站资源接口为 `/api/courses/{course_id}/chapters/{chapter_id}/resource`，也沿用网站原权益验证，旧 playback 只处理视频。笔记保留原内容并记录资源修订号，内容更新时展示提示。旧版本延迟进度在章节行锁释放后仍须通过版本检查。
 
 ## 配套上线
 
 1. 备份数据库与私有存储，执行 Backend `alembic upgrade head`（crs006）。
-2. 网站执行 `scripts/003_document_progress.sql`，只更改 vw_* 表；已存在网站无需重跑001。
+2. 网站使用新版部署脚本执行 `python -m app.migrations`，只升级 vw_* 表；已存在网站无需重跑001。
 3. 更新 Backend 镜像及网站服务端，再更新 Admin、网站前端、小程序。
 4. OSS 沿用私有权限，确认网站来源允许 GET/HEAD、Range 请求及暴露 Content-Length/Content-Range/Accept-Ranges。PDF.js 和 worker 随网站构建产物发布，不依赖公共CDN。
-5. 通过真实 OSS 的视频/PDF上传、签名续签、旧视频、积分兑换、兑换码、赠送题库及撤销权益联调后开放PDF入口。可先设置 `COURSE_DOCUMENT_UPLOADS_ENABLED=false`，验收后开启。Compose及.env.example默认false，本地Settings默认true。
+5. PDF上传在Settings、两套Compose和.env.example中统一默认开启。需要暂停时显式设置 `COURSE_DOCUMENT_UPLOADS_ENABLED=false`；按真实OSS验证视频/PDF上传、签名续签、旧视频、积分兑换、兑换码、赠送题库及撤销权益。
+
+如果创建课程上传PDF时提示“PDF 上传暂未开放，请联系管理员”，检查 **Backend实际部署使用的runtime.env／.env**。旧环境若显式保留 `COURSE_DOCUMENT_UPLOADS_ENABLED=false`，更新代码不会覆盖该值，需要维护人员改为 `true`，并用原项目名、环境文件和Compose文件重新创建后端app容器。只刷新Admin、重启未读取新环境的旧容器或更新学习网站不能使该配置生效。
+
+可在实际后端app容器内只输出该开关进行核对：`python -c "from app.port.config import settings; print(settings.COURSE_DOCUMENT_UPLOADS_ENABLED)"`。应输出 `True`。开关开启后仍保留PDF大小、有效页面及加密／损坏文件校验。
 
 回滚优先关闭PDF上传入口，保留数据、文件和可识别PDF的服务版本。已有文档后禁止降级删字段，迁移 downgrade 明确拒绝；旧视频接口继续保留。本次不部署、不操作线上收款／权益数据。
 
