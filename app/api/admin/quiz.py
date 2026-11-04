@@ -562,7 +562,7 @@ async def admin_question_query(
     keyword: str | None = Query(None, min_length=1, max_length=128),
     include_deleted: bool = Query(False),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
 ) -> AdminQuizQuestionQuery:
     return _validated_query(
         AdminQuizQuestionQuery,

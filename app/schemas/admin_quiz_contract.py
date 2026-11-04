@@ -123,7 +123,7 @@ class AdminQuizQuestionQuery(QuizContractModel):
     keyword: str | None = Field(default=None, min_length=1, max_length=128)
     include_deleted: bool = False
     page: int = Field(default=1, ge=1)
-    page_size: int = Field(default=20, ge=1, le=100)
+    page_size: int = Field(default=20, ge=1, le=2000)
 
     @model_validator(mode="after")
     def validate_hierarchy_filters(self) -> "AdminQuizQuestionQuery":

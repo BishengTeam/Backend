@@ -34,6 +34,7 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizLibraryUpdate,
     AdminQuizModuleCreate,
     AdminQuizQuestionCreate,
+    AdminQuizQuestionQuery,
     AdminQuizQuestionUpdate,
     AdminQuizStatsQuestionQuery,
     AdminQuizVersionRequest,
@@ -976,3 +977,46 @@ async def test_free_to_paid_validates_price_without_changing_failed_versions(qui
         await env.service.convert_library_access_mode(
             library.id, AdminQuizLibraryAccessModeConvert(lock_version=library.lock_version, target_mode="free"), admin_id=env.admin_id,
         )
+
+async def test_large_question_pages_prefetch_revisions_and_preserve_order(quiz_v2_env):
+    import hashlib
+    from sqlalchemy import event
+    env = quiz_v2_env
+    library = await env.service.create_library(
+        AdminQuizLibraryCreate(name=f"{env.prefix}大分页", access_mode="free"), admin_id=env.admin_id,
+    )
+    module = await env.service.create_module(AdminQuizModuleCreate(library_id=library.id, name="模块"), admin_id=env.admin_id)
+    point = await env.service.create_knowledge_point(AdminQuizKnowledgePointCreate(module_id=module.id, name="知识点"), admin_id=env.admin_id)
+    async with env.factory() as db:
+        rows = []
+        for number in range(2001):
+            content = f"{env.prefix}题目{number}"
+            rows.append(QuizQuestion(library_id=library.id, knowledge_point_id=point.id, question_type="judge", status="draft",
+                question_text=content, normalized_question_text=content, question_text_hash=hashlib.sha256(content.encode()).hexdigest(),
+                correct_answer="A", created_by=env.admin_id, updated_by=env.admin_id))
+        db.add_all(rows)
+        await db.flush()
+        revisions = [QuizQuestionRevision(question_id=row.id, revision_no=1, status="draft", question_type="judge",
+            question_text=row.question_text, normalized_question_text=row.normalized_question_text, question_text_hash=row.question_text_hash,
+            correct_answer="A", created_by=env.admin_id) for row in rows]
+        db.add_all(revisions)
+        await db.flush()
+        for row, revision in zip(rows, revisions):
+            row.pending_revision_id = revision.id
+        await db.commit()
+    statements = []
+    engine = env.factory.kw["bind"].sync_engine
+    def count_query(_conn, _cursor, statement, _params, _context, _many):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+    event.listen(engine, "before_cursor_execute", count_query)
+    try:
+        first = await env.service.list_questions(AdminQuizQuestionQuery(library_id=library.id, page_size=2000))
+        assert first.total == 2001 and len(first.items) == 2000 and first.page_size == 2000
+        assert all(item.pending_revision_no == 1 and item.has_pending_revision for item in first.items)
+        assert len(statements) == 3  # count, question rows, all revisions in one query
+        second = await env.service.list_questions(AdminQuizQuestionQuery(library_id=library.id, page=2, page_size=2000))
+        assert len(second.items) == 1 and second.total == 2001
+        assert first.items[-1].id > second.items[0].id
+    finally:
+        event.remove(engine, "before_cursor_execute", count_query)

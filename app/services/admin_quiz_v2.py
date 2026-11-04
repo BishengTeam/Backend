@@ -242,7 +242,8 @@ class AdminQuizV2Service:
 
     @classmethod
     async def _question_response(
-        cls, db, question: QuizQuestion
+        cls, db, question: QuizQuestion,
+        revisions: dict[int, QuizQuestionRevision] | None = None,
     ) -> AdminQuizQuestionResponse:
         revision_ids = [
             revision_id
@@ -252,8 +253,7 @@ class AdminQuizV2Service:
             )
             if revision_id is not None
         ]
-        revisions: dict[int, QuizQuestionRevision] = {}
-        if revision_ids:
+        if revisions is None and revision_ids:
             revisions = {
                 int(item.id): item
                 for item in (
@@ -264,6 +264,7 @@ class AdminQuizV2Service:
                     )
                 ).scalars()
             }
+        revisions = revisions or {}
         current = revisions.get(int(question.current_revision_id or 0))
         pending = revisions.get(int(question.pending_revision_id or 0))
         return AdminQuizQuestionResponse(
@@ -777,7 +778,7 @@ class AdminQuizV2Service:
             or 0
         )
         if published_count == 0:
-            blockers.append("没有有效的模块、知识点和已发布题目路径")
+            blockers.append("没有有效的模块、知识点和已发布题目路径；请先创建或启用模块、知识点，并发布至少一道题目的修订，再发布题库")
         return blockers
 
     @classmethod
@@ -1813,8 +1814,17 @@ class AdminQuizV2Service:
                     )
                 ).scalars()
             )
+            # A 2000-row page must not issue one revision query per question.
+            revision_ids = {revision_id for item in questions
+                            for revision_id in (item.current_revision_id, item.pending_revision_id)
+                            if revision_id is not None}
+            revisions = {
+                int(item.id): item for item in (await db.execute(
+                    select(QuizQuestionRevision).where(QuizQuestionRevision.id.in_(revision_ids))
+                )).scalars()
+            } if revision_ids else {}
             return PaginatedData(
-                items=[await self._question_response(db, item) for item in questions],
+                items=[await self._question_response(db, item, revisions) for item in questions],
                 total=total,
                 page=query.page,
                 page_size=query.page_size,
