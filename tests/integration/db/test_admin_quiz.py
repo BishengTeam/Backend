@@ -689,7 +689,10 @@ async def test_qf55_frozen_import_fixtures_succeed_and_roll_back_atomically(
         assert await env.service.process_import_job(job.id) is True
         invalid_jobs.append(job)
 
-    expected_error_rows = ({1, 2, 4}, {2, 3, 4, 6})
+    # A missing legacy category is an import arrangement, not an independent
+    # content error. It is confirmed/created separately; disabled categories and
+    # duplicate rows still fail the whole batch atomically.
+    expected_error_rows = ({2, 4}, {2, 3, 6})
     async with env.factory() as db:
         imported_after_failures = await db.scalar(
             select(func.count())
