@@ -27,14 +27,6 @@
     PRODUCTION_ACCEPTED: ['生产验收完成', '本次初始化已完成并永久封存', 6]
   }
 
-  const optionalGroups = [
-    {
-      element: document.querySelector('[data-optional-group="oss"]'),
-      label: '阿里云 OSS',
-      names: ['oss_endpoint', 'oss_bucket', 'oss_access_key_id', 'oss_access_key_secret']
-    }
-  ]
-
   function setMessage(text, isError = false) {
     message.textContent = text || ''
     message.classList.toggle('error', Boolean(isError))
@@ -236,12 +228,6 @@
   })
 
   configuration.elements.deployment_mode.addEventListener('change', () => syncInfrastructureMode())
-  for (const group of optionalGroups) {
-    for (const name of group.names) {
-      configuration.elements[name].addEventListener('input', () => renderOptionalGroup(group))
-    }
-    renderOptionalGroup(group)
-  }
   syncInfrastructureMode({ initial: true })
 
   configuration.addEventListener('submit', async (event) => {
@@ -259,7 +245,6 @@
       for (const optional of ['postgres_password', 'redis_url']) {
         if (!data[optional]) data[optional] = null
       }
-      for (const group of optionalGroups) normalizeOptionalGroup(data, group)
       data.wechat_pay_private_key_pem = await fileText(form, 'wechat_pay_private_key_file', '商户私钥 PEM 文件')
       data.wechat_pay_public_key_pem = await fileText(form, 'wechat_pay_public_key_file', '微信支付公钥 PEM 文件')
       data.recovery_public_key_pem = await fileText(form, 'recovery_public_key_file', '恢复 RSA 公钥 PEM 文件')
@@ -269,8 +254,7 @@
       })
       form.reset()
       syncInfrastructureMode({ initial: true })
-      optionalGroups.forEach(renderOptionalGroup)
-      renderStatus(state)
+    renderStatus(state)
       setMessage('配置已安全提交。宿主机正在继续质量门禁和部署。')
     } catch (error) {
       setMessage(error.message, true)

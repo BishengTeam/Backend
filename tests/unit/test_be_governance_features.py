@@ -78,9 +78,7 @@ def test_free_form_diagnostics_redact_credential_assignments() -> None:
     assert redact_sensitive_text("Authorization: Bearer abc.def.ghi") == (
         "Authorization: [REDACTED]"
     )
-    assert redact_sensitive_text("password=Top Secret 123") == (
-        "password=[REDACTED]"
-    )
+    assert redact_sensitive_text("password=Top Secret 123") == ("password=[REDACTED]")
 
 
 def test_audit_values_never_persist_object_keys_or_signed_urls() -> None:
@@ -125,13 +123,13 @@ def test_deleted_source_sentinel_is_never_treated_as_an_object_key() -> None:
         enrollment_pdf_oss="deleted:legacy",
         degree_cert_oss="renshe/source/1/education.jpg",
     )
-    assert profile_source_keys(student=student) == {
-        "renshe/source/1/education.jpg"
-    }
+    assert profile_source_keys(student=student) == {"renshe/source/1/education.jpg"}
 
 
 @pytest.mark.asyncio
-async def test_source_cleanup_can_surface_oss_failure_for_retention_retry(monkeypatch) -> None:
+async def test_source_cleanup_can_surface_oss_failure_for_retention_retry(
+    monkeypatch,
+) -> None:
     class _DbContext:
         async def __aenter__(self):
             return object()
@@ -157,7 +155,9 @@ async def test_source_cleanup_can_surface_oss_failure_for_retention_retry(monkey
 
 
 @pytest.mark.asyncio
-async def test_dependency_checks_keep_legacy_shape_and_add_safe_details(monkeypatch) -> None:
+async def test_dependency_checks_keep_legacy_shape_and_add_safe_details(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         "app.main._database_probe",
         AsyncMock(
@@ -246,7 +246,9 @@ async def test_dependency_checks_reject_unwritable_local_quiz_storage(
 
 
 @pytest.mark.asyncio
-async def test_ready_returns_503_when_required_dependency_is_unavailable(monkeypatch) -> None:
+async def test_ready_returns_503_when_required_dependency_is_unavailable(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         "app.main._dependency_checks",
         AsyncMock(
@@ -305,7 +307,7 @@ def test_readiness_requires_production_wechat_and_payment() -> None:
         settings.APP_ENV = previous
 
 
-def test_readiness_treats_explicitly_disabled_oss_as_optional(monkeypatch) -> None:
+def test_readiness_requires_real_oss_in_production(monkeypatch) -> None:
     monkeypatch.setattr(settings, "APP_ENV", "production")
     monkeypatch.setattr(settings, "RENSHE_STORAGE_TYPE", "disabled")
     monkeypatch.setattr(settings, "QUIZ_IMPORT_STORAGE_TYPE", "disabled")
@@ -321,6 +323,9 @@ def test_readiness_treats_explicitly_disabled_oss_as_optional(monkeypatch) -> No
         "wechat_payment": "ok",
     }
 
+    assert is_ready(checks) is False
+    checks["oss"] = "ok"
+    checks["quiz_oss"] = "ok"
     assert is_ready(checks) is True
 
 
@@ -449,6 +454,9 @@ def test_production_settings_require_explicit_wechat_v3_configuration() -> None:
         "QUIZ_OSS_ACCESS_KEY_ID": "quiz-key",
         "QUIZ_OSS_ACCESS_KEY_SECRET": "quiz-secret",
         "QUIZ_METRICS_BEARER_TOKEN": "quiz-metrics-token-that-is-long-enough",
+        "VIDEOWEB_BASE_URL": "http://192.168.77.238:8100",
+        "VIDEOWEB_SERVICE_TOKEN": "videoweb-service-token-that-is-long-enough",
+        "VIDEOWEB_LOOKUP_SERVICE_TOKEN": "videoweb-lookup-token-that-is-long-enough",
     }
     valid = Settings(**values)
     assert valid.WECHAT_PAY_API_VERSION == "v3"
@@ -467,9 +475,11 @@ def test_production_settings_require_explicit_wechat_v3_configuration() -> None:
         "QUIZ_OSS_ACCESS_KEY_ID": "",
         "QUIZ_OSS_ACCESS_KEY_SECRET": "",
     }
-    disabled_oss = Settings(**disabled_oss_values)
-    assert disabled_oss.RENSHE_STORAGE_TYPE == "disabled"
-    assert disabled_oss.QUIZ_IMPORT_STORAGE_TYPE == "disabled"
+    with pytest.raises(
+        ValueError,
+        match="RENSHE_STORAGE_TYPE must be aliyun_oss in the unified production build",
+    ):
+        Settings(**disabled_oss_values)
 
     with pytest.raises(
         ValueError,
@@ -495,14 +505,20 @@ def test_database_url_driver_is_derived_when_only_one_complete_url_is_given() ->
         DATABASE_URL_SYNC="",
     )
     assert async_settings.DATABASE_URL.startswith("postgresql+asyncpg://")
-    assert async_settings.DATABASE_URL_SYNC == "postgresql://user:p%40ss@db.example:3306/app"
+    assert (
+        async_settings.DATABASE_URL_SYNC
+        == "postgresql://user:p%40ss@db.example:3306/app"
+    )
 
     sync_settings = Settings(
         **common,
         DATABASE_URL="",
         DATABASE_URL_SYNC="postgresql+psycopg2://user:p%40ss@db.example:3306/app",
     )
-    assert sync_settings.DATABASE_URL == "postgresql+asyncpg://user:p%40ss@db.example:3306/app"
+    assert (
+        sync_settings.DATABASE_URL
+        == "postgresql+asyncpg://user:p%40ss@db.example:3306/app"
+    )
     assert sync_settings.DATABASE_URL_SYNC == (
         "postgresql+psycopg2://user:p%40ss@db.example:3306/app"
     )
@@ -558,9 +574,7 @@ def test_wechat_payment_health_requires_public_key_id_and_rsa_public_key(
         "WECHAT_PAY_PUBLIC_KEY": wechat_pay_key.public_key()
         .export_key()
         .decode("ascii"),
-        "WECHAT_PAY_PUBLIC_KEY_ID": (
-            "PUB_KEY_ID_0000000000000024101100397200000006"
-        ),
+        "WECHAT_PAY_PUBLIC_KEY_ID": ("PUB_KEY_ID_0000000000000024101100397200000006"),
         "WECHAT_PAY_NOTIFY_URL": "https://example.test/payment/callback",
         "WECHAT_PAY_REFUND_NOTIFY_URL": (
             "https://example.test/payment/refund-callback"

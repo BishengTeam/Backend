@@ -5,8 +5,14 @@ import re
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
-
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
 HOST_RE = re.compile(
     r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
@@ -40,7 +46,9 @@ def _clean_single_line(value: str, *, field_name: str, max_length: int = 2048) -
 
 
 def _https_origin(value: str, *, field_name: str) -> str:
-    cleaned = _clean_single_line(value, field_name=field_name, max_length=512).rstrip("/")
+    cleaned = _clean_single_line(value, field_name=field_name, max_length=512).rstrip(
+        "/"
+    )
     parsed = urlsplit(cleaned)
     if (
         parsed.scheme != "https"
@@ -51,15 +59,42 @@ def _https_origin(value: str, *, field_name: str) -> str:
         or parsed.fragment
         or parsed.path not in {"", "/"}
     ):
-        raise ValueError(f"{field_name} must be an HTTPS origin without path or credentials")
+        raise ValueError(
+            f"{field_name} must be an HTTPS origin without path or credentials"
+        )
     return cleaned
 
 
 def _https_endpoint(value: str, *, field_name: str) -> str:
-    cleaned = _clean_single_line(value, field_name=field_name, max_length=512).rstrip("/")
+    cleaned = _clean_single_line(value, field_name=field_name, max_length=512).rstrip(
+        "/"
+    )
     parsed = urlsplit(cleaned)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
         raise ValueError(f"{field_name} must be an HTTPS endpoint")
+    return cleaned
+
+
+def _http_origin(value: str, *, field_name: str) -> str:
+    cleaned = _clean_single_line(value, field_name=field_name, max_length=512).rstrip(
+        "/"
+    )
+    parsed = urlsplit(cleaned)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError(f"{field_name} must be an HTTP(S) origin")
+    if (
+        parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ValueError(f"{field_name} must be an origin without path or credentials")
     return cleaned
 
 
@@ -87,29 +122,14 @@ class BootstrapConfigureRequest(BaseModel):
     wechat_pay_public_key_pem: SecretStr
     wechat_pay_public_key_id: str
 
-    oss_endpoint: str | None = None
-    oss_bucket: str | None = None
-    oss_access_key_id: SecretStr | None = None
-    oss_access_key_secret: SecretStr | None = None
+    oss_endpoint: str
+    oss_bucket: str
+    oss_access_key_id: SecretStr
+    oss_access_key_secret: SecretStr
+    videoweb_base_url: str
+    videoweb_service_token: SecretStr
+    videoweb_lookup_service_token: SecretStr
     recovery_public_key_pem: SecretStr
-
-    @field_validator(
-        "oss_endpoint",
-        "oss_bucket",
-        "oss_access_key_id",
-        "oss_access_key_secret",
-        mode="before",
-    )
-    @classmethod
-    def empty_optional_oss_value(cls, value):
-        """Treat an empty browser field as an omitted optional credential."""
-
-        if value is None:
-            return None
-        if isinstance(value, str):
-            cleaned = value.strip()
-            return cleaned or None
-        return value
 
     @field_validator("api_origin")
     @classmethod
@@ -125,22 +145,23 @@ class BootstrapConfigureRequest(BaseModel):
         "oss_endpoint",
     )
     @classmethod
-    def validate_endpoint(cls, value: str | None, info) -> str | None:
-        if value is None:
-            return None
+    def validate_endpoint(cls, value: str, info) -> str:
         return _https_endpoint(value, field_name=info.field_name)
 
     @field_validator(
         "oss_bucket",
     )
     @classmethod
-    def validate_bucket(cls, value: str | None, info) -> str | None:
-        if value is None:
-            return None
+    def validate_bucket(cls, value: str, info) -> str:
         cleaned = _clean_single_line(value, field_name=info.field_name, max_length=63)
         if not BUCKET_RE.fullmatch(cleaned):
             raise ValueError(f"{info.field_name} has an invalid OSS bucket name")
         return cleaned
+
+    @field_validator("videoweb_base_url")
+    @classmethod
+    def validate_videoweb_base_url(cls, value: str) -> str:
+        return _http_origin(value, field_name="videoweb_base_url")
 
     @field_validator("postgres_host")
     @classmethod
@@ -174,7 +195,7 @@ class BootstrapConfigureRequest(BaseModel):
         return _clean_single_line(value, field_name=info.field_name, max_length=128)
 
     @model_validator(mode="after")
-    def validate_modes_and_origins(self) -> "BootstrapConfigureRequest":
+    def validate_modes_and_origins(self) -> BootstrapConfigureRequest:
         if self.api_origin == self.admin_origin:
             raise ValueError("api_origin and admin_origin must be different")
         fields = (
@@ -184,15 +205,17 @@ class BootstrapConfigureRequest(BaseModel):
             "oss_access_key_secret",
         )
         present = [self._optional_value_present(getattr(self, name)) for name in fields]
-        if any(present) and not all(present):
+        if not all(present):
             missing = [name for name, exists in zip(fields, present) if not exists]
-            raise ValueError(
-                "oss must be fully configured or left empty; missing: "
-                + ", ".join(missing)
-            )
+            raise ValueError("oss is required; missing: " + ", ".join(missing))
+        for name in ("videoweb_service_token", "videoweb_lookup_service_token"):
+            if len(getattr(self, name).get_secret_value()) < 32:
+                raise ValueError(f"{name} must contain at least 32 characters")
         if self.deployment_mode == "external":
             if self.postgres_host == "db":
-                raise ValueError("external deployment requires an explicit postgres_host")
+                raise ValueError(
+                    "external deployment requires an explicit postgres_host"
+                )
             if (
                 self.postgres_password is None
                 or not self.postgres_password.get_secret_value()
@@ -221,7 +244,7 @@ class BootstrapConfigureRequest(BaseModel):
         return self.has_oss()
 
     def has_oss(self) -> bool:
-        return self.oss_endpoint is not None
+        return True
 
 
 class BootstrapAdminRequest(BaseModel):
@@ -233,13 +256,15 @@ class BootstrapAdminRequest(BaseModel):
     @field_validator("username")
     @classmethod
     def validate_username(cls, value: str) -> str:
-        cleaned = _clean_single_line(value, field_name="username", max_length=32).lower()
+        cleaned = _clean_single_line(
+            value, field_name="username", max_length=32
+        ).lower()
         if not ADMIN_USERNAME_RE.fullmatch(cleaned):
             raise ValueError("username contains unsupported characters")
         return cleaned
 
     @model_validator(mode="after")
-    def validate_password(self) -> "BootstrapAdminRequest":
+    def validate_password(self) -> BootstrapAdminRequest:
         password = self.password.get_secret_value()
         if len(password) < 12 or len(password) > 128:
             raise ValueError("password must contain 12 to 128 characters")

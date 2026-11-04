@@ -248,6 +248,25 @@ check_activity() {
   fi
 }
 
+materialize_videoweb_service_secrets() {
+  local secrets_dir="$DEPLOYMENT_ROOT/installation/secrets" key file value
+  install -d -m 0700 "$secrets_dir"
+  for key in VIDEOWEB_SERVICE_TOKEN VIDEOWEB_LOOKUP_SERVICE_TOKEN; do
+    file="$secrets_dir/${key,,}"
+    if [[ -f "$file" ]]; then
+      continue
+    fi
+    if grep -q "^${key}=" "$runtime_env"; then
+      value="$(read_env_value "$runtime_env" "$key")"
+      printf '%s' "$value" >"$file.tmp"
+      chmod 0600 "$file.tmp"
+      mv "$file.tmp" "$file"
+    else
+      fail "$key or its secret file is required for the unified production build"
+    fi
+  done
+}
+
 mkdir -p "$UPDATER_ROOT/releases" "$UPDATER_ROOT/logs" "$UPDATER_ROOT/cache"
 chmod 0700 "$UPDATER_ROOT" "$UPDATER_ROOT/releases" "$UPDATER_ROOT/logs" "$UPDATER_ROOT/cache"
 exec 9>"$UPDATER_ROOT/upgrade.lock"
@@ -373,6 +392,8 @@ No service was stopped, no image was loaded, and no database was changed.
 EOF
   exit 0
 fi
+
+materialize_videoweb_service_secrets
 
 log "loading Backend image"
 zstd -dc "$new_backend_archive" | docker_cli load >/dev/null

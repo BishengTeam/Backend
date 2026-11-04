@@ -87,6 +87,7 @@ def test_bootstrap_and_runtime_compose_parse_when_required_values_are_supplied(t
         "ALIYUN_OSS_BUCKET": "renshe-private",
         "QUIZ_OSS_ENDPOINT": "https://oss.example.com",
         "QUIZ_OSS_BUCKET": "quiz-private",
+        "VIDEOWEB_BASE_URL": "http://192.168.77.238:8100",
         "SECRETS_DIR": str(tmp_path / "secrets"),
         "RENSHE_TEMPLATE_HOST_DIR": str(tmp_path / "templates"),
     }
@@ -104,30 +105,8 @@ def test_bootstrap_and_runtime_compose_parse_when_required_values_are_supplied(t
         check=True,
     )
 
-    runtime_without_oss = dict(runtime_env)
-    for name in (
-        "ALIYUN_OSS_ENDPOINT",
-        "ALIYUN_OSS_BUCKET",
-        "QUIZ_OSS_ENDPOINT",
-        "QUIZ_OSS_BUCKET",
-    ):
-        runtime_without_oss.pop(name, None)
-    runtime_without_oss.update(
-        {
-            "RENSHE_STORAGE_TYPE": "disabled",
-            "QUIZ_IMPORT_STORAGE_TYPE": "disabled",
-        }
-    )
-    subprocess.run(
-        [
-            "docker",
-            "compose",
-            "-f",
-            "docker-compose.deploy.yml",
-            "config",
-            "--quiet",
-        ],
-        cwd=ROOT,
-        env=runtime_without_oss,
-        check=True,
-    )
+    compose_source = (ROOT / "docker-compose.deploy.yml").read_text("utf-8")
+    assert "RENSHE_STORAGE_TYPE: ${RENSHE_STORAGE_TYPE:-aliyun_oss}" in compose_source
+    assert "COURSE_DOCUMENT_UPLOADS_ENABLED: ${COURSE_DOCUMENT_UPLOADS_ENABLED:-true}" in compose_source
+    assert "QUIZ_IMPORT_STORAGE_TYPE: ${QUIZ_IMPORT_STORAGE_TYPE:-aliyun_oss}" in compose_source
+    assert "VIDEOWEB_BASE_URL: ${VIDEOWEB_BASE_URL:?VIDEOWEB_BASE_URL is required}" in compose_source

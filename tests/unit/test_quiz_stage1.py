@@ -53,24 +53,20 @@ MIGRATION_PATH = REPO_ROOT / "alembic/versions/quiz001_rebuild_quiz_domain.py"
 STATS_INDEX_MIGRATION_PATH = (
     REPO_ROOT / "alembic/versions/quiz002_add_stats_dirty_indexes.py"
 )
-QUIZ_MIGRATION_PATHS = tuple(
-    sorted((REPO_ROOT / "alembic/versions").glob("quiz*.py"))
-)
+QUIZ_MIGRATION_PATHS = tuple(sorted((REPO_ROOT / "alembic/versions").glob("quiz*.py")))
 COURSE_QUIZ_MIGRATION_PATH = (
     REPO_ROOT / "alembic/versions/crs001_rebuild_course_domain.py"
 )
-V2_MIGRATION_PATH = (
-    REPO_ROOT / "alembic/versions/quiz004_expand_quiz_v2_domain.py"
-)
+V2_MIGRATION_PATH = REPO_ROOT / "alembic/versions/quiz004_expand_quiz_v2_domain.py"
 V2_PRACTICE_MIGRATION_PATH = (
     REPO_ROOT / "alembic/versions/quiz005_add_v2_practice_revision_stats.py"
 )
-REVIEW_MIGRATION_PATH = (
-    REPO_ROOT / "alembic/versions/quiz012_add_exam_manual_review.py"
+REVIEW_MIGRATION_PATH = REPO_ROOT / "alembic/versions/quiz012_add_exam_manual_review.py"
+
+
+ACTIVATION_MIGRATION_PATH = (
+    REPO_ROOT / "alembic/versions/quiz018_quiz_activation_codes.py"
 )
-
-
-ACTIVATION_MIGRATION_PATH = REPO_ROOT / "alembic/versions/quiz018_quiz_activation_codes.py"
 
 
 def _load_migration(path: Path = MIGRATION_PATH):
@@ -116,6 +112,9 @@ def _production_settings(**overrides) -> Settings:
         "QUIZ_OSS_ACCESS_KEY_ID": "quiz-key",
         "QUIZ_OSS_ACCESS_KEY_SECRET": "quiz-secret",
         "QUIZ_METRICS_BEARER_TOKEN": "quiz-metrics-token-that-is-long-enough",
+        "VIDEOWEB_BASE_URL": "http://192.168.77.238:8100",
+        "VIDEOWEB_SERVICE_TOKEN": "videoweb-service-token-that-is-long-enough",
+        "VIDEOWEB_LOOKUP_SERVICE_TOKEN": "videoweb-lookup-token-that-is-long-enough",
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -194,9 +193,7 @@ def test_question_rules_support_option_images_with_text_or_image_minimum() -> No
         require_publishable=True,
     )
     assert normalized.options == {"A": "80", "B": "", "C": "22"}
-    assert normalized.option_image_urls == {
-        "B": "https://cdn.example.com/option-b.png"
-    }
+    assert normalized.option_image_urls == {"B": "https://cdn.example.com/option-b.png"}
 
     # Pure-image options are valid as long as every option has text or image.
     pure_image = normalize_question_payload(
@@ -269,12 +266,8 @@ def test_submitted_answers_are_canonical_and_exact_match_only() -> None:
     assert normalize_submitted_answer(
         "multiple_choice", ["c", "A", "C"], options=options
     ) == ["A", "C"]
-    assert answers_match(
-        "multiple_choice", ["C", "A"], ["A", "C"], options=options
-    )
-    assert not answers_match(
-        "multiple_choice", ["A"], ["A", "C"], options=options
-    )
+    assert answers_match("multiple_choice", ["C", "A"], ["A", "C"], options=options)
+    assert not answers_match("multiple_choice", ["A"], ["A", "C"], options=options)
     assert normalize_question_text(" A\n\t B ") == "A B"
 
 
@@ -294,7 +287,10 @@ def test_contract_registry_is_complete_strict_and_machine_readable() -> None:
         ("GET", "/admin/quiz/stats/questions"),
         ("GET", "/api/quiz/libraries"),
         ("GET", "/api/quiz/practice-scopes/preview"),
-        ("POST", "/api/quiz/practice-sessions/{session_id}/questions/{session_question_id}/skip"),
+        (
+            "POST",
+            "/api/quiz/practice-sessions/{session_id}/questions/{session_question_id}/skip",
+        ),
         ("GET", "/admin/quiz/libraries/{library_id}/content-tree"),
         ("POST", "/admin/quiz/questions/{question_id}/undo-delete"),
     }.issubset(set(keys))
@@ -341,9 +337,7 @@ def test_contract_registry_is_complete_strict_and_machine_readable() -> None:
     }
     for key, expected in expected_admin_limits.items():
         contract = next(
-            entry
-            for entry in QUIZ_API_CONTRACTS
-            if (entry.method, entry.path) == key
+            entry for entry in QUIZ_API_CONTRACTS if (entry.method, entry.path) == key
         )
         assert contract.rate_limit_per_minute == expected
         assert QuizErrorCode.RATE_LIMITED in contract.errors
@@ -354,9 +348,7 @@ def test_contract_explicitly_deletes_legacy_endpoints() -> None:
     assert ("POST", "/api/quiz/submit") in deleted
     assert ("POST", "/admin/quiz/import") in deleted
     assert ("POST", "/admin/quiz/questions/batch-delete") in deleted
-    assert not deleted & {
-        (entry.method, entry.path) for entry in QUIZ_API_CONTRACTS
-    }
+    assert not deleted & {(entry.method, entry.path) for entry in QUIZ_API_CONTRACTS}
 
 
 def test_answer_visibility_is_enforced_by_separate_exam_schemas() -> None:
@@ -415,9 +407,14 @@ def test_quiz_metadata_matches_the_rebuilt_domain() -> None:
 
     exam_indexes = {index.name: index for index in QuizExam.__table__.indexes}
     assert exam_indexes["uq_quiz_exam_active_user"].unique
-    assert exam_indexes["uq_quiz_exam_active_user"].dialect_options["postgresql"]["where"] is not None
+    assert (
+        exam_indexes["uq_quiz_exam_active_user"].dialect_options["postgresql"]["where"]
+        is not None
+    )
 
-    attempt_constraints = {constraint.name for constraint in QuizPracticeAttempt.__table__.constraints}
+    attempt_constraints = {
+        constraint.name for constraint in QuizPracticeAttempt.__table__.constraints
+    }
     assert "uq_quiz_practice_attempt_idempotency" in attempt_constraints
     assert "uq_quiz_practice_attempt_number" in attempt_constraints
     assert "fk_quiz_practice_attempt_session_question" in attempt_constraints
@@ -430,12 +427,8 @@ def test_reactivation_and_retention_constraints_match_frozen_lifecycle() -> None
         )
         return str(constraint.sqltext)
 
-    question_lifecycle = constraint_sql(
-        QuizQuestion, "ck_quiz_question_lifecycle"
-    )
-    wrong_lifecycle = constraint_sql(
-        QuizWrongItem, "ck_quiz_wrong_item_lifecycle"
-    )
+    question_lifecycle = constraint_sql(QuizQuestion, "ck_quiz_question_lifecycle")
+    wrong_lifecycle = constraint_sql(QuizWrongItem, "ck_quiz_wrong_item_lifecycle")
     collection_lifecycle = constraint_sql(
         QuizCollection, "ck_quiz_collection_lifecycle"
     )
@@ -499,9 +492,7 @@ def test_stats_index_migration_is_non_destructive_and_quiz_scoped() -> None:
     assert "create_table" not in source
     assert "drop_table" not in source
     assert not re.search(r"\bbanner\b|\bzone\b", source, flags=re.IGNORECASE)
-    created_indexes = set(
-        re.findall(r'op\.create_index\(\s*"([^"]+)"', source)
-    )
+    created_indexes = set(re.findall(r'op\.create_index\(\s*"([^"]+)"', source))
     assert created_indexes == {
         "ix_quiz_practice_attempt_submitted",
         "ix_quiz_exam_status_updated",
@@ -590,7 +581,10 @@ def test_quiz_image_upload_put_signature_covers_content_type() -> None:
     from pathlib import Path
 
     source = (
-        Path(__file__).resolve().parents[2] / "app" / "services" / "quiz_image_upload.py"
+        Path(__file__).resolve().parents[2]
+        / "app"
+        / "services"
+        / "quiz_image_upload.py"
     ).read_text(encoding="utf-8")
     contract = (
         Path(__file__).resolve().parents[2]
@@ -599,12 +593,17 @@ def test_quiz_image_upload_put_signature_covers_content_type() -> None:
         / "admin_quiz_contract.py"
     ).read_text(encoding="utf-8")
 
-    assert 'headers={"Content-Type": _normalized_content_type(data.content_type)}' in source
+    assert (
+        'headers={"Content-Type": _normalized_content_type(data.content_type)}'
+        in source
+    )
     assert "content_type=_normalized_content_type(data.content_type)" in source
     assert "content_type: str" in contract
 
 
-def test_quiz_media_signing_extracts_keys_and_passes_external_through(monkeypatch) -> None:
+def test_quiz_media_signing_extracts_keys_and_passes_external_through(
+    monkeypatch,
+) -> None:
     from app.services.quiz_image_upload import (
         extract_quiz_image_key,
         sign_quiz_media_map,

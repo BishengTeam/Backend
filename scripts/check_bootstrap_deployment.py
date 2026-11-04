@@ -74,13 +74,38 @@ def main() -> None:
     )
     require(
         runtime_compose,
-        "RENSHE_STORAGE_TYPE: ${RENSHE_STORAGE_TYPE:-disabled}",
-        "optional human-resources OSS mode",
+        "RENSHE_STORAGE_TYPE: ${RENSHE_STORAGE_TYPE:-aliyun_oss}",
+        "human-resources OSS mode",
     )
     require(
         runtime_compose,
-        "QUIZ_IMPORT_STORAGE_TYPE: ${QUIZ_IMPORT_STORAGE_TYPE:-disabled}",
-        "optional quiz OSS mode",
+        "QUIZ_IMPORT_STORAGE_TYPE: ${QUIZ_IMPORT_STORAGE_TYPE:-aliyun_oss}",
+        "quiz OSS mode",
+    )
+    require(
+        runtime_compose,
+        "COURSE_DOCUMENT_UPLOADS_ENABLED: ${COURSE_DOCUMENT_UPLOADS_ENABLED:-true}",
+        "course PDF upload mode",
+    )
+    require(
+        runtime_compose,
+        "BANK_TRANSFER_NEW_ORDERS_ENABLED: ${BANK_TRANSFER_NEW_ORDERS_ENABLED:-true}",
+        "new bank-transfer order mode",
+    )
+    require(
+        runtime_compose,
+        "VIDEOWEB_BASE_URL: ${VIDEOWEB_BASE_URL:?VIDEOWEB_BASE_URL is required}",
+        "required VideoWeb bridge URL",
+    )
+    require(
+        runtime_compose,
+        "VIDEOWEB_SERVICE_TOKEN_FILE: /run/secrets/videoweb_service_token",
+        "VideoWeb service token secret",
+    )
+    require(
+        runtime_compose,
+        "VIDEOWEB_LOOKUP_SERVICE_TOKEN_FILE: /run/secrets/videoweb_lookup_service_token",
+        "VideoWeb lookup token secret",
     )
     forbid(
         runtime_compose,

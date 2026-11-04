@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import base64
 import time
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
 from Crypto.Signature import pkcs1_15
+from pydantic import ValidationError
 
 from bootstrap_app.models import BootstrapConfigureRequest
 from bootstrap_app.probes import (
@@ -44,6 +44,9 @@ def _request():
             "oss_bucket": "shared-private",
             "oss_access_key_id": "shared-id",
             "oss_access_key_secret": "shared-secret",
+            "videoweb_base_url": "http://192.168.77.238:8100",
+            "videoweb_service_token": "v" * 40,
+            "videoweb_lookup_service_token": "w" * 40,
             "recovery_public_key_pem": recovery.public_key().export_key().decode(),
         }
     )
@@ -306,7 +309,9 @@ async def test_external_probe_rejects_public_bucket_without_exposing_credentials
     nonce = "response-nonce"
     signature = base64.b64encode(
         pkcs1_15.new(payment).sign(
-            SHA256.new(timestamp.encode() + b"\n" + nonce.encode() + b"\n" + body + b"\n")
+            SHA256.new(
+                timestamp.encode() + b"\n" + nonce.encode() + b"\n" + body + b"\n"
+            )
         )
     ).decode()
     responses = iter(
@@ -343,36 +348,15 @@ async def test_external_probe_rejects_public_bucket_without_exposing_credentials
     assert "renshe-secret" not in str(error.value)
 
 
-@pytest.mark.asyncio
-async def test_external_probe_skips_omitted_optional_oss(monkeypatch):
-    request, _ = _request()
-    request = request.model_copy(
-        update={
-            name: None
-            for name in (
-                "oss_endpoint",
-                "oss_bucket",
-                "oss_access_key_id",
-                "oss_access_key_secret",
-            )
-        }
-    )
-    monkeypatch.setattr("bootstrap_app.probes._probe_wechat_login", AsyncMock())
-    monkeypatch.setattr("bootstrap_app.probes._probe_wechat_pay", AsyncMock())
+def test_external_probe_requires_oss_before_request_validation():
+    values = _request()[0].model_dump()
+    for name in (
+        "oss_endpoint",
+        "oss_bucket",
+        "oss_access_key_id",
+        "oss_access_key_secret",
+    ):
+        values[name] = None
 
-    def unexpected_bucket(*_args):
-        raise AssertionError("OSS probe must not run for an omitted group")
-
-    report = await validate_external_dependencies(
-        request,
-        installation_id="install-without-oss",
-        bucket_factory=unexpected_bucket,
-    )
-
-    assert report.public_dict() == {
-        "wechat_login": "ok",
-        "wechat_pay": "ok",
-        "renshe_oss": "not_configured",
-        "quiz_oss": "not_configured",
-        "recovery_oss": "not_configured",
-    }
+    with pytest.raises(ValidationError):
+        BootstrapConfigureRequest.model_validate(values)

@@ -5,7 +5,6 @@ from typing import Any
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
 
-
 SECRET_FILE_FIELDS = (
     "DB_PASSWORD",
     "DATABASE_URL",
@@ -248,7 +247,10 @@ class Settings(BaseSettings):
         env = info.data.get("APP_ENV", "")
         if env == "production" and v:
             import warnings
-            warnings.warn("APP_DEBUG forced to False in production environment", UserWarning)
+
+            warnings.warn(
+                "APP_DEBUG forced to False in production environment", UserWarning
+            )
             return False
         return v
 
@@ -379,7 +381,9 @@ class Settings(BaseSettings):
         if not 0.5 <= self.HEALTH_CHECK_TIMEOUT_SECONDS <= 10:
             raise ValueError("HEALTH_CHECK_TIMEOUT_SECONDS must be between 0.5 and 10")
         if not 1 <= self.ALIYUN_OSS_SIGNED_URL_TTL_SECONDS <= 300:
-            raise ValueError("ALIYUN_OSS_SIGNED_URL_TTL_SECONDS must be between 1 and 300")
+            raise ValueError(
+                "ALIYUN_OSS_SIGNED_URL_TTL_SECONDS must be between 1 and 300"
+            )
         if not 1 <= self.RENSHE_WORKER_POLL_SECONDS <= 300:
             raise ValueError("RENSHE_WORKER_POLL_SECONDS must be between 1 and 300")
         if not 0 < self.RENSHE_CLEANUP_RETENTION_DAYS <= 30:
@@ -403,8 +407,7 @@ class Settings(BaseSettings):
             )
         if storage_type == "aliyun_oss" and not all(present.values()):
             raise ValueError(
-                "missing human-resources OSS settings: "
-                + ", ".join(required)
+                "missing human-resources OSS settings: " + ", ".join(required)
             )
         if storage_type == "disabled" and any(present.values()):
             raise ValueError(
@@ -415,9 +418,9 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "RENSHE_CLEANUP_RETENTION_DAYS must remain 30 in production"
                 )
-            if storage_type not in {"aliyun_oss", "disabled"}:
+            if storage_type != "aliyun_oss":
                 raise ValueError(
-                    "RENSHE_STORAGE_TYPE must be aliyun_oss or disabled in production"
+                    "RENSHE_STORAGE_TYPE must be aliyun_oss in the unified production build"
                 )
         return self
 
@@ -463,8 +466,7 @@ class Settings(BaseSettings):
         ]
         if missing_login:
             raise ValueError(
-                "missing production WeChat login settings: "
-                + ", ".join(missing_login)
+                "missing production WeChat login settings: " + ", ".join(missing_login)
             )
 
         if not self.WECHAT_PAY_ENABLED:
@@ -494,15 +496,42 @@ class Settings(BaseSettings):
                 "missing production WeChat Pay V3 settings: "
                 + ", ".join(missing_payment)
             )
+        if not self.BANK_TRANSFER_NEW_ORDERS_ENABLED:
+            raise ValueError(
+                "BANK_TRANSFER_NEW_ORDERS_ENABLED must be true in the unified production build"
+            )
+        if not self.COURSE_DOCUMENT_UPLOADS_ENABLED:
+            raise ValueError(
+                "COURSE_DOCUMENT_UPLOADS_ENABLED must be true in the unified production build"
+            )
+        missing_videoweb = [
+            name
+            for name, value in {
+                "VIDEOWEB_BASE_URL": self.VIDEOWEB_BASE_URL,
+                "VIDEOWEB_SERVICE_TOKEN": self.VIDEOWEB_SERVICE_TOKEN,
+                "VIDEOWEB_LOOKUP_SERVICE_TOKEN": self.VIDEOWEB_LOOKUP_SERVICE_TOKEN,
+            }.items()
+            if not value
+        ]
+        if missing_videoweb:
+            raise ValueError(
+                "missing production VideoWeb bridge settings: "
+                + ", ".join(missing_videoweb)
+            )
         return self
 
     @model_validator(mode="after")
     def validate_wechat_pay_runtime(self) -> "Settings":
         if self.WECHAT_PAY_ENABLED and self.WECHAT_PAY_API_VERSION.lower() != "v3":
-            raise ValueError("WECHAT_PAY_API_VERSION must be v3 when payment is enabled")
-        if self.WECHAT_PAY_ENABLED and self.WECHAT_PAY_API_V3_KEY:
-            if len(self.WECHAT_PAY_API_V3_KEY.encode("utf-8")) != 32:
-                raise ValueError("WECHAT_PAY_API_V3_KEY must be exactly 32 bytes")
+            raise ValueError(
+                "WECHAT_PAY_API_VERSION must be v3 when payment is enabled"
+            )
+        if (
+            self.WECHAT_PAY_ENABLED
+            and self.WECHAT_PAY_API_V3_KEY
+            and len(self.WECHAT_PAY_API_V3_KEY.encode("utf-8")) != 32
+        ):
+            raise ValueError("WECHAT_PAY_API_V3_KEY must be exactly 32 bytes")
         if (
             self.WECHAT_PAY_ENABLED
             and self.WECHAT_PAY_PUBLIC_KEY_ID
@@ -572,9 +601,7 @@ class Settings(BaseSettings):
                 "WECHAT_PAY_LATE_REFUND_MAX_QUERY_ATTEMPTS must be between 3 and 100"
             )
         if not 1 <= self.WECHAT_PAY_SYNC_RATE_PER_MINUTE <= 60:
-            raise ValueError(
-                "WECHAT_PAY_SYNC_RATE_PER_MINUTE must be between 1 and 60"
-            )
+            raise ValueError("WECHAT_PAY_SYNC_RATE_PER_MINUTE must be between 1 and 60")
         return self
 
     @model_validator(mode="after")
@@ -626,7 +653,9 @@ class Settings(BaseSettings):
         if changed:
             raise ValueError("; ".join(changed))
         if not 1 <= self.QUIZ_OSS_SIGNED_URL_TTL_SECONDS <= 300:
-            raise ValueError("QUIZ_OSS_SIGNED_URL_TTL_SECONDS must be between 1 and 300")
+            raise ValueError(
+                "QUIZ_OSS_SIGNED_URL_TTL_SECONDS must be between 1 and 300"
+            )
         if not 1 <= self.QUIZ_WORKER_POLL_SECONDS <= 60:
             raise ValueError("QUIZ_WORKER_POLL_SECONDS must be between 1 and 60")
         if not 1 <= self.QUIZ_WORKER_HEARTBEAT_SECONDS < self.QUIZ_WORKER_STALE_SECONDS:
@@ -644,8 +673,12 @@ class Settings(BaseSettings):
             raise ValueError(
                 "QUIZ_EMBEDDED_WORKER_ENABLED must be false in the standalone quiz worker"
             )
-        if self.QUIZ_TASKS_ENABLED and not self.REDIS_URL.startswith(("redis://", "rediss://")):
-            raise ValueError("REDIS_URL must use redis:// or rediss:// when quiz tasks are enabled")
+        if self.QUIZ_TASKS_ENABLED and not self.REDIS_URL.startswith(
+            ("redis://", "rediss://")
+        ):
+            raise ValueError(
+                "REDIS_URL must use redis:// or rediss:// when quiz tasks are enabled"
+            )
         storage_type = (self.QUIZ_IMPORT_STORAGE_TYPE or "").strip().lower()
         required = {
             "QUIZ_OSS_ENDPOINT": self.QUIZ_OSS_ENDPOINT,
@@ -672,9 +705,9 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "QUIZ_EMBEDDED_WORKER_ENABLED must be false in production"
                 )
-            if storage_type not in {"aliyun_oss", "disabled"}:
+            if storage_type != "aliyun_oss":
                 raise ValueError(
-                    "QUIZ_IMPORT_STORAGE_TYPE must be aliyun_oss or disabled in production"
+                    "QUIZ_IMPORT_STORAGE_TYPE must be aliyun_oss in the unified production build"
                 )
             if not self.QUIZ_METRICS_ENABLED:
                 raise ValueError("QUIZ_METRICS_ENABLED must be true in production")

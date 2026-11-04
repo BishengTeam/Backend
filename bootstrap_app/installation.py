@@ -8,13 +8,12 @@ import re
 import secrets
 import shutil
 import stat
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping
 
 from Crypto.PublicKey import RSA
 
 from bootstrap_app.models import BootstrapConfigureRequest
-
 
 SECRET_FILE_RE = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 RUNTIME_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
@@ -101,7 +100,9 @@ def build_installation_payload(
         require_private=True,
     )
     if RSA.import_key(merchant_private_key).size_in_bits() != 2048:
-        raise BootstrapValidationError("WeChat Pay merchant private key must be RSA 2048")
+        raise BootstrapValidationError(
+            "WeChat Pay merchant private key must be RSA 2048"
+        )
     payment_public_key = _validate_rsa_key(
         _secret_value(request.wechat_pay_public_key_pem),
         name="wechat_pay_public_key_pem",
@@ -123,18 +124,22 @@ def build_installation_payload(
 
     scalar_secret_fields = {
         "wechat_secret": _secret_value(request.wechat_secret),
-        "aliyun_oss_access_key_id": _optional_secret_value(
-            request.oss_access_key_id
-        ),
+        "aliyun_oss_access_key_id": _optional_secret_value(request.oss_access_key_id),
         "aliyun_oss_access_key_secret": _optional_secret_value(
             request.oss_access_key_secret
+        ),
+        "videoweb_service_token": _secret_value(request.videoweb_service_token),
+        "videoweb_lookup_service_token": _secret_value(
+            request.videoweb_lookup_service_token
         ),
     }
     for name, value in scalar_secret_fields.items():
         if name in OPTIONAL_EMPTY_SECRET_FILES and not value:
             continue
         if not value or "\x00" in value or "\r" in value or "\n" in value:
-            raise BootstrapValidationError(f"{name} must be a non-empty single-line value")
+            raise BootstrapValidationError(
+                f"{name} must be a non-empty single-line value"
+            )
         if len(value.encode("utf-8")) > 4096:
             raise BootstrapValidationError(f"{name} is too large")
 
@@ -173,6 +178,12 @@ def build_installation_payload(
         "aliyun_oss_access_key_secret": scalar_secret_fields[
             "aliyun_oss_access_key_secret"
         ].encode("utf-8"),
+        "videoweb_service_token": scalar_secret_fields["videoweb_service_token"].encode(
+            "utf-8"
+        ),
+        "videoweb_lookup_service_token": scalar_secret_fields[
+            "videoweb_lookup_service_token"
+        ].encode("utf-8"),
     }
     secrets_dir = host_deploy_root / "installation" / "secrets"
     runtime = {
@@ -200,19 +211,18 @@ def build_installation_payload(
         ),
         "WECHAT_PAY_CERT_SERIAL_NO": request.wechat_pay_cert_serial_no,
         "WECHAT_PAY_PUBLIC_KEY_ID": request.wechat_pay_public_key_id,
-        "RENSHE_STORAGE_TYPE": (
-            "aliyun_oss" if request.has_oss() else "disabled"
-        ),
+        "BANK_TRANSFER_NEW_ORDERS_ENABLED": "true",
+        "RENSHE_STORAGE_TYPE": ("aliyun_oss" if request.has_oss() else "disabled"),
         "ALIYUN_OSS_ENDPOINT": request.oss_endpoint or "",
         "ALIYUN_OSS_BUCKET": request.oss_bucket or "",
-        "QUIZ_IMPORT_STORAGE_TYPE": (
-            "aliyun_oss" if request.has_oss() else "disabled"
-        ),
+        "COURSE_DOCUMENT_UPLOADS_ENABLED": "true",
+        "QUIZ_IMPORT_STORAGE_TYPE": ("aliyun_oss" if request.has_oss() else "disabled"),
         "QUIZ_OSS_ENDPOINT": request.oss_endpoint or "",
         "QUIZ_OSS_BUCKET": request.oss_bucket or "",
         "RECOVERY_OSS_ENDPOINT": request.oss_endpoint or "",
         "RECOVERY_OSS_BUCKET": request.oss_bucket or "",
         "RECOVERY_OSS_PREFIX": "wemini-recovery",
+        "VIDEOWEB_BASE_URL": request.videoweb_base_url,
         "API_ORIGIN": request.api_origin,
         "ADMIN_ORIGIN": request.admin_origin,
         "CORS_ORIGINS": json.dumps([request.admin_origin], separators=(",", ":")),
@@ -271,7 +281,10 @@ class InstallationStore:
         parent = self.installation_dir.parent
         parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         parent_info = parent.lstat()
-        if stat.S_ISLNK(parent_info.st_mode) or stat.S_IMODE(parent_info.st_mode) & 0o077:
+        if (
+            stat.S_ISLNK(parent_info.st_mode)
+            or stat.S_IMODE(parent_info.st_mode) & 0o077
+        ):
             raise InstallationCommitError("deployment root must be a private directory")
 
         stage = parent / f".installation-{secrets.token_hex(8)}.tmp"
@@ -347,7 +360,9 @@ class InstallationStore:
             payload = envelope["payload"]
             signature = envelope["signature"]
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
-            raise InstallationCommitError("installation manifest cannot be read") from exc
+            raise InstallationCommitError(
+                "installation manifest cannot be read"
+            ) from exc
         if not isinstance(payload, dict) or not isinstance(signature, str):
             raise InstallationCommitError("installation manifest is invalid")
         if not hmac.compare_digest(signature, self._signature(payload)):
@@ -359,7 +374,9 @@ class InstallationStore:
         try:
             runtime_bytes = runtime_path.read_bytes()
         except OSError as exc:
-            raise InstallationCommitError("runtime configuration cannot be read") from exc
+            raise InstallationCommitError(
+                "runtime configuration cannot be read"
+            ) from exc
         runtime_sha256 = hashlib.sha256(runtime_bytes).hexdigest()
         if not hmac.compare_digest(
             str(payload.get("runtime_sha256", "")), runtime_sha256
@@ -380,7 +397,9 @@ class InstallationStore:
         if actual_names != set(expected_secret_macs):
             raise InstallationCommitError("secret file set does not match manifest")
         for name, expected_mac in expected_secret_macs.items():
-            if not SECRET_FILE_RE.fullmatch(str(name)) or not isinstance(expected_mac, str):
+            if not SECRET_FILE_RE.fullmatch(str(name)) or not isinstance(
+                expected_mac, str
+            ):
                 raise InstallationCommitError("secret manifest entry is invalid")
             path = secrets_dir / str(name)
             try:

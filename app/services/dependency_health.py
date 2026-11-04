@@ -314,11 +314,17 @@ def required_dependency_names() -> set[str]:
     # pass the migration with an empty table, but bootstrap must create the
     # initial account before runtime readiness succeeds.
     required = {"database", "redis", "admin_identity"}
-    if inspect_oss_configuration().get("mode") != "disabled":
+    if (
+        settings.APP_ENV == "production"
+        or inspect_oss_configuration().get("mode") != "disabled"
+    ):
         required.add("oss")
     if settings.QUIZ_TASKS_ENABLED:
         required.add("quiz_worker")
-        if inspect_quiz_oss_configuration().get("mode") != "disabled":
+        if (
+            settings.APP_ENV == "production"
+            or inspect_quiz_oss_configuration().get("mode") != "disabled"
+        ):
             required.add("quiz_oss")
     if settings.APP_ENV == "production":
         required.update({"wechat_login", "wechat_payment"})

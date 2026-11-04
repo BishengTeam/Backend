@@ -58,6 +58,9 @@ def configure_payload(rsa_materials, **overrides):
         "oss_bucket": "shared-private",
         "oss_access_key_id": "shared-id",
         "oss_access_key_secret": "shared-secret",
+        "videoweb_base_url": "http://192.168.77.238:8100",
+        "videoweb_service_token": "v" * 40,
+        "videoweb_lookup_service_token": "w" * 40,
         "recovery_public_key_pem": rsa_materials["recovery_public"],
     }
     payload.update(overrides)
@@ -78,6 +81,9 @@ def test_build_internal_payload_generates_separate_secrets(rsa_materials, tmp_pa
     assert runtime["RUN_MIGRATIONS"] == "false"
     assert runtime["DB_HOST"] == "db"
     assert runtime["WECHAT_PAY_NOTIFY_URL"].startswith("https://api.example.com/")
+    assert runtime["BANK_TRANSFER_NEW_ORDERS_ENABLED"] == "true"
+    assert runtime["COURSE_DOCUMENT_UPLOADS_ENABLED"] == "true"
+    assert runtime["VIDEOWEB_BASE_URL"] == "http://192.168.77.238:8100"
     assert runtime["ALIYUN_OSS_ENDPOINT"] == "https://oss-cn-hangzhou.aliyuncs.com"
     assert runtime["ALIYUN_OSS_BUCKET"] == "shared-private"
     assert runtime["QUIZ_OSS_ENDPOINT"] == runtime["ALIYUN_OSS_ENDPOINT"]
@@ -87,6 +93,8 @@ def test_build_internal_payload_generates_separate_secrets(rsa_materials, tmp_pa
     assert runtime["RECOVERY_OSS_PREFIX"] == "wemini-recovery"
     assert first["aliyun_oss_access_key_id"] == b"shared-id"
     assert first["aliyun_oss_access_key_secret"] == b"shared-secret"
+    assert first["videoweb_service_token"] == b"v" * 40
+    assert first["videoweb_lookup_service_token"] == b"w" * 40
     assert "quiz_oss_access_key_id" not in first
     assert "recovery_oss_access_key_id" not in first
     assert "wechat-secret" not in json.dumps(runtime)
@@ -115,11 +123,7 @@ def test_external_mode_keeps_credentials_out_of_runtime(rsa_materials, tmp_path)
     assert "db-password" not in json.dumps(runtime)
 
 
-@POSIX_ONLY
-def test_oss_can_be_omitted_without_enabling_local_fallback(
-    rsa_materials,
-    tmp_path,
-):
+def test_oss_is_required_for_the_unified_production_install(rsa_materials):
     omitted = {
         name: None
         for name in (
@@ -129,35 +133,14 @@ def test_oss_can_be_omitted_without_enabling_local_fallback(
             "oss_access_key_secret",
         )
     }
-    request = BootstrapConfigureRequest.model_validate(
-        configure_payload(rsa_materials, **omitted)
-    )
-
-    secret_files, runtime, _ = build_installation_payload(
-        request,
-        host_deploy_root=tmp_path,
-    )
-
-    assert runtime["RENSHE_STORAGE_TYPE"] == "disabled"
-    assert runtime["QUIZ_IMPORT_STORAGE_TYPE"] == "disabled"
-    assert runtime["ALIYUN_OSS_ENDPOINT"] == ""
-    assert runtime["QUIZ_OSS_ENDPOINT"] == ""
-    assert runtime["RECOVERY_OSS_ENDPOINT"] == ""
-    assert secret_files["aliyun_oss_access_key_id"] == b""
-
-    os.chmod(tmp_path, 0o700)
-    store = InstallationStore(tmp_path / "installation", b"o" * 64)
-    store.commit(
-        installation_id="optional-oss",
-        secret_files=secret_files,
-        runtime=runtime,
-        recovery_public_key=rsa_materials["recovery_public"].encode(),
-    )
-    assert store.verify_existing("optional-oss")
+    with pytest.raises(ValidationError):
+        BootstrapConfigureRequest.model_validate(
+            configure_payload(rsa_materials, **omitted)
+        )
 
 
-def test_optional_oss_rejects_partial_credentials(rsa_materials):
-    with pytest.raises(ValidationError, match=r"oss must be fully configured"):
+def test_empty_oss_field_is_rejected(rsa_materials):
+    with pytest.raises(ValidationError):
         BootstrapConfigureRequest.model_validate(
             configure_payload(
                 rsa_materials,

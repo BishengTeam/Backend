@@ -47,7 +47,7 @@ x-backend-environment: &backend_environment
   BANK_TRANSFER_NEW_ORDERS_ENABLED: ${BANK_TRANSFER_NEW_ORDERS_ENABLED:-true}
   UPLOAD_DIR: /app/uploads
   STORAGE_TYPE: local
-  RENSHE_STORAGE_TYPE: ${RENSHE_STORAGE_TYPE:-disabled}
+  RENSHE_STORAGE_TYPE: ${RENSHE_STORAGE_TYPE:-aliyun_oss}
   COURSE_DOCUMENT_UPLOADS_ENABLED: ${COURSE_DOCUMENT_UPLOADS_ENABLED:-true}
   ALIYUN_OSS_ENDPOINT: ${ALIYUN_OSS_ENDPOINT:-}
   ALIYUN_OSS_BUCKET: ${ALIYUN_OSS_BUCKET:-}
@@ -62,7 +62,7 @@ x-backend-environment: &backend_environment
   HEALTH_CHECK_TIMEOUT_SECONDS: ${HEALTH_CHECK_TIMEOUT_SECONDS:-3}
   QUIZ_TASKS_ENABLED: "true"
   QUIZ_EMBEDDED_WORKER_ENABLED: "false"
-  QUIZ_IMPORT_STORAGE_TYPE: ${QUIZ_IMPORT_STORAGE_TYPE:-disabled}
+  QUIZ_IMPORT_STORAGE_TYPE: ${QUIZ_IMPORT_STORAGE_TYPE:-aliyun_oss}
   QUIZ_OSS_ENDPOINT: ${QUIZ_OSS_ENDPOINT:-}
   QUIZ_OSS_BUCKET: ${QUIZ_OSS_BUCKET:-}
   QUIZ_OSS_ACCESS_KEY_ID_FILE: /run/secrets/aliyun_oss_access_key_id
@@ -75,10 +75,11 @@ x-backend-environment: &backend_environment
   QUIZ_WORKER_MAX_RETRIES: ${QUIZ_WORKER_MAX_RETRIES:-5}
   QUIZ_METRICS_ENABLED: "true"
   QUIZ_METRICS_BEARER_TOKEN_FILE: /run/secrets/quiz_metrics_bearer_token
-  # Closed course-video website bridge. Empty disables all bridge behaviour.
-  VIDEOWEB_BASE_URL: ${VIDEOWEB_BASE_URL:-}
-  VIDEOWEB_SERVICE_TOKEN: ${VIDEOWEB_SERVICE_TOKEN:-}
-  VIDEOWEB_LOOKUP_SERVICE_TOKEN: ${VIDEOWEB_LOOKUP_SERVICE_TOKEN:-}
+  # Closed course-video website bridge. The two service tokens are mounted as
+  # files so Compose inspection never exposes credential values.
+  VIDEOWEB_BASE_URL: ${VIDEOWEB_BASE_URL:?VIDEOWEB_BASE_URL is required}
+  VIDEOWEB_SERVICE_TOKEN_FILE: /run/secrets/videoweb_service_token
+  VIDEOWEB_LOOKUP_SERVICE_TOKEN_FILE: /run/secrets/videoweb_lookup_service_token
   VIDEOWEB_ISSUE_DELAY_SECONDS: "1"
   VIDEOWEB_RECONCILE_POLL_SECONDS: ${VIDEOWEB_RECONCILE_POLL_SECONDS:-300}
   VIDEOWEB_RECONCILE_WINDOW_DAYS: ${VIDEOWEB_RECONCILE_WINDOW_DAYS:-7}
@@ -100,6 +101,8 @@ x-backend-secrets: &backend_secrets
   - aliyun_oss_access_key_id
   - aliyun_oss_access_key_secret
   - quiz_metrics_bearer_token
+  - videoweb_service_token
+  - videoweb_lookup_service_token
 
 services:
   uploads-init:
@@ -273,3 +276,7 @@ secrets:
     file: ${SECRETS_DIR:?SECRETS_DIR is required}/aliyun_oss_access_key_secret
   quiz_metrics_bearer_token:
     file: ${SECRETS_DIR:?SECRETS_DIR is required}/quiz_metrics_bearer_token
+  videoweb_service_token:
+    file: ${SECRETS_DIR:?SECRETS_DIR is required}/videoweb_service_token
+  videoweb_lookup_service_token:
+    file: ${SECRETS_DIR:?SECRETS_DIR is required}/videoweb_lookup_service_token

@@ -40,6 +40,9 @@ def web_payload():
         "oss_bucket": "shared-private",
         "oss_access_key_id": "shared-id",
         "oss_access_key_secret": "shared-secret",
+        "videoweb_base_url": "http://192.168.77.238:8100",
+        "videoweb_service_token": "v" * 40,
+        "videoweb_lookup_service_token": "w" * 40,
         "recovery_public_key_pem": recovery.public_key().export_key().decode(),
     }
 
@@ -60,6 +63,7 @@ def _client(tmp_path, *, admin_creator=None):
         installation_dir=tmp_path / "installation",
         token=token,
     )
+
     async def successful_probes(*_args, **_kwargs):
         return ProbeReport("ok", "ok", "ok", "ok", "ok")
 
@@ -89,14 +93,14 @@ def test_health_and_static_page_have_security_headers(tmp_path):
         "oss_bucket",
         "oss_access_key_id",
         "oss_access_key_secret",
+        "videoweb_base_url",
+        "videoweb_service_token",
+        "videoweb_lookup_service_token",
     ):
         tag = re.search(rf'<input name="{name}"[^>]*>', page.text)
         assert tag is not None
-        assert "required" not in tag.group(0)
-    assert 'data-optional-group="oss"' in page.text
-    assert 'data-optional-group="renshe"' not in page.text
-    assert 'data-optional-group="quiz"' not in page.text
-    assert 'data-optional-group="recovery"' not in page.text
+        assert "required" in tag.group(0)
+    assert "必配" in page.text
 
 
 def test_api_requires_exact_bearer_token(tmp_path):
@@ -136,18 +140,23 @@ def test_configuration_commits_once_without_echoing_secrets(tmp_path, web_payloa
         json=web_payload,
     )
     assert repeated.status_code == 200
-    assert repeated.json()["config_fingerprint"] == response.json()[
-        "config_fingerprint"
-    ]
+    assert (
+        repeated.json()["config_fingerprint"] == response.json()["config_fingerprint"]
+    )
 
 
-def test_configuration_accepts_unified_oss_as_unconfigured(
+def test_configuration_rejects_missing_unified_oss(
     tmp_path,
     web_payload,
 ):
     client, token = _client(tmp_path)
     payload = dict(web_payload)
-    for name in ("oss_endpoint", "oss_bucket", "oss_access_key_id", "oss_access_key_secret"):
+    for name in (
+        "oss_endpoint",
+        "oss_bucket",
+        "oss_access_key_id",
+        "oss_access_key_secret",
+    ):
         payload[name] = None
 
     response = client.post(
@@ -156,13 +165,13 @@ def test_configuration_accepts_unified_oss_as_unconfigured(
         json=payload,
     )
 
-    assert response.status_code == 200
-    runtime = (tmp_path / "installation" / "runtime.env").read_text("utf-8")
-    assert "RENSHE_STORAGE_TYPE=disabled" in runtime
-    assert "QUIZ_IMPORT_STORAGE_TYPE=disabled" in runtime
-    assert (
-        tmp_path / "installation" / "secrets" / "aliyun_oss_access_key_id"
-    ).read_bytes() == b""
+    assert response.status_code == 422
+    assert {
+        "oss_endpoint",
+        "oss_bucket",
+        "oss_access_key_id",
+        "oss_access_key_secret",
+    } <= set(response.json()["fields"])
 
 
 def test_validation_response_never_echoes_rejected_secret(tmp_path, web_payload):
