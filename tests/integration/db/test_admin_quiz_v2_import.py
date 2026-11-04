@@ -22,7 +22,7 @@ from app.domain.community.src.index import (
 )
 from app.domain.user.src.index import AdminUser
 from app.port.config import settings
-from app.schemas.admin_quiz_contract import AdminQuizLibraryCreate
+from app.schemas.admin_quiz_contract import AdminQuizLibraryCreate, AdminQuizImportConfirmCategoriesRequest
 from app.services.admin_quiz import AdminQuizService
 from app.services.admin_quiz_v2 import AdminQuizV2Service
 
@@ -97,6 +97,11 @@ async def test_v2_import_imports_duplicate_stems_verbatim(
         filename="v2-dup.json",
         library_id=library.id,
     )
+    assert await service.process_import_job(job.id) is True
+    checked = await service.get_import_job(job.id)
+    assert checked.status == "awaiting_category_confirmation"
+    assert checked.created_count == 0
+    await service.confirm_import_categories(job.id, AdminQuizImportConfirmCategoriesRequest(lock_version=checked.lock_version, impact_version=checked.impact_version), admin_id=admin.id)
     assert await service.process_import_job(job.id) is True
 
     async with factory() as db:
@@ -226,8 +231,13 @@ async def test_v2_import_requires_two_level_path_and_confirms_atomically(
         filename="v2.json",
         library_id=library.id,
     )
-    # 2026-10-22 relaxed flow: missing categories are auto-created, so one
-    # processing run goes straight to succeeded without manual confirmation.
+    # All valid jobs first expose the plan; one explicit confirmation queues
+    # the atomic creation of categories and draft questions.
+    assert await service.process_import_job(job.id) is True
+    checked = await service.get_import_job(job.id)
+    assert checked.status == "awaiting_category_confirmation"
+    assert checked.created_count == 0
+    await service.confirm_import_categories(job.id, AdminQuizImportConfirmCategoriesRequest(lock_version=checked.lock_version, impact_version=checked.impact_version), admin_id=admin.id)
     assert await service.process_import_job(job.id) is True
 
     async with factory() as db:

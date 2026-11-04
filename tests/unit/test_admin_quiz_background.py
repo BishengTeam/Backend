@@ -285,7 +285,8 @@ def test_import_parser_preserves_domain_error_field_without_sensitive_value() ->
             ensure_ascii=False,
         ).encode(),
     )
-    assert path_errors[0]["field"] == "category_path"
+    assert path_errors == []
+    assert _rows[0][1].category_path == [""]
 
 
 def test_quiz_worker_registers_cleanup_and_stats_with_subminute_polling() -> None:
@@ -296,6 +297,7 @@ def test_quiz_worker_registers_cleanup_and_stats_with_subminute_polling() -> Non
         "quiz-question-stats",
         "course-entitlement-jobs",
         "course-upload-cleanup",
+        "quiz-publication",
     )
     assert QUIZ_TASK_RUNTIME.poll_seconds <= 60
 

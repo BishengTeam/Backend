@@ -31,6 +31,20 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.adapter.database import Base
 
 
+class QuizPublicationOperation(Base):
+    __tablename__ = "quiz_publication_operation"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    library_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("quiz_library.id", ondelete="RESTRICT"), nullable=False)
+    admin_id: Mapped[int] = mapped_column(Integer, ForeignKey("admin_user.id", ondelete="RESTRICT"), nullable=False)
+    request_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    progress: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class _QuizTimestampMixin:
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -230,6 +244,9 @@ class QuizModule(Base, _QuizTimestampMixin):
             postgresql_where=text("name_reserved = true"),
             sqlite_where=text("name_reserved = true"),
         ),
+        Index("uq_quiz_module_import_default", "library_id", unique=True,
+              postgresql_where=text("is_import_default = true AND status <> 'deleted'"),
+              sqlite_where=text("is_import_default = true AND status <> 'deleted'")),
         Index("ix_quiz_module_tree", "library_id", "sort_order", "id"),
         Index("ix_quiz_module_cleanup", "status", "restore_until", "id"),
     )
@@ -246,6 +263,7 @@ class QuizModule(Base, _QuizTimestampMixin):
     system_kind: Mapped[str] = mapped_column(
         String(32), nullable=False, default="none", server_default="none"
     )
+    is_import_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     name_reserved: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )
@@ -301,6 +319,9 @@ class QuizKnowledgePoint(Base, _QuizTimestampMixin):
             postgresql_where=text("name_reserved = true"),
             sqlite_where=text("name_reserved = true"),
         ),
+        Index("uq_quiz_point_import_default", "module_id", unique=True,
+              postgresql_where=text("is_import_default = true AND status <> 'deleted'"),
+              sqlite_where=text("is_import_default = true AND status <> 'deleted'")),
         Index("ix_quiz_knowledge_point_tree", "library_id", "module_id", "sort_order", "id"),
         Index("ix_quiz_knowledge_point_cleanup", "status", "restore_until", "id"),
     )
@@ -316,6 +337,7 @@ class QuizKnowledgePoint(Base, _QuizTimestampMixin):
     system_kind: Mapped[str] = mapped_column(
         String(32), nullable=False, default="none", server_default="none"
     )
+    is_import_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     name_reserved: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )
@@ -419,6 +441,7 @@ class QuizQuestion(Base, _QuizTimestampMixin):
         ),
     )
 
+    import_default_ownership: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     library_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("quiz_library.id", ondelete="RESTRICT")
     )
@@ -1528,6 +1551,7 @@ class QuizImportJob(Base, _QuizTimestampMixin):
         String(32), nullable=False, default="queued", server_default="queued"
     )
     source_object_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    source_filename: Mapped[str | None] = mapped_column(String(256))
     source_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     report_object_key: Mapped[str | None] = mapped_column(String(512))
     total_rows: Mapped[int] = mapped_column(

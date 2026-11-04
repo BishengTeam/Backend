@@ -256,7 +256,7 @@ def test_parse_full_template_all_eight_types() -> None:
     assert ordering.correct_answer == ["元宵节", "端午节", "中秋节", "重阳节"]
 
 
-def test_parse_rejects_missing_required_headers() -> None:
+def test_parse_allows_missing_optional_classification_headers() -> None:
     workbook = Workbook()
     sheet = workbook.active
     sheet.append(["题目", "题型", "选项A", "选项B", "正确答案", "解析", "分数", "标签"])
@@ -264,8 +264,9 @@ def test_parse_rejects_missing_required_headers() -> None:
     buffer = io.BytesIO()
     workbook.save(buffer)
     rows, errors = AdminQuizService()._parse_import_rows_xlsx(buffer.getvalue())
-    assert rows == []
-    assert errors[0]["error_code"] == "invalid_workbook_header"
+    assert errors == []
+    assert len(rows) == 1
+    assert rows[0][1].category_path == []
 
 
 def test_parse_row_level_errors_do_not_abort_batch() -> None:
@@ -286,6 +287,6 @@ def test_real_client_template_file_parses() -> None:
 
     path = Path(__file__).parent.parent / "fixtures" / "quiz-import-template.xlsx"
     rows, errors = AdminQuizService()._parse_import_rows_xlsx(path.read_bytes())
-    # 甲方模板第一个工作表共 11 行示例（第二个 sheet「模板说明」不参与解析）。
+    # 甲方模板第一个工作表共 14 行示例（第二个 sheet「模板说明」不参与解析）。
     assert errors == []
-    assert len(rows) == 11
+    assert len(rows) == 14

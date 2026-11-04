@@ -62,10 +62,10 @@ def _item(text: str) -> AdminQuizImportQuestion:
 def _library_module_point() -> tuple:
     library = SimpleNamespace(id=6, status="active")
     module = SimpleNamespace(
-        id=11, name="模块", normalized_name="模块", status="active"
+        id=11, system_kind="none", is_import_default=False, lock_version=1, name_reserved=True, name="模块", normalized_name="模块", status="active"
     )
     point = SimpleNamespace(
-        id=22, module_id=11, name="知识点", normalized_name="知识点", status="active"
+        id=22, system_kind="none", is_import_default=False, lock_version=1, name_reserved=True, module_id=11, name="知识点", normalized_name="知识点", status="active"
     )
     return library, module, point
 
@@ -164,8 +164,8 @@ def test_v2_import_flags_missing_structure_without_hard_error() -> None:
 
     result = _validate(db, rows)
 
-    # Missing structure is informational only: auto-creation happens at import
-    # time, so the row stays in `valid` with a path target.
+    # Missing structure is an arrangement, not a content error. The row stays
+    # valid and its signed plan is explicitly confirmed before creation.
     assert result.errors == []
     assert [item["error_code"] for item in result.missing_errors] == [
         "category_missing"

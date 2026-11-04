@@ -389,7 +389,7 @@ def test_quiz_metadata_matches_the_rebuilt_domain() -> None:
     v2_practice_migration = _load_migration(V2_PRACTICE_MIGRATION_PATH)
     expected = (
         set(migration.NEW_TABLES)
-        | {"quiz_import_error"}
+        | {"quiz_import_error", "quiz_publication_operation"}
         | set(v2_migration.V2_TABLES)
         | set(v2_practice_migration.V2_PRACTICE_TABLES)
         | set(_load_migration(REVIEW_MIGRATION_PATH).REVIEW_TABLES)

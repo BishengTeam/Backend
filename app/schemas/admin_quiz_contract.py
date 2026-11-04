@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import Field, JsonValue, field_validator, model_validator
+from pydantic import PrivateAttr, Field, JsonValue, field_validator, model_validator
 
 from app.domain.community.src.rule.quiz import (
     QuizActivationCodeStatus,
@@ -112,6 +112,8 @@ class AdminQuizCategoryImpactResponse(QuizContractModel):
 
 
 class AdminQuizQuestionQuery(QuizContractModel):
+    import_default_ownership: bool | None = None
+    unavailable_ownership: bool | None = None
     category_id: int | None = Field(default=None, ge=1)
     include_descendants: bool = False
     library_id: int | None = Field(default=None, ge=1)
@@ -203,6 +205,7 @@ class AdminQuizQuestionUpdate(QuizContractModel):
 
 
 class AdminQuizQuestionResponse(QuizContractModel):
+    import_default_ownership: bool = False
     id: int
     category_id: int | None = None
     library_id: int | None = None
@@ -258,6 +261,7 @@ class AdminQuizVersionRequest(QuizContractModel):
 
 
 class AdminQuizBatchTarget(QuizContractModel):
+    revision_id: int | None = Field(default=None, ge=1)
     question_id: int = Field(ge=1)
     lock_version: int = Field(ge=1)
 
@@ -465,7 +469,11 @@ class AdminQuizCsvImportMetadata(QuizContractModel):
 
 
 class AdminQuizImportQuestion(QuizContractModel):
-    category_path: list[str] = Field(min_length=1, max_length=3)
+    _default_module: bool = PrivateAttr(default=False)
+    _default_point: bool = PrivateAttr(default=False)
+    category_path: list[str] = Field(default_factory=list, max_length=3)
+    module_name: str | None = Field(default=None, max_length=128)
+    knowledge_point_name: str | None = Field(default=None, max_length=128)
     question_type: QuizQuestionType
     question_text: str = Field(min_length=1, max_length=1024)
     options: dict[str, str] | None = None
@@ -496,7 +504,21 @@ class AdminQuizImportQuestion(QuizContractModel):
     @field_validator("category_path")
     @classmethod
     def normalize_path(cls, value: list[str]) -> list[str]:
-        return [normalize_category_name(part) for part in value]
+        return [normalize_category_name(part) if part.strip() else "" for part in value]
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_ownership(cls, value):
+        if isinstance(value, dict):
+            value = dict(value)
+            explicit = [str(value.get(key) or "").strip() for key in ("module_name", "knowledge_point_name")]
+            if any(explicit):
+                legacy = value.get("category_path") or []
+                canonical = [normalize_category_name(str(part)) if str(part).strip() else "" for part in legacy] if isinstance(legacy, list) else legacy
+                if legacy and (not isinstance(canonical, list) or canonical + [""] * max(0, 2 - len(canonical)) != [normalize_category_name(p) if p else "" for p in explicit]):
+                    raise ValueError("模块、知识点与旧分类路径不一致，请只填写一套一致的归属")
+                value["category_path"] = explicit
+        return value
 
     @model_validator(mode="after")
     def normalize_question(self) -> "AdminQuizImportQuestion":
@@ -530,6 +552,7 @@ class AdminQuizJsonImportRequest(QuizContractModel):
 
 
 class AdminQuizImportJobQuery(QuizContractModel):
+    library_id: int | None = Field(default=None, ge=1)
     status: QuizImportStatus | None = None
     source_type: QuizImportSourceType | None = None
     page: int = Field(default=1, ge=1)
@@ -537,6 +560,7 @@ class AdminQuizImportJobQuery(QuizContractModel):
 
 
 class AdminQuizImportJobResponse(QuizContractModel):
+    source_filename: str | None = None
     id: int
     admin_id: int | None = None
     library_id: int | None = None
@@ -601,6 +625,9 @@ class AdminQuizImportErrorPage(QuizContractModel):
 
 
 class AdminQuizImportCategoryImpactNode(QuizContractModel):
+    is_import_default: bool = False
+    entity_status: str | None = None
+    entity_version: int | None = None
     name: str = Field(min_length=1, max_length=128)
     path: list[str] = Field(min_length=1, max_length=3)
     depth: int = Field(ge=1, le=3)
@@ -900,6 +927,7 @@ class AdminQuizContentStatusUpdate(QuizContractModel):
 
 
 class AdminQuizKnowledgePointResponse(QuizContractModel):
+    is_import_default: bool = False
     id: int
     library_id: int
     module_id: int
@@ -919,6 +947,7 @@ class AdminQuizKnowledgePointResponse(QuizContractModel):
 
 
 class AdminQuizModuleResponse(QuizContractModel):
+    is_import_default: bool = False
     id: int
     library_id: int
     name: str
@@ -994,3 +1023,30 @@ class AdminQuizActivationCodeItem(QuizContractModel):
 
 class AdminQuizActivationCodeGenerateResponse(QuizContractModel):
     codes: list[str] = Field(min_length=1)
+
+
+class AdminQuizOwnershipMoveRequest(AdminQuizBatchRequest):
+    library_id: int = Field(ge=1)
+    knowledge_point_id: int = Field(ge=1)
+
+
+class AdminQuizPublicationRequest(QuizContractModel):
+    preflight_version: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_key: str = Field(min_length=16, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    lock_version: int = Field(ge=1)
+    items: list[AdminQuizBatchTarget] = Field(default_factory=list, max_length=5000)
+    publish_library: bool = False
+    open_entry: bool = False
+
+    @model_validator(mode="after")
+    def validate_selection(self):
+        ids = [i.question_id for i in self.items]
+        if len(ids) != len(set(ids)) or any(i.revision_id is None for i in self.items):
+            raise ValueError("请选择不重复的题目及其明确修订版本")
+        if not self.items and not self.publish_library and not self.open_entry:
+            raise ValueError("请至少选择一项发布操作")
+        return self
+
+
+class AdminQuizPublicationResumeRequest(QuizContractModel):
+    preflight_version: str = Field(pattern=r"^[0-9a-f]{64}$")

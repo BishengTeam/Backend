@@ -149,6 +149,11 @@ async def quiz_v2_catalog_env(monkeypatch):
         AdminQuizKnowledgePointCreate(module_id=module.id, name="知识点"),
         admin_id=admin.id,
     )
+    # Normal default nodes use exactly the same catalog/entitlement/practice rules.
+    async with factory() as db:
+        (await db.get(QuizModule, module.id)).is_import_default = True
+        (await db.get(QuizKnowledgePoint, point.id)).is_import_default = True
+        await db.commit()
     question = await admin_service.create_question(
         AdminQuizQuestionCreate(
             knowledge_point_id=point.id,

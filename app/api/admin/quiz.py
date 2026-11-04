@@ -76,6 +76,9 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizLibraryUpdate,
     AdminQuizMigrationReportResponse,
     AdminQuizModuleCreate,
+    AdminQuizOwnershipMoveRequest,
+    AdminQuizPublicationRequest,
+    AdminQuizPublicationResumeRequest,
     AdminQuizModuleResponse,
     AdminQuizModuleUpdate,
 )
@@ -553,6 +556,8 @@ async def admin_category_query(
 async def admin_question_query(
     category_id: int | None = Query(None, ge=1),
     include_descendants: bool = Query(False),
+    import_default_ownership: bool | None = Query(None),
+    unavailable_ownership: bool | None = Query(None),
     library_id: int | None = Query(None, ge=1),
     module_id: int | None = Query(None, ge=1),
     knowledge_point_id: int | None = Query(None, ge=1),
@@ -569,6 +574,8 @@ async def admin_question_query(
         {
             "category_id": category_id,
             "include_descendants": include_descendants,
+            "import_default_ownership": import_default_ownership,
+            "unavailable_ownership": unavailable_ownership,
             "library_id": library_id,
             "module_id": module_id,
             "knowledge_point_id": knowledge_point_id,
@@ -654,6 +661,7 @@ async def admin_stats_question_query(
 
 
 async def admin_import_query(
+    library_id: int | None = Query(None, ge=1),
     status: QuizImportStatus | None = Query(None),
     source_type: QuizImportSourceType | None = Query(None),
     page: int = Query(1, ge=1),
@@ -663,6 +671,7 @@ async def admin_import_query(
         AdminQuizImportJobQuery,
         {
             "status": status,
+            "library_id": library_id,
             "source_type": source_type,
             "page": page,
             "page_size": page_size,
@@ -1570,3 +1579,44 @@ async def read_import_source(
             "Cache-Control": "private, no-store",
         },
     )
+
+
+@router.get("/libraries/{library_id}/publication-preflight")
+async def publication_preflight(library_id: int = Path(..., ge=1), _admin=Depends(require_permission("quiz:list"))):
+    from app.services.quiz_publication import QuizPublicationService
+    return success(data=await QuizPublicationService().preflight(library_id))
+
+
+@router.post("/ownership-moves")
+async def move_question_ownership(body: AdminQuizOwnershipMoveRequest, admin=Depends(require_permission("quiz_content_edit"))):
+    from app.services.quiz_publication import QuizPublicationService
+    return success(data=await QuizPublicationService().move(body, admin_id=admin.id))
+
+
+@router.post("/libraries/{library_id}/publication-operations")
+async def create_publication_operation(body: AdminQuizPublicationRequest, library_id: int = Path(..., ge=1), admin=Depends(require_permission("quiz:list"))):
+    from app.services.quiz_publication import QuizPublicationService
+    return success(data=await QuizPublicationService().create(library_id, body, admin_id=admin.id))
+
+
+@router.get("/libraries/{library_id}/publication-operations")
+async def list_publication_operations(library_id: int = Path(..., ge=1), _admin=Depends(require_permission("quiz:list"))):
+    from app.services.quiz_publication import QuizPublicationService
+    return success(data=await QuizPublicationService().list(library_id))
+
+
+@router.get("/publication-operations/{job_id}")
+async def get_publication_operation(job_id: int = Path(..., ge=1), _admin=Depends(require_permission("quiz:list"))):
+    from app.services.quiz_publication import QuizPublicationService
+    return success(data=await QuizPublicationService().get(job_id))
+
+
+@router.post("/publication-operations/{job_id}/resume")
+async def resume_publication_operation(body: AdminQuizPublicationResumeRequest, job_id: int = Path(..., ge=1), admin=Depends(require_permission("quiz:list"))):
+    from app.services.quiz_publication import QuizPublicationService
+    return success(data=await QuizPublicationService().resume(job_id, admin_id=admin.id, preflight_version=body.preflight_version))
+
+
+@router.get("/imports/{job_id}/preview")
+async def preview_import_questions(job_id: int = Path(..., ge=1), page: int = Query(1, ge=1), _admin=Depends(require_permission("quiz:list"))):
+    return success(data=await AdminQuizService().preview_import_questions(job_id, page))

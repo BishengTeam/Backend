@@ -7,6 +7,8 @@ legacy routes remain adapters until the cutover is complete.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import io
 import json
 from datetime import datetime, timedelta, timezone
@@ -113,6 +115,15 @@ _ACCESS_MODE_TRANSITIONS = {
 
 class AdminQuizV2Service:
     _CONFLICT = "数据已被其他管理员修改，请刷新后重试"
+
+    @staticmethod
+    @asynccontextmanager
+    async def _database(db=None):
+        if db is not None:
+            yield db
+        else:
+            async with get_db_ctx() as session:
+                yield session
 
     @staticmethod
     def _now() -> datetime:
@@ -269,6 +280,7 @@ class AdminQuizV2Service:
         pending = revisions.get(int(question.pending_revision_id or 0))
         return AdminQuizQuestionResponse(
             id=int(question.id),
+            import_default_ownership=bool(question.import_default_ownership),
             category_id=question.category_id,
             library_id=question.library_id,
             knowledge_point_id=question.knowledge_point_id,
@@ -578,8 +590,9 @@ class AdminQuizV2Service:
         data: AdminQuizLibraryUpdate,
         *,
         admin_id: int,
+        _db=None,
     ) -> AdminQuizLibraryResponse:
-        async with get_db_ctx() as db:
+        async with self._database(_db) as db:
             library = await self._locked(db, QuizLibrary, library_id)
             if library is None:
                 raise NotFoundException("题库")
@@ -623,7 +636,10 @@ class AdminQuizV2Service:
                 permission="quiz_library_manage",
             )
             try:
-                await db.commit()
+                if _db is None:
+                    await db.commit()
+                else:
+                    await db.flush()
             except IntegrityError as exc:
                 await db.rollback()
                 raise ValidationException("题库名称已存在") from exc
@@ -1037,8 +1053,9 @@ class AdminQuizV2Service:
         data: AdminQuizLibraryStatusUpdate,
         *,
         admin_id: int,
+        _db=None,
     ) -> AdminQuizLibraryResponse:
-        async with get_db_ctx() as db:
+        async with self._database(_db) as db:
             library = await self._locked(db, QuizLibrary, library_id)
             if library is None:
                 raise NotFoundException("题库")
@@ -1129,7 +1146,10 @@ class AdminQuizV2Service:
                 before=before,
                 after=self._library_fields(library),
             )
-            await db.commit()
+            if _db is None:
+                await db.commit()
+            else:
+                await db.flush()
             await db.refresh(library)
             counts = await self._library_counts(db, [library_id])
             return self._library_response(library, counts[library_id])
@@ -1236,6 +1256,7 @@ class AdminQuizV2Service:
             description=point.description,
             status=point.status,
             system_kind=point.system_kind,
+            is_import_default=bool(point.is_import_default),
             sort_order=int(point.sort_order),
             lock_version=int(point.lock_version),
             question_count=question_count,
@@ -1265,6 +1286,7 @@ class AdminQuizV2Service:
             description=module.description,
             status=module.status,
             system_kind=module.system_kind,
+            is_import_default=bool(module.is_import_default),
             sort_order=int(module.sort_order),
             lock_version=int(module.lock_version),
             question_count=sum(item.question_count for item in point_responses),
@@ -1772,6 +1794,14 @@ class AdminQuizV2Service:
             stmt = select(QuizQuestion).where(QuizQuestion.library_id.is_not(None))
             if not query.include_deleted:
                 stmt = stmt.where(QuizQuestion.status != "deleted")
+            if query.import_default_ownership is not None:
+                stmt = stmt.where(QuizQuestion.import_default_ownership == query.import_default_ownership)
+            if query.unavailable_ownership is not None:
+                available = select(QuizKnowledgePoint.id).join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id).where(
+                    QuizKnowledgePoint.library_id == QuizQuestion.library_id, QuizModule.library_id == QuizQuestion.library_id,
+                    QuizKnowledgePoint.status == "active", QuizModule.status == "active",
+                    QuizKnowledgePoint.system_kind == "none", QuizModule.system_kind == "none")
+                stmt = stmt.where(or_(QuizQuestion.knowledge_point_id.is_(None), ~QuizQuestion.knowledge_point_id.in_(available)) if query.unavailable_ownership else QuizQuestion.knowledge_point_id.in_(available))
             if query.question_id is not None:
                 stmt = stmt.where(QuizQuestion.id == query.question_id)
             if query.library_id is not None:
@@ -2279,6 +2309,7 @@ class AdminQuizV2Service:
             before = self._question_fields(question)
             if target_point is not None:
                 question.knowledge_point_id = target_point.id
+                question.import_default_ownership = False
             if "score" in meta_fields:
                 question.score = normalized.score
             if "tags" in meta_fields:
@@ -2488,11 +2519,12 @@ class AdminQuizV2Service:
         action: str,
         *,
         admin_id: int,
+        _db=None,
     ) -> AdminQuizBatchResponse:
         """Atomically publish pending revisions or disable V2 questions."""
 
         errors: list[AdminQuizBatchItemError] = []
-        async with get_db_ctx() as db:
+        async with self._database(_db) as db:
             questions: dict[int, QuizQuestion] = {}
             pending_revisions: dict[int, QuizQuestionRevision] = {}
             for item in data.items:
@@ -2505,6 +2537,9 @@ class AdminQuizV2Service:
                     errors.append(AdminQuizBatchItemError(question_id=item.question_id, code=40201, field="lock_version", message=self._CONFLICT))
                     continue
                 if action == "publish":
+                    if item.revision_id is not None and question.pending_revision_id != item.revision_id:
+                        errors.append(AdminQuizBatchItemError(question_id=item.question_id, code=40201, field="pending_revision_id", message="待发布修订已变化，请重新检查"))
+                        continue
                     if question.status == "deleted":
                         errors.append(AdminQuizBatchItemError(question_id=item.question_id, code=40200, field="status", message="已删除题目不可发布版本"))
                         continue
@@ -2541,7 +2576,8 @@ class AdminQuizV2Service:
                 elif action == "disable" and question.status != "published":
                     errors.append(AdminQuizBatchItemError(question_id=item.question_id, code=40200, field="status", message="仅已发布题目可以停用"))
             if errors:
-                await db.rollback()
+                if _db is None:
+                    await db.rollback()
                 return AdminQuizBatchResponse(succeeded=False, updated_count=0, errors=errors)
 
             if action == "disable":
@@ -2568,7 +2604,8 @@ class AdminQuizV2Service:
                             for question_id in sorted(by_library[library_id])
                         )
                 if errors:
-                    await db.rollback()
+                    if _db is None:
+                        await db.rollback()
                     return AdminQuizBatchResponse(
                         succeeded=False, updated_count=0, errors=errors
                     )
@@ -2617,7 +2654,8 @@ class AdminQuizV2Service:
                     after=self._question_fields(question),
                     permission="quiz_content_publish",
                 )
-            await db.commit()
+            if _db is None:
+                await db.commit()
             return AdminQuizBatchResponse(succeeded=True, updated_count=len(questions), errors=[])
 
     async def is_v2_question(self, question_id: int) -> bool:

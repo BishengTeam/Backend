@@ -2462,7 +2462,9 @@ class AdminQuizService:
     def _local_import_path(object_key: str) -> Path:
         root = (Path(settings.UPLOAD_DIR).resolve() / "private").resolve()
         target = (root / object_key).resolve()
-        if root not in target.parents:
+        # A concurrent first upload may create the private directory while resolving.
+        # Re-resolve the root so Windows canonical casing/short names agree.
+        if root.resolve() not in target.parents:
             raise ValidationException("题库导入对象键无效")
         return target
 
@@ -2696,6 +2698,7 @@ class AdminQuizService:
                     source_type=source_type,
                     status="queued",
                     source_object_key=source_key,
+                    source_filename=Path(filename).name[:256],
                     source_size_bytes=len(content),
                     expires_at=expires_at,
                     heartbeat_at=now,
@@ -2748,6 +2751,8 @@ class AdminQuizService:
         query = query or AdminQuizImportJobQuery()
         async with get_db_ctx() as db:
             stmt = select(QuizImportJob)
+            if query.library_id is not None:
+                stmt = stmt.where(QuizImportJob.library_id == query.library_id)
             if query.status is not None:
                 stmt = stmt.where(QuizImportJob.status == self._enum_value(query.status))
             if query.source_type is not None:
@@ -2888,6 +2893,15 @@ class AdminQuizService:
             available_fields=available_fields,
             validation_version=job.validation_version,
         )
+
+    async def preview_import_questions(self, job_id: int, page: int = 1):
+        job = await self.get_import_job(job_id)
+        content = await self._get_import_object(job.source_object_key)
+        rows, _ = self._parse_import_rows(job.source_type, content)
+        return {"items": [{"row": row, "question_text": item.question_text, "question_type": str(item.question_type),
+                           "category_path": item.category_path, "correct_answer": item.correct_answer}
+                          for row, item in rows[(page - 1) * 20:page * 20]],
+                "total": len(rows), "page": page, "page_size": 20}
 
     async def get_import_category_impact(
         self,
@@ -3658,7 +3672,7 @@ class AdminQuizService:
                     limit_error_added = True
                 continue
             try:
-                path = json.loads((raw.get("category_path") or "").strip())
+                path = json.loads((raw.get("category_path") or "[]").strip() or "[]")
                 options_text = (raw.get("options") or "").strip()
                 options = json.loads(options_text) if options_text else None
                 answer_text = (raw.get("correct_answer") or "").strip()
@@ -3741,10 +3755,12 @@ class AdminQuizService:
         "分值": "score",
         "分类": "category",
         "分类路径": "category",
+        "模块": "module_name",
+        "知识点": "knowledge_point_name",
         "标签": "tags",
     }
-    _XLSX_REQUIRED_HEADERS = ("question_text", "question_type", "correct_answer", "category")
-    _XLSX_REQUIRED_TEXT_MARK_RE = re.compile(r"[（(]\s*必填\s*[)）]\s*$")
+    _XLSX_REQUIRED_HEADERS = ("question_text", "question_type", "correct_answer")
+    _XLSX_REQUIRED_TEXT_MARK_RE = re.compile(r"[（(]\s*(?:必填|选填)\s*[)）]\s*$")
     _JUDGE_TRUE_TEXTS = {"对", "正确", "√", "是", "T", "TRUE", "Y", "YES"}
     _JUDGE_FALSE_TEXTS = {"错", "错误", "×", "X", "否", "F", "FALSE", "N", "NO"}
     _MATCHING_ARROW_RE = re.compile(r"\s*(?:->|→|=>)\s*")
@@ -3768,7 +3784,10 @@ class AdminQuizService:
                 )
             ]
         try:
-            return self._parse_template_worksheet(workbook)
+            rows, errors = self._parse_template_worksheet(workbook)
+            for error in errors:
+                error["message"] = f"工作表「{workbook.worksheets[0].title}」：{error['message']}"
+            return rows, errors
         finally:
             workbook.close()
 
@@ -3812,7 +3831,7 @@ class AdminQuizService:
                     question_index=None,
                     field=None,
                     error_code="invalid_workbook_header",
-                    message="Excel 表头缺少必要列（题目/题型/正确答案/分类），请使用标准导入模板",
+                    message="Excel 表头缺少必要列（题目/题型/正确答案），请使用标准导入模板",
                 )
             ]
 
@@ -3891,17 +3910,12 @@ class AdminQuizService:
             raise ValueError(f"无效题型: {type_text}")
         enum_type = QuizQuestionType(question_type)
 
-        category_parts = [
-            part.strip()
-            for part in re.split(r"[，,、/]", values.get("category", ""))
-            if part.strip()
-        ]
-        if len(category_parts) == 1:
-            # Vendor workbooks often ship a single-level category (e.g. SR);
-            # copy it as the knowledge point to satisfy the strict two-level V2 path.
-            category_parts.append(category_parts[0])
+        category_text = values.get("category", "").strip()
+        category_parts = [part.strip() for part in re.split(r"[，,、/]", category_text)] if category_text else []
         item: dict[str, object] = {
             "category_path": category_parts,
+            "module_name": values.get("module_name") or None,
+            "knowledge_point_name": values.get("knowledge_point_name") or None,
             "question_type": type_text,
             "question_text": question_text,
             "explanation": values.get("explanation", "") or None,
@@ -4325,20 +4339,37 @@ class AdminQuizService:
         def location(locator: int) -> tuple[int, int]:
             return (locator, locator - 1) if source_type == "csv" else (locator, locator)
 
+        default_prefixes: set[tuple[str, ...]] = set()
         for locator, item in rows:
             row_no, question_index = location(locator)
             path = tuple(item.category_path)
-            if len(path) != 2:
-                errors.append(
-                    self._import_error(
-                        row=row_no,
-                        question_index=question_index,
-                        field="category_path",
-                        error_code="invalid_v2_path",
-                        message="V2 导入路径必须严格为模块、知识点两级",
-                    )
-                )
+            if len(path) > 2:
+                errors.append(self._import_error(row=row_no, question_index=question_index,
+                    field="category_path", error_code="invalid_v2_path", message="分类路径最多两级：模块、知识点"))
                 continue
+            item._default_module = not path or not path[0]
+            item._default_point = len(path) < 2 or not path[1]
+            module = next((m for m in modules if m.is_import_default and m.status != "deleted"), None) if item._default_module else None
+            module_name = module.normalized_name if module else (path[0] if not item._default_module else "基础题目")
+            module = module or module_by_name.get(module_name)
+            point = next((p for p in points if module and p.module_id == module.id and p.is_import_default and p.status != "deleted"), None) if item._default_point else None
+            point_name = point.normalized_name if point else (path[1] if not item._default_point else "综合练习")
+            point = point or (point_by_parent_name.get((int(module.id), point_name)) if module else None)
+            path = (module_name, point_name)
+            if item._default_module: default_prefixes.add(path[:1])
+            if item._default_point: default_prefixes.add(path)
+            conflicts = []
+            for entity, is_default, label in ((module, item._default_module, "默认模块"), (point, item._default_point, "默认知识点")):
+                if entity and (entity.system_kind != "none" or (is_default and entity.status != "active")):
+                    conflicts.append(f"{label if is_default else '分类'}不可用，请先处理分类状态")
+            if module is None and any(m.normalized_name == module_name and m.name_reserved for m in modules):
+                conflicts.append("同名模块已删除且仍保留名称，请先处理分类")
+            if module and point is None and any(p.module_id == module.id and p.normalized_name == point_name and p.name_reserved for p in points):
+                conflicts.append("同名知识点已删除且仍保留名称，请先处理分类")
+            if conflicts:
+                errors.append(self._import_error(row=row_no, question_index=question_index, field="category_path", error_code="category_unavailable", message="；".join(conflicts)))
+                continue
+            item.category_path = list(path)
             path_rows.append((path, locator))
             module = module_by_name.get(path[0])
             point = None
@@ -4417,16 +4448,9 @@ class AdminQuizService:
         for locator, item, target, _question_hash in candidates:
             valid.append((locator, item, target))
 
-        impact = (
-            self._build_v2_import_impact(
-                job_id=job_id,
-                lock_version=lock_version,
-                entity_by_prefix=entity_by_prefix,
-                missing_prefixes=missing_prefixes,
-                path_rows=path_rows,
-            )
-            if missing_prefixes or lock_content
-            else None
+        impact = self._build_v2_import_impact(
+            job_id=job_id, lock_version=lock_version, entity_by_prefix=entity_by_prefix,
+            missing_prefixes=missing_prefixes, path_rows=path_rows, default_prefixes=default_prefixes,
         )
         return ImportValidationResult(
             valid=valid,
@@ -4443,6 +4467,7 @@ class AdminQuizService:
         entity_by_prefix: dict[tuple[str, ...], object],
         missing_prefixes: set[tuple[str, ...]],
         path_rows: list[tuple[tuple[str, ...], int]],
+        default_prefixes: set[tuple[str, ...]] | None = None,
     ) -> AdminQuizImportCategoryImpactResponse:
         direct_counts: dict[tuple[str, ...], int] = {}
         subtree_counts: dict[tuple[str, ...], int] = {}
@@ -4457,6 +4482,9 @@ class AdminQuizService:
         for prefix in sorted(prefixes, key=lambda item: (len(item), item)):
             entity = entity_by_prefix.get(prefix)
             nodes[prefix] = {
+                "is_import_default": prefix in (default_prefixes or set()),
+                "entity_status": getattr(entity, "status", None),
+                "entity_version": getattr(entity, "lock_version", None),
                 "name": prefix[-1],
                 "path": list(prefix),
                 "depth": len(prefix),
@@ -4713,7 +4741,7 @@ class AdminQuizService:
             if (
                 point is None
                 or int(point.library_id) != int(current.library_id)
-                or point.status != "active"
+                or point.status == "deleted"
             ):
                 raise ValidationException("导入目标知识点不可用")
             normalized = normalize_question_payload(
@@ -4731,6 +4759,7 @@ class AdminQuizService:
             question = QuizQuestion(
                 library_id=current.library_id,
                 knowledge_point_id=target,
+                import_default_ownership=item._default_module or item._default_point,
                 category_id=None,
                 question_type=normalized.question_type.value,
                 status="draft",
@@ -4926,6 +4955,12 @@ class AdminQuizService:
                 db.add(point)
                 await db.flush()
                 point_by_parent_name[(int(module.id), path[1])] = point
+            for entity, required in ((module, any(i._default_module and tuple(i.category_path) == path for _, i, _ in valid)),
+                                     (point, any(i._default_point and tuple(i.category_path) == path for _, i, _ in valid))):
+                if required and not entity.is_import_default:
+                    entity.is_import_default = True
+                    entity.lock_version += 1
+                    entity.updated_by = current.admin_id
             resolved[path] = point
         if created_count > 500:
             raise ValidationException("单个导入任务最多新建 500 个模块或知识点")
@@ -5104,7 +5139,7 @@ class AdminQuizService:
                 # Missing categories are a confirmation state only when there
                 # are no independent content/category blockers.
                 if errors:
-                    all_errors = [*errors, *missing_errors]
+                    all_errors = errors
                     report_key = await self._write_import_report(current, all_errors)
                     current.report_object_key = report_key
                     current.status = "validation_failed"
@@ -5152,9 +5187,27 @@ class AdminQuizService:
                     await db.commit()
                     return True
 
-                # Relaxed per 2026-10-22 product decision: imports no longer
-                # pause for category confirmation. Missing modules/knowledge
-                # points are created automatically; only format errors fail.
+                if current.library_id is not None:
+                    impact = validation.impact
+                    assert impact is not None
+                    if not confirmed_run or not hmac.compare_digest(current.impact_version or "", impact.impact_version):
+                        current.lock_version += 1
+                        impact.lock_version = current.lock_version
+                        current.category_impact = impact.model_dump(mode="json")
+                        current.impact_version = impact.impact_version
+                        current.missing_category_count = impact.new_category_count
+                        current.affected_question_count = impact.affected_question_count
+                        current.status = "awaiting_category_confirmation"
+                        current.confirmed_at = None
+                        current.confirmed_by = None
+                        current.execution_protected_until = None
+                        current.created_count = 0
+                        current.error_count = 0
+                        current.error_message = "分类安排已更新，请重新确认" if confirmed_run else None
+                        await self._replace_import_errors(db, job_id=current.id, validation_version=next_validation_version, errors=[])
+                        await db.commit()
+                        return True
+
                 current.status = "importing"
                 if (
                     confirmed_run

@@ -721,3 +721,11 @@ __all__ = [
     "read_quiz_task_snapshot",
     "quiz_worker_loop",
 ]
+
+
+async def _process_quiz_publication() -> bool:
+    from app.services.quiz_publication import QuizPublicationService
+    return await QuizPublicationService().process_one()
+
+
+quiz_task_registry.register("quiz-publication", _process_quiz_publication)

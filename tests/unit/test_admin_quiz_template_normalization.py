@@ -27,10 +27,10 @@ def _build(
     return AdminQuizService()._build_import_item_from_template(values, options)
 
 
-def test_single_level_category_is_padded_to_two_levels() -> None:
+def test_single_level_category_remains_a_module_for_default_point_planning() -> None:
     item = _build("单选题", "题干", "A", "SR", ["选项一", "选项二"])
 
-    assert item["category_path"] == ["SR", "SR"]
+    assert item["category_path"] == ["SR"]
 
 
 def test_two_level_category_unchanged() -> None:
