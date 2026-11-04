@@ -21,10 +21,10 @@ def test_paid_can_convert_out_to_every_open_mode():
     }
 
 
-def test_pending_stays_restricted_to_non_paid_targets():
-    assert QuizLibraryAccessMode.PAID not in _ACCESS_MODE_TRANSITIONS[
-        QuizLibraryAccessMode.PENDING
-    ]
+def test_points_redemption_paid_mode_is_reachable_from_other_modes():
+    for mode in QuizLibraryAccessMode:
+        if mode != QuizLibraryAccessMode.PAID:
+            assert QuizLibraryAccessMode.PAID in _ACCESS_MODE_TRANSITIONS[mode]
 
 
 def test_activation_code_mode_is_reachable_and_exits_cleanly():

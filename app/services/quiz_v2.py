@@ -242,7 +242,7 @@ class QuizV2Service:
         return or_(
             QuizLibrary.access_mode.in_(modes),
             and_(
-                QuizLibrary.access_mode == "course_entitlement",
+                QuizLibrary.access_mode.in_(("course_entitlement", "paid")),
                 cls._entitlement_exists(user_id),
             ),
         )
@@ -254,7 +254,7 @@ class QuizV2Service:
         return or_(
             QuizLibrary.access_mode == "free",
             and_(
-                QuizLibrary.access_mode.in_(("course_entitlement", "activation_code")),
+                QuizLibrary.access_mode.in_(("course_entitlement", "paid", "activation_code")),
                 cls._entitlement_exists(user_id),
             ),
         )
@@ -470,7 +470,7 @@ class QuizV2Service:
             )
         if library.access_mode == "free":
             return "active", None, now
-        if library.access_mode not in ("course_entitlement", "activation_code"):
+        if library.access_mode not in ("course_entitlement", "paid", "activation_code"):
             return "paused", "quiz_entitlement_inactive", now
 
         entitlements = list(

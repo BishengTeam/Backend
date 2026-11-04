@@ -1169,3 +1169,41 @@ async def test_anonymous_catalog_exposes_metadata_without_granting_practice(quiz
         await db.commit()
     assert env.library.id not in {item.id for item in await env.user_service.list_libraries(None)}
     with pytest.raises(QuizV2Exception): await env.user_service.get_library(None, env.library.id)
+
+async def test_paid_library_points_entitlement_allows_practice_and_revocation_blocks_it(quiz_v2_catalog_env):
+    env = quiz_v2_catalog_env
+    library = await env.admin_service.update_library(
+        env.library.id, AdminQuizLibraryUpdate(lock_version=env.library.lock_version, access_mode="paid", price_cents=4900),
+        admin_id=env.admin_id,
+    )
+    assert library.access_mode == "paid"
+    assert await env.user_service.list_libraries(env.user_id) == []
+    with pytest.raises(QuizV2Exception):
+        await env.user_service.get_library(env.user_id, env.library.id)
+    entitlement_id = await _grant_entitlement(env)
+    async with env.factory() as db:
+        entitlement = await db.get(QuizLibraryEntitlement, entitlement_id)
+        entitlement.source_type, entitlement.course_id = "quiz_order", None
+        await db.commit()
+    assert [item.id for item in await env.user_service.list_libraries(env.user_id)] == [env.library.id]
+    session = await env.user_service.create_practice_session(
+        env.user_id, QuizPracticeSessionCreate(mode="full", scope_type="knowledge_point", scope_id=env.point.id),
+    )
+    assert session.actual_count == 1
+    resumed = await env.user_service.get_practice_session(env.user_id, session.id)
+    assert resumed.id == session.id
+    async with env.factory() as db:
+        entitlement = await db.get(QuizLibraryEntitlement, entitlement_id)
+        entitlement.status = "revoked"
+        entitlement.revoked_at = datetime.now(timezone.utc)
+        await db.commit()
+    assert await env.user_service.list_libraries(env.user_id) == []
+    paused = await env.user_service.get_practice_session(env.user_id, session.id)
+    assert paused.status == "paused" and paused.pause_reason == "quiz_entitlement_inactive"
+    with pytest.raises(QuizV2Exception) as blocked:
+        await env.practice_service.submit_attempt(
+            env.user_id, session.id,
+            QuizPracticeAttemptCreate(session_question_id=session.questions[0].session_question_id,
+                idempotency_key="paid-revoked-attempt", user_answer="A"),
+        )
+    assert blocked.value.http_status_code == 423

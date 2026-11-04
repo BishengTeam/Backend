@@ -716,6 +716,7 @@ class AdminQuizLibraryCreate(QuizContractModel):
     cover_url: str | None = Field(default=None, max_length=512)
     details: str | None = Field(default=None, max_length=10000)
     access_mode: QuizLibraryAccessMode = QuizLibraryAccessMode.PENDING
+    price_cents: int = Field(default=0, ge=0, le=2147483647)
     vendor_tag: Literal["h3c", "nisp", "sangfor", "none"] = "none"
     sort_order: int = 0
 
@@ -732,6 +733,7 @@ class AdminQuizLibraryUpdate(QuizContractModel):
     cover_url: str | None = Field(default=None, max_length=512)
     details: str | None = Field(default=None, max_length=10000)
     access_mode: QuizLibraryAccessMode | None = None
+    price_cents: int = Field(default=0, ge=0, le=2147483647)
     vendor_tag: Literal["h3c", "nisp", "sangfor", "none"] | None = None
     v2_enabled: bool | None = None
     sort_order: int | None = None
@@ -764,6 +766,7 @@ class AdminQuizLibraryStatusUpdate(QuizContractModel):
 class AdminQuizLibraryAccessModeConvert(QuizContractModel):
     lock_version: int = Field(ge=1)
     target_mode: QuizLibraryAccessMode
+    price_cents: int | None = Field(default=None, ge=0, le=2147483647)
 
 
 class AdminQuizLibraryAccessModeConvertResponse(QuizContractModel):

@@ -926,3 +926,53 @@ async def test_published_library_cannot_lose_its_last_effective_content_path(
             ).scalars()
         )
         assert {question.status for question in persisted} == {"published"}
+
+async def test_paid_library_price_is_saved_and_metadata_edits_preserve_it(quiz_v2_env):
+    env = quiz_v2_env
+    library = await env.service.create_library(
+        AdminQuizLibraryCreate(name=f"{env.prefix}积分题库", access_mode="paid", price_cents=4900),
+        admin_id=env.admin_id,
+    )
+    assert library.price_cents == 4900
+    edited = await env.service.update_library(
+        library.id, AdminQuizLibraryUpdate(lock_version=library.lock_version, description="updated"), admin_id=env.admin_id,
+    )
+    assert edited.price_cents == 4900
+    edited = await env.service.update_library(
+        library.id, AdminQuizLibraryUpdate(lock_version=edited.lock_version, price_cents=5900), admin_id=env.admin_id,
+    )
+    assert edited.price_cents == 5900
+    async with env.factory() as db:
+        persisted = await db.get(QuizLibrary, library.id)
+        assert persisted.price_cents == 5900
+
+
+async def test_free_to_paid_validates_price_without_changing_failed_versions(quiz_v2_env):
+    env = quiz_v2_env
+    library = await env.service.create_library(
+        AdminQuizLibraryCreate(name=f"{env.prefix}免费转积分", access_mode="free"), admin_id=env.admin_id,
+    )
+    for operation, data in [
+        (env.service.update_library, AdminQuizLibraryUpdate(lock_version=library.lock_version, access_mode="paid", price_cents=0)),
+        (env.service.convert_library_access_mode, AdminQuizLibraryAccessModeConvert(lock_version=library.lock_version, target_mode="paid")),
+    ]:
+        with pytest.raises(ValidationException, match="大于0"):
+            await operation(library.id, data, admin_id=env.admin_id)
+        fresh = await env.service.get_library(library.id)
+        assert fresh.access_mode == "free" and fresh.lock_version == library.lock_version
+    converted = await env.service.convert_library_access_mode(
+        library.id, AdminQuizLibraryAccessModeConvert(lock_version=library.lock_version, target_mode="paid", price_cents=4900),
+        admin_id=env.admin_id,
+    )
+    assert converted.library.access_mode == "paid" and converted.library.price_cents == 4900
+    assert converted.library.lock_version == library.lock_version + 1
+    async with env.factory() as db:
+        audit = await db.scalar(select(QuizAdminAuditLog).where(
+            QuizAdminAuditLog.object_id == library.id, QuizAdminAuditLog.action == "library.convert_access_mode",
+            QuizAdminAuditLog.admin_id == env.admin_id,
+        ))
+        assert "price_cents" in audit.changed_fields
+    with pytest.raises(ConflictException):
+        await env.service.convert_library_access_mode(
+            library.id, AdminQuizLibraryAccessModeConvert(lock_version=library.lock_version, target_mode="free"), admin_id=env.admin_id,
+        )

@@ -83,15 +83,18 @@ from app.utils.excel import export_csv
 _RESTORE_WINDOW = timedelta(days=7)
 _ACCESS_MODE_TRANSITIONS = {
     QuizLibraryAccessMode.PENDING: {
+        QuizLibraryAccessMode.PAID,
         QuizLibraryAccessMode.FREE,
         QuizLibraryAccessMode.COURSE_ENTITLEMENT,
         QuizLibraryAccessMode.ACTIVATION_CODE,
     },
     QuizLibraryAccessMode.FREE: {
+        QuizLibraryAccessMode.PAID,
         QuizLibraryAccessMode.COURSE_ENTITLEMENT,
         QuizLibraryAccessMode.ACTIVATION_CODE,
     },
     QuizLibraryAccessMode.COURSE_ENTITLEMENT: {
+        QuizLibraryAccessMode.PAID,
         QuizLibraryAccessMode.FREE,
         QuizLibraryAccessMode.ACTIVATION_CODE,
     },
@@ -182,6 +185,7 @@ class AdminQuizV2Service:
             "cover_url": library.cover_url,
             "details": library.details,
             "access_mode": library.access_mode,
+            "price_cents": library.price_cents,
             "vendor_tag": library.vendor_tag,
             "status": library.status,
             "v2_enabled": library.v2_enabled,
@@ -465,6 +469,7 @@ class AdminQuizV2Service:
             cover_url=library.cover_url,
             details=library.details,
             access_mode=library.access_mode,
+            price_cents=int(library.price_cents or 0),
             vendor_tag=library.vendor_tag,
             system_kind=library.system_kind,
             migration_state=library.migration_state,
@@ -530,6 +535,7 @@ class AdminQuizV2Service:
             cover_url=data.cover_url,
             details=data.details,
             access_mode=str(data.access_mode),
+            price_cents=data.price_cents,
             vendor_tag=str(data.vendor_tag),
             system_kind="none",
             migration_state="ready",
@@ -541,6 +547,7 @@ class AdminQuizV2Service:
             created_by=admin_id,
             updated_by=admin_id,
         )
+        self._validate_library_price(library)
         async with get_db_ctx() as db:
             db.add(library)
             try:
@@ -580,7 +587,7 @@ class AdminQuizV2Service:
                 raise BusinessException("已归档或删除题库不可编辑")
             before = self._library_fields(library)
             fields = data.model_fields_set - {"lock_version"}
-            for field in ("description", "cover_url", "details", "sort_order"):
+            for field in ("description", "cover_url", "details", "sort_order", "price_cents"):
                 if field in fields:
                     setattr(library, field, getattr(data, field))
             if "name" in fields and data.name is not None:
@@ -592,6 +599,8 @@ class AdminQuizV2Service:
                 library.vendor_tag = str(data.vendor_tag)
             if "v2_enabled" in fields and data.v2_enabled is not None:
                 library.v2_enabled = data.v2_enabled
+            if {"access_mode", "price_cents"} & fields:
+                self._validate_library_price(library)
             if library.v2_enabled and ({"access_mode", "v2_enabled"} & fields):
                 await self._validate_enabled_library_access(db, library)
             access_changed = (
@@ -643,6 +652,9 @@ class AdminQuizV2Service:
 
             before = self._library_fields(library)
             library.access_mode = str(target_mode)
+            if data.price_cents is not None:
+                library.price_cents = data.price_cents
+            self._validate_library_price(library)
             if library.v2_enabled:
                 await self._validate_enabled_library_access(db, library)
             sessions_affected = await self._sync_library_sessions(db, library_id)
@@ -666,6 +678,11 @@ class AdminQuizV2Service:
                 sessions_affected=sessions_affected,
             )
 
+    @staticmethod
+    def _validate_library_price(library: QuizLibrary) -> None:
+        if library.access_mode == "paid" and (library.price_cents or 0) <= 0:
+            raise ValidationException("付费题库必须设置大于0的价格（分）；实际兑换积分在积分商城配置")
+
     async def _validate_enabled_library_access(self, db, library: QuizLibrary) -> None:
         if library.status != "published":
             raise BusinessException("只有已发布题库可以启用 V2 用户入口")
@@ -685,7 +702,7 @@ class AdminQuizV2Service:
                 or 0
             )
             if active_binding_count == 0:
-                raise BusinessException("课程权益题库至少需要一个有效课程绑定")
+                raise BusinessException("课程权益题库至少需要一个有效课程绑定；请先关闭用户入口，切换模式并绑定课程后再重新开启")
 
     async def _sync_library_sessions(self, db, library_id: int) -> int:
         return await QuizV2Service.sync_sessions_for_library(
