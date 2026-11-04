@@ -28,6 +28,35 @@ from app.services.offline_payment import OfflinePaymentService
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
 
 
+async def test_unified_notice_snapshot_payment_progress_and_consultation_scope(context, monkeypatch):
+    from app.models.consultation_group import CertConsultationGroup
+    from app.services.certification_journey import CertificationJourneyService, user_journey
+    @asynccontextmanager
+    async def ctx():
+        async with context.db() as db:
+            yield db
+    monkeypatch.setattr("app.services.certification_journey.get_db_ctx", ctx)
+    notice = await CertificationJourneyService().notice("sangfor", context.plan_id)
+    record = await context.service.create(context.uid, SangforCreate(batch_id=context.plan_id, notice_hash=notice["notice_hash"], **values()))
+    assert record["candidate_snapshot"]["enrollment_notice"]["notice_hash"] == notice["notice_hash"]
+    assert record["versions"][0]["snapshot"]["enrollment_notice"]["batch"]["plan_id"] == context.plan_id
+    async with context.db() as db, db.begin():
+        db.add(CertConsultationGroup(plan_id=context.plan_id, qrcode_url="/api/media/test-group.png", expires_at=datetime.now(timezone.utc) + timedelta(days=1)))
+    journey = await user_journey("sangfor", record["id"], context.uid)
+    assert journey["progress"]["stage"] == 0 and journey["consultation_group"] is None
+    assert journey["contact"]["contact_phone"] == "13800000000"
+    with pytest.raises(NotFoundException):
+        await user_journey("sangfor", record["id"], context.other_id)
+    await context.pay(record)
+    journey = await user_journey("sangfor", record["id"], context.uid)
+    assert journey["progress"]["stage"] == 2 and journey["consultation_group"] is not None
+    async with context.db() as db, db.begin():
+        group = await db.scalar(select(CertConsultationGroup).where(CertConsultationGroup.plan_id == context.plan_id))
+        group.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    expired = await user_journey("sangfor", record["id"], context.uid)
+    assert expired["consultation_group"] is None and expired["contact"]["contact_phone"]
+
+
 def values(**changes):
     return dict(phone="13800000000", organization="测试学院", first_name="Xiaofu", last_name="Shen", exam_voucher_code="VENDOR-001") | changes
 

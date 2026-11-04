@@ -5,6 +5,7 @@ from app.api.agreement_acceptance import router as agreement_acceptance_router
 from app.api.agreement_template import router as agreement_template_router
 from app.api.auth import router as auth_router
 from app.api.certification import router as cert_router
+from app.api.certification_journey import router as certification_journey_router
 from app.api.chat import quick_router, router as chat_router
 from app.api.collection import router as collection_router
 from app.api.competition import router as competition_router
@@ -40,6 +41,7 @@ router.include_router(auth_router)
 router.include_router(agreement_template_router)
 router.include_router(agreement_acceptance_router)
 router.include_router(cert_router)
+router.include_router(certification_journey_router)
 router.include_router(user_router)
 router.include_router(chat_router)
 router.include_router(courses_router)

@@ -106,6 +106,8 @@ class RensheApplicationService:
             realname, _ = await self._verified_profiles(db, user_id, plan)
 
             values = data.model_dump(mode="json", exclude_none=True)
+            if (application.draft_data or {}).get("enrollment_notice"):
+                values["enrollment_notice"] = application.draft_data["enrollment_notice"]
             if is_self_reported(batch_configuration(plan)):
                 contract = await resolve_contract(db, plan)
                 values.update(await self._admission_values(db, application, realname, batch_configuration(plan), values))
@@ -129,7 +131,7 @@ class RensheApplicationService:
             return RensheApplicationResponse.model_validate(application)
 
     async def submit(
-        self, user_id: int, application_id: int
+        self, user_id: int, application_id: int, *, notice_hash: str | None = None, require_notice: bool = False
     ) -> RensheApplicationSubmitResponse:
         copied_keys: list[str] = []
         committed = False
@@ -162,7 +164,7 @@ class RensheApplicationService:
                 await validate_snapshot(db, plan, application.draft_data)
                 if graduated:
                     try:
-                        RensheDraftUpsert.model_validate({key: value for key, value in application.draft_data.items() if key not in {"materials", "reporting_contract", "commitment_template", "eligibility_snapshot"}})
+                        RensheDraftUpsert.model_validate({key: value for key, value in application.draft_data.items() if key not in {"materials", "reporting_contract", "commitment_template", "eligibility_snapshot", "enrollment_notice"}})
                     except ValueError as exc:
                         raise BusinessException("请先完整填写本申报路径的资格信息和联系方式并保存") from exc
                     policy = await validate_snapshot(db, plan, application.draft_data)
@@ -174,6 +176,11 @@ class RensheApplicationService:
 
                 if paid_order is None:
                     await self._ensure_capacity(db, plan)
+                    if require_notice and not notice_hash:
+                        raise BusinessException("请先选择科目并阅读确认报名须知")
+                    if notice_hash:
+                        from app.services.certification_journey import confirmed_notice
+                        application.draft_data = {**application.draft_data, "enrollment_notice": await confirmed_notice(db, vendor="renshe", batch_id=plan.id, notice_hash=notice_hash)}
 
                 latest_no = await db.scalar(
                     select(func.max(RensheApplicationVersion.version_no)).where(

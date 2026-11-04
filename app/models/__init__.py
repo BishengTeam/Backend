@@ -111,6 +111,7 @@ from app.models.cert_product import CertProduct
 from app.models.renshe_project import RensheProjectConfig
 from app.models.cert_product_catalog import CertProductCatalog
 from app.models.consultation_group import CertConsultationGroup
+from app.models.certification_journey import CertificationJourneyContent
 from app.domain.points_mall.src import (
     PointsMallItem,
     PointsMallRedemption,

@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, File, Path, Query, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Path, Query, Request, UploadFile
+from app.schemas.certification_journey import NoticeSubmission
 from fastapi.responses import FileResponse
 
 from app.domain.user.src.index import User
@@ -225,10 +226,11 @@ async def list_own_applications(
     description="生成不可变版本；首次提交按批次价格创建 60 分钟待支付订单。",
 )
 async def submit_application(
+    body: NoticeSubmission | None = Body(None),
     application_id: int = Path(..., ge=1),
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[RensheApplicationSubmitResponse]:
-    result = await RensheApplicationService().submit(current_user.id, application_id)
+    result = await RensheApplicationService().submit(current_user.id, application_id, notice_hash=body.notice_hash if body else None, require_notice=True)
     return success(data=result)
 
 

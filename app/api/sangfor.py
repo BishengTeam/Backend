@@ -21,6 +21,9 @@ async def batch(batch_id: int):
 
 @router.post("/registrations")
 async def create(body: SangforCreate, user=Depends(get_current_user)):
+    if not body.notice_hash:
+        from app.port.exceptions import BusinessException
+        raise BusinessException("请先选择科目并阅读确认报名须知")
     return success(data=await service.create(user.id, body))
 
 

@@ -141,6 +141,26 @@ async def applicant(context, batch):
             id_card_both_sides_key=keys['id_card_both_sides'], portrait_photo_key=keys['portrait_photo'])
 
 
+async def test_nisp_notice_snapshot_accepts_the_last_available_seat(context, monkeypatch):
+    from app.services.certification_journey import CertificationJourneyService, user_journey
+    from app.domain.nisp.src.index import NispRegistrationVersion
+    @asynccontextmanager
+    async def ctx():
+        async with context.factory() as db:
+            yield db
+    monkeypatch.setattr('app.services.certification_journey.get_db_ctx', ctx)
+    batch, _ = await seed(context, capacity=1)
+    user_id, request = await applicant(context, batch)
+    notice = await CertificationJourneyService().notice('nisp', batch.id, '1')
+    created = await NispRegistrationService().create_order(user_id, request.model_copy(update={'notice_hash': notice['notice_hash']}))
+    assert created.candidate_snapshot['enrollment_notice']['batch']['plan_id'] == batch.plan_id
+    async with context.factory() as db:
+        version = await db.scalar(select(NispRegistrationVersion).where(NispRegistrationVersion.registration_id == created.id))
+        assert version.candidate_snapshot['enrollment_notice']['notice_hash'] == notice['notice_hash']
+    journey = await user_journey('nisp', created.id, user_id)
+    assert journey['progress']['stage'] == 2
+
+
 async def test_review_batch_options_include_history_and_search_every_page(context, monkeypatch):
     statuses = ['draft', 'published', 'registration_closed', 'cancelled', 'finalized', 'archived']
     async with context.factory() as db:

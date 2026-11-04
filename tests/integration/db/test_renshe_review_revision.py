@@ -20,6 +20,31 @@ from tests.unit.test_renshe_graduated import graduated_batch, uploads, draft_pay
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
 
 
+async def test_renshe_notice_confirmation_is_saved_with_submitted_material_version(pg_env, monkeypatch):
+    from app.models.certification_journey import CertificationJourneyContent
+    from app.domain.renshe.src.index import RensheApplicationVersion
+    from app.services.certification_journey import CertificationJourneyService, user_journey
+    env = pg_env
+    monkeypatch.setattr('app.services.certification_journey.get_db_ctx', env.db)
+    async with env.db() as db:
+        connection = await db.connection()
+        await connection.run_sync(lambda bind: CertificationJourneyContent.__table__.create(bind, checkfirst=True))
+        await db.commit()
+    _, batch = await graduated_batch(env, monkeypatch)
+    service = RensheApplicationService(env.storage)
+    await uploads(service, batch)
+    draft = await service.save_draft(1, draft_payload(batch))
+    notice = await CertificationJourneyService().notice('renshe', batch.id)
+    submitted = await service.submit(1, draft.id, notice_hash=notice['notice_hash'], require_notice=True)
+    async with env.db() as db:
+        version = await db.get(RensheApplicationVersion, submitted.version.id)
+        assert version.form_data['enrollment_notice']['notice_hash'] == notice['notice_hash']
+        assert version.form_data['enrollment_notice']['subject']['id'] == batch.product_type
+        assert version.form_data['enrollment_notice']['requirements']['reporting_policy']['commitment_template']
+    journey = await user_journey('renshe', draft.id, 1)
+    assert journey['stages'][3] == '外审' and journey['progress']['stage'] == 0
+
+
 @pytest.fixture
 async def pg_env(monkeypatch, tmp_path):
     schema = "review_test_" + uuid4().hex

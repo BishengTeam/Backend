@@ -317,6 +317,10 @@ class H3cRegistrationService:
                     keys=requested_keys,
                 )
                 price_cents = _price(batch, data.registration_type)
+                notice_snapshot = None
+                if data.notice_hash:
+                    from app.services.certification_journey import confirmed_notice
+                    notice_snapshot = await confirmed_notice(db, vendor="h3c", batch_id=batch.id, registration_type=data.registration_type, notice_hash=data.notice_hash)
                 now = _now()
                 order = Order(
                     user_id=user_id,
@@ -355,6 +359,8 @@ class H3cRegistrationService:
                     ),
                     candidate_idcard=identity.id_card_number,
                 )
+                if notice_snapshot:
+                    registration.candidate_snapshot = {**registration.candidate_snapshot, "enrollment_notice": notice_snapshot}
                 db.add(registration)
                 await db.flush()
                 registration.registration_no = (

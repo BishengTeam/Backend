@@ -194,8 +194,11 @@ class SangforService:
                         raise BusinessException("该批次未配置考试时间")
                     identity = await lock_verified_identity(db, user_id=user_id)
                     await ensure_accepted(db, user_id, "cert_registration", message="请先阅读并同意认证报名信息处理授权协议")
-                    snapshot = data.model_dump(exclude={"batch_id"}) | {"name": identity.real_name, "id_card": identity.id_card_number,
+                    snapshot = data.model_dump(exclude={"batch_id", "notice_hash"}) | {"name": identity.real_name, "id_card": identity.id_card_number,
                         "exam_direction": direction, "exam_direction_code": plan.product_type, "exam_date": plan.exam_date.isoformat()}
+                    if data.notice_hash:
+                        from app.services.certification_journey import confirmed_notice
+                        snapshot["enrollment_notice"] = await confirmed_notice(db, vendor="sangfor", batch_id=plan.id, notice_hash=data.notice_hash)
                     order = Order(user_id=user_id, order_kind="certification", product_type=plan.product_type, plan_id=plan.id,
                         candidate_name=identity.real_name, candidate_idcard=identity.id_card_number, candidate_phone=data.phone,
                         price=plan.price_cents, status="pending", out_trade_no=generate_out_trade_no("SF"),

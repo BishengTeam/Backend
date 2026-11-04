@@ -576,6 +576,23 @@ async def test_h3c_order_accepts_cert_product_only_batch(context):
     assert created.order_status == "completed"
 
 
+async def test_h3c_notice_snapshot_accepts_the_last_available_seat(context, monkeypatch):
+    from app.services.h3c_registration import H3cRegistrationService
+    from app.services.certification_journey import CertificationJourneyService, user_journey
+    from app.domain.h3c.src.index import H3cRegistrationVersion
+    seed = await _seed(context, product_source="cert_product")
+    monkeypatch.setattr("app.services.certification_journey.get_db_ctx", context.db_ctx)
+    notice = await CertificationJourneyService().notice("h3c", seed.batch_id, "coupon")
+    request = _request(context, seed).model_copy(update={"notice_hash": notice["notice_hash"]})
+    created = await H3cRegistrationService().create_order(seed.user_id, request)
+    assert created.candidate_snapshot["enrollment_notice"]["price"]["price_cents"] == 0
+    async with context.factory() as db:
+        version = await db.scalar(select(H3cRegistrationVersion).where(H3cRegistrationVersion.registration_id == created.id))
+        assert version.candidate_snapshot["enrollment_notice"]["notice_hash"] == notice["notice_hash"]
+    journey = await user_journey("h3c", created.id, seed.user_id)
+    assert journey["progress"]["stage"] == 2
+
+
 async def test_h3c_final_review_requires_effective_export_version(context):
     from app.domain.h3c.src.index import (
         H3cExportItem,

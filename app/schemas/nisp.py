@@ -180,6 +180,7 @@ class NispBatchListItem(BaseModel):
 # ── User: order creation ──
 
 class NispOrderCreate(BaseModel):
+    notice_hash: str | None = Field(None, min_length=64, max_length=64)
     batch_id: int
     level: NispLevel
 

@@ -160,6 +160,9 @@ async def create_order(
     body: NispOrderCreate,
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[NispRegistrationResponse]:
+    if not body.notice_hash:
+        from app.port.exceptions import BusinessException
+        raise BusinessException("请先选择科目并阅读确认报名须知")
     return success(data=await _service.create_order(current_user.id, body))
 
 

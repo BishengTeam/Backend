@@ -185,6 +185,10 @@ class NispRegistrationService:
                     raise BusinessException("NISP二级必须上传申请表模板")
 
             price = _price(batch, data.level)
+            notice_snapshot = None
+            if data.notice_hash:
+                from app.services.certification_journey import confirmed_notice
+                notice_snapshot = await confirmed_notice(db, vendor="nisp", batch_id=batch.id, registration_type=data.level, notice_hash=data.notice_hash)
 
             # Create order
             expires_at = _now() + timedelta(minutes=batch.payment_timeout_minutes)
@@ -208,6 +212,8 @@ class NispRegistrationService:
 
             # Build snapshot (matching Excel export columns)
             snapshot = self._build_snapshot(data, batch, plan, identity)
+            if notice_snapshot:
+                snapshot["enrollment_notice"] = notice_snapshot
 
             # Build material keys
             material_keys = {

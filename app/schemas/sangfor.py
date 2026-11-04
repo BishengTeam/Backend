@@ -38,6 +38,7 @@ class SangforSubmission(BaseModel):
 
 
 class SangforCreate(SangforSubmission):
+    notice_hash: str | None = Field(None, min_length=64, max_length=64)
     batch_id: int = Field(gt=0)
 
 

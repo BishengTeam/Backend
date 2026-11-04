@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from app.api.certification_journey import admin_router as certification_journey_router
 
 from app.api.admin.activities import router as activities_router
 from app.api.admin.agreements import router as agreements_router
@@ -41,6 +42,7 @@ from app.api.videoweb import admin_router as videoweb_router
 from app.api.admin.zones import router as zones_router
 
 router = APIRouter(prefix="/admin")
+router.include_router(certification_journey_router)
 router.include_router(activities_router)
 router.include_router(auth_router)
 router.include_router(banners_router)
