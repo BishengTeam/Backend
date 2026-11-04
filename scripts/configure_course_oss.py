@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 def _read_env(path: Path) -> dict[str, str]:
@@ -25,6 +26,34 @@ def _required(runtime: dict[str, str], key: str) -> str:
     return value
 
 
+def _validate_origin(origin: str, *, allow_http: bool) -> str:
+    normalized = origin.rstrip("/")
+    parsed = urlsplit(normalized)
+    allowed_schemes = {"https", "http"} if allow_http else {"https"}
+    if (
+        parsed.scheme not in allowed_schemes
+        or not parsed.hostname
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        suffix = " HTTPS origin" if not allow_http else " HTTP(S) origin"
+        raise SystemExit(f"invalid{suffix}: {origin}")
+    return normalized
+
+
+def _runtime_extra_origins(runtime: dict[str, str]) -> set[str]:
+    """Read deployment-controlled origins, including temporary HTTP test entries."""
+    values = runtime.get("COURSE_OSS_EXTRA_ORIGINS", "").split(",")
+    return {
+        _validate_origin(value.strip(), allow_http=True)
+        for value in values
+        if value.strip()
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--installation-dir", type=Path, required=True)
@@ -38,11 +67,11 @@ def main() -> None:
 
     installation_dir = args.installation_dir.resolve()
     runtime = _read_env(installation_dir / "runtime.env")
-    origins = {_required(runtime, "ADMIN_ORIGIN").rstrip("/"), *args.allow_origin}
-    for origin in origins:
-        if not origin.startswith("https://") or origin.rstrip("/") != origin:
-            raise SystemExit(f"invalid HTTPS origin: {origin}")
-
+    origins = {
+        _validate_origin(_required(runtime, "ADMIN_ORIGIN"), allow_http=False),
+        *(_validate_origin(origin, allow_http=False) for origin in args.allow_origin),
+        *_runtime_extra_origins(runtime),
+    }
     import oss2
     from oss2.models import BucketCors, CorsRule
 
