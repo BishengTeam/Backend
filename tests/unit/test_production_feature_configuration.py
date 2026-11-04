@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.port.config import Settings, _load_secret_files
 from scripts.check_production_features import feature_configuration_report
 
 
@@ -75,3 +76,25 @@ def test_report_names_disabled_features_without_secret_material(tmp_path: Path) 
     assert {"CHAT_BACKEND", "GZH_APPID", "GZH_APP_SECRET"} <= set(
         report["missing_optional"]
     )
+
+
+def test_videoweb_service_token_secret_files_are_settings_fields(
+    tmp_path: Path,
+) -> None:
+    assert "VIDEOWEB_SERVICE_TOKEN_FILE" in Settings.model_fields
+    assert "VIDEOWEB_LOOKUP_SERVICE_TOKEN_FILE" in Settings.model_fields
+
+    service = tmp_path / "videoweb-service-token"
+    lookup = tmp_path / "videoweb-lookup-token"
+    service.write_text("s" * 64, encoding="utf-8")
+    lookup.write_text("l" * 64, encoding="utf-8")
+
+    loaded = _load_secret_files(
+        {
+            "VIDEOWEB_SERVICE_TOKEN_FILE": str(service),
+            "VIDEOWEB_LOOKUP_SERVICE_TOKEN_FILE": str(lookup),
+        }
+    )
+
+    assert loaded["VIDEOWEB_SERVICE_TOKEN"] == "s" * 64
+    assert loaded["VIDEOWEB_LOOKUP_SERVICE_TOKEN"] == "l" * 64

@@ -152,6 +152,8 @@ class Settings(BaseSettings):
     QUIZ_OSS_ACCESS_KEY_ID_FILE: str = ""
     QUIZ_OSS_ACCESS_KEY_SECRET_FILE: str = ""
     QUIZ_METRICS_BEARER_TOKEN_FILE: str = ""
+    VIDEOWEB_SERVICE_TOKEN_FILE: str = ""
+    VIDEOWEB_LOOKUP_SERVICE_TOKEN_FILE: str = ""
 
     @model_validator(mode="before")
     @classmethod

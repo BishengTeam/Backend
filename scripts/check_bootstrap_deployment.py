@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import re
 import subprocess
-import sys
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -29,11 +27,12 @@ def main() -> None:
     runtime_compose = (ROOT / "docker-compose.deploy.yml").read_text("utf-8")
     orchestrator = (ROOT / "scripts/bootstrap_server.sh").read_text("utf-8")
     installer = (ROOT / "scripts/install_server.sh").read_text("utf-8")
+    updater = (ROOT / "scripts/upgrade_release.sh").read_text("utf-8")
     release_installer = (ROOT / "scripts/install_release.sh").read_text("utf-8")
     release_packager = (ROOT / "scripts/package_github_release.py").read_text("utf-8")
-    image_workflow = (
-        ROOT / ".github/workflows/publish-github-release.yml"
-    ).read_text("utf-8")
+    image_workflow = (ROOT / ".github/workflows/publish-github-release.yml").read_text(
+        "utf-8"
+    )
     production_seed = (ROOT / "scripts/seed_production.py").read_text("utf-8")
 
     require(
@@ -107,6 +106,16 @@ def main() -> None:
         "VIDEOWEB_LOOKUP_SERVICE_TOKEN_FILE: /run/secrets/videoweb_lookup_service_token",
         "VideoWeb lookup token secret",
     )
+    require(
+        updater,
+        'DROP DATABASE \\"$runtime_db_name\\" WITH (FORCE);',
+        "PostgreSQL rollback drop syntax",
+    )
+    require(
+        updater,
+        'pg_restore -U \\"\\$POSTGRES_USER\\" -d \\"$runtime_db_name\\" --no-owner --no-privileges --exit-on-error',
+        "PostgreSQL rollback fail-fast restore",
+    )
     forbid(
         runtime_compose,
         "${ALIYUN_OSS_ENDPOINT:?",
@@ -117,10 +126,14 @@ def main() -> None:
         "${QUIZ_OSS_ENDPOINT:?",
         "required quiz OSS endpoint",
     )
-    require(orchestrator, "refs/heads/main:refs/remotes/origin/main", "single main fetch")
+    require(
+        orchestrator, "refs/heads/main:refs/remotes/origin/main", "single main fetch"
+    )
     require(orchestrator, "git clone --branch main", "automatic Admin clone")
     require(orchestrator, "status --porcelain", "dirty worktree refusal")
-    require(orchestrator, 'DEPLOY_SOURCE_MODE="${DEPLOY_SOURCE_MODE:-git}"', "source mode")
+    require(
+        orchestrator, 'DEPLOY_SOURCE_MODE="${DEPLOY_SOURCE_MODE:-git}"', "source mode"
+    )
     require(orchestrator, "release-source.env", "GitHub Release source manifest")
     require(orchestrator, 'docker_cli pull "$BACKEND_IMAGE"', "prebuilt Backend pull")
     require(orchestrator, 'docker_cli pull "$ADMIN_IMAGE"', "prebuilt Admin pull")
@@ -235,6 +248,10 @@ def main() -> None:
         )
     subprocess.run(
         ["bash", "-n", str(ROOT / "scripts/bootstrap_server.sh")],
+        check=True,
+    )
+    subprocess.run(
+        ["bash", "-n", str(ROOT / "scripts/upgrade_release.sh")],
         check=True,
     )
     print("bootstrap_deployment_contract=ok")

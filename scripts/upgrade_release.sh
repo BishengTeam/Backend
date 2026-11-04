@@ -254,6 +254,9 @@ materialize_videoweb_service_secrets() {
   for key in VIDEOWEB_SERVICE_TOKEN VIDEOWEB_LOOKUP_SERVICE_TOKEN; do
     file="$secrets_dir/${key,,}"
     if [[ -f "$file" ]]; then
+      [[ -s "$file" ]] || fail "$key secret file is empty"
+      [[ "$(stat -c '%u' "$file")" = "$(id -u)" ]] \
+        || fail "$key secret file must be owned by the deployment user"
       continue
     fi
     if grep -q "^${key}=" "$runtime_env"; then
@@ -477,18 +480,26 @@ NEW_STARTED=0
 ROLLBACK_DONE=0
 
 restore_database() {
-  compose_for "$old_compose" "$old_release_env" exec -T db \
+  if ! compose_for "$old_compose" "$old_release_env" exec -T db \
     sh -c "exec psql -U \"\$POSTGRES_USER\" -d postgres -v ON_ERROR_STOP=1" \
-    <<<"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$runtime_db_name' AND pid <> pg_backend_pid();" >/dev/null
-  compose_for "$old_compose" "$old_release_env" exec -T db \
+    <<<"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$runtime_db_name' AND pid <> pg_backend_pid();" >/dev/null; then
+    return 1
+  fi
+  if ! compose_for "$old_compose" "$old_release_env" exec -T db \
     sh -c "exec psql -U \"\$POSTGRES_USER\" -d postgres -v ON_ERROR_STOP=1" \
-    <<<"DROP DATABASE WITH (FORCE) \"$runtime_db_name\";" >/dev/null
-  compose_for "$old_compose" "$old_release_env" exec -T db \
+    <<<"DROP DATABASE \"$runtime_db_name\" WITH (FORCE);" >/dev/null; then
+    return 1
+  fi
+  if ! compose_for "$old_compose" "$old_release_env" exec -T db \
     sh -c "exec psql -U \"\$POSTGRES_USER\" -d postgres -v ON_ERROR_STOP=1" \
-    <<<"CREATE DATABASE \"$runtime_db_name\" OWNER \"$runtime_db_user\";" >/dev/null
-  compose_for "$old_compose" "$old_release_env" exec -T db \
-    sh -c "exec pg_restore -U \"\$POSTGRES_USER\" -d \"$runtime_db_name\" --no-owner --no-privileges" \
-    <"$backup_file" >/dev/null
+    <<<"CREATE DATABASE \"$runtime_db_name\" OWNER \"$runtime_db_user\";" >/dev/null; then
+    return 1
+  fi
+  if ! compose_for "$old_compose" "$old_release_env" exec -T db \
+    sh -c "exec pg_restore -U \"\$POSTGRES_USER\" -d \"$runtime_db_name\" --no-owner --no-privileges --exit-on-error" \
+    <"$backup_file" >/dev/null; then
+    return 1
+  fi
 }
 
 rollback() {
