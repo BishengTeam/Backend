@@ -645,3 +645,5 @@ def test_updater_configures_restricted_course_oss_cors() -> None:
     assert "scripts/configure_course_oss.py" in updater
     assert "allowed_methods=[\"GET\", \"PUT\", \"POST\", \"DELETE\", \"HEAD\"]" in script
     assert "allowed_origins=sorted(origins)" in script
+    assert '"Range"' in script
+    assert '"Content-Range"' in script

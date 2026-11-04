@@ -66,8 +66,15 @@ def main() -> None:
             "x-oss-user-agent",
             "x-oss-security-token",
             "x-oss-meta-*",
+            "Range",
         ],
-        expose_headers=["ETag", "x-oss-request-id"],
+        expose_headers=[
+            "ETag",
+            "x-oss-request-id",
+            "Content-Length",
+            "Content-Range",
+            "Accept-Ranges",
+        ],
         max_age_seconds=3600,
     )
     bucket.put_bucket_cors(BucketCors([rule]))
