@@ -174,12 +174,14 @@ class QuizV2Service:
         )
 
     @staticmethod
-    def _activation_required() -> QuizV2Exception:
+    def _activation_required(library_id: int) -> QuizV2Exception:
         return QuizV2Exception(
             reason="quiz_activation_required",
             message="该题库需激活码解锁，请先激活后再练习",
             http_status_code=403,
             code=40301,
+            # 客户端凭 library_id 在当前页内联兑换，无需跳回题库页
+            detail={"library_id": library_id},
         )
 
     @staticmethod
@@ -394,7 +396,7 @@ class QuizV2Service:
                 ).scalar_one_or_none()
             )
             if not entitled:
-                raise self._activation_required()
+                raise self._activation_required(library_id)
         else:
             # Deliberately evaluate entitlement before reporting lifecycle state so
             # an unentitled caller cannot infer that a paid library exists.
