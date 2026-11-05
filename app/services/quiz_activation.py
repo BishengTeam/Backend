@@ -8,9 +8,10 @@
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select, true
 
 from app.adapter.database import get_db_ctx
 from app.adapter.logging import client_ip_var, request_id_var
@@ -22,11 +23,14 @@ from app.domain.community.src.index import (
 )
 from app.domain.community.src.rule.quiz import QuizActivationCodeStatus
 from app.domain.user.src.index import User
+from app.port.config import settings
 from app.port.exceptions import BusinessException, NotFoundException, ValidationException
 from app.schemas.admin_quiz_contract import (
     AdminQuizActivationCodeCreate,
+    AdminQuizActivationCodeGenerateResponse,
     AdminQuizActivationCodeItem,
     AdminQuizActivationCodeQuery,
+    AdminQuizActivationDisplayStatus,
 )
 from app.schemas.common import PaginatedData
 from app.schemas.quiz_contract import QuizLibraryActivationResponse
@@ -48,6 +52,37 @@ ACTIVATION_CODE_CSV_HEADERS = [
     "备注",
     "创建时间",
 ]
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _is_expired(row: QuizActivationCode, now: datetime) -> bool:
+    deadline = row.expires_at
+    if deadline is not None and deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    return deadline is not None and now >= deadline
+
+
+def _status_filter(status: AdminQuizActivationDisplayStatus | None, now: datetime, *, schema_v2: bool):
+    issued = QuizActivationCode.status == QuizActivationCodeStatus.ISSUED
+    expired = and_(issued, QuizActivationCode.expires_at <= now)
+    if status == "expired":
+        return expired
+    if status == "issued":
+        return and_(issued, expired.is_not(True))
+    if status is not None:
+        return QuizActivationCode.status == status
+    # Legacy clients cannot represent the expired state. Omit those rows so
+    # operators do not distribute them as usable codes.
+    return true() if schema_v2 else expired.is_not(True)
+
+
+def _display_status(row: QuizActivationCode, now: datetime, *, schema_v2: bool) -> AdminQuizActivationDisplayStatus:
+    if schema_v2 and row.status == QuizActivationCodeStatus.ISSUED and _is_expired(row, now):
+        return "expired"
+    return row.status
 
 
 def normalize_activation_code(raw: str) -> str:
@@ -77,6 +112,7 @@ def _audit(
     action: str,
     object_type: str,
     object_id: int | None,
+    changed_fields: dict[str, object] | None = None,
 ) -> None:
     request_id = request_id_var.get()
     db.add(
@@ -90,7 +126,7 @@ def _audit(
             object_type=object_type,
             object_id=object_id,
             result="succeeded",
-            changed_fields=None,
+            changed_fields=changed_fields,
         )
     )
 
@@ -104,7 +140,6 @@ class QuizActivationCodeService:
         self, user_id: int, library_id: int, raw_code: str
     ) -> QuizLibraryActivationResponse:
         code = normalize_activation_code(raw_code)
-        now = datetime.now(timezone.utc)
         async with get_db_ctx() as db:
             row = (
                 await db.execute(
@@ -123,6 +158,9 @@ class QuizActivationCodeService:
                 raise ValidationException("激活码已被使用")
             if row.status == QuizActivationCodeStatus.REVOKED:
                 raise ValidationException("激活码已作废，请联系发放方")
+            now = _now()
+            if _is_expired(row, now):
+                raise ValidationException("激活码已过期，请联系发放方获取新码")
 
             library = await db.get(QuizLibrary, int(library_id))
             if library is None:
@@ -158,29 +196,41 @@ class QuizActivationCodeService:
     # ---------- 管理侧 ----------
 
     async def generate_codes(
-        self, library_id: int, body: AdminQuizActivationCodeCreate, *, admin_id: int
-    ) -> list[str]:
+        self, library_id: int, body: AdminQuizActivationCodeCreate, *, admin_id: int,
+        schema_v2: bool = False,
+    ) -> AdminQuizActivationCodeGenerateResponse:
+        if schema_v2:
+            if body.validity_days is None:
+                raise ValidationException("请选择兑换有效期")
+        elif body.validity_days is not None or not settings.QUIZ_LEGACY_ACTIVATION_CODE_GENERATION_ENABLED:
+            raise ValidationException("请刷新后台并使用新版页面生成限期激活码")
         async with get_db_ctx() as db:
             library = await db.get(QuizLibrary, int(library_id))
             if library is None:
                 raise NotFoundException("题库")
+            now = _now().replace(microsecond=0)
+            expires_at = now + timedelta(days=body.validity_days) if body.validity_days else None
             rows: list[QuizActivationCode] = []
+            reserved: set[str] = set()
             for _ in range(body.quantity):
                 candidate = _new_code()
                 for _attempt in range(_GENERATE_ATTEMPTS):
                     taken = await db.scalar(
                         select(QuizActivationCode.id).where(QuizActivationCode.code == candidate)
                     )
-                    if taken is None:
+                    if taken is None and candidate not in reserved:
                         break
                     candidate = _new_code()
                 else:
                     raise BusinessException("激活码生成冲突，请重试")
+                reserved.add(candidate)
                 rows.append(
                     QuizActivationCode(
                         code=candidate,
                         library_id=int(library_id),
                         note=body.note,
+                        created_at=now,
+                        expires_at=expires_at,
                         created_by=int(admin_id),
                     )
                 )
@@ -192,17 +242,27 @@ class QuizActivationCodeService:
                 action="library.generate_activation_codes",
                 object_type="library",
                 object_id=int(library_id),
+                changed_fields={
+                    "validity_days": {"before": None, "after": body.validity_days},
+                    "expires_at": {"before": None, "after": expires_at.isoformat()},
+                } if expires_at else None,
+            )
+            response = AdminQuizActivationCodeGenerateResponse(
+                codes=[format_activation_code(row.code) for row in rows],
+                **({"expires_at": expires_at} if schema_v2 else {}),
             )
             await db.commit()
-            return [format_activation_code(row.code) for row in rows]
+            return response
 
     async def list_codes(
-        self, query: AdminQuizActivationCodeQuery
+        self, query: AdminQuizActivationCodeQuery, *, schema_v2: bool = False
     ) -> PaginatedData[AdminQuizActivationCodeItem]:
         async with get_db_ctx() as db:
-            conditions = [QuizActivationCode.library_id == int(query.library_id)]
-            if query.status is not None:
-                conditions.append(QuizActivationCode.status == str(query.status))
+            now = _now()
+            conditions = (
+                QuizActivationCode.library_id == int(query.library_id),
+                _status_filter(query.status, now, schema_v2=schema_v2),
+            )
             total = await db.scalar(
                 select(func.count()).select_from(QuizActivationCode).where(*conditions)
             )
@@ -219,21 +279,23 @@ class QuizActivationCodeService:
             )
             phones = await self._redeemed_phones(db, rows)
             return PaginatedData(
-                items=[self._item(row, phones) for row in rows],
+                items=[self._item(row, phones, now, schema_v2=schema_v2) for row in rows],
                 total=int(total or 0),
                 page=query.page,
                 page_size=query.page_size,
             )
 
     async def export_rows(
-        self, library_id: int, status: QuizActivationCodeStatus | None
+        self, library_id: int, status: AdminQuizActivationDisplayStatus | None, *, schema_v2: bool = False
     ) -> list[list[str]]:
         """导出全部（或按状态筛选的）激活码，供线下发放。"""
 
         async with get_db_ctx() as db:
-            conditions = [QuizActivationCode.library_id == int(library_id)]
-            if status is not None:
-                conditions.append(QuizActivationCode.status == str(status))
+            now = _now()
+            conditions = (
+                QuizActivationCode.library_id == int(library_id),
+                _status_filter(status, now, schema_v2=schema_v2),
+            )
             rows = list(
                 (
                     await db.execute(
@@ -245,19 +307,25 @@ class QuizActivationCodeService:
             )
             phones = await self._redeemed_phones(db, rows)
             status_labels = {
-                QuizActivationCodeStatus.ISSUED: "未兑换",
+                QuizActivationCodeStatus.ISSUED: "可兑换" if schema_v2 else "未兑换",
+                "expired": "已过期",
                 QuizActivationCodeStatus.REDEEMED: "已兑换",
                 QuizActivationCodeStatus.REVOKED: "已作废",
             }
+            zone = ZoneInfo(settings.APP_TIMEZONE)
             return [
                 [
                     format_activation_code(row.code),
-                    status_labels.get(QuizActivationCodeStatus(row.status), row.status),
+                    status_labels[_display_status(row, now, schema_v2=schema_v2)],
                     "" if row.redeemed_by is None else str(int(row.redeemed_by)),
                     phones.get(int(row.id), ""),
                     "" if row.redeemed_at is None else row.redeemed_at.strftime("%Y-%m-%d %H:%M:%S"),
                     row.note or "",
                     row.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    *([
+                        row.expires_at.astimezone(zone).isoformat(sep=" ", timespec="seconds")
+                        if row.expires_at else "无截止时间"
+                    ] if schema_v2 else []),
                 ]
                 for row in rows
             ]
@@ -275,6 +343,8 @@ class QuizActivationCodeService:
                 raise BusinessException("已兑换的激活码不能作废")
             if row.status == QuizActivationCodeStatus.REVOKED:
                 return
+            if _is_expired(row, _now()):
+                raise BusinessException("已过期的激活码无需作废")
             row.status = QuizActivationCodeStatus.REVOKED
             _audit(
                 db,
@@ -303,15 +373,16 @@ class QuizActivationCodeService:
 
     @staticmethod
     def _item(
-        row: QuizActivationCode, phones: dict[int, str]
+        row: QuizActivationCode, phones: dict[int, str], now: datetime, *, schema_v2: bool
     ) -> AdminQuizActivationCodeItem:
         return AdminQuizActivationCodeItem(
             id=int(row.id),
             code=format_activation_code(row.code),
-            status=QuizActivationCodeStatus(row.status),
+            status=_display_status(row, now, schema_v2=schema_v2),
             note=row.note,
             redeemed_by=None if row.redeemed_by is None else int(row.redeemed_by),
             redeemed_by_phone=phones.get(int(row.id)) or None,
             redeemed_at=row.redeemed_at,
             created_at=row.created_at,
+            **({"expires_at": row.expires_at} if schema_v2 else {}),
         )

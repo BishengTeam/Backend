@@ -59,6 +59,7 @@ from app.schemas.quiz_contract import (
     QuizPublicQuestion,
 )
 from app.services.quiz_practice import QuizPracticeService
+from app.services.quiz_question_pool import practice_pool
 from app.services.quiz_v2 import QuizV2Service
 
 
@@ -660,17 +661,10 @@ class QuizExamService:
                 rows = list(
                     (
                         await db.execute(
-                            select(QuizQuestion, QuizQuestionRevision)
-                            .join(
-                                QuizQuestionRevision,
-                                QuizQuestionRevision.id
-                                == QuizQuestion.current_revision_id,
-                            )
+                            practice_pool(select(QuizQuestion, QuizQuestionRevision))
                             .where(
                                 QuizQuestion.library_id == library.id,
                                 QuizQuestion.knowledge_point_id.in_(point_ids),
-                                QuizQuestion.status == _PUBLISHED,
-                                QuizQuestionRevision.status == "published",
                             )
                             .order_by(func.random())
                             .limit(data.question_count)
@@ -680,11 +674,9 @@ class QuizExamService:
                 available = int(
                     (
                         await db.execute(
-                            select(func.count(QuizQuestion.id)).where(
+                            practice_pool(select(func.count(QuizQuestion.id))).where(
                                 QuizQuestion.library_id == library.id,
                                 QuizQuestion.knowledge_point_id.in_(point_ids),
-                                QuizQuestion.status == _PUBLISHED,
-                                QuizQuestion.current_revision_id.is_not(None),
                             )
                         )
                     ).scalar()
@@ -851,17 +843,8 @@ class QuizExamService:
             rows = list(
                 (
                     await db.execute(
-                        select(QuizQuestion, QuizQuestionRevision)
-                        .join(
-                            QuizQuestionRevision,
-                            QuizQuestionRevision.id
-                            == QuizQuestion.current_revision_id,
-                        )
-                        .where(
-                            QuizQuestion.id.in_(data.question_ids),
-                            QuizQuestion.status == _PUBLISHED,
-                            QuizQuestionRevision.status == "published",
-                        )
+                        practice_pool(select(QuizQuestion, QuizQuestionRevision))
+                        .where(QuizQuestion.id.in_(data.question_ids))
                     )
                 ).all()
             )

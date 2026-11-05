@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, Path, Query, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
@@ -7,7 +8,7 @@ from fastapi.responses import PlainTextResponse
 from app.utils.excel import export_csv
 from pydantic import ValidationError
 
-from app.port.exceptions import BusinessException
+from app.port.exceptions import BusinessException, ValidationException
 from app.port.config import settings
 from app.middleware.auth import (
     require_permission,
@@ -63,6 +64,7 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizActivationCodeGenerateResponse,
     AdminQuizActivationCodeItem,
     AdminQuizActivationCodeQuery,
+    AdminQuizActivationDisplayStatus,
     AdminQuizContentTreeResponse,
     AdminQuizKnowledgePointCreate,
     AdminQuizKnowledgePointResponse,
@@ -71,6 +73,7 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizLibraryAccessModeConvertResponse,
     AdminQuizLibraryCreate,
     AdminQuizLibraryQuery,
+    AdminQuizLibraryListItem,
     AdminQuizLibraryResponse,
     AdminQuizLibraryStatusUpdate,
     AdminQuizLibraryUpdate,
@@ -91,7 +94,6 @@ from app.services.quiz_activation import (
     QuizActivationCodeService,
 )
 from app.domain.community.src.rule.quiz import (
-    QuizActivationCodeStatus,
     QuizCategoryStatus,
     QuizImportSourceType,
     QuizImportStatus,
@@ -128,7 +130,8 @@ async def list_course_options(
 
 @router.get(
     "/libraries",
-    response_model=APIResponse[list[AdminQuizLibraryResponse]],
+    response_model=APIResponse[list[AdminQuizLibraryListItem]],
+    response_model_exclude_unset=True,
     summary="V2 题库列表",
 )
 async def list_libraries(
@@ -136,8 +139,9 @@ async def list_libraries(
     access_mode: str | None = Query(None),
     keyword: str | None = Query(None, min_length=1, max_length=128),
     include_deleted: bool = Query(False),
+    count_schema: Literal["2"] | None = Query(None),
     _admin=Depends(require_permission("quiz:list")),
-) -> APIResponse[list[AdminQuizLibraryResponse]]:
+) -> APIResponse[list[AdminQuizLibraryListItem]]:
     query = _validated_query(
         AdminQuizLibraryQuery,
         {
@@ -147,7 +151,9 @@ async def list_libraries(
             "include_deleted": include_deleted,
         },
     )
-    return success(data=await AdminQuizV2Service().list_libraries(query))
+    return success(data=await AdminQuizV2Service().list_libraries(
+        query, include_practice_counts=count_schema == "2"
+    ))
 
 
 @router.post(
@@ -230,6 +236,7 @@ async def convert_library_access_mode(
 @router.post(
     "/libraries/{library_id}/activation-codes",
     response_model=APIResponse[AdminQuizActivationCodeGenerateResponse],
+    response_model_exclude_unset=True,
     summary="批量生成题库激活码",
     description="""
 管理后台 **题库管理** 使用：为激活码模式题库批量生成激活码（一次 ≤500），
@@ -239,26 +246,30 @@ async def convert_library_access_mode(
 async def create_activation_codes(
     body: AdminQuizActivationCodeCreate,
     library_id: int = Path(..., ge=1),
+    code_schema: Literal["2"] | None = Query(None),
     admin=Depends(require_permission("quiz_library_manage")),
 ) -> APIResponse[AdminQuizActivationCodeGenerateResponse]:
-    codes = await QuizActivationCodeService().generate_codes(
-        library_id, body, admin_id=admin.id
-    )
-    return success(data=AdminQuizActivationCodeGenerateResponse(codes=codes))
+    return success(data=await QuizActivationCodeService().generate_codes(
+        library_id, body, admin_id=admin.id, schema_v2=code_schema == "2"
+    ))
 
 
 @router.get(
     "/libraries/{library_id}/activation-codes",
     response_model=APIResponse[PaginatedData[AdminQuizActivationCodeItem]],
+    response_model_exclude_unset=True,
     summary="题库激活码列表",
 )
 async def list_activation_codes(
     library_id: int = Path(..., ge=1),
-    status: str | None = Query(None, pattern="^(issued|redeemed|revoked)$"),
+    code_schema: Literal["2"] | None = Query(None),
+    status: AdminQuizActivationDisplayStatus | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     _admin=Depends(require_permission("quiz:list")),
 ) -> APIResponse[PaginatedData[AdminQuizActivationCodeItem]]:
+    if status == "expired" and code_schema != "2":
+        raise ValidationException("请使用新版页面筛选已过期激活码")
     query = _validated_query(
         AdminQuizActivationCodeQuery,
         {
@@ -268,7 +279,7 @@ async def list_activation_codes(
             "page_size": page_size,
         },
     )
-    return success(data=await QuizActivationCodeService().list_codes(query))
+    return success(data=await QuizActivationCodeService().list_codes(query, schema_v2=code_schema == "2"))
 
 
 @router.get(
@@ -279,12 +290,16 @@ async def list_activation_codes(
 )
 async def export_activation_codes(
     library_id: int = Path(..., ge=1),
-    status: str | None = Query(None, pattern="^(issued|redeemed|revoked)$"),
+    code_schema: Literal["2"] | None = Query(None),
+    status: AdminQuizActivationDisplayStatus | None = Query(None),
     _admin=Depends(require_permission("quiz:list")),
 ) -> Response:
-    status_filter = QuizActivationCodeStatus(status) if status else None
-    rows = await QuizActivationCodeService().export_rows(library_id, status_filter)
-    output = export_csv(ACTIVATION_CODE_CSV_HEADERS, rows)
+    schema_v2 = code_schema == "2"
+    if status == "expired" and not schema_v2:
+        raise ValidationException("请使用新版页面导出已过期激活码")
+    rows = await QuizActivationCodeService().export_rows(library_id, status, schema_v2=schema_v2)
+    headers = [*ACTIVATION_CODE_CSV_HEADERS, "兑换截止时间"] if schema_v2 else ACTIVATION_CODE_CSV_HEADERS
+    output = export_csv(headers, rows)
     return PlainTextResponse(
         content=output.getvalue(),
         media_type="text/csv; charset=utf-8",

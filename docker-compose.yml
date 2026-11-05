@@ -104,6 +104,7 @@ services:
       # 题库导入 — 生产环境必须使用私有阿里云 OSS；显式注入任务参数，
       # 避免容器内因缺少 .env 而回退到本地存储。
       - QUIZ_TASKS_ENABLED=true
+      - QUIZ_LEGACY_ACTIVATION_CODE_GENERATION_ENABLED=${QUIZ_LEGACY_ACTIVATION_CODE_GENERATION_ENABLED:-false}
       - QUIZ_EMBEDDED_WORKER_ENABLED=false
       - QUIZ_WORKER_PROCESS=false
       - QUIZ_IMPORT_STORAGE_TYPE=aliyun_oss

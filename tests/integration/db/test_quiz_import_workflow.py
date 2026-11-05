@@ -10,7 +10,7 @@ from sqlalchemy import delete, select, func
 from tests.integration.db.test_admin_quiz_v2 import quiz_v2_env
 from app.domain.community.src.model.quiz import QuizImportJob, QuizImportError, QuizPublicationOperation, QuizModule, QuizKnowledgePoint, QuizQuestion
 from app.domain.user.src.index import AdminUser
-from app.schemas.admin_quiz_contract import AdminQuizLibraryCreate, AdminQuizImportConfirmCategoriesRequest, AdminQuizPublicationRequest, AdminQuizQuestionQuery, AdminQuizOwnershipMoveRequest
+from app.schemas.admin_quiz_contract import AdminQuizLibraryCreate, AdminQuizLibraryQuery, AdminQuizImportConfirmCategoriesRequest, AdminQuizPublicationRequest, AdminQuizQuestionQuery, AdminQuizOwnershipMoveRequest
 from app.port.config import settings
 from app.services.quiz_publication import QuizPublicationService
 
@@ -115,6 +115,28 @@ async def test_publication_exact_revisions_stages_and_idempotency(workflow):
     check = await svc.preflight(env.library.id)
     assert check["counts"]["published"] == 1 and check["counts"]["draft"] == 1
     assert check["entry_open"]
+
+
+async def test_import_and_partial_publication_reconcile_library_totals(workflow):
+    env = workflow
+    job = await confirm(env, await upload(env, [item([], f"导入对账 {index}") for index in range(10)]))
+    assert job.total_rows == job.created_count == 10
+    service = QuizPublicationService()
+    check = await service.preflight(env.library.id)
+    operation = await service.create(env.library.id, AdminQuizPublicationRequest(
+        request_key=uuid4().hex, lock_version=check["lock_version"],
+        preflight_version=check["preflight_version"], items=check["candidates"][:8],
+        publish_library=True, open_entry=True,
+    ), admin_id=env.admin_id)
+    for _ in range(5):
+        await service.process_one()
+    assert (await service.get(operation["id"]))["status"] == "succeeded"
+    (row,) = await env.service.list_libraries(
+        AdminQuizLibraryQuery(keyword=env.prefix), include_practice_counts=True,
+    )
+    assert row.question_count == 10
+    assert row.practice_counts.practicable == 8
+    assert row.practice_counts.unpublished == 2
 
 
 async def test_bulk_move_retains_revisions_and_blocks_cross_library(workflow):

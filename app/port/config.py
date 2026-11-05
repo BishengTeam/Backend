@@ -336,6 +336,7 @@ class Settings(BaseSettings):
     # embedded loop enabled for convenience; production compose explicitly
     # disables it in the Web process and runs ``app.quiz_worker`` separately.
     QUIZ_TASKS_ENABLED: bool = True
+    QUIZ_LEGACY_ACTIVATION_CODE_GENERATION_ENABLED: bool = False
     QUIZ_EMBEDDED_WORKER_ENABLED: bool = True
     QUIZ_WORKER_PROCESS: bool = False
     QUIZ_EXAM_DURATION_SECONDS: int = 3600

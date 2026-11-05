@@ -23,6 +23,7 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizLibraryUpdate, AdminQuizOwnershipMoveRequest,
 )
 from app.services.admin_quiz_v2 import AdminQuizV2Service
+from app.services.quiz_question_pool import practice_pool
 
 
 class QuizPublicationService:
@@ -50,6 +51,9 @@ class QuizPublicationService:
                 .where(QuizQuestion.library_id == library_id, QuizQuestion.status != "deleted")
                 .order_by(QuizQuestion.id))).all())
             counts = {key: 0 for key in ("published", "draft", "abnormal", "default_ownership", "unavailable_ownership", "system_ownership")}
+            counts["published"] = int(await session.scalar(
+                practice_pool(select(func.count())).where(QuizQuestion.library_id == library_id)
+            ) or 0)
             repairable = []
             revisions = {r.id: r for r in (await session.execute(select(QuizQuestionRevision).where(
                 QuizQuestionRevision.id.in_([q.pending_revision_id for q, _, _ in rows if q.pending_revision_id])))).scalars()}
@@ -57,7 +61,6 @@ class QuizPublicationService:
             for q, point, module in rows:
                 usable = bool(point and module and point.library_id == library_id and module.library_id == library_id
                     and point.status == module.status == "active" and point.system_kind == module.system_kind == "none")
-                if q.status == "published" and usable: counts["published"] += 1
                 if q.pending_revision_id: counts["draft"] += 1
                 if q.import_default_ownership: counts["default_ownership"] += 1
                 if (point and point.system_kind != "none") or (module and module.system_kind != "none"):

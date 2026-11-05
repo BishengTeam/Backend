@@ -8,6 +8,7 @@ from decimal import Decimal
 from sqlalchemy import and_, case, func, or_, select
 
 from app.adapter.database import get_db_ctx
+from app.services.quiz_question_pool import practice_pool
 from app.services.quiz_image_upload import sign_quiz_media_map, sign_quiz_media_urls
 from app.domain.community.src.index import (
     QuizKnowledgePoint,
@@ -63,46 +64,17 @@ class QuizV2Service:
         async with get_db_ctx() as db:
             await self._require_user(db, user_id)
             scope_id = int(query.scope_id) if query.scope_type != "library" else int(library_id)
-            await self._resolve_scope(db, user_id, query.scope_type, scope_id)
-            conditions = [
-                QuizQuestion.library_id == library_id,
-                QuizQuestion.status == "published",
-                QuizQuestion.current_revision_id.is_not(None),
-                QuizKnowledgePoint.status == "active",
-                QuizKnowledgePoint.system_kind == "none",
-            ]
-            if query.scope_type == "knowledge_point":
-                conditions.append(QuizQuestion.knowledge_point_id == scope_id)
-            elif query.scope_type == "module":
-                conditions.append(
-                    QuizQuestion.knowledge_point_id.in_(
-                        select(QuizKnowledgePoint.id).where(
-                            QuizKnowledgePoint.module_id == scope_id,
-                            QuizKnowledgePoint.status == "active",
-                            QuizKnowledgePoint.system_kind == "none",
-                        )
-                    )
-                )
-            else:
-                conditions.append(
-                    QuizQuestion.knowledge_point_id.in_(
-                        select(QuizKnowledgePoint.id).where(
-                            QuizKnowledgePoint.library_id == library_id,
-                            QuizKnowledgePoint.status == "active",
-                            QuizKnowledgePoint.system_kind == "none",
-                        )
-                    )
-                )
-            if query.question_type is not None:
-                conditions.append(QuizQuestion.question_type == query.question_type)
-            base = (
-                select(QuizQuestion)
-                .join(
-                    QuizKnowledgePoint,
-                    QuizKnowledgePoint.id == QuizQuestion.knowledge_point_id,
-                )
-                .where(*conditions)
+            library, point_ids, _paths = await self._resolve_scope(
+                db, user_id, query.scope_type, scope_id
             )
+            if library.id != library_id:
+                raise self._not_found()
+            base = practice_pool(select(QuizQuestion, QuizQuestionRevision)).where(
+                QuizQuestion.library_id == library_id,
+                QuizQuestion.knowledge_point_id.in_(point_ids),
+            )
+            if query.question_type is not None:
+                base = base.where(QuizQuestionRevision.question_type == query.question_type)
             total = int(
                 (
                     await db.execute(
@@ -118,7 +90,7 @@ class QuizV2Service:
                         .offset((query.page - 1) * query.page_size)
                         .limit(query.page_size)
                     )
-                ).scalars()
+                ).all()
             )
             items = [
                 QuizPublicQuestion(
@@ -135,23 +107,18 @@ class QuizV2Service:
                         if question.current_revision_id is not None
                         else None
                     ),
-                    question_type=question.question_type,
-                    question_text=question.question_text,
-                    options=dict(question.options or {}),
+                    question_type=revision.question_type,
+                    question_text=revision.question_text,
+                    options=dict(revision.options or {}),
                     matching_rights=(
-                        matching_rights_pool(
-                            question.correct_answer,
-                            question.current_revision_id or question.id,
-                        )
-                        if question.question_type == "matching"
+                        matching_rights_pool(revision.correct_answer, revision.id)
+                        if revision.question_type == "matching"
                         else []
                     ),
-                    image_urls=sign_quiz_media_urls(list(question.image_urls or [])),
-                    option_image_urls=sign_quiz_media_map(
-                        getattr(question, "option_image_urls", None) or {}
-                    ),
+                    image_urls=sign_quiz_media_urls(list(revision.image_urls or [])),
+                    option_image_urls=sign_quiz_media_map(revision.option_image_urls or {}),
                 )
-                for question in rows
+                for question, revision in rows
             ]
             return PaginatedData(
                 items=items,
@@ -272,23 +239,12 @@ class QuizV2Service:
             return output
         rows = (
             await db.execute(
-                select(
+                practice_pool(select(
                     QuizQuestion.library_id,
                     func.count(QuizQuestion.id),
                     func.count(func.distinct(QuizKnowledgePoint.module_id)),
-                )
-                .join(
-                    QuizKnowledgePoint,
-                    QuizKnowledgePoint.id == QuizQuestion.knowledge_point_id,
-                )
-                .join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
-                .where(
-                    QuizQuestion.library_id.in_(library_ids),
-                    QuizQuestion.status == "published",
-                    QuizQuestion.current_revision_id.is_not(None),
-                    QuizKnowledgePoint.status == "active",
-                    QuizModule.status == "active",
-                )
+                ))
+                .where(QuizQuestion.library_id.in_(library_ids))
                 .group_by(QuizQuestion.library_id)
             )
         ).all()
@@ -653,12 +609,8 @@ class QuizV2Service:
                 int(point_id): int(count)
                 for point_id, count in (
                     await db.execute(
-                        select(QuizQuestion.knowledge_point_id, func.count())
-                        .where(
-                            QuizQuestion.library_id == library_id,
-                            QuizQuestion.status == "published",
-                            QuizQuestion.current_revision_id.is_not(None),
-                        )
+                        practice_pool(select(QuizQuestion.knowledge_point_id, func.count()))
+                        .where(QuizQuestion.library_id == library_id)
                         .group_by(QuizQuestion.knowledge_point_id)
                     )
                 ).all()
@@ -754,7 +706,7 @@ class QuizV2Service:
             )
             rows = (
                 await db.execute(
-                    select(
+                    practice_pool(select(
                         QuizQuestion.knowledge_point_id,
                         func.count(func.distinct(QuizQuestion.id)),
                         func.count(func.distinct(QuizQuestion.id)).filter(
@@ -770,8 +722,7 @@ class QuizV2Service:
                         func.count(func.distinct(latest_attempt.c.question_id)).filter(
                             latest_attempt.c.is_correct.is_(True)
                         ),
-                    )
-                    .select_from(QuizQuestion)
+                    ))
                     .outerjoin(
                         QuizPracticeSessionQuestion,
                         QuizPracticeSessionQuestion.question_id == QuizQuestion.id,
@@ -791,20 +742,7 @@ class QuizV2Service:
                             latest_attempt.c.rn == 1,
                         ),
                     )
-                    .join(
-                        QuizKnowledgePoint,
-                        QuizKnowledgePoint.id == QuizQuestion.knowledge_point_id,
-                    )
-                    .join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
-                    .where(
-                        QuizQuestion.library_id == library_id,
-                        QuizQuestion.status == "published",
-                        QuizQuestion.current_revision_id.is_not(None),
-                        QuizKnowledgePoint.status == "active",
-                        QuizKnowledgePoint.system_kind == "none",
-                        QuizModule.status == "active",
-                        QuizModule.system_kind == "none",
-                    )
+                    .where(QuizQuestion.library_id == library_id)
                     .group_by(QuizQuestion.knowledge_point_id)
                 )
             ).all()
@@ -939,6 +877,7 @@ class QuizV2Service:
                     .join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
                     .where(
                         QuizKnowledgePoint.library_id == library_id,
+                        QuizKnowledgePoint.library_id == QuizModule.library_id,
                         QuizKnowledgePoint.status == "active",
                         QuizKnowledgePoint.system_kind == "none",
                         QuizModule.status == "active",
@@ -964,6 +903,7 @@ class QuizV2Service:
                     .join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
                     .where(
                         QuizKnowledgePoint.module_id == scope_id,
+                        QuizKnowledgePoint.library_id == QuizModule.library_id,
                         QuizKnowledgePoint.status == "active",
                         QuizKnowledgePoint.system_kind == "none",
                         QuizModule.status == "active",
@@ -983,6 +923,7 @@ class QuizV2Service:
                     .join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
                     .where(
                         QuizKnowledgePoint.id == scope_id,
+                        QuizKnowledgePoint.library_id == QuizModule.library_id,
                         QuizKnowledgePoint.status == "active",
                         QuizKnowledgePoint.system_kind == "none",
                         QuizModule.status == "active",
@@ -1049,11 +990,9 @@ class QuizV2Service:
             library, point_ids, _paths = await self._resolve_scope(
                 db, user_id, scope_type, scope_id
             )
-            stmt = select(func.count()).select_from(QuizQuestion).where(
+            stmt = practice_pool(select(func.count())).where(
                 QuizQuestion.library_id == library.id,
                 QuizQuestion.knowledge_point_id.in_(point_ids),
-                QuizQuestion.status == "published",
-                QuizQuestion.current_revision_id.is_not(None),
             )
             if mode == "wrong_only":
                 stmt = stmt.join(
@@ -1199,18 +1138,9 @@ class QuizV2Service:
                 db, user_id, scope_type, scope_id
             )
             path_by_point = {item["point_id"]: item["path"] for item in paths}
-            stmt = (
-                select(QuizQuestion, QuizQuestionRevision)
-                .join(
-                    QuizQuestionRevision,
-                    QuizQuestionRevision.id == QuizQuestion.current_revision_id,
-                )
-                .where(
-                    QuizQuestion.library_id == library.id,
-                    QuizQuestion.knowledge_point_id.in_(point_ids),
-                    QuizQuestion.status == "published",
-                    QuizQuestionRevision.status == "published",
-                )
+            stmt = practice_pool(select(QuizQuestion, QuizQuestionRevision)).where(
+                QuizQuestion.library_id == library.id,
+                QuizQuestion.knowledge_point_id.in_(point_ids),
             )
             if mode == "wrong_only":
                 stmt = stmt.join(

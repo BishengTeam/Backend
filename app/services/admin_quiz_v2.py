@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
+from app.services.quiz_question_pool import practice_count_breakdown, practice_pool
 from app.adapter.database import get_db_ctx
 from app.services.quiz_image_upload import sign_quiz_media_map, sign_quiz_media_urls
 from app.adapter.logging import client_ip_var, request_id_var
@@ -59,6 +60,8 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizCourseBindingStatusUpdate,
     AdminQuizLibraryCreate,
     AdminQuizLibraryQuery,
+    AdminQuizLibraryListItem,
+    AdminQuizPracticeCounts,
     AdminQuizLibraryResponse,
     AdminQuizLibraryStatusUpdate,
     AdminQuizLibraryUpdate,
@@ -422,7 +425,7 @@ class AdminQuizV2Service:
         )
 
     @staticmethod
-    async def _library_counts(db, library_ids: list[int]) -> dict[int, dict[str, int]]:
+    async def _library_counts(db, library_ids: list[int], *, count_questions: bool = True) -> dict[int, dict[str, int]]:
         counts = {
             library_id: {"issues": 0, "modules": 0, "points": 0, "questions": 0}
             for library_id in library_ids
@@ -465,6 +468,8 @@ class AdminQuizV2Service:
             ),
         )
         for field, stmt in queries:
+            if field == "questions" and not count_questions:
+                continue
             for library_id, count in (await db.execute(stmt)).all():
                 counts[int(library_id)][field] = int(count)
         return counts
@@ -504,8 +509,8 @@ class AdminQuizV2Service:
         )
 
     async def list_libraries(
-        self, query: AdminQuizLibraryQuery
-    ) -> list[AdminQuizLibraryResponse]:
+        self, query: AdminQuizLibraryQuery, *, include_practice_counts: bool = False
+    ) -> list[AdminQuizLibraryListItem]:
         async with get_db_ctx() as db:
             stmt = select(QuizLibrary)
             if not query.include_deleted:
@@ -526,8 +531,20 @@ class AdminQuizV2Service:
                     )
                 ).scalars()
             )
-            counts = await self._library_counts(db, [int(item.id) for item in libraries])
-            return [self._library_response(item, counts[int(item.id)]) for item in libraries]
+            ids = [int(item.id) for item in libraries]
+            counts = await self._library_counts(db, ids, count_questions=not include_practice_counts)
+            breakdown = await practice_count_breakdown(db, ids) if include_practice_counts else {}
+            result = []
+            for item in libraries:
+                library_id = int(item.id)
+                extra = {}
+                if include_practice_counts:
+                    practice_counts = breakdown[library_id]
+                    counts[library_id]["questions"] = sum(practice_counts.values())
+                    extra["practice_counts"] = AdminQuizPracticeCounts(**practice_counts)
+                row = self._library_response(item, counts[library_id])
+                result.append(AdminQuizLibraryListItem(**row.model_dump(), **extra))
+            return result
 
     async def get_library(self, library_id: int) -> AdminQuizLibraryResponse:
         async with get_db_ctx() as db:
@@ -771,27 +788,8 @@ class AdminQuizV2Service:
         )
         if system_questions:
             blockers.append(f"仍有 {system_questions} 道待整理题目")
-        published_count = int(
-            (
-                await db.execute(
-                    select(func.count())
-                    .select_from(QuizQuestion)
-                    .join(
-                        QuizKnowledgePoint,
-                        QuizKnowledgePoint.id == QuizQuestion.knowledge_point_id,
-                    )
-                    .join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
-                    .where(
-                        QuizQuestion.library_id == library.id,
-                        QuizQuestion.status == "published",
-                        QuizKnowledgePoint.status == "active",
-                        QuizKnowledgePoint.system_kind == "none",
-                        QuizModule.status == "active",
-                        QuizModule.system_kind == "none",
-                    )
-                )
-            ).scalar()
-            or 0
+        published_count = await db.scalar(
+            practice_pool(select(func.count())).where(QuizQuestion.library_id == library.id)
         )
         if published_count == 0:
             blockers.append("没有有效的模块、知识点和已发布题目路径；请先创建或启用模块、知识点，并发布至少一道题目的修订，再发布题库")
@@ -1017,23 +1015,7 @@ class AdminQuizV2Service:
         if library.status != "published":
             return
 
-        stmt = (
-            select(func.count())
-            .select_from(QuizQuestion)
-            .join(
-                QuizKnowledgePoint,
-                QuizKnowledgePoint.id == QuizQuestion.knowledge_point_id,
-            )
-            .join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
-            .where(
-                QuizQuestion.library_id == library_id,
-                QuizQuestion.status == "published",
-                QuizKnowledgePoint.status == "active",
-                QuizKnowledgePoint.system_kind == "none",
-                QuizModule.status == "active",
-                QuizModule.system_kind == "none",
-            )
-        )
+        stmt = practice_pool(select(func.count())).where(QuizQuestion.library_id == library_id)
         if excluded_question_ids:
             stmt = stmt.where(QuizQuestion.id.not_in(excluded_question_ids))
         if excluded_module_ids:

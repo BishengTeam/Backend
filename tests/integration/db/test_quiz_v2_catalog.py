@@ -45,6 +45,7 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizCourseBindingCreate,
     AdminQuizKnowledgePointCreate,
     AdminQuizLibraryCreate,
+    AdminQuizLibraryQuery,
     AdminQuizLibraryStatusUpdate,
     AdminQuizLibraryUpdate,
     AdminQuizModuleCreate,
@@ -60,6 +61,7 @@ from app.schemas.quiz_contract import (
     QuizCollectionCreate,
     QuizExamAnswerSave,
     QuizExamCreate,
+    QuizLibraryQuestionQuery,
     QuizPracticeAnswerSave,
     QuizPracticeAttemptCreate,
     QuizPracticeSessionCreate,
@@ -69,6 +71,7 @@ from app.services.admin_quiz_v2 import AdminQuizV2Service
 from app.services.admin_quiz import AdminQuizService
 from app.services.quiz_exam import QuizExamService
 from app.services.quiz_practice import QuizPracticeService
+from app.services.quiz_publication import QuizPublicationService
 from app.services.quiz_v2 import QuizV2Service
 
 
@@ -416,6 +419,90 @@ async def test_catalog_hides_unentitled_course_library(quiz_v2_catalog_env) -> N
         ),
     )
     assert replacement.id != session.id
+
+
+async def test_inventory_reconciles_with_catalog_and_full_practice(quiz_v2_catalog_env) -> None:
+    env = quiz_v2_catalog_env
+    await _grant_entitlement(env)
+    extra_point = await env.admin_service.create_knowledge_point(
+        AdminQuizKnowledgePointCreate(module_id=env.module.id, name="待停用知识点"),
+        admin_id=env.admin_id,
+    )
+    questions = []
+    for index in range(9):
+        questions.append(await env.admin_service.create_question(
+            AdminQuizQuestionCreate(
+                knowledge_point_id=extra_point.id if index == 8 else env.point.id,
+                question_type="judge", question_text=f"{env.prefix} 对账 {index}",
+                correct_answer="A", explanation="正确。",
+            ),
+            admin_id=env.admin_id,
+        ))
+    await env.admin_service.update_question(
+        env.question.id,
+        AdminQuizQuestionUpdate(lock_version=env.question.lock_version, question_text="待审修订"),
+        admin_id=env.admin_id,
+    )
+
+    async def publish(items):
+        for question in items:
+            await env.admin_service.publish_question_revision(
+                question.id, AdminQuizVersionRequest(lock_version=question.lock_version),
+                admin_id=env.admin_id,
+            )
+
+    async def reconcile(expected_ids, **reasons):
+        library_id = env.library.id
+        expected_count = len(expected_ids)
+        (admin_row,) = await env.admin_service.list_libraries(
+            AdminQuizLibraryQuery(keyword=env.prefix), include_practice_counts=True,
+        )
+        assert admin_row.question_count == 10
+        assert admin_row.practice_counts.model_dump() == {
+            "practicable": expected_count, "unpublished": 0, "disabled": 0,
+            "unavailable_ownership": 0, "invalid_revision": 0, **reasons,
+        }
+        async with env.factory() as db:
+            assert (await QuizPublicationService().preflight(library_id, db=db))["counts"]["published"] == expected_count
+        (card,) = await env.user_service.list_libraries(env.user_id)
+        detail = await env.user_service.get_library(env.user_id, library_id)
+        progress = await env.user_service.get_library_progress(env.user_id, library_id)
+        preview = await env.user_service.preview_practice_scope(env.user_id, "library", library_id)
+        selection = await env.user_service.list_library_questions(env.user_id, library_id, QuizLibraryQuestionQuery())
+        session = await env.user_service.create_practice_session(
+            env.user_id, QuizPracticeSessionCreate(
+                mode="full", scope_type="library", scope_id=library_id, restart_existing=True,
+            ),
+        )
+        assert {card.question_count, detail.question_count, progress.question_count,
+                preview.question_count, selection.total, session.actual_count} == {expected_count}
+        assert {item.id for item in selection.items} == expected_ids
+        assert {item.id for item in session.questions} == expected_ids
+        return session
+
+    await publish(questions[:7])
+    first_ids = {env.question.id, *(question.id for question in questions[:7])}
+    original = await reconcile(first_ids, unpublished=2)
+    await publish(questions[7:])
+    await reconcile(first_ids | {question.id for question in questions[7:]})
+
+    async with env.factory() as db:
+        disabled = await db.get(QuizQuestion, questions[5].id)
+        disabled.status = "disabled"
+        disabled.disabled_at = datetime.now(timezone.utc)
+        wrong_revision = await db.get(QuizQuestion, questions[6].id)
+        (await db.get(QuizQuestionRevision, wrong_revision.current_revision_id)).status = "superseded"
+        (await db.get(QuizKnowledgePoint, extra_point.id)).system_kind = "uncategorized"
+        await db.commit()
+    await reconcile(
+        {env.question.id, *(question.id for question in questions[:5]), questions[7].id},
+        disabled=1, unavailable_ownership=1, invalid_revision=1,
+    )
+    async with env.factory() as db:
+        snapshot_ids = set((await db.scalars(select(QuizPracticeSessionQuestion.question_id).where(
+            QuizPracticeSessionQuestion.session_id == original.id,
+        ))).all())
+    assert snapshot_ids == first_ids
 
 
 async def test_scope_preview_reports_last_completed_round(quiz_v2_catalog_env) -> None:

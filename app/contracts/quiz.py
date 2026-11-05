@@ -59,6 +59,7 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizLibraryAccessModeConvertResponse,
     AdminQuizLibraryCreate,
     AdminQuizLibraryQuery,
+    AdminQuizLibraryListItem,
     AdminQuizLibraryResponse,
     AdminQuizLibraryStatusUpdate,
     AdminQuizLibraryUpdate,
@@ -415,7 +416,7 @@ QUIZ_API_CONTRACTS: tuple[QuizEndpointContract, ...] = (
     ),
     QuizEndpointContract(
         "GET", "/admin/quiz/libraries", "admin",
-        APIResponse[list[AdminQuizLibraryResponse]],
+        APIResponse[list[AdminQuizLibraryListItem]],
         query_model=AdminQuizLibraryQuery, permission="quiz:list",
     ),
     QuizEndpointContract(

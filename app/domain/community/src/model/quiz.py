@@ -618,6 +618,7 @@ class QuizActivationCode(Base, _QuizTimestampMixin):
         Integer, ForeignKey("user.id", ondelete="SET NULL")
     )
     redeemed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("admin_user.id", ondelete="SET NULL")
     )

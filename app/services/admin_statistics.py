@@ -15,6 +15,7 @@ from app.domain.order.src.index import Order
 from app.domain.user.src.index import User
 from app.port.config import settings
 from app.services.admin_order import cash_event_ledger
+from app.services.quiz_question_pool import practice_pool
 
 
 class AdminStatisticsService:
@@ -91,6 +92,11 @@ class AdminStatisticsService:
                     .where(QuizLibrary.status != "deleted", QuizQuestion.status != "deleted")
                 )
             ).one()
+            quiz_questions_practicable_total = await db.scalar(
+                practice_pool(select(func.count()))
+                .join_from(QuizQuestion, QuizLibrary, QuizLibrary.id == QuizQuestion.library_id)
+                .where(QuizLibrary.status != "deleted")
+            )
             quiz_libraries_total = await count(QuizLibrary, QuizLibrary.status == "published")
 
             conversations_total = await count(Conversation)
@@ -140,6 +146,7 @@ class AdminStatisticsService:
             "manual_transfer_rate": round(tickets_waiting_manual / tickets_total * 100, 2) if tickets_total else 0,
             "quiz_questions_total": quiz_questions_total,
             "quiz_questions_inventory_total": quiz_questions_inventory_total,
+            "quiz_questions_practicable_total": quiz_questions_practicable_total,
             "quiz_libraries_total": quiz_libraries_total,
             "quiz_attempts_today": quiz_trend[-1]["value"],
             "quiz_attempts_30d": sum(point["value"] for point in quiz_trend),

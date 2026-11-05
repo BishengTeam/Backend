@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from contextlib import asynccontextmanager
@@ -14,9 +15,12 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import delete, func, select
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete, event, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.api.admin.quiz import router as admin_quiz_router
 from app.domain.community.src.index import (
     QuizActivationCode,
     QuizAdminAuditLog,
@@ -29,6 +33,8 @@ from app.domain.community.src.index import (
     QuizQuestionRevision,
 )
 from app.domain.user.src.index import AdminUser, User
+from app.middleware.auth import require_normal_admin
+from app.port.config import settings
 from app.port.exceptions import BusinessException, QuizV2Exception, ValidationException
 from app.schemas.admin_quiz_contract import (
     AdminQuizActivationCodeCreate,
@@ -75,6 +81,7 @@ async def activation_env(monkeypatch):
         async with factory() as session:
             yield session
 
+    monkeypatch.setattr(settings, "QUIZ_LEGACY_ACTIVATION_CODE_GENERATION_ENABLED", True)
     monkeypatch.setattr("app.services.quiz_activation.get_db_ctx", test_db_ctx)
     monkeypatch.setattr("app.services.quiz_v2.get_db_ctx", test_db_ctx)
     monkeypatch.setattr("app.services.admin_quiz_v2.get_db_ctx", test_db_ctx)
@@ -260,11 +267,11 @@ def test_normalize_strips_separators_and_uppercases():
 
 async def test_generate_codes_display_format_and_normalized_storage(activation_env):
     env = activation_env
-    codes = await env.codes.generate_codes(
+    codes = (await env.codes.generate_codes(
         env.library.id,
         AdminQuizActivationCodeCreate(quantity=3, note="首批"),
         admin_id=env.admin_id,
-    )
+    )).codes
     assert len(codes) == 3
     assert len(set(codes)) == 3
     for display in codes:
@@ -289,11 +296,11 @@ async def test_generate_codes_display_format_and_normalized_storage(activation_e
 
 async def test_redeem_grants_entitlement_and_marks_code(activation_env):
     env = activation_env
-    (display,) = await env.codes.generate_codes(
+    (display,) = (await env.codes.generate_codes(
         env.library.id,
         AdminQuizActivationCodeCreate(quantity=1),
         admin_id=env.admin_id,
-    )
+    )).codes
     result = await env.codes.redeem(env.student_a, env.library.id, display.lower())
     assert result.library_id == int(env.library.id)
     assert result.activated is True
@@ -325,11 +332,11 @@ async def test_redeem_grants_entitlement_and_marks_code(activation_env):
 
 async def test_redeem_is_idempotent_for_same_user_only(activation_env):
     env = activation_env
-    (display,) = await env.codes.generate_codes(
+    (display,) = (await env.codes.generate_codes(
         env.library.id,
         AdminQuizActivationCodeCreate(quantity=1),
         admin_id=env.admin_id,
-    )
+    )).codes
     first = await env.codes.redeem(env.student_a, env.library.id, display)
     again = await env.codes.redeem(env.student_a, env.library.id, display)
     assert first.activated and again.activated
@@ -352,22 +359,22 @@ async def test_redeem_rejects_unknown_and_cross_library_codes(activation_env):
     )
     with pytest.raises(ValidationException, match="不存在"):
         await env.codes.redeem(env.student_a, env.library.id, "AAAA-BBBB-CCCC-DDDD")
-    (display,) = await env.codes.generate_codes(
+    (display,) = (await env.codes.generate_codes(
         env.library.id,
         AdminQuizActivationCodeCreate(quantity=1),
         admin_id=env.admin_id,
-    )
+    )).codes
     with pytest.raises(ValidationException, match="不匹配"):
         await env.codes.redeem(env.student_a, other_library.id, display)
 
 
 async def test_revoke_only_issued_codes(activation_env):
     env = activation_env
-    codes = await env.codes.generate_codes(
+    codes = (await env.codes.generate_codes(
         env.library.id,
         AdminQuizActivationCodeCreate(quantity=2),
         admin_id=env.admin_id,
-    )
+    )).codes
     async with env.factory() as db:
         rows = list(
             (
@@ -391,11 +398,11 @@ async def test_revoke_only_issued_codes(activation_env):
 
 async def test_list_codes_filters_by_status(activation_env):
     env = activation_env
-    codes = await env.codes.generate_codes(
+    codes = (await env.codes.generate_codes(
         env.library.id,
         AdminQuizActivationCodeCreate(quantity=2),
         admin_id=env.admin_id,
-    )
+    )).codes
     await env.codes.redeem(env.student_a, env.library.id, codes[0])
 
     issued = await env.codes.list_codes(
@@ -412,11 +419,11 @@ async def test_list_codes_filters_by_status(activation_env):
 
 async def test_export_rows_covers_all_codes(activation_env):
     env = activation_env
-    codes = await env.codes.generate_codes(
+    codes = (await env.codes.generate_codes(
         env.library.id,
         AdminQuizActivationCodeCreate(quantity=2, note="导出"),
         admin_id=env.admin_id,
-    )
+    )).codes
     await env.codes.redeem(env.student_a, env.library.id, codes[0])
     rows = await env.codes.export_rows(env.library.id, None)
     assert len(rows) == 2
@@ -424,6 +431,159 @@ async def test_export_rows_covers_all_codes(activation_env):
     assert rows[0][1] == "已兑换"
     assert rows[1][1] == "未兑换"
     assert rows[1][5] == "导出"
+
+
+@pytest.mark.parametrize("days", [1, 3, 7, 30, 60, 90, 365])
+async def test_timed_code_batch_and_audit(activation_env, monkeypatch, days):
+    env = activation_env
+    now = datetime(2026, 11, 5, 2, tzinfo=timezone.utc)
+    monkeypatch.setattr("app.services.quiz_activation._now", lambda: now)
+    batch = await env.codes.generate_codes(
+        env.library.id, AdminQuizActivationCodeCreate(quantity=2, validity_days=days),
+        admin_id=env.admin_id, schema_v2=True,
+    )
+    deadline = now + timedelta(days=days)
+    assert batch.expires_at == deadline
+    async with env.factory() as db:
+        rows = (await db.scalars(select(QuizActivationCode).where(
+            QuizActivationCode.library_id == env.library.id,
+        ))).all()
+        assert len(rows) == 2
+        assert all(row.expires_at == deadline and row.created_at == now for row in rows)
+        audit = await db.scalar(select(QuizAdminAuditLog).where(
+            QuizAdminAuditLog.admin_id == env.admin_id,
+            QuizAdminAuditLog.action == "library.generate_activation_codes",
+        ))
+        assert audit.changed_fields == {
+            "validity_days": {"before": None, "after": days},
+            "expires_at": {"before": None, "after": deadline.isoformat()},
+        }
+
+
+async def test_exact_deadline_idempotence_and_versioned_api(activation_env, monkeypatch):
+    env = activation_env
+    now = datetime(2026, 11, 5, 2, tzinfo=timezone.utc)
+    monkeypatch.setattr("app.services.quiz_activation._now", lambda: now)
+    app = FastAPI()
+    app.include_router(admin_quiz_router)
+    app.dependency_overrides[require_normal_admin] = lambda: SimpleNamespace(id=env.admin_id, role="super_admin")
+    path = f"/quiz/libraries/{env.library.id}/activation-codes"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        legacy_libraries = (await client.get("/quiz/libraries", params={"keyword": env.prefix})).json()["data"]
+        assert "practice_counts" not in legacy_libraries[0]
+        current_libraries = (await client.get("/quiz/libraries", params={
+            "keyword": env.prefix, "count_schema": "2",
+        })).json()["data"]
+        assert current_libraries[0]["question_count"] == current_libraries[0]["practice_counts"]["practicable"] == 1
+        legacy = await client.post(path, json={})
+        assert legacy.status_code == 200 and set(legacy.json()["data"]) == {"codes"}
+        for invalid in (2, 366, True, 1.0, "1"):
+            assert (await client.post(path, params={"code_schema": "2"}, json={"validity_days": invalid})).status_code == 422
+        timed = await client.post(path, params={"code_schema": "2"}, json={"quantity": 2, "validity_days": 1})
+        assert timed.status_code == 200
+        data = timed.json()["data"]
+        valid, expired = data["codes"]
+        deadline = datetime.fromisoformat(data["expires_at"])
+        now = deadline - timedelta(microseconds=1)
+        assert (await env.codes.redeem(env.student_a, env.library.id, valid)).activated
+        now = deadline
+        assert (await env.codes.redeem(env.student_a, env.library.id, valid)).activated
+        with pytest.raises(ValidationException, match="激活码已被使用"):
+            await env.codes.redeem(env.student_b, env.library.id, valid)
+        with pytest.raises(ValidationException, match="激活码已过期"):
+            await env.codes.redeem(env.student_b, env.library.id, expired)
+        assert (await env.codes.redeem(env.student_b, env.library.id, legacy.json()["data"]["codes"][0])).activated
+
+        old_page = (await client.get(path)).json()["data"]
+        assert old_page["total"] == 2
+        assert all(item["status"] == "redeemed" and "expires_at" not in item for item in old_page["items"])
+        old_issued = (await client.get(path, params={"status": "issued"})).json()["data"]
+        assert old_issued["total"] == 0
+        old_csv = (await client.get(f"{path}/export")).text
+        assert "兑换截止时间" not in old_csv and expired not in old_csv
+        issued = await client.get(path, params={"status": "issued", "code_schema": "2"})
+        assert issued.json()["data"]["total"] == 0
+        expired_filter = {"status": "expired", "code_schema": "2"}
+        page = (await client.get(path, params=expired_filter)).json()["data"]
+        assert page["total"] == 1
+        assert page["items"][0]["code"] == expired and page["items"][0]["status"] == "expired"
+        assert datetime.fromisoformat(page["items"][0]["expires_at"]) == deadline
+        csv = (await client.get(f"{path}/export", params=expired_filter)).text
+        assert "兑换截止时间" in csv and "已过期" in csv and expired in csv and valid not in csv
+        with pytest.raises(BusinessException, match="已过期"):
+            await env.codes.revoke_code(page["items"][0]["id"], admin_id=env.admin_id)
+
+    monkeypatch.setattr(settings, "QUIZ_LEGACY_ACTIVATION_CODE_GENERATION_ENABLED", False)
+    with pytest.raises(ValidationException, match="新版页面"):
+        await env.codes.generate_codes(env.library.id, AdminQuizActivationCodeCreate(), admin_id=env.admin_id)
+    with pytest.raises(ValidationException, match="请选择兑换有效期"):
+        await env.codes.generate_codes(
+            env.library.id, AdminQuizActivationCodeCreate(), admin_id=env.admin_id, schema_v2=True,
+        )
+
+
+@pytest.mark.parametrize("competing_action", ["redeem", "revoke"])
+async def test_timed_code_concurrent_actions(activation_env, competing_action):
+    env = activation_env
+    batch = await env.codes.generate_codes(
+        env.library.id, AdminQuizActivationCodeCreate(validity_days=1),
+        admin_id=env.admin_id, schema_v2=True,
+    )
+    (code,) = batch.codes
+    async with env.factory() as db:
+        code_id = await db.scalar(select(QuizActivationCode.id).where(
+            QuizActivationCode.code == normalize_activation_code(code),
+        ))
+    other = (
+        env.codes.redeem(env.student_b, env.library.id, code)
+        if competing_action == "redeem"
+        else env.codes.revoke_code(code_id, admin_id=env.admin_id)
+    )
+    results = await asyncio.gather(
+        env.codes.redeem(env.student_a, env.library.id, code), other, return_exceptions=True,
+    )
+    assert sum(not isinstance(result, Exception) for result in results) == 1
+    assert any(isinstance(result, (ValidationException, BusinessException)) for result in results)
+    async with env.factory() as db:
+        row = await db.get(QuizActivationCode, code_id)
+        count = await db.scalar(select(func.count()).select_from(QuizLibraryEntitlement).where(
+            QuizLibraryEntitlement.activation_code_id == code_id,
+        ))
+        assert row.status in {"redeemed", "revoked"}
+        assert count == (1 if row.status == "redeemed" else 0)
+
+
+async def test_redemption_checks_expiry_after_waiting_for_row_lock(activation_env, monkeypatch):
+    env = activation_env
+    batch = await env.codes.generate_codes(
+        env.library.id, AdminQuizActivationCodeCreate(validity_days=1),
+        admin_id=env.admin_id, schema_v2=True,
+    )
+    (code,) = batch.codes
+    now = batch.expires_at - timedelta(seconds=1)
+    monkeypatch.setattr("app.services.quiz_activation._now", lambda: now)
+    async with env.factory() as db:
+        stmt = select(QuizActivationCode).where(
+            QuizActivationCode.code == normalize_activation_code(code)
+        ).with_for_update()
+        await db.scalar(stmt)
+        lock_requested = asyncio.Event()
+        engine = db.bind.sync_engine
+
+        def observe_lock(_conn, _cursor, statement, _params, _context, _executemany):
+            if "quiz_activation_code" in statement and "FOR UPDATE" in statement:
+                lock_requested.set()
+
+        event.listen(engine, "before_cursor_execute", observe_lock)
+        redemption = asyncio.create_task(env.codes.redeem(env.student_a, env.library.id, code))
+        try:
+            await asyncio.wait_for(lock_requested.wait(), timeout=5)
+            now = batch.expires_at
+        finally:
+            event.remove(engine, "before_cursor_execute", observe_lock)
+            await db.rollback()
+        with pytest.raises(ValidationException, match="激活码已过期"):
+            await redemption
 
 
 async def test_catalog_legacy_contract_hides_activation_library(activation_env):
@@ -443,11 +603,11 @@ async def test_catalog_legacy_contract_hides_activation_library(activation_env):
 
 async def test_catalog_schema2_reflects_activation_state(activation_env):
     env = activation_env
-    (display,) = await env.codes.generate_codes(
+    (display,) = (await env.codes.generate_codes(
         env.library.id,
         AdminQuizActivationCodeCreate(quantity=1),
         admin_id=env.admin_id,
-    )
+    )).codes
     before = await env.catalog.list_libraries(env.student_a, schema="2")
     locked = next(item for item in before if item.id == int(env.library.id))
     assert locked.accessible is False
@@ -518,11 +678,11 @@ async def test_session_state_follows_activation(activation_env):
         state, reason, _at = await env.catalog._session_access_state(db, stored, now)
     assert (state, reason) == ("paused", "quiz_entitlement_inactive")
 
-    (display,) = await env.codes.generate_codes(
+    (display,) = (await env.codes.generate_codes(
         env.library.id,
         AdminQuizActivationCodeCreate(quantity=1),
         admin_id=env.admin_id,
-    )
+    )).codes
     await env.codes.redeem(env.student_a, env.library.id, display)
     async with env.factory() as db:
         stored = await db.get(QuizPracticeSession, session_id)

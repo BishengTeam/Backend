@@ -81,6 +81,7 @@ class DashboardResponse(BaseModel):
     # Quiz
     quiz_questions_total: int = 0
     quiz_questions_inventory_total: int = 0
+    quiz_questions_practicable_total: int = 0
     quiz_libraries_total: int = 0
     quiz_attempts_today: int = 0
     quiz_attempts_30d: int = 0

@@ -9,7 +9,6 @@ from typing import Literal
 from pydantic import PrivateAttr, Field, JsonValue, field_validator, model_validator
 
 from app.domain.community.src.rule.quiz import (
-    QuizActivationCodeStatus,
     QuizCategoryStatus,
     QuizImportSourceType,
     QuizImportStatus,
@@ -860,6 +859,18 @@ class AdminQuizLibraryResponse(QuizContractModel):
     updated_at: datetime
 
 
+class AdminQuizPracticeCounts(QuizContractModel):
+    practicable: int
+    unpublished: int
+    disabled: int
+    unavailable_ownership: int
+    invalid_revision: int
+
+
+class AdminQuizLibraryListItem(AdminQuizLibraryResponse):
+    practice_counts: AdminQuizPracticeCounts | None = None
+
+
 class AdminQuizModuleCreate(QuizContractModel):
     library_id: int = Field(ge=1)
     name: str = Field(min_length=1, max_length=128)
@@ -996,16 +1007,28 @@ class AdminQuizMigrationReportResponse(QuizContractModel):
     issues: list[AdminQuizMigrationIssueResponse]
 
 
+AdminQuizActivationDisplayStatus = Literal["issued", "redeemed", "revoked", "expired"]
+
+
 class AdminQuizActivationCodeCreate(QuizContractModel):
     """批量生成题库激活码（quiz018）。"""
 
     quantity: int = Field(default=1, ge=1, le=500)
     note: str | None = Field(default=None, max_length=512)
 
+    validity_days: Literal[1, 3, 7, 30, 60, 90, 365] | None = None
+
+    @field_validator("validity_days", mode="before")
+    @classmethod
+    def validate_validity_days(cls, value):
+        if value is not None and type(value) is not int:
+            raise ValueError("兑换有效期必须使用指定的天数档位")
+        return value
+
 
 class AdminQuizActivationCodeQuery(QuizContractModel):
     library_id: int = Field(ge=1)
-    status: QuizActivationCodeStatus | None = None
+    status: AdminQuizActivationDisplayStatus | None = None
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
 
@@ -1013,16 +1036,18 @@ class AdminQuizActivationCodeQuery(QuizContractModel):
 class AdminQuizActivationCodeItem(QuizContractModel):
     id: int
     code: str  # 展示格式 XXXX-XXXX-XXXX-XXXX
-    status: QuizActivationCodeStatus
+    status: AdminQuizActivationDisplayStatus
     note: str | None = None
     redeemed_by: int | None = None
     redeemed_by_phone: str | None = None
     redeemed_at: datetime | None = None
     created_at: datetime
+    expires_at: datetime | None = None
 
 
 class AdminQuizActivationCodeGenerateResponse(QuizContractModel):
     codes: list[str] = Field(min_length=1)
+    expires_at: datetime | None = None
 
 
 class AdminQuizOwnershipMoveRequest(AdminQuizBatchRequest):
