@@ -49,6 +49,7 @@ async def test_different_quiz_admin_can_view_and_retry_an_import(
     job = SimpleNamespace(
         id=73,
         admin_id=creator_admin_id,
+        library_id=None,
         status="failed",
         retry_count=0,
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
