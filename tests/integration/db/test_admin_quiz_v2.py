@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -30,6 +31,7 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizKnowledgePointCreate,
     AdminQuizLibraryAccessModeConvert,
     AdminQuizLibraryCreate,
+    AdminQuizLibraryQuery,
     AdminQuizLibraryStatusUpdate,
     AdminQuizLibraryUpdate,
     AdminQuizModuleCreate,
@@ -476,7 +478,8 @@ async def test_library_access_mode_conversion_versions_audit_and_transition_gate
         assert audit.changed_fields["access_mode"]["after"] == "free"
 
 
-async def test_library_publication_gate_and_safe_delete_restore(quiz_v2_env) -> None:
+@pytest.mark.parametrize("offset_ms", [-1, 0, 1])
+async def test_library_publication_gate_and_safe_delete_restore(quiz_v2_env, monkeypatch, offset_ms) -> None:
     env = quiz_v2_env
     library = await env.service.create_library(
         AdminQuizLibraryCreate(name=f"{env.prefix}发布题库"),
@@ -510,6 +513,14 @@ async def test_library_publication_gate_and_safe_delete_restore(quiz_v2_env) -> 
         AdminQuizLibraryStatusUpdate(action="archive", lock_version=version),
         admin_id=env.admin_id,
     )
+    async def visible(view=None, **kwargs):
+        return {item.id for item in await env.service.list_libraries(
+            AdminQuizLibraryQuery(view=view, keyword=env.prefix, **kwargs)
+        )}
+
+    assert library.id not in await visible("working")
+    assert library.id in await visible("archived")
+    assert library.id in await visible()
     deleted = await env.service.transition_library(
         library.id,
         AdminQuizLibraryStatusUpdate(
@@ -518,15 +529,29 @@ async def test_library_publication_gate_and_safe_delete_restore(quiz_v2_env) -> 
         admin_id=env.admin_id,
     )
     assert deleted.restore_until is not None
-    restored = await env.service.transition_library(
-        library.id,
-        AdminQuizLibraryStatusUpdate(
-            action="undo_delete", lock_version=deleted.lock_version
-        ),
-        admin_id=env.admin_id,
-    )
+    assert library.id not in await visible()
+    assert library.id not in await visible("archived")
+    assert library.id in await visible("trash")
+    assert library.id in await visible(include_deleted=True)
+    when = deleted.restore_until + timedelta(milliseconds=offset_ms)
+    monkeypatch.setattr(AdminQuizV2Service, "_now", staticmethod(lambda: when))
+    request = AdminQuizLibraryStatusUpdate(action="undo_delete", lock_version=deleted.lock_version)
+    async def undo():
+        return await env.service.transition_library(
+            library.id, request, admin_id=env.admin_id,
+        )
+    if offset_ms >= 0:
+        with pytest.raises(BusinessException, match="无法撤销"):
+            await undo()
+        assert library.id in await visible("trash")
+        return
+    results = await asyncio.gather(undo(), undo(), return_exceptions=True)
+    assert sum(isinstance(result, ConflictException) for result in results) == 1
+    restored = next(result for result in results if not isinstance(result, Exception))
     assert restored.status == "archived"
     assert restored.v2_enabled is False
+    assert library.id in await visible("archived")
+    assert library.id not in await visible("trash")
 
 
 async def test_migration_recheck_resolves_reorganized_and_deleted_questions(

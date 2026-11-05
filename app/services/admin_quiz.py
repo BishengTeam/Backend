@@ -3303,6 +3303,10 @@ class AdminQuizService:
             job = await self._get_for_update(db, QuizImportJob, job_id)
             if job is None:
                 raise NotFoundException("导入任务")
+            if job.library_id is not None:
+                library = await self._get_for_update(db, QuizLibrary, job.library_id)
+                if library is None or library.status in {"archived", "deleted"}:
+                    raise BusinessException("已归档或删除题库不可重试导入")
             if job.status != "failed":
                 self._add_audit(
                     db,

@@ -8,13 +8,41 @@ import pytest
 from sqlalchemy import delete, select, func
 
 from tests.integration.db.test_admin_quiz_v2 import quiz_v2_env
-from app.domain.community.src.model.quiz import QuizImportJob, QuizImportError, QuizPublicationOperation, QuizModule, QuizKnowledgePoint, QuizQuestion
+from app.domain.community.src.model.quiz import QuizImportJob, QuizImportError, QuizPublicationOperation, QuizModule, QuizKnowledgePoint, QuizQuestion, QuizLibrary
 from app.domain.user.src.index import AdminUser
 from app.schemas.admin_quiz_contract import AdminQuizLibraryCreate, AdminQuizLibraryQuery, AdminQuizImportConfirmCategoriesRequest, AdminQuizPublicationRequest, AdminQuizQuestionQuery, AdminQuizOwnershipMoveRequest
 from app.port.config import settings
+from app.port.exceptions import BusinessException
 from app.services.quiz_publication import QuizPublicationService
 
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
+
+
+@pytest.mark.parametrize("status", ["archived", "deleted"])
+async def test_inactive_library_keeps_history_but_cannot_start_or_resume_publication(workflow, status):
+    env = workflow
+    service = QuizPublicationService()
+    before = await service.preflight(env.library.id)
+    payload = AdminQuizPublicationRequest(
+        request_key=uuid4().hex, preflight_version=before["preflight_version"],
+        lock_version=before["lock_version"], publish_library=True,
+    )
+    job = await service.create(env.library.id, payload, admin_id=env.admin_id)
+    async with env.factory() as db:
+        row = await db.get(QuizLibrary, env.library.id)
+        row.status = status
+        row.archived_at = row.created_at
+        if status == "deleted":
+            row.deleted_at = row.created_at
+        await db.commit()
+    after = await service.preflight(env.library.id)
+    with pytest.raises(BusinessException, match="不能执行发布"):
+        await service.create(env.library.id, payload.model_copy(update={"request_key": uuid4().hex}), admin_id=env.admin_id)
+    assert await service.process_one()
+    assert (await service.get(job["id"]))["status"] == "failed"
+    with pytest.raises(BusinessException, match="不能执行发布"):
+        await service.resume(job["id"], admin_id=env.admin_id, preflight_version=after["preflight_version"])
+    assert any(item["id"] == job["id"] for item in await service.list(env.library.id))
 
 
 @pytest.fixture

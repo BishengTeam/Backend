@@ -135,6 +135,7 @@ async def list_course_options(
     summary="V2 题库列表",
 )
 async def list_libraries(
+    view: Literal["working", "archived", "trash"] | None = Query(None),
     status: str | None = Query(None),
     access_mode: str | None = Query(None),
     keyword: str | None = Query(None, min_length=1, max_length=128),
@@ -145,6 +146,7 @@ async def list_libraries(
     query = _validated_query(
         AdminQuizLibraryQuery,
         {
+            "view": view,
             "status": status,
             "access_mode": access_mode,
             "keyword": keyword,

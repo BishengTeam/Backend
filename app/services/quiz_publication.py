@@ -28,6 +28,13 @@ from app.services.quiz_question_pool import practice_pool
 
 class QuizPublicationService:
     @staticmethod
+    def require_active_library(library):
+        if library is None:
+            raise NotFoundException("题库")
+        if library.status in {"archived", "deleted"}:
+            raise BusinessException("题库已归档或已移入回收站，不能执行发布")
+
+    @staticmethod
     async def permission(db, admin_id, permission):
         admin = await db.get(AdminUser, admin_id)
         allowed = ROLE_PERMISSIONS.get(admin.role, []) if admin else []
@@ -126,7 +133,7 @@ class QuizPublicationService:
     async def create(self, library_id, data: AdminQuizPublicationRequest, *, admin_id):
         async with get_db_ctx() as db:
             library = await AdminQuizV2Service._locked(db, QuizLibrary, library_id)
-            if not library: raise NotFoundException("题库")
+            self.require_active_library(library)
             old = await db.scalar(select(QuizPublicationOperation).where(QuizPublicationOperation.request_key == data.request_key))
             payload = data.model_dump(mode="json")
             if old:
@@ -173,6 +180,7 @@ class QuizPublicationService:
             for permission in self.required_permissions(data): await self.permission(db, admin_id, permission)
             if job.status == "failed":
                 library = await AdminQuizV2Service._locked(db, QuizLibrary, job.library_id)
+                self.require_active_library(library)
                 check = await self.preflight(job.library_id, db=db)
                 if preflight_version != check["preflight_version"]:
                     raise ConflictException("题库已变化，请重新检查后确认继续")
@@ -200,6 +208,7 @@ class QuizPublicationService:
                     data = AdminQuizPublicationRequest.model_validate(job.payload)
                     progress = dict(job.progress)
                     library = await svc._locked(db, QuizLibrary, job.library_id)
+                    self.require_active_library(library)
                     svc._check_version(library, progress["library_version"])
                     cursor = progress["questions"]
                     if cursor < len(data.items):

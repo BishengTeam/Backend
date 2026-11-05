@@ -513,7 +513,13 @@ class AdminQuizV2Service:
     ) -> list[AdminQuizLibraryListItem]:
         async with get_db_ctx() as db:
             stmt = select(QuizLibrary)
-            if not query.include_deleted:
+            if query.view == "working":
+                stmt = stmt.where(QuizLibrary.status.in_(("draft", "published", "suspended")))
+            elif query.view == "archived":
+                stmt = stmt.where(QuizLibrary.status == "archived")
+            elif query.view == "trash":
+                stmt = stmt.where(QuizLibrary.status == "deleted")
+            elif not query.include_deleted:
                 stmt = stmt.where(QuizLibrary.status != "deleted")
             if query.status is not None:
                 stmt = stmt.where(QuizLibrary.status == str(query.status))
@@ -1111,6 +1117,7 @@ class AdminQuizV2Service:
                 library.status = "archived"
                 library.deleted_at = None
                 library.restore_until = None
+                library.v2_enabled = False
             else:  # protected by Pydantic, retained for direct callers
                 raise BusinessException("不支持的题库状态操作")
             if action in {"suspend", "restore", "archive", "delete"}:

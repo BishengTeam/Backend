@@ -730,6 +730,7 @@ class AdminQuizAuditLogResponse(QuizContractModel):
 
 
 class AdminQuizLibraryQuery(QuizContractModel):
+    view: Literal["working", "archived", "trash"] | None = None
     status: QuizLibraryStatus | None = None
     access_mode: QuizLibraryAccessMode | None = None
     keyword: str | None = Field(default=None, min_length=1, max_length=128)
