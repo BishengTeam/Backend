@@ -151,7 +151,7 @@ async def quiz_v2_env(monkeypatch):
 
 
 async def test_v2_aggregate_stats_exclude_deleted_content_and_use_fixed_path(
-    quiz_v2_env,
+    quiz_v2_env, monkeypatch,
 ) -> None:
     env = quiz_v2_env
     baseline = await env.stats_service.get_stats_overview()
@@ -266,6 +266,18 @@ async def test_v2_aggregate_stats_exclude_deleted_content_and_use_fixed_path(
     )
     assert overview.question_count == baseline.question_count + 1
     assert overview.draft_question_count == baseline.draft_question_count + 1
+
+    from app.services import admin_statistics
+
+    @asynccontextmanager
+    async def dashboard_db():
+        async with env.factory() as db:
+            yield db
+
+    monkeypatch.setattr(admin_statistics, "get_db_ctx", dashboard_db)
+    dashboard = await admin_statistics.AdminStatisticsService().dashboard()
+    assert dashboard["quiz_questions_inventory_total"] == overview.question_count
+    assert dashboard["quiz_questions_total"] == overview.published_question_count
 
     path_query = AdminQuizStatsQuestionQuery(
         library_id=library.id,

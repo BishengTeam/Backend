@@ -66,6 +66,7 @@ class DashboardResponse(BaseModel):
     total_orders: int
     recent_orders_30d: int
     paid_orders: int
+    refunded_orders: int = 0
     revenue_fen: int
     recent_revenue_30d_fen: int
     conversion_rate: float
@@ -79,6 +80,7 @@ class DashboardResponse(BaseModel):
     manual_transfer_rate: float = 0
     # Quiz
     quiz_questions_total: int = 0
+    quiz_questions_inventory_total: int = 0
     quiz_libraries_total: int = 0
     quiz_attempts_today: int = 0
     quiz_attempts_30d: int = 0

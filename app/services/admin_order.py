@@ -20,6 +20,41 @@ from app.schemas.order import OrderDetailResponse, OrderFilter, OrderResponse
 from app.services.order_fulfillment import OrderFulfillmentService
 
 
+def cash_event_ledger(start: datetime | None, end: datetime):
+    """Use the same cash events for reconciliation and dashboard totals."""
+    from app.models.offline_payment import OfflineBankEntry
+    from app.domain.h3c.src.model.h3c import H3cRefundRequest
+    from app.domain.nisp.src.model.nisp import NispRefundRequest
+    from app.domain.renshe.src.model.renshe import RensheRefundRequest
+    from app.domain.order.src.model.payment_refund import PaymentRefundTask
+
+    def in_window(column):
+        if start is None:
+            return column < end
+        return (column >= start) & (column < end)
+
+    events = [
+        select(
+            OfflineBankEntry.order_id.label("order_id"),
+            literal("bank_transfer").label("channel"),
+            OfflineBankEntry.kind.label("kind"),
+            OfflineBankEntry.amount_cents.label("amount"),
+            OfflineBankEntry.bank_time.label("occurred_at"),
+        ).where(in_window(OfflineBankEntry.bank_time)),
+        select(Order.id, literal("wechat"), literal("receipt"), Order.price, Order.paid_at)
+        .where(Order.payment_channel == "wechat", in_window(Order.paid_at)),
+    ]
+    for refund in (H3cRefundRequest, NispRefundRequest, RensheRefundRequest, PaymentRefundTask):
+        events.append(
+            select(refund.order_id, literal("wechat"), literal("refund"),
+                   refund.amount_cents, refund.succeeded_at)
+            .join(Order, Order.id == refund.order_id)
+            .where(Order.payment_channel == "wechat", refund.status == "succeeded",
+                   in_window(refund.succeeded_at))
+        )
+    return union_all(*events).subquery()
+
+
 class AdminOrderService:
 
     def __init__(self) -> None:
@@ -253,29 +288,7 @@ class AdminOrderService:
             tzinfo=local_zone,
         ).astimezone(timezone.utc)
         async with get_db_ctx() as db:
-            from app.models.offline_payment import OfflineBankEntry
-            from app.domain.h3c.src.model.h3c import H3cRefundRequest
-            from app.domain.nisp.src.model.nisp import NispRefundRequest
-            from app.domain.renshe.src.model.renshe import RensheRefundRequest
-            from app.domain.order.src.model.payment_refund import PaymentRefundTask
-
-            # Aggregate immutable money events, never the order's present state.
-            events = [select(
-                OfflineBankEntry.order_id.label("order_id"),
-                literal("bank_transfer").label("channel"),
-                OfflineBankEntry.kind.label("kind"),
-                OfflineBankEntry.amount_cents.label("amount"),
-            ).where(OfflineBankEntry.bank_time >= date_start,
-                    OfflineBankEntry.bank_time < date_end)]
-            events.append(select(Order.id, literal("wechat"), literal("receipt"), Order.price)
-                .where(Order.payment_channel == "wechat", Order.paid_at >= date_start,
-                       Order.paid_at < date_end))
-            for refund in (H3cRefundRequest, NispRefundRequest, RensheRefundRequest, PaymentRefundTask):
-                events.append(select(refund.order_id, literal("wechat"), literal("refund"), refund.amount_cents)
-                    .join(Order, Order.id == refund.order_id)
-                    .where(Order.payment_channel == "wechat", refund.status == "succeeded",
-                           refund.succeeded_at >= date_start, refund.succeeded_at < date_end))
-            ledger = union_all(*events).subquery()
+            ledger = cash_event_ledger(date_start, date_end)
             signed = case((ledger.c.kind == "receipt", ledger.c.amount), else_=-ledger.c.amount)
             row = (await db.execute(select(
                 func.coalesce(func.sum(case((ledger.c.kind == "receipt", ledger.c.amount), else_=0)), 0),

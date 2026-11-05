@@ -1,363 +1,161 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from app.adapter.database import get_db_ctx
+from app.domain.certification.src.model.competition import Competition, CompetitionReg
+from app.domain.certification.src.model.course import Course
+from app.domain.classroom.src.model.classroom import Classroom
+from app.domain.community.src.index import Conversation, QuizLibrary, QuizPracticeAttempt, QuizQuestion
+from app.domain.content.src.index import Ticket
+from app.domain.h3c.src.index import H3cRegistration
+from app.domain.nisp.src import NispRegistration
 from app.domain.order.src.index import Order
 from app.domain.user.src.index import User
+from app.port.config import settings
+from app.services.admin_order import cash_event_ledger
 
 
 class AdminStatisticsService:
-
     async def dashboard(self) -> dict:
-        now = datetime.now(timezone.utc)
-        thirty_days_ago = now - timedelta(days=30)
+        zone = ZoneInfo(settings.APP_TIMEZONE)
+        today = datetime.now(zone).date()
+        tomorrow = today + timedelta(days=1)
+        first_day = tomorrow - timedelta(days=30)
+        start = datetime.combine(first_day, time.min, tzinfo=zone)
+        end = datetime.combine(tomorrow, time.min, tzinfo=zone)
+        dates = [first_day + timedelta(days=offset) for offset in range(30)]
 
+        def in_window(column):
+            return (column >= start) & (column < end)
+
+        def local_day(column):
+            return func.date(func.timezone(settings.APP_TIMEZONE, column))
+
+        def trend(rows):
+            values = dict(rows)
+            return [{"date": day.isoformat(), "value": int(values.get(day, 0))} for day in dates]
+
+        paid = Order.status.in_(("paid", "completed"))
         async with get_db_ctx() as db:
-            total_users = (
-                await db.execute(select(func.count()).select_from(User))
-            ).scalar() or 0
+            async def count(model, *conditions):
+                return await db.scalar(select(func.count()).select_from(model).where(*conditions)) or 0
 
-            order_base = select(Order)
-            total_orders = (
+            total_users = await count(User)
+            total_orders, recent_orders, paid_orders, closed_orders, refunded_orders = (
                 await db.execute(
-                    select(func.count()).select_from(order_base.subquery())
-                )
-            ).scalar() or 0
-
-            recent_orders = (
-                await db.execute(
-                    select(func.count()).select_from(Order).where(
-                        Order.created_at >= thirty_days_ago
+                    select(
+                        func.count(Order.id),
+                        func.count(Order.id).filter(in_window(Order.created_at)),
+                        func.count(Order.id).filter(paid),
+                        func.count(Order.id).filter(Order.status == "closed"),
+                        func.count(Order.id).filter(Order.status == "refunded"),
                     )
                 )
-            ).scalar() or 0
+            ).one()
 
-            paid_orders = (
+            ledger = cash_event_ledger(None, end)
+            amount = case((ledger.c.kind == "receipt", ledger.c.amount), else_=-ledger.c.amount)
+            revenue = await db.scalar(select(func.coalesce(func.sum(amount), 0))) or 0
+
+            ledger = cash_event_ledger(start, end)
+            amount = case((ledger.c.kind == "receipt", ledger.c.amount), else_=-ledger.c.amount)
+            day = local_day(ledger.c.occurred_at)
+            revenue_trend = trend(
+                (await db.execute(select(day, func.sum(amount)).group_by(day))).all()
+            )
+
+            day = local_day(User.created_at)
+            user_trend = trend(
+                (await db.execute(
+                    select(day, func.count(User.id)).where(in_window(User.created_at)).group_by(day)
+                )).all()
+            )
+            day = local_day(QuizPracticeAttempt.submitted_at)
+            quiz_trend = trend(
+                (await db.execute(
+                    select(day, func.count(QuizPracticeAttempt.id))
+                    .where(in_window(QuizPracticeAttempt.submitted_at)).group_by(day)
+                )).all()
+            )
+
+            # Match the V2 library list and the quiz statistics page.
+            quiz_questions_inventory_total, quiz_questions_total = (
                 await db.execute(
-                    select(func.count()).select_from(Order).where(
-                        Order.status.in_(["paid", "completed"])
+                    select(
+                        func.count(QuizQuestion.id),
+                        func.count(QuizQuestion.id).filter(QuizQuestion.status == "published"),
                     )
+                    .join(QuizLibrary, QuizLibrary.id == QuizQuestion.library_id)
+                    .where(QuizLibrary.status != "deleted", QuizQuestion.status != "deleted")
                 )
-            ).scalar() or 0
+            ).one()
+            quiz_libraries_total = await count(QuizLibrary, QuizLibrary.status == "published")
 
-            revenue = (
-                await db.execute(
-                    select(func.coalesce(func.sum(Order.price), 0)).select_from(Order).where(
-                        Order.status.in_(["paid", "completed"])
-                    )
-                )
-            ).scalar() or 0
+            conversations_total = await count(Conversation)
+            conversations_30d = await count(Conversation, in_window(Conversation.created_at))
+            tickets_total = await count(Ticket)
+            tickets_waiting_manual = await count(Ticket, Ticket.status == "waiting_manual")
 
-            recent_revenue = (
-                await db.execute(
-                    select(func.coalesce(func.sum(Order.price), 0))
-                    .select_from(Order)
-                    .where(
-                        Order.status.in_(["paid", "completed"]),
-                        Order.created_at >= thirty_days_ago,
-                    )
-                )
-            ).scalar() or 0
+            cert_status = {}
+            for name, registration in (("h3c", H3cRegistration), ("nisp", NispRegistration)):
+                counts = (await db.execute(
+                    select(registration.status, func.count()).group_by(registration.status)
+                )).all()
+                by_status = dict(counts)
+                cert_status[name] = {
+                    status: by_status.get(status, 0)
+                    for status in ("pending_review", "approved", "final_approved")
+                }
 
-            conversion_rate = round(paid_orders / total_orders * 100, 2) if total_orders > 0 else 0
+            courses_total = await count(Course, Course.status == "published")
+            competitions_active = await count(Competition, Competition.is_active.is_(True))
+            competition_registrations = await count(CompetitionReg)
+            classrooms_active = await count(Classroom, Classroom.status == "active")
 
-            closed_orders = (
-                await db.execute(
-                    select(func.count()).select_from(Order).where(
-                        Order.status == "closed"
-                    )
-                )
-            ).scalar() or 0
+            order_type_rows = (await db.execute(
+                select(Order.product_type, func.count()).where(paid).group_by(Order.product_type)
+            )).all()
 
-            refunded_orders = (
-                await db.execute(
-                    select(func.count()).select_from(Order).where(
-                        Order.status == "refunded"
-                    )
-                )
-            ).scalar() or 0
-
-            # 支付成功率：终态订单（已支付/已完成/已退款/已关闭）中支付成功的占比。
-            # 订单表无 prepay 发起落库标记，pending 视为未完成支付，不计入分母。
-            terminal_payment_orders = paid_orders + closed_orders + refunded_orders
-            payment_success_rate = (
-                round(paid_orders / terminal_payment_orders * 100, 2)
-                if terminal_payment_orders > 0
-                else 0
-            )
-
-            # ── AI 客服指标 ──
-            from app.domain.community.src.index import Conversation
-            from app.domain.content.src.index import Ticket
-
-            conversations_total = (
-                await db.execute(select(func.count()).select_from(Conversation))
-            ).scalar() or 0
-
-            conversations_30d = (
-                await db.execute(
-                    select(func.count()).select_from(Conversation).where(
-                        Conversation.created_at >= thirty_days_ago
-                    )
-                )
-            ).scalar() or 0
-
-            tickets_total = (
-                await db.execute(select(func.count()).select_from(Ticket))
-            ).scalar() or 0
-
-            tickets_waiting_manual = (
-                await db.execute(
-                    select(func.count()).select_from(Ticket).where(
-                        Ticket.status == "waiting_manual"
-                    )
-                )
-            ).scalar() or 0
-
-            manual_transfer_rate = (
-                round(tickets_waiting_manual / tickets_total * 100, 2)
-                if tickets_total > 0
-                else 0
-            )
-
-        # ── Quiz module stats ──
-        from app.domain.community.src.index import QuizQuestion, QuizLibrary, QuizPracticeAttempt
-
-        quiz_questions_total = (
-            await db.execute(
-                select(func.count()).select_from(QuizQuestion).where(
-                    QuizQuestion.status == "published"
-                )
-            )
-        ).scalar() or 0
-
-        quiz_libraries_total = (
-            await db.execute(
-                select(func.count()).select_from(QuizLibrary).where(
-                    QuizLibrary.status == "published"
-                )
-            )
-        ).scalar() or 0
-
-        quiz_attempts_today = (
-            await db.execute(
-                select(func.count()).select_from(QuizPracticeAttempt).where(
-                    QuizPracticeAttempt.submitted_at >= now.replace(hour=0, minute=0, second=0)
-                )
-            )
-        ).scalar() or 0
-
-        quiz_attempts_30d = (
-            await db.execute(
-                select(func.count()).select_from(QuizPracticeAttempt).where(
-                    QuizPracticeAttempt.submitted_at >= thirty_days_ago
-                )
-            )
-        ).scalar() or 0
-
-        # ── Certification stats ──
-        from app.domain.h3c.src.index import H3cRegistration
-        from app.domain.nisp.src import NispRegistration
-
-        h3c_pending_review = (
-            await db.execute(
-                select(func.count()).select_from(H3cRegistration).where(
-                    H3cRegistration.status == "pending_review"
-                )
-            )
-        ).scalar() or 0
-
-        h3c_approved = (
-            await db.execute(
-                select(func.count()).select_from(H3cRegistration).where(
-                    H3cRegistration.status == "approved"
-                )
-            )
-        ).scalar() or 0
-
-        nisp_pending_review = (
-            await db.execute(
-                select(func.count()).select_from(NispRegistration).where(
-                    NispRegistration.status == "pending_review"
-                )
-            )
-        ).scalar() or 0
-
-        nisp_approved = (
-            await db.execute(
-                select(func.count()).select_from(NispRegistration).where(
-                    NispRegistration.status == "approved"
-                )
-            )
-        ).scalar() or 0
-
-        # ── Course stats ──
-        from app.domain.certification.src.model.course import Course
-
-        courses_total = (
-            await db.execute(
-                select(func.count()).select_from(Course).where(
-                    Course.status == "published"
-                )
-            )
-        ).scalar() or 0
-
-        # ── Competition stats ──
-        from app.domain.certification.src.model.competition import Competition, CompetitionReg
-
-        competitions_active = (
-            await db.execute(
-                select(func.count()).select_from(Competition).where(
-                    Competition.is_active == True
-                )
-            )
-        ).scalar() or 0
-
-        competition_registrations = (
-            await db.execute(
-                select(func.count()).select_from(CompetitionReg)
-            )
-        ).scalar() or 0
-
-        # ── Classroom stats ──
-        from app.domain.classroom.src.model.classroom import Classroom
-
-        classrooms_active = (
-            await db.execute(
-                select(func.count()).select_from(Classroom).where(
-                    Classroom.status == "active"
-                )
-            )
-        ).scalar() or 0
-
-        # ── 30-day trends ──
-        # Daily revenue
-        revenue_rows = (
-            await db.execute(
-                select(
-                    func.date_trunc("day", Order.created_at).label("day"),
-                    func.coalesce(func.sum(Order.price), 0).label("revenue"),
-                )
-                .where(
-                    Order.status.in_(["paid", "completed"]),
-                    Order.created_at >= thirty_days_ago,
-                )
-                .group_by("day")
-                .order_by("day")
-            )
-        ).all()
-        revenue_by_day = {str(r.day.date()): int(r.revenue) for r in revenue_rows}
-
-        # Daily new users
-        user_rows = (
-            await db.execute(
-                select(
-                    func.date_trunc("day", User.created_at).label("day"),
-                    func.count().label("count"),
-                )
-                .where(User.created_at >= thirty_days_ago)
-                .group_by("day")
-                .order_by("day")
-            )
-        ).all()
-        users_by_day = {str(r.day.date()): int(r.count) for r in user_rows}
-
-        # Daily quiz attempts
-        quiz_rows = (
-            await db.execute(
-                select(
-                    func.date_trunc("day", QuizPracticeAttempt.submitted_at).label("day"),
-                    func.count().label("count"),
-                )
-                .where(QuizPracticeAttempt.submitted_at >= thirty_days_ago)
-                .group_by("day")
-                .order_by("day")
-            )
-        ).all()
-        quiz_by_day = {str(r.day.date()): int(r.count) for r in quiz_rows}
-
-        # Build continuous 30-day series
-        from datetime import date as date_type
-        trend_dates = []
-        for i in range(30):
-            d = (now - timedelta(days=29 - i)).date()
-            trend_dates.append(d.isoformat())
-
-        revenue_trend = [
-            {"date": d, "value": revenue_by_day.get(d, 0)} for d in trend_dates
-        ]
-        user_trend = [
-            {"date": d, "value": users_by_day.get(d, 0)} for d in trend_dates
-        ]
-        quiz_trend = [
-            {"date": d, "value": quiz_by_day.get(d, 0)} for d in trend_dates
-        ]
-
-        # ── Order type distribution (pie chart) ──
-        order_type_rows = (
-            await db.execute(
-                select(
-                    Order.product_type,
-                    func.count().label("count"),
-                )
-                .where(Order.status.in_(["paid", "completed"]))
-                .group_by(Order.product_type)
-            )
-        ).all()
-        order_type_distribution = [
-            {"name": r.product_type, "value": int(r.count)} for r in order_type_rows
-        ]
-
-        # ── Certification status breakdown ──
-        cert_status = {
-            "h3c": {
-                "pending_review": h3c_pending_review,
-                "approved": h3c_approved,
-            },
-            "nisp": {
-                "pending_review": nisp_pending_review,
-                "approved": nisp_approved,
-            },
-        }
-
+        terminal_payment_orders = paid_orders + closed_orders + refunded_orders
         return {
             "total_users": total_users,
             "total_orders": total_orders,
             "recent_orders_30d": recent_orders,
             "paid_orders": paid_orders,
+            "refunded_orders": refunded_orders,
             "revenue_fen": revenue,
-            "recent_revenue_30d_fen": recent_revenue,
-            "conversion_rate": conversion_rate,
-            # 支付质量
-            "payment_success_rate": payment_success_rate,
-            # AI 客服
+            "recent_revenue_30d_fen": sum(point["value"] for point in revenue_trend),
+            "conversion_rate": round(paid_orders / total_orders * 100, 2) if total_orders else 0,
+            # Retained for existing API consumers.
+            "payment_success_rate": (
+                round(paid_orders / terminal_payment_orders * 100, 2)
+                if terminal_payment_orders else 0
+            ),
             "ai_conversations_total": conversations_total,
             "ai_conversations_30d": conversations_30d,
             "tickets_total": tickets_total,
             "tickets_waiting_manual": tickets_waiting_manual,
-            "manual_transfer_rate": manual_transfer_rate,
-            # Quiz
+            "manual_transfer_rate": round(tickets_waiting_manual / tickets_total * 100, 2) if tickets_total else 0,
             "quiz_questions_total": quiz_questions_total,
+            "quiz_questions_inventory_total": quiz_questions_inventory_total,
             "quiz_libraries_total": quiz_libraries_total,
-            "quiz_attempts_today": quiz_attempts_today,
-            "quiz_attempts_30d": quiz_attempts_30d,
-            # Certification
-            "h3c_pending_review": h3c_pending_review,
-            "h3c_approved": h3c_approved,
-            "nisp_pending_review": nisp_pending_review,
-            "nisp_approved": nisp_approved,
-            # Course
+            "quiz_attempts_today": quiz_trend[-1]["value"],
+            "quiz_attempts_30d": sum(point["value"] for point in quiz_trend),
+            "h3c_pending_review": cert_status["h3c"]["pending_review"],
+            "h3c_approved": cert_status["h3c"]["approved"],
+            "nisp_pending_review": cert_status["nisp"]["pending_review"],
+            "nisp_approved": cert_status["nisp"]["approved"],
             "courses_total": courses_total,
-            # Competition
             "competitions_active": competitions_active,
             "competition_registrations": competition_registrations,
-            # Classroom
             "classrooms_active": classrooms_active,
-            # Trends
             "revenue_trend": revenue_trend,
             "user_trend": user_trend,
             "quiz_trend": quiz_trend,
-            "order_type_distribution": order_type_distribution,
+            "order_type_distribution": [
+                {"name": name, "value": count} for name, count in order_type_rows
+            ],
             "cert_status": cert_status,
         }

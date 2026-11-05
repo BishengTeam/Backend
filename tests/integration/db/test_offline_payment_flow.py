@@ -95,7 +95,7 @@ async def test_two_admins_same_order_and_replay(context):
 
 
 async def test_daily_money_uses_bank_day_not_creation_or_current_status(context, monkeypatch):
-    from app.services import admin_order
+    from app.services import admin_order, admin_statistics
 
     @asynccontextmanager
     async def ctx():
@@ -128,6 +128,23 @@ async def test_daily_money_uses_bank_day_not_creation_or_current_status(context,
     async with context.db() as db, db.begin():
         (await db.get(Order, order_id)).status = "closed"
     assert await service.reconciliation("2098-10-22") == receipt
+
+    class DashboardClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            stamp = datetime(2098, 10, 22, 17, tzinfo=timezone.utc)
+            return stamp.astimezone(tz)
+
+    monkeypatch.setattr(admin_statistics, "datetime", DashboardClock)
+    monkeypatch.setattr(admin_statistics, "get_db_ctx", ctx)
+    dashboard = await admin_statistics.AdminStatisticsService().dashboard()
+    trend = {point["date"]: point["value"] for point in dashboard["revenue_trend"]}
+    assert len(trend) == 30
+    assert trend["2098-10-22"] == receipt["net_income"]
+    assert trend["2098-10-23"] == refund["net_income"]
+    assert dashboard["recent_revenue_30d_fen"] == sum(trend.values()) == 3000
+    assert dashboard["quiz_trend"][-1]["date"] == "2098-10-23"
+    assert dashboard["quiz_attempts_today"] == dashboard["quiz_trend"][-1]["value"]
 
 
 async def test_daily_wechat_receipt_and_successful_refund_use_their_own_dates(context, monkeypatch):
