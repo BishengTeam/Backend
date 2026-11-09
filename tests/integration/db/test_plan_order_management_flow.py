@@ -68,7 +68,7 @@ async def management_context(monkeypatch):
                 {"prefix_like": prefix_like},
             )
             await db.execute(
-                text("DELETE FROM plan WHERE product_type LIKE :prefix_like"),
+                text("DELETE FROM plan WHERE id IN (SELECT pp.plan_id FROM plan_product pp JOIN cert_product cp ON cp.id=pp.product_id WHERE cp.code LIKE :prefix_like)"),
                 {"prefix_like": prefix_like},
             )
             await db.execute(
@@ -111,23 +111,29 @@ async def _seed_management_data(context):
         db.add_all([paid_user, pending_user, admin])
         await db.flush()
 
+        from app.models.cert_product import CertProduct as _PCP
+        from app.domain.plan.src.index import PlanProduct as _PPP
+        _ca = _PCP(type="generic", code=product_a, name=product_a, chinese_name=product_a, is_active=True)
+        _cb = _PCP(type="generic", code=product_b, name=product_b, chinese_name=product_b, is_active=True)
+        db.add_all([_ca, _cb]); await db.flush()
         plan_a = Plan(
-            product_type=product_a,
-            name="Batch A",
+            name=f"Batch A {context.prefix}",
             apply_start=now - timedelta(days=1),
             apply_end=now + timedelta(days=1),
-            capacity=10,
             status="published",
         )
         plan_b = Plan(
-            product_type=product_b,
-            name="Batch B",
+            name=f"Batch B {context.prefix}",
             apply_start=now - timedelta(days=1),
             apply_end=now + timedelta(days=1),
-            capacity=10,
             status="published",
         )
         db.add_all([plan_a, plan_b])
+        await db.flush()
+        db.add_all([
+            _PPP(plan_id=plan_a.id, product_id=_ca.id, capacity=10),
+            _PPP(plan_id=plan_b.id, product_id=_cb.id, capacity=10),
+        ])
         await db.flush()
 
         paid_a = Order(
