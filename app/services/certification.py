@@ -69,9 +69,9 @@ class CertificationService:
             for cp in new_certs:
                 if is_public_cert_product(cp):
                     # v2: 跳过未映射 vendor 的占位产品（测试/兼容层创建）
-                    from app.schemas.certification import CertificationResponse
+                    from app.schemas.certification import CertificationResponse as _CVR
                     vendor = CERT_PRODUCT_VENDOR_MAP.get(cp.type, cp.type)
-                    if vendor not in CertificationResponse.model_fields['vendor'].annotation.__args__:
+                    if vendor not in _CVR.model_fields['vendor'].annotation.__args__:
                         continue
                     result_items.append(cert_product_response(cp))
             # 专用认证不能从旧表重新出现在公开目录，避免绕过当前产品管理。

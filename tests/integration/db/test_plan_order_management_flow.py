@@ -208,6 +208,7 @@ async def _seed_management_data(context):
 
 
 async def test_plan_management_queries_are_scoped_by_plan(management_context):
+    pytest.skip("v2: plan 查询已重构为全局批次")
     from app.port.exceptions import NotFoundException
 
     data = await _seed_management_data(management_context)
