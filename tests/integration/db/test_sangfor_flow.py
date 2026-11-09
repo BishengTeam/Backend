@@ -41,7 +41,7 @@ async def test_unified_notice_snapshot_payment_progress_and_consultation_scope(c
     assert record["candidate_snapshot"]["enrollment_notice"]["notice_hash"] == notice["notice_hash"]
     assert record["versions"][0]["snapshot"]["enrollment_notice"]["batch"]["plan_id"] == context.plan_id
     async with context.db() as db, db.begin():
-        db.add(CertConsultationGroup(plan_product_id=context.plan_id, qrcode_url="/api/media/test-group.png", expires_at=datetime.now(timezone.utc) + timedelta(days=1)))
+        db.add(CertConsultationGroup(plan_product_id=context.plan_product_id, qrcode_url="/api/media/test-group.png", expires_at=datetime.now(timezone.utc) + timedelta(days=1)))
     journey = await user_journey("sangfor", record["id"], context.uid)
     assert journey["progress"]["stage"] == 0 and journey["consultation_group"] is None
     assert journey["contact"]["contact_phone"] == "13800000000"
@@ -51,7 +51,7 @@ async def test_unified_notice_snapshot_payment_progress_and_consultation_scope(c
     journey = await user_journey("sangfor", record["id"], context.uid)
     assert journey["progress"]["stage"] == 2 and journey["consultation_group"] is not None
     async with context.db() as db, db.begin():
-        group = await db.scalar(select(CertConsultationGroup).where(CertConsultationGroup.plan_id == context.plan_id))
+        group = await db.scalar(select(CertConsultationGroup).where(CertConsultationGroup.plan_product_id == context.plan_product_id))
         group.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     expired = await user_journey("sangfor", record["id"], context.uid)
     assert expired["consultation_group"] is None and expired["contact"]["contact_phone"]
@@ -93,10 +93,17 @@ async def context(monkeypatch, tmp_path):
         other = User(openid=prefix + "_other")
         db.add_all([user, other]); await db.flush()
         identity = UserRealname(user_id=user.id, user_type="enterprise", status="verified", real_name="实名考生", id_card_number="11010519491231002X")
-        plan = Plan(product_type="SCSA-T", name=prefix, status="published", apply_start=datetime.now(timezone.utc) - timedelta(days=1),
-            apply_end=datetime.now(timezone.utc) + timedelta(days=1), exam_date=datetime.now(timezone.utc) + timedelta(days=2), capacity=2, price_cents=12345)
-        db.add_all([identity, plan]); await db.flush()
-        uid, other_id, plan_id = user.id, other.id, plan.id
+        from app.models.cert_product import CertProduct as _SCP
+        from app.domain.plan.src.index import PlanProduct as _SPP
+        _sangfor_cert = await db.scalar(select(_SCP).where(_SCP.code == "SCSA-T"))
+        if _sangfor_cert is None:
+            _sangfor_cert = _SCP(type="sangfor", code="SCSA-T", name="SCSA-T", chinese_name="深信服SCSA", is_active=True)
+        plan = Plan(name=prefix, status="published", apply_start=datetime.now(timezone.utc) - timedelta(days=1),
+            apply_end=datetime.now(timezone.utc) + timedelta(days=1), exam_date=datetime.now(timezone.utc) + timedelta(days=2))
+        db.add_all([identity, _sangfor_cert, plan]); await db.flush()
+        _spp = _SPP(plan_id=plan.id, product_id=_sangfor_cert.id, capacity=2)
+        db.add(_spp); await db.flush()
+        uid, other_id, plan_id, plan_product_id = user.id, other.id, plan.id, _spp.id
     async def create():
         return await service.create(uid, SangforCreate(batch_id=plan_id, **values()))
     async def pay(order):
@@ -106,7 +113,7 @@ async def context(monkeypatch, tmp_path):
         await bank.decide(order["id"], 101, ConfirmInput(expected_version=1, request_key=uuid4().hex, note="已核实实际到账", amount_cents=12345,
             bank_time=datetime.now(timezone.utc), bank_reference=uuid4().hex), "confirm")
         return await service.detail(order["id"], uid)
-    yield SimpleNamespace(db=factory, service=service, bank=bank, create=create, pay=pay, uid=uid, other_id=other_id, plan_id=plan_id, agreement_calls=agreement_calls)
+    yield SimpleNamespace(db=factory, service=service, bank=bank, create=create, pay=pay, uid=uid, other_id=other_id, plan_id=plan_id, plan_product_id=plan_product_id, agreement_calls=agreement_calls)
     async with factory() as db, db.begin():
         order_ids = select(Order.id).where(Order.plan_id == plan_id)
         for model in (OfflineBankEntry, OfflinePaymentSubmission, OfflinePaymentMaterial, OfflinePaymentAudit, OfflinePayment):

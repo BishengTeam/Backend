@@ -166,9 +166,10 @@ class ConsultationGroupService:
         if registration_status not in USER_VISIBLE_REGISTRATION_STATUSES:
             return None
         row = await db.scalar(
-            select(CertConsultationGroup).where(
-                CertConsultationGroup.plan_product_id == plan.id
-            )
+            select(CertConsultationGroup)
+            .join(PlanProduct, PlanProduct.id == CertConsultationGroup.plan_product_id)
+            .where(PlanProduct.plan_id == plan.id)
+            .limit(1)
         )
         if row is None or _is_expired(row):
             return None

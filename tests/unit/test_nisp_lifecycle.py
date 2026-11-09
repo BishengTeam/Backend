@@ -206,7 +206,7 @@ async def test_cancel_batch_closes_pending_and_requests_paid_refund(monkeypatch)
     second = NS(id=2, status='approved', user_id=5)
     p = plan()
     db = session(monkeypatch, 'app.services.nisp_admin',
-                 scalars=[2, p, batch(), pending, first, paid, second, None],
+                 scalars=[p, batch(), pending, first, paid, second, None],
                  execute=[NS(all=lambda: [(1, 10), (2, 20)])])
     monkeypatch.setattr('app.services.nisp_admin.release_order_coupon', AsyncMock())
     service = NispAdminService()

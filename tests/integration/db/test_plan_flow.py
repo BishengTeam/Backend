@@ -110,13 +110,13 @@ async def test_list_plans_returns_only_same_product_type(test_context):
     plans_a = await PlanService().list_plans(pt_a)
     assert len(plans_a) >= 1
     for p in plans_a:
-        assert p.product_type == pt_a
+        assert all(pp.product_code == pt_a for pp in p.products)  # v2
 
     # List pt_b only
     plans_b = await PlanService().list_plans(pt_b)
     assert len(plans_b) >= 1
     for p in plans_b:
-        assert p.product_type == pt_b
+        assert all(pp.product_code == pt_b for pp in p.products)  # v2
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +156,7 @@ async def test_full_state_transition(test_context):
 async def test_cannot_edit_published_plan(test_context):
     from app.schemas.plan import PlanCreate, PlanUpdate
     from app.services.plan import PlanService
-    from app.port.exceptions import BusinessException
+    from app.port.exceptions import BusinessException, ConflictException
 
     factory, prefix = test_context
     product_type = f"{prefix}_lock"
@@ -168,7 +168,7 @@ async def test_cannot_edit_published_plan(test_context):
     )
     await PlanService().publish_plan(plan.id)
 
-    with pytest.raises(BusinessException, match="当前批次状态不可编辑"):
+    with pytest.raises(BusinessException, match="当前批次状态不可编辑|仅草稿状态的批次可以编辑"):
         await PlanService().update_plan(plan.id, PlanUpdate(name="New Name"))
 
 
@@ -180,7 +180,7 @@ async def test_cannot_edit_published_plan(test_context):
 async def test_cannot_delete_published_plan(test_context):
     from app.schemas.plan import PlanCreate
     from app.services.plan import PlanService
-    from app.port.exceptions import BusinessException
+    from app.port.exceptions import BusinessException, ConflictException
 
     factory, prefix = test_context
     product_type = f"{prefix}_del"
@@ -204,15 +204,24 @@ async def test_cannot_delete_published_plan(test_context):
 async def test_duplicate_name_rejected(test_context):
     from app.schemas.plan import PlanCreate
     from app.services.plan import PlanService
-    from app.port.exceptions import BusinessException
+    from app.port.exceptions import BusinessException, ConflictException
 
     factory, prefix = test_context
     pt = f"{prefix}_dup"
 
-    await PlanService().create_plan(pt, PlanCreate(name="Same Name"))
+    # 清理前次运行残留
+    from app.adapter.database import get_db_ctx
+    from app.domain.plan.src.index import Plan as _P
+    from sqlalchemy import delete as _del
+    async with get_db_ctx() as _db:
+        await _db.execute(_del(_P).where(_P.name == f"{pt} Same Name"))
+        await _db.commit()
 
-    with pytest.raises(BusinessException, match="已存在"):
-        await PlanService().create_plan(pt, PlanCreate(name="Same Name"))
+    await PlanService().create_plan(pt, PlanCreate(name=f"{pt} Same Name"))
+
+    # v2: 批次名全局唯一（v1 是 per-product 唯一）
+    with pytest.raises(ConflictException, match="已存在"):
+        await PlanService().create_plan(pt, PlanCreate(name=f"{pt} Same Name"))
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +388,7 @@ async def test_publish_requires_valid_window(test_context):
 
 
 async def test_product_code_mismatch_is_not_found(test_context):
+    pytest.skip("v2: 批次为全局资源，不再有 per-product mismatch 路径")
     from app.port.exceptions import NotFoundException
     from app.schemas.plan import PlanCreate, PlanUpdate
     from app.services.plan import PlanService

@@ -89,7 +89,13 @@ async def _lock_nisp_chain(db: AsyncSession, registration_id: int):
     ).first()
     if refs is None:
         raise NotFoundException("NISP 报名")
-    plan = await db.scalar(select(Plan).where(Plan.id == refs.plan_id).with_for_update())
+    # v2: plan_product_id → PlanProduct.plan_id
+    plan = await db.scalar(
+        select(Plan)
+        .join(PlanProduct, PlanProduct.plan_id == Plan.id)
+        .where(PlanProduct.id == refs.plan_product_id)
+        .with_for_update()
+    )
     batch = await db.scalar(
         select(NispExamBatch).where(NispExamBatch.id == refs.batch_id).with_for_update()
     )

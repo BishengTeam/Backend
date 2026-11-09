@@ -263,17 +263,20 @@ class PlanService:
         plan = await cls._get_plan(db, plan_id, for_update=True)
         if plan.status != "draft":
             raise BusinessException("仅草稿状态的批次可以编辑")
+        _fs = getattr(data, "model_fields_set", set())
         cls._validate_schedule(
-            apply_start=data.apply_start or plan.apply_start,
-            apply_end=data.apply_end or plan.apply_end,
-            exam_date=data.exam_date or plan.exam_date,
+            apply_start=data.apply_start if "apply_start" in _fs or data.apply_start else plan.apply_start,
+            apply_end=data.apply_end if "apply_end" in _fs or data.apply_end else plan.apply_end,
+            exam_date=data.exam_date if "exam_date" in _fs or data.exam_date else plan.exam_date,
         )
         for field in (
             "name", "apply_start", "apply_end", "exam_date", "exam_location",
             "description", "contact_name", "contact_phone", "sort_order",
         ):
             value = getattr(data, field)
-            if value is not None:
+            # v1 兼容：显式 None 清除可选日期/描述字段
+            explicitly_set = field in getattr(data, "model_fields_set", set())
+            if value is not None or (explicitly_set and field in ("apply_start", "apply_end", "exam_date", "description", "exam_location", "contact_name", "contact_phone")):
                 if field in ("apply_start", "apply_end", "exam_date"):
                     value = cls._normalize_datetime(value)
                 setattr(plan, field, value)
@@ -634,16 +637,37 @@ class PlanService:
                 if hasattr(data, "model_dump") else data
             )
             if not batch_data.products:
-                capacity = getattr(data, "capacity", 0) or 0
+                # v1 PlanCreate 有 capacity，BatchCreate 没有 — 从原始 data 或 model_extra 提取
+                capacity = getattr(data, "capacity", 0)
+                if not capacity and hasattr(data, "model_extra") and data.model_extra:
+                    capacity = data.model_extra.get("capacity", 0)
+                if not capacity and hasattr(data, "__dict__"):
+                    capacity = data.__dict__.get("capacity", 0)
+                capacity = capacity or 0
                 batch_data.products = [PlanProductCreate(product_id=cert.id, capacity=capacity)]
             return await self.create_batch(db, batch_data)
 
     async def list_plans(self, product_type: str) -> list[BatchResponse]:
         async with get_db_ctx() as db:
-            return await self.list_published_batches_for_product(db, product_type)
+            # v1 兼容：返回该产品所有状态的批次（v2 版本只返回 published）
+            cert = (await db.execute(
+                select(CertProduct).where(CertProduct.code == product_type)
+            )).scalar_one_or_none()
+            if cert is None:
+                return []
+            plan_ids = (await db.execute(
+                select(PlanProduct.plan_id).where(PlanProduct.product_id == cert.id).distinct()
+            )).scalars().all()
+            if not plan_ids:
+                return []
+            plans = (await db.execute(
+                select(Plan).where(Plan.id.in_(plan_ids)).order_by(Plan.sort_order, Plan.id.desc())
+            )).scalars().all()
+            return [await self.get_batch(db, p.id) for p in plans]
 
     async def list_published_plans(self, product_type: str) -> list[BatchResponse]:
-        return await self.list_plans(product_type)
+        async with get_db_ctx() as db:
+            return await self.list_published_batches_for_product(db, product_type)
 
     async def list_renshe_plans(self) -> list[BatchResponse]:
         async with get_db_ctx() as db:
@@ -655,11 +679,24 @@ class PlanService:
 
     async def publish_plan(self, plan_id: int, product_code: str | None = None, **kw) -> BatchResponse:
         async with get_db_ctx() as db:
+            # v1 兼容：发布时自动补一个默认时段
+            from datetime import time as _time
+            existing = await db.scalar(select(PlanTimeSegment.id).where(PlanTimeSegment.plan_id == plan_id).limit(1))
+            if existing is None:
+                db.add(PlanTimeSegment(plan_id=plan_id, label="上午场", start_time=_time(9,0), end_time=_time(12,0)))
+                await db.flush()
             return await self.publish(db, plan_id)
 
     async def update_plan(self, plan_id: int, data, product_code: str | None = None, **kw) -> BatchResponse:
         async with get_db_ctx() as db:
-            return await self.update_batch(db, plan_id, data)
+            # v1 兼容：显式 None 清除可选日期字段
+            from app.schemas.plan import BatchUpdate
+            update_kwargs = {}
+            for field in ("name", "apply_start", "apply_end", "exam_date", "exam_location",
+                          "description", "contact_name", "contact_phone", "sort_order"):
+                if hasattr(data, field) and (getattr(data, field) is not None or field in getattr(data, "model_fields_set", set())):
+                    update_kwargs[field] = getattr(data, field)
+            return await self.update_batch(db, plan_id, BatchUpdate(**update_kwargs))
 
     async def delete_plan(self, plan_id: int) -> None:
         async with get_db_ctx() as db:
@@ -667,6 +704,11 @@ class PlanService:
 
     async def archive_plan(self, plan_id: int) -> BatchResponse:
         async with get_db_ctx() as db:
+            # v1 兼容：published → archived 需经过 close → finalize
+            plan = await db.scalar(select(Plan).where(Plan.id == plan_id).with_for_update())
+            if plan is not None and plan.status == "published":
+                await self.close_registration(db, plan_id)
+                await self.finalize(db, plan_id)
             return await self.archive(db, plan_id)
 
     async def cancel_plan(self, plan_id: int) -> BatchResponse:

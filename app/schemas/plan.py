@@ -97,6 +97,8 @@ class PlanProductResponse(BaseModel):
 
 class BatchCreate(BaseModel):
     """POST /admin/certifications/batches"""
+    # v1 兼容：capacity/price_cents 等旧字段通过 extra 传递给 create_plan
+    model_config = {"extra": "allow"}
     name: str = Field(..., min_length=1, max_length=128, description="批次名称（全局唯一）")
     apply_start: datetime | None = Field(None, description="报名开始时间")
     apply_end: datetime | None = Field(None, description="报名截止时间")

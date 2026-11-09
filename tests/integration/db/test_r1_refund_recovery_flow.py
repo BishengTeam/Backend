@@ -152,8 +152,14 @@ async def _seed_h3c(context, *, refund_status="requested"):
         db.add_all([admin, user, plan])
         await db.flush()
 
+        from app.domain.plan.src.index import PlanProduct
+        from app.models.cert_product import CertProduct as _CP
+        _cert = _CP(type="h3c", code=f"{prefix}-cert", name=f"{prefix}", chinese_name=f"{prefix}", is_active=True)
+        db.add(_cert); await db.flush()
+        _pp = PlanProduct(plan_id=plan.id, product_id=_cert.id, capacity=0)
+        db.add(_pp); await db.flush()
         batch = H3cExamBatch(
-            plan_id=plan.id,
+            plan_product_id=_pp.id,
             exam_code=f"{prefix}-exam",
             identity_tag=f"{prefix}-tag",
             coupon_price_cents=100,
@@ -204,7 +210,7 @@ async def _seed_h3c(context, *, refund_status="requested"):
         )
         registration = H3cRegistration(
             batch_id=batch.id,
-            plan_id=plan.id,
+            plan_product_id=_pp.id,
             user_id=user.id,
             order_id=order.id,
             registration_no=f"{prefix}-reg",
@@ -344,8 +350,14 @@ async def _seed_pending_closed_race(context):
         )
         db.add_all([admin, user, plan])
         await db.flush()
+        from app.domain.plan.src.index import PlanProduct
+        from app.models.cert_product import CertProduct as _CP
+        _cert2 = _CP(type="h3c", code=f"{prefix}-cert2", name=f"{prefix}2", chinese_name=f"{prefix}2", is_active=True)
+        db.add(_cert2); await db.flush()
+        _pp2 = PlanProduct(plan_id=plan.id, product_id=_cert2.id, capacity=0)
+        db.add(_pp2); await db.flush()
         batch = H3cExamBatch(
-            plan_id=plan.id,
+            plan_product_id=_pp2.id,
             exam_code=f"{prefix}-exam",
             identity_tag="test",
             coupon_price_cents=100,
@@ -394,7 +406,7 @@ async def _seed_pending_closed_race(context):
         )
         registration = H3cRegistration(
             batch_id=batch.id,
-            plan_id=plan.id,
+            plan_product_id=_pp.id,
             user_id=user.id,
             order_id=order.id,
             registration_no=f"{prefix}-reg",

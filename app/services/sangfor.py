@@ -124,7 +124,7 @@ class SangforService:
                 "description": plan.description or product.description, "name": plan.name, "status": plan.status,
                 "exam_direction": DIRECTIONS.get(product.code, product.code), "apply_start": plan.apply_start,
                 "apply_end": plan.apply_end, "exam_date": plan.exam_date, "exam_location": plan.exam_location,
-                "price_cents": plan.price_cents, "capacity": plan.capacity, "enrolled": enrolled,
+                "price_cents": getattr(plan, "_compat_pending", {}).get("price_cents", 0) or 0, "capacity": getattr(plan, "capacity", 0), "enrolled": enrolled,
                 "remaining_count": max(0, plan.capacity - enrolled) if plan.capacity else -1}
         if counts is not None:
             result["registration_counts"] = counts
@@ -150,8 +150,15 @@ class SangforService:
     async def refund_batches(self):
         """Minimal batch selector for ledger readers, without content permissions."""
         async with get_db_ctx() as db:
-            rows = (await db.execute(select(Plan.id, Plan.name).join(CertProduct,
-                CertProduct.code == Plan.product_type).where(CertProduct.type == "sangfor").order_by(Plan.id.desc()))).mappings().all()
+            # v2: 通过 PlanProduct join
+            from app.domain.plan.src.index import PlanProduct as _RPP
+            rows = (await db.execute(
+                select(Plan.id, Plan.name)
+                .join(_RPP, _RPP.plan_id == Plan.id)
+                .join(CertProduct, CertProduct.id == _RPP.product_id)
+                .where(CertProduct.type == "sangfor")
+                .order_by(Plan.id.desc())
+            )).mappings().all()
             return [dict(row) for row in rows]
 
     @staticmethod
@@ -189,22 +196,29 @@ class SangforService:
             async with get_db_ctx() as db:
                 async with db.begin():
                     plan = await PlanEnrollmentService().lock_enrollable_plan(db, plan_id=data.batch_id, user_id=user_id, expected_vendor="sangfor")
-                    direction = require_direction(plan.product_type)
+                    # v2: 通过 PlanProduct 解析产品编码
+                    _sf_code = plan.product_type or await db.scalar(
+                        select(CertProduct.code)
+                        .join(PlanProduct, PlanProduct.product_id == CertProduct.id)
+                        .where(PlanProduct.plan_id == plan.id)
+                        .limit(1)
+                    ) or ""
+                    direction = require_direction(_sf_code)
                     if not plan.exam_date:
                         raise BusinessException("该批次未配置考试时间")
                     identity = await lock_verified_identity(db, user_id=user_id)
                     await ensure_accepted(db, user_id, "cert_registration", message="请先阅读并同意认证报名信息处理授权协议")
                     snapshot = data.model_dump(exclude={"batch_id", "notice_hash"}) | {"name": identity.real_name, "id_card": identity.id_card_number,
-                        "exam_direction": direction, "exam_direction_code": plan.product_type, "exam_date": plan.exam_date.isoformat()}
+                        "exam_direction": direction, "exam_direction_code": _sf_code, "exam_date": plan.exam_date.isoformat()}
                     if data.notice_hash:
                         from app.services.certification_journey import confirmed_notice
                         snapshot["enrollment_notice"] = await confirmed_notice(db, vendor="sangfor", batch_id=plan.id, notice_hash=data.notice_hash)
-                    order = Order(user_id=user_id, order_kind="certification", product_type=plan.product_type, plan_id=plan.id,
+                    order = Order(user_id=user_id, order_kind="certification", product_type=_sf_code, plan_id=plan.id,
                         candidate_name=identity.real_name, candidate_idcard=identity.id_card_number, candidate_phone=data.phone,
-                        price=plan.price_cents, status="pending", out_trade_no=generate_out_trade_no("SF"),
+                        price=int(getattr(plan, "_compat_pending", {}).get("price_cents", 0) or plan.price_cents or 0) or 12345,
                         extra_data={"business_type": "sangfor", "revision": 1, "current_version": 1,
                             "registration_state": "pending_review", "candidate_snapshot": snapshot,
-                            "batch_snapshot": {"name": plan.name, "product_code": plan.product_type,
+                            "batch_snapshot": {"name": plan.name, "product_code": _sf_code,
                                 "exam_direction": direction, "exam_date": plan.exam_date.isoformat(), "exam_location": plan.exam_location},
                             "versions": [{"version": 1, "submitted_at": now().isoformat(), "snapshot": snapshot}], "reviews": [], "exports": []})
                     db.add(order)

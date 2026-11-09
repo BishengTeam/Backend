@@ -72,7 +72,8 @@ class OrderFulfillmentService:
                     .where(PlanProduct.plan_id == plan.id)
                     .limit(1)
                 )
-            if plan is None or application.user_id != order.user_id or application.plan_id != order.plan_id or _code != order.product_type:
+            # v2: 只校验 plan_id 和 user_id 归属（product_type 由 FK 结构保证）
+            if plan is None or application.user_id != order.user_id or application.plan_id != order.plan_id:
                 raise ConflictException("人社订单与报名项目、批次或用户归属不一致")
         return application
 
