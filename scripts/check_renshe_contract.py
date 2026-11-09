@@ -79,11 +79,9 @@ EXPECTED_PATHS: dict[str, set[str]] = {
     "/admin/cert-products/renshe/users/{user_id}/verification-materials/{kind}/signed-url": {
         "get"
     },
-    "/admin/certifications/{code}/plans/{plan_id}/impact": {"get"},
 }
 
 ADDITIONAL_RENSHE_PATHS = {
-    "/admin/certifications/{code}/plans/{plan_id}/impact",
     "/api/payment/prepay",
     "/api/payment/orders/{order_id}/sync",
     "/api/payment/callback",

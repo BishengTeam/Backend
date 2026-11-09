@@ -26,6 +26,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.check_migrations import static_check  # noqa: E402
+from scripts.quiz_contract_manifest import canonical_manifest  # noqa: E402
 from scripts.postgres_backup import (  # noqa: E402
     DatabaseTarget,
     REQUIRED_QUIZ_TABLES,
@@ -579,7 +580,8 @@ def _load_contract_manifest() -> dict[str, Any]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise PreflightError("cannot read the frozen quiz contract manifest") from exc
-    if not isinstance(payload, dict) or payload.get("operation_count") != 78:
+    expected_count = canonical_manifest()["operation_count"]
+    if not isinstance(payload, dict) or payload.get("operation_count") != expected_count:
         raise PreflightError("the frozen quiz contract manifest is invalid")
     return payload
 

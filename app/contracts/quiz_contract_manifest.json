@@ -1,7 +1,7 @@
 {
-  "admin_operation_count": 64,
-  "fingerprint_sha256": "5f01cb0d6a3e0af3c70a9edf50071aa05071637bf1e7a5c9b2872ab6cbc45fd4",
-  "operation_count": 98,
+  "admin_operation_count": 66,
+  "fingerprint_sha256": "69cc21e1f340eb280601348d7c611e0ac17ed343528dc1043e0072af92a8ce45",
+  "operation_count": 100,
   "operations": [
     {
       "auth": "admin",
@@ -296,6 +296,20 @@
       "path": "/admin/quiz/questions",
       "permission": "quiz:write",
       "rate_limit_per_minute": 120
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/questions/batch-delete",
+      "permission": "quiz:write",
+      "rate_limit_per_minute": 30
+    },
+    {
+      "auth": "admin",
+      "method": "POST",
+      "path": "/admin/quiz/questions/batch-delete-by-scope",
+      "permission": "quiz:write",
+      "rate_limit_per_minute": 30
     },
     {
       "auth": "admin",
@@ -691,7 +705,7 @@
     }
   ],
   "quiz_contract_version": "2026-09-01",
-  "removed_operation_count": 12,
+  "removed_operation_count": 11,
   "removed_operations": [
     {
       "method": "POST",
@@ -700,10 +714,6 @@
     {
       "method": "POST",
       "path": "/admin/quiz/import/json"
-    },
-    {
-      "method": "POST",
-      "path": "/admin/quiz/questions/batch-delete"
     },
     {
       "method": "GET",

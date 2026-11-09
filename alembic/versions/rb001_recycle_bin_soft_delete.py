@@ -11,7 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "rb001_recycle_bin"
-down_revision = "quiz020"
+# 2026-11-09 rebase：远程 cbr001（认证批次重构）同挂 quiz020，本迁移改挂其后避免双 head
+down_revision = "cbr001"
 branch_labels = None
 depends_on = None
 
