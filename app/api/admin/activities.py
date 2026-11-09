@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Path, Query
 from fastapi.responses import PlainTextResponse
 
@@ -14,19 +16,24 @@ from app.services.admin_activity import AdminActivityService
 
 router = APIRouter(prefix="/activities", tags=["管理后台-活动管理"])
 
+# 专区分类筛选：缺省排除英才活动（活动管理页只看普通活动），
+# category=yingcai 仅英才活动（英才计划管理页用）。
+CategoryQuery = Literal["yingcai"] | None
+
 
 @router.get("",
     response_model=APIResponse[PaginatedData[AdminActivityListItem]],
     summary="活动列表",
     description="""
-管理后台 **活动管理** 页面使用。
+管理后台 **活动管理 / 英才计划管理** 页面使用。
 
-**页面路径**: `/admin/activity`
+**页面路径**: `/operations/activities`、`/operations/yingcai`
 
 **使用场景**: 页面加载时获取活动列表，支持关键词搜索
 
 **查询参数**:
 - `keyword`: 按活动标题模糊搜索
+- `category`: 专区分类；缺省排除英才计划活动，`yingcai` 仅英才计划活动
 - `page`: 页码，从 1 开始
 - `page_size`: 每页条数，默认 20，最大 100
 
@@ -35,12 +42,13 @@ router = APIRouter(prefix="/activities", tags=["管理后台-活动管理"])
 )
 async def list_activities(
     keyword: str | None = Query(None, description="按标题关键词模糊搜索"),
+    category: CategoryQuery = Query(None, description="专区分类：yingcai=仅英才计划活动；缺省=仅普通活动"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=100, description="每页条数"),
     _admin=Depends(require_permission("activity:list")),
 ) -> APIResponse[PaginatedData[AdminActivityListItem]]:
-    """活动列表（分页+搜索）"""
-    result = await AdminActivityService().list_activities(keyword, page, page_size)
+    """活动列表（分页+搜索+专区分类）"""
+    result = await AdminActivityService().list_activities(keyword, page, page_size, category=category)
     return success(data=result)
 
 
@@ -154,20 +162,24 @@ async def list_activity_registrations(
     response_class=PlainTextResponse,
     summary="导出活动报名数据",
     description="""
-管理后台 **活动管理** 页面使用。
+管理后台 **活动管理 / 英才计划管理** 页面使用。
 
-**页面路径**: `/admin/activity`
+**页面路径**: `/operations/activities`、`/operations/yingcai`
 
-**使用场景**: 导出所有活动报名数据为 CSV 文件
+**使用场景**: 导出活动报名数据为 CSV 文件，按专区分类过滤
+
+**查询参数**:
+- `category`: 专区分类；缺省仅普通活动，`yingcai` 仅英才计划活动
 
 **响应**: CSV 文件下载
     """,
 )
 async def export_registrations(
+    category: CategoryQuery = Query(None, description="专区分类：yingcai=仅英才计划活动；缺省=仅普通活动"),
     _admin=Depends(require_permission("activity:list")),
 ):
-    """导出活动报名 CSV"""
-    csv_content = await ActivityService().export_csv()
+    """导出活动报名 CSV（按专区分类过滤）"""
+    csv_content = await ActivityService().export_csv(category=category)
     return PlainTextResponse(
         content=csv_content,
         media_type="text/csv",

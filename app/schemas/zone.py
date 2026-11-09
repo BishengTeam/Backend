@@ -7,20 +7,20 @@ from app.schemas.admin_training import AdminTrainingListItem
 from app.schemas.certification import CertificationResponse
 from app.schemas.competition import CompetitionListItem
 from app.schemas.course import CourseListResponse
-from app.schemas.job import JobResponse
 
 
 # ── zone_type → entity field mapping ──────────────────────────────
 # Drives entity assignment in ZoneService.get_home_aggregation.
 # Each zone_type maps to the ZoneSectionData field that carries its
-# associated entity list.
+# associated entity list. 就业专区（employment）已关闭，由英才计划
+# 专区（yingcai，Activity category='yingcai'）原位替代。
 
 ZONE_ENTITY_MAP: dict[str, str] = {
     "cert":        "certifications",
     "study":       "courses",
     "competition": "competitions",
     "activity":    "activities",
-    "employment":  "jobs",
+    "yingcai":     "yingcai_activities",
     "training":    "trainings",
 }
 
@@ -77,10 +77,10 @@ class ZoneSectionData(BaseModel):
     items: list[ZoneBrief] = Field(default_factory=list)
     courses: list[CourseListResponse] | None = None
     activities: list[ActivityResponse] | None = None
+    yingcai_activities: list[ActivityResponse] | None = None
     certifications: list[CertificationResponse] | None = None
     trainings: list[AdminTrainingListItem] | None = None
     competitions: list[CompetitionListItem] | None = None
-    jobs: list[JobResponse] | None = None
 
     @model_serializer(mode='wrap')
     def _compact(self, handler, info):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Path, Query
 
 from app.middleware.auth import get_current_user
@@ -20,9 +22,10 @@ router = APIRouter(prefix="/activities", tags=["活动"])
     response_model=APIResponse[PaginatedData[ActivityResponse]],
     summary="活动列表",
     description="""
-小程序 **活动专区** 页面使用。
+小程序 **活动专区 / 英才计划专区** 页面使用。
 
-**使用场景**: 加载进行中的活动列表
+**使用场景**: 加载活动列表；默认（不带 category）返回普通活动，
+`category=yingcai` 返回英才计划活动，两类专区互不可见
 
 **认证**: 无需登录
     """,
@@ -30,11 +33,13 @@ router = APIRouter(prefix="/activities", tags=["活动"])
 async def list_activities(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    category: Literal["yingcai"] | None = Query(None, description="专区分类：yingcai=英才计划活动；缺省=普通活动"),
 ) -> APIResponse[PaginatedData[ActivityResponse]]:
-    """活动列表（仅展示进行中且未结束的活动）"""
+    """活动列表（缺省排除英才计划活动）"""
     result = await ActivityService().list_activities(
         page=page,
         page_size=page_size,
+        category=category,
     )
     return success(data=result)
 

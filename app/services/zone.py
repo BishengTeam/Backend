@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from app.adapter.database import get_db_ctx
 from app.domain.content.src.index import Activity, Training, Zone
-from app.domain.certification.src.index import Competition, Course, Job
+from app.domain.certification.src.index import Competition, Course
 from app.models.cert_product import CertProduct
 from app.domain.content.src.model.banner import Banner
 from app.domain.content.src.model.gzh_article import GzhArticle
@@ -13,7 +13,6 @@ from app.domain.content.src.model.popup import Popup
 from app.schemas.activity import ActivityResponse
 from app.schemas.admin_training import AdminTrainingListItem
 from app.schemas.competition import CompetitionListItem
-from app.schemas.job import JobResponse
 from app.schemas.zone import (
     BannerBrief,
     GzhArticleBrief,
@@ -32,19 +31,20 @@ HOME_ZONE_LIMIT = 10
 # 公众号资讯捎带条数：首页新闻 tab / ticker 默认展示最新 10 条
 GZH_ARTICLE_LIMIT = 10
 
-ALL_ZONE_TYPES = ("cert", "study", "competition", "activity", "employment", "training")
+# 就业专区已关闭，由英才计划专区（yingcai）原位替代。
+ALL_ZONE_TYPES = ("cert", "study", "competition", "activity", "yingcai", "training")
 # Zone content rows are legacy per-zone banners/cards. Competition is driven by
 # real competition entities and must never consume a separately configured banner.
+# 英才计划专区由 Activity(category='yingcai') 驱动，同样不用 legacy Zone 卡。
 HOME_ZONE_CONTENT_TYPES = (
-    "cert", "study", "activity", "employment", "training"
+    "cert", "study", "activity", "training"
 )
 
 # Entity query config: (model_class, response_schema, has_is_active_filter)
+# activities/yingcai_activities 需按 category 拆分过滤，见 get_home_aggregation 定制查询。
 _ENTITY_QUERIES: dict[str, tuple] = {
-    "activities":      (Activity,       ActivityResponse,          True),
     "trainings":       (Training,       AdminTrainingListItem,          True),
     "competitions":    (Competition,      CompetitionListItem,           True),
-    "jobs":            (Job,            JobResponse,               True),
 }
 
 
@@ -152,6 +152,25 @@ class ZoneService:
             entity_data["certifications"] = [
                 cert_product_response(row) for row in cert_rows
             ]
+
+            # Activities: 普通活动与英才计划活动（category='yingcai'）分别供
+            # 活动专区与英才计划专区使用，互不可见；deleted_at 过滤与公开列表口径一致。
+            for field_name, is_yingcai in (("activities", False), ("yingcai_activities", True)):
+                act_stmt = select(Activity).where(
+                    Activity.is_active == True,
+                    Activity.deleted_at.is_(None),
+                )
+                if is_yingcai:
+                    act_stmt = act_stmt.where(Activity.category == "yingcai")
+                else:
+                    act_stmt = act_stmt.where(
+                        (Activity.category == "normal") | (Activity.category.is_(None))
+                    )
+                act_stmt = act_stmt.order_by(Activity.id.desc()).limit(HOME_ZONE_LIMIT)
+                act_rows = (await db.execute(act_stmt)).scalars().all()
+                entity_data[field_name] = [
+                    ActivityResponse.model_validate(row) for row in act_rows
+                ]
 
             for field_name, (model_cls, schema_cls, active_filter) in _ENTITY_QUERIES.items():
                 stmt = select(model_cls)

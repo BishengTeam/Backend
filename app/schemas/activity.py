@@ -15,6 +15,7 @@ class ActivityResponse(BaseModel):
     end_time: datetime | None = None
     max_participants: int = 0
     is_active: bool = True
+    category: str | None = None
     related_cert_id: int | None = None
     related_course_id: int | None = None
     live_url: str | None = None

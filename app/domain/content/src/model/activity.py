@@ -17,6 +17,9 @@ class Activity(Base, RecycleBinMixin, TimestampMixin):
     end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     max_participants: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # 专区分类：normal=普通活动（活动专区），yingcai=英才计划活动（英才计划专区）。
+    # 英才计划活动只在英才专区露出，公开/管理端列表缺省均排除 yingcai。
+    category: Mapped[str | None] = mapped_column(String(16), server_default="normal")
     # ── 线上营销活动扩展 ──
     related_cert_id: Mapped[int | None] = mapped_column(
         ForeignKey("certification.id", ondelete="SET NULL")

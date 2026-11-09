@@ -25,6 +25,7 @@ class AdminActivityService:
         Activity.end_time,
         Activity.max_participants,
         Activity.is_active,
+        Activity.category,
         Activity.related_cert_id,
         Activity.related_course_id,
         Activity.live_url,
@@ -33,11 +34,22 @@ class AdminActivityService:
         Activity.created_at,
     )
 
+    # 英才计划活动（category='yingcai'）只在英才计划管理页可见；
+    # 管理端列表缺省（category 未传）排除英才活动，两个管理页互不可见对方数据。
+    _YINGCAI_CATEGORY = "yingcai"
+
     async def list_activities(
-        self, keyword: str | None, page: int, page_size: int
+        self, keyword: str | None, page: int, page_size: int,
+        *, category: str | None = None,
     ) -> PaginatedData[AdminActivityListItem]:
         async with get_db_ctx() as db:
             base = select(*self._list_columns).where(Activity.deleted_at.is_(None))
+            if category == self._YINGCAI_CATEGORY:
+                base = base.where(Activity.category == self._YINGCAI_CATEGORY)
+            else:
+                base = base.where(
+                    (Activity.category == "normal") | (Activity.category.is_(None))
+                )
             if keyword:
                 base = base.where(Activity.title.ilike(f"%{keyword}%"))
             count_stmt = select(func.count()).select_from(base.subquery())

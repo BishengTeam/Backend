@@ -10,6 +10,10 @@ from app.domain.content.src.index import Activity, ActivityRegistration, Activit
 from app.schemas.activity import ActivityResponse
 from app.schemas.common import PaginatedData
 
+# 英才计划活动（category='yingcai'）只在英才计划专区露出；
+# 公开列表缺省（category 未传）排除英才活动，两类专区互不可见。
+_YINGCAI_CATEGORY = "yingcai"
+
 
 class ActivityService:
 
@@ -18,11 +22,18 @@ class ActivityService:
         *,
         page: int = 1,
         page_size: int = 20,
+        category: str | None = None,
     ) -> PaginatedData[ActivityResponse]:
         stmt = select(Activity).where(
             Activity.is_active == True,
             Activity.deleted_at.is_(None),
         )
+        if category == _YINGCAI_CATEGORY:
+            stmt = stmt.where(Activity.category == _YINGCAI_CATEGORY)
+        else:
+            stmt = stmt.where(
+                (Activity.category == "normal") | (Activity.category.is_(None))
+            )
         async with get_db_ctx() as db:
             total = (
                 await db.execute(
@@ -104,12 +115,21 @@ class ActivityService:
             await db.refresh(reg)
             return reg
 
-    async def export_csv(self) -> str:
-        """导出所有活动报名为 CSV（管理端）"""
+    async def export_csv(self, *, category: str | None = None) -> str:
+        """导出活动报名为 CSV（管理端）；category 语义同 list_activities，缺省仅普通活动"""
         async with get_db_ctx() as db:
-            result = await db.execute(
-                select(ActivityRegistration).order_by(ActivityRegistration.id)
+            stmt = (
+                select(ActivityRegistration)
+                .join(Activity, ActivityRegistration.activity_id == Activity.id)
+                .order_by(ActivityRegistration.id)
             )
+            if category == _YINGCAI_CATEGORY:
+                stmt = stmt.where(Activity.category == _YINGCAI_CATEGORY)
+            else:
+                stmt = stmt.where(
+                    (Activity.category == "normal") | (Activity.category.is_(None))
+                )
+            result = await db.execute(stmt)
             registrations = result.scalars().all()
 
             output = io.StringIO()

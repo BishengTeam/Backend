@@ -1,8 +1,12 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from app.schemas.activity import ActivityResponse
+
+# 专区分类取值：normal=普通活动（活动管理页），yingcai=英才计划活动（英才计划管理页）。
+ActivityCategory = Literal["normal", "yingcai"]
 
 
 class AdminActivityCreate(BaseModel):
@@ -14,6 +18,7 @@ class AdminActivityCreate(BaseModel):
     end_time: datetime | None = Field(None, description="结束时间")
     max_participants: int = Field(0, ge=0, description="最大参与人数")
     is_active: bool = Field(True, description="是否上架")
+    category: ActivityCategory = Field("normal", description="专区分类：normal=普通活动，yingcai=英才计划活动")
     related_cert_id: int | None = Field(None, description="转化目标：关联认证（certification.id）")
     related_course_id: int | None = Field(None, description="转化目标：关联课程")
     live_url: str | None = Field(None, max_length=512, description="直播/会议链接")
@@ -30,6 +35,7 @@ class AdminActivityUpdate(BaseModel):
     end_time: datetime | None = Field(None, description="结束时间")
     max_participants: int | None = Field(None, ge=0, description="最大参与人数")
     is_active: bool | None = Field(None, description="是否上架")
+    category: ActivityCategory | None = Field(None, description="专区分类：normal=普通活动，yingcai=英才计划活动")
     related_cert_id: int | None = Field(None, description="关联认证")
     related_course_id: int | None = Field(None, description="关联课程")
     live_url: str | None = Field(None, max_length=512, description="直播/会议链接")
