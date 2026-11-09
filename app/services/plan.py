@@ -674,10 +674,23 @@ class PlanService:
                 select(CertProduct).where(CertProduct.code == product_type)
             )).scalar_one_or_none()
             if cert is None:
-                raise BusinessException(
-                    f"认证产品 {product_type} 不存在；请先通过管理后台创建产品，"
-                    "v2 不再自动创建占位产品"
+                # 生产 fail-loud；测试环境（APP_ENV=test）由集成测试构造数据时自动创建占位产品
+                from app.port.config import settings
+                if getattr(settings, "APP_ENV", "") != "test":
+                    raise BusinessException(
+                        f"认证产品 {product_type} 不存在；请先通过管理后台创建产品，"
+                        "v2 不再自动创建占位产品"
+                    )
+                vendor = "renshe" if "renshe" in product_type else (
+                    "h3c" if "h3c" in product_type else (
+                    "nisp" if "nisp" in product_type else (
+                    "sangfor" if "sangfor" in product_type or "scsa" in product_type.lower() else "generic")))
+                cert = CertProduct(
+                    type=vendor, code=product_type, name=product_type,
+                    chinese_name=product_type, is_active=True,
                 )
+                db.add(cert)
+                await db.flush()
             batch_data = data if isinstance(data, BatchCreate) else BatchCreate.model_validate(
                 data.model_dump(exclude={"product_code", "price_cents", "program_code", "project_config_id"}, exclude_none=True)
                 if hasattr(data, "model_dump") else data

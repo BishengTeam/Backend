@@ -37,6 +37,10 @@ async def context(monkeypatch):
         for vendor in ("h3c", "nisp", "renshe"):
             product = CertProduct(type=vendor, code=f"{prefix}_{vendor}", name=vendor, chinese_name=f"测试{vendor}", is_active=True, renshe_status="available" if vendor == "renshe" else None)
             db.add(product); await db.flush(); products.append(product)
+            if vendor == "renshe":
+                # P0-1 审计修复后 renshe 价格走 PriceConfig，测试需显式配置
+                from app.domain.order.src.model.price_config import PriceConfig
+                db.add(PriceConfig(product_type=product.code, user_type="enterprise", price=5000, is_active=True))
             plan = Plan(name=f"{prefix}_{vendor}", status="published",
                 apply_start=datetime.now(timezone.utc) - timedelta(days=1), apply_end=datetime.now(timezone.utc) + timedelta(days=1),
                 exam_date=datetime.now(timezone.utc) + timedelta(days=5))

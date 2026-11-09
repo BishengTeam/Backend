@@ -132,7 +132,6 @@ class SangforService:
                 counts.setdefault(plan_id, {})[state] = count
         return occupied, counts
 
-    @staticmethod
     async def batch_response(self, db, plan, product, *, enrolled=0, counts=None):
         result = {"id": plan.id, "product_code": product.code, "product_name": product.chinese_name,
                 "description": plan.description or product.description, "name": plan.name, "status": plan.status,
@@ -159,7 +158,7 @@ class SangforService:
         async with get_db_ctx() as db:
             plan, product = await self.batch(db, batch_id, public=public)
             occupied, counts = await self.batch_statistics(db, [batch_id], public=public)
-            return self.batch_response(plan, product, enrolled=occupied.get(batch_id, 0), counts=None if public else counts.get(batch_id, {}))
+            return await self.batch_response(db, plan, product, enrolled=occupied.get(batch_id, 0), counts=None if public else counts.get(batch_id, {}))
 
     async def refund_batches(self):
         """Minimal batch selector for ledger readers, without content permissions."""

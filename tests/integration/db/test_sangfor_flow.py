@@ -89,6 +89,12 @@ async def context(monkeypatch, tmp_path):
         if product is None:
             product = CertProduct(type="sangfor", code="SCSA-T", name="scsa_t", chinese_name="安全技术认证工程师", is_active=True)
             db.add(product)
+        # P0-1 审计修复后价格 fail-loud，测试需显式配置
+        from app.domain.order.src.model.price_config import PriceConfig
+        if await db.scalar(select(PriceConfig).where(
+            PriceConfig.product_type == "SCSA-T", PriceConfig.is_active.is_(True)
+        )) is None:
+            db.add(PriceConfig(product_type="SCSA-T", user_type="enterprise", price=12345, is_active=True))
         user = User(openid=prefix)
         other = User(openid=prefix + "_other")
         db.add_all([user, other]); await db.flush()

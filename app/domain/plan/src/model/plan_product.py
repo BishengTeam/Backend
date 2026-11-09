@@ -45,4 +45,4 @@ class PlanProduct(Base, TimestampMixin):
     application_type: Mapped[str | None] = mapped_column(String(16))
 
     # v2: 关联认证产品（供兼容层 _compat_product_type 等使用）
-    cert_product = relationship("CertProduct", lazy="joined", viewonly=True)
+    cert_product = relationship("CertProduct", lazy="joined", innerjoin=True, viewonly=True)
