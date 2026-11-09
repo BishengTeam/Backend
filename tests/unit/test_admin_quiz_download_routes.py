@@ -81,7 +81,7 @@ async def test_v2_question_delete_returns_null_data_after_commit(monkeypatch) ->
     )
 
     assert response.data is None
-    assert response.message == "题目已删除，可在 7 天内撤销"
+    assert response.message == "题目已删除，可在 30 天内撤销"
     service.transition_question.assert_awaited_once_with(
         6,
         AdminQuizVersionRequest(lock_version=4),

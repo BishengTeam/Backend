@@ -272,7 +272,7 @@ def test_submitted_answers_are_canonical_and_exact_match_only() -> None:
 
 
 def test_contract_registry_is_complete_strict_and_machine_readable() -> None:
-    assert len(QUIZ_API_CONTRACTS) == 98  # quiz018: +redeem
+    assert len(QUIZ_API_CONTRACTS) == 100  # quiz018 +redeem；2026-11 回收站 +batch-delete 恢复 +batch-delete-by-scope
     keys = {(entry.method, entry.path) for entry in QUIZ_API_CONTRACTS}
     assert len(keys) == len(QUIZ_API_CONTRACTS)
     assert {
@@ -347,7 +347,6 @@ def test_contract_explicitly_deletes_legacy_endpoints() -> None:
     deleted = set(DELETED_QUIZ_ENDPOINTS)
     assert ("POST", "/api/quiz/submit") in deleted
     assert ("POST", "/admin/quiz/import") in deleted
-    assert ("POST", "/admin/quiz/questions/batch-delete") in deleted
     assert not deleted & {(entry.method, entry.path) for entry in QUIZ_API_CONTRACTS}
 
 

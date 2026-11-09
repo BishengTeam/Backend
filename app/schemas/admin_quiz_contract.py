@@ -286,6 +286,20 @@ class AdminQuizBatchItemError(QuizContractModel):
     message: str
 
 
+class AdminQuizScopeDeleteRequest(QuizContractModel):
+    """按范围一键清空题目：必须且只能指定一个范围。"""
+
+    library_id: int | None = Field(default=None, ge=1)
+    module_id: int | None = Field(default=None, ge=1)
+    knowledge_point_id: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def require_single_scope(self) -> "AdminQuizScopeDeleteRequest":
+        if sum(bool(v) for v in (self.library_id, self.module_id, self.knowledge_point_id)) != 1:
+            raise ValueError("必须且只能指定 library_id / module_id / knowledge_point_id 之一")
+        return self
+
+
 class AdminQuizBatchResponse(QuizContractModel):
     succeeded: bool
     updated_count: int = Field(ge=0)

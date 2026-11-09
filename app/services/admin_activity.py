@@ -1,8 +1,8 @@
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import NotFoundException
-from app.domain.content.src.index import Activity, ActivityRegistration, ActivityReminder
+from app.domain.content.src.index import Activity, ActivityRegistration
 from app.schemas.admin_activity import (
     AdminActivityCreate,
     AdminActivityListItem,
@@ -10,6 +10,7 @@ from app.schemas.admin_activity import (
     AdminActivityUpdate,
 )
 from app.schemas.common import PaginatedData
+from app.services.recycle_bin import restore_row, soft_delete_row
 
 
 class AdminActivityService:
@@ -36,7 +37,7 @@ class AdminActivityService:
         self, keyword: str | None, page: int, page_size: int
     ) -> PaginatedData[AdminActivityListItem]:
         async with get_db_ctx() as db:
-            base = select(*self._list_columns)
+            base = select(*self._list_columns).where(Activity.deleted_at.is_(None))
             if keyword:
                 base = base.where(Activity.title.ilike(f"%{keyword}%"))
             count_stmt = select(func.count()).select_from(base.subquery())
@@ -62,7 +63,7 @@ class AdminActivityService:
     async def update(self, activity_id: int, data: AdminActivityUpdate) -> AdminActivityListItem:
         async with get_db_ctx() as db:
             activity = await db.get(Activity, activity_id)
-            if activity is None:
+            if activity is None or activity.deleted_at is not None:
                 raise NotFoundException("培训活动")
             update_data = data.model_dump(exclude_unset=True)
             for key, value in update_data.items():
@@ -72,22 +73,22 @@ class AdminActivityService:
             return AdminActivityListItem.model_validate(activity)
 
     async def delete(self, activity_id: int) -> None:
+        """软删除进回收站，30 自然日内可恢复。报名/提醒记录（学生数据）保留不动。"""
         async with get_db_ctx() as db:
-            async with db.begin():
-                activity = await db.get(Activity, activity_id)
-                if activity is None:
-                    raise NotFoundException("培训活动")
-                await db.execute(
-                    delete(ActivityRegistration).where(
-                        ActivityRegistration.activity_id == activity_id
-                    )
-                )
-                await db.execute(
-                    delete(ActivityReminder).where(
-                        ActivityReminder.activity_id == activity_id
-                    )
-                )
-                await db.delete(activity)
+            activity = await db.get(Activity, activity_id)
+            if activity is None or activity.deleted_at is not None:
+                raise NotFoundException("培训活动")
+            soft_delete_row(activity)
+            await db.commit()
+
+    async def restore(self, activity_id: int) -> None:
+        """从回收站恢复。"""
+        async with get_db_ctx() as db:
+            activity = await db.get(Activity, activity_id)
+            if activity is None or activity.deleted_at is None:
+                raise NotFoundException("培训活动")
+            restore_row(activity)
+            await db.commit()
 
     async def list_registrations(
         self, activity_id: int, page: int, page_size: int

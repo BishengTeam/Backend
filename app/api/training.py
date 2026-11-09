@@ -26,7 +26,9 @@ async def list_trainings(
 ) -> APIResponse[PaginatedData[TrainingListItem]]:
     """公开培训列表（仅展示已上架的培训）"""
     async with get_db_ctx() as db:
-        base = select(Training).where(Training.is_active == True)
+        base = select(Training).where(
+            Training.is_active == True, Training.deleted_at.is_(None)
+        )
         count_stmt = select(func.count()).select_from(base.subquery())
         total = (await db.execute(count_stmt)).scalar() or 0
         stmt = base.order_by(Training.created_at.desc()).offset((page - 1) * page_size).limit(page_size)

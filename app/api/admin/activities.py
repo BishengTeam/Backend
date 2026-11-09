@@ -173,3 +173,19 @@ async def export_registrations(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=activity_registrations.csv"},
     )
+
+@router.post("/{activity_id}/restore",
+    response_model=APIResponse,
+    summary="恢复活动（回收站）",
+    description="""
+从回收站恢复已删除的活动，删除后 **30 自然日** 内有效，过期自动永久删除。
+
+**认证**: 需 `activity:write` 权限
+    """,
+)
+async def restore_activity(
+    activity_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("activity:write")),
+):
+    await AdminActivityService().restore(activity_id)
+    return success(message="活动已恢复")

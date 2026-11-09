@@ -99,7 +99,7 @@ async def update_share_poster(
 |------|------|------|
 | poster_id | int | SharePoster ID |
 
-硬删除，数据不可恢复。
+删除后进回收站，30 自然日内可恢复。
 
 **认证**: 需 `homepage:write` 权限
     """,
@@ -135,3 +135,19 @@ async def batch_delete_share_posters(
 ):
     count = await AdminSharePosterService().batch_delete(body.ids)
     return success(data=count, message=f"已删除 {count} 个分享海报")
+
+@router.post("/{poster_id}/restore",
+    response_model=APIResponse,
+    summary="恢复分享海报（回收站）",
+    description="""
+从回收站恢复已删除的分享海报，删除后 **30 自然日** 内有效，过期自动永久删除。
+
+**认证**: 需 `homepage:write` 权限
+    """,
+)
+async def restore_share_poster(
+    poster_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("homepage:write")),
+):
+    await AdminSharePosterService().restore(poster_id)
+    return success(message="分享海报已恢复")

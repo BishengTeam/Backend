@@ -870,6 +870,8 @@ class UserService:
             )
             user.phone = None
             user.is_active = False
+            # 注销标记：区分「注销」（后台不可见、不进回收站）与管理端「禁用」
+            user.deactivated_at = datetime.now(timezone.utc)
             db.add(
                 RensheAuditLog(
                     actor_type="user",

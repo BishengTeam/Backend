@@ -281,10 +281,13 @@ class AdminRoutePresenceTests(unittest.TestCase):
 
     def test_quiz_batch_state_routes_replace_batch_delete(self):
         # Quiz state routes use f-string paths, which this AST helper cannot resolve.
+        # 2026-11 回收站改造：batch-delete 恢复（勾选批量删除，进回收站），
+        # 并新增 batch-delete-by-scope（按知识点/模块/题库一键清空）。
         source = (REPO_ROOT / "app/api/admin/quiz.py").read_text(encoding="utf-8")
         self.assertIn("batch-publish", source)
         self.assertIn("batch-disable", source)
-        self.assertNotIn("batch-delete", source)
+        self.assertIn("batch-delete", source)
+        self.assertIn("batch-delete-by-scope", source)
 
     def test_toggle_zone_status_route_exists(self):
         routes = _iter_admin_routes("app/api/admin/zones.py")

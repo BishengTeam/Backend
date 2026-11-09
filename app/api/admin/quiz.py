@@ -18,6 +18,7 @@ from app.middleware.rate_limit import limiter, quiz_admin_key
 from app.schemas.admin_quiz_contract import (
     AdminQuizBatchRequest,
     AdminQuizBatchResponse,
+    AdminQuizScopeDeleteRequest,
     AdminQuizAuditLogResponse,
     AdminQuizAuditQuery,
     AdminQuizImportJobQuery,
@@ -440,7 +441,7 @@ async def delete_module_v2(
     admin=Depends(require_permission("quiz_content_edit")),
 ) -> APIResponse[None]:
     await AdminQuizV2Service().delete_module(module_id, body, admin_id=admin.id)
-    return success(message="模块已删除，可在 7 天内撤销")
+    return success(message="模块已删除，可在 30 天内撤销")
 
 
 @router.post(
@@ -523,7 +524,7 @@ async def delete_knowledge_point(
     await AdminQuizV2Service().delete_knowledge_point(
         point_id, body, admin_id=admin.id
     )
-    return success(message="知识点已删除，可在 7 天内撤销")
+    return success(message="知识点已删除，可在 30 天内撤销")
 
 
 @router.post(
@@ -1019,7 +1020,7 @@ async def delete_question(
         # the transitioned entity for internal callers, but exposing it here
         # makes FastAPI fail response validation after the delete has already
         # committed (the client then sees a misleading 500/version conflict).
-        return success(message="题目已删除，可在 7 天内撤销")
+        return success(message="题目已删除，可在 30 天内撤销")
     await AdminQuizService().delete_question(
         question_id, body.lock_version, admin_id=admin.id
     )
@@ -1176,6 +1177,59 @@ async def batch_disable_questions(
         await AdminQuizV2Service().batch_transition_questions(body, "disable", admin_id=admin.id)
         if all(v2_flags)
         else await AdminQuizService().batch_disable_questions(body, admin_id=admin.id)
+    )
+    return success(data=result)
+
+
+@router.post(f"{QUESTION}/batch-delete",
+    response_model=APIResponse[AdminQuizBatchResponse],
+    summary="批量删除题目（勾选，进回收站）",
+    description="""
+勾选批量删除：草稿/已停用直接删，**已发布题自动先停用再删**。
+全部进回收站，**30 自然日**内可在回收站恢复，到期自动永久删除。
+已发布题库会守住「至少保留一条可用答题路径」，删到最后一条会被逐项拒绝。
+旧分类（非 V2）题目不支持本端点，会逐项报错。
+    """,
+)
+@limiter.limit(
+    f"{settings.QUIZ_ADMIN_BATCH_RATE_PER_MINUTE}/minute",
+    key_func=quiz_admin_key,
+)
+async def batch_delete_questions(
+    request: Request,
+    body: AdminQuizBatchRequest,
+    admin=Depends(require_permission("quiz:write")),
+) -> APIResponse[AdminQuizBatchResponse]:
+    v2_flags = [await AdminQuizV2Service().is_v2_question(item.question_id) for item in body.items]
+    if not all(v2_flags):
+        raise BusinessException("批量删除仅支持 V2 题目（旧分类题目请单独处理）")
+    result = await AdminQuizV2Service().batch_delete_questions(body, admin_id=admin.id)
+    return success(data=result)
+
+
+@router.post(f"{QUESTION}/batch-delete-by-scope",
+    response_model=APIResponse[AdminQuizBatchResponse],
+    summary="按范围一键清空题目（进回收站）",
+    description="""
+按范围一键清空：`knowledge_point_id`（知识点）/ `module_id`（模块）/ `library_id`（题库）
+三选一。已发布题自动先停用再删，全部进回收站，**30 自然日**内可恢复。
+题库范围要求题库未发布（已发布请先停用题库）；模块/知识点范围沿用单题守卫。
+    """,
+)
+@limiter.limit(
+    f"{settings.QUIZ_ADMIN_BATCH_RATE_PER_MINUTE}/minute",
+    key_func=quiz_admin_key,
+)
+async def batch_delete_questions_by_scope(
+    request: Request,
+    body: AdminQuizScopeDeleteRequest,
+    admin=Depends(require_permission("quiz:write")),
+) -> APIResponse[AdminQuizBatchResponse]:
+    result = await AdminQuizV2Service().delete_questions_by_scope(
+        library_id=body.library_id,
+        module_id=body.module_id,
+        knowledge_point_id=body.knowledge_point_id,
+        admin_id=admin.id,
     )
     return success(data=result)
 

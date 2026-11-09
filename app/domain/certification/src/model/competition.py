@@ -4,10 +4,10 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.adapter.database import Base, TimestampMixin
+from app.adapter.database import Base, RecycleBinMixin, TimestampMixin
 
 
-class Competition(Base, TimestampMixin):
+class Competition(Base, RecycleBinMixin, TimestampMixin):
     """赛事（一场比赛，含多条赛道）"""
 
     __tablename__ = "competition"

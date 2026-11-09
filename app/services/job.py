@@ -11,12 +11,14 @@ class JobService:
 
     async def list_jobs(self, page: int, page_size: int) -> PaginatedData[JobResponse]:
         async with get_db_ctx() as db:
-            count_stmt = select(func.count()).select_from(Job).where(Job.is_active == True)
+            count_stmt = select(func.count()).select_from(Job).where(
+                Job.is_active == True, Job.deleted_at.is_(None)
+            )
             total = (await db.execute(count_stmt)).scalar() or 0
 
             stmt = (
                 select(Job)
-                .where(Job.is_active == True)
+                .where(Job.is_active == True, Job.deleted_at.is_(None))
                 .order_by(Job.created_at.desc())
                 .offset((page - 1) * page_size)
                 .limit(page_size)

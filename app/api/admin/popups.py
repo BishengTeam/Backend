@@ -106,7 +106,7 @@ async def update_popup(
 |------|------|------|
 | popup_id | int | Popup ID |
 
-硬删除，数据不可恢复。
+删除后进回收站，30 自然日内可恢复。
 
 **认证**: 需 `homepage:write` 权限
     """,
@@ -142,3 +142,19 @@ async def batch_delete_popups(
 ):
     count = await AdminPopupService().batch_delete(body.ids)
     return success(data=count, message=f"已删除 {count} 个弹窗海报")
+
+@router.post("/{popup_id}/restore",
+    response_model=APIResponse,
+    summary="恢复弹窗海报（回收站）",
+    description="""
+从回收站恢复已删除的弹窗海报，删除后 **30 自然日** 内有效，过期自动永久删除。
+
+**认证**: 需 `homepage:write` 权限
+    """,
+)
+async def restore_popup(
+    popup_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("homepage:write")),
+):
+    await AdminPopupService().restore(popup_id)
+    return success(message="弹窗海报已恢复")

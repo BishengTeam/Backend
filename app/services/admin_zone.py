@@ -1,10 +1,11 @@
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import NotFoundException
 from app.domain.content.src.index import Zone
 from app.schemas.admin_zone import AdminZoneCreate, AdminZoneListItem, AdminZoneUpdate
 from app.schemas.common import PaginatedData
+from app.services.recycle_bin import restore_row, soft_delete_row
 
 
 class AdminZoneService:
@@ -24,7 +25,7 @@ class AdminZoneService:
         self, keyword: str | None, zone_type: str | None, page: int, page_size: int
     ) -> PaginatedData[AdminZoneListItem]:
         async with get_db_ctx() as db:
-            base = select(*self._list_columns)
+            base = select(*self._list_columns).where(Zone.deleted_at.is_(None))
             if keyword:
                 base = base.where(Zone.title.ilike(f"%{keyword}%"))
             if zone_type:
@@ -54,7 +55,7 @@ class AdminZoneService:
     async def update(self, zone_id: int, data: AdminZoneUpdate) -> AdminZoneListItem:
         async with get_db_ctx() as db:
             zone = await db.get(Zone, zone_id)
-            if zone is None:
+            if zone is None or zone.deleted_at is not None:
                 raise NotFoundException("专区内容")
             update_data = data.model_dump(exclude_unset=True)
             for key, value in update_data.items():
@@ -66,7 +67,7 @@ class AdminZoneService:
     async def toggle_status(self, zone_id: int, is_active: bool) -> AdminZoneListItem:
         async with get_db_ctx() as db:
             zone = await db.get(Zone, zone_id)
-            if zone is None:
+            if zone is None or zone.deleted_at is not None:
                 raise NotFoundException("专区内容")
             zone.is_active = is_active
             await db.commit()
@@ -74,28 +75,41 @@ class AdminZoneService:
             return AdminZoneListItem.model_validate(zone)
 
     async def delete(self, zone_id: int) -> None:
+        """软删除进回收站，30 自然日内可恢复。"""
         async with get_db_ctx() as db:
             zone = await db.get(Zone, zone_id)
-            if zone is None:
+            if zone is None or zone.deleted_at is not None:
                 raise NotFoundException("专区内容")
-            await db.delete(zone)
+            soft_delete_row(zone)
             await db.commit()
 
     async def batch_delete(self, zone_ids: list[int]) -> int:
         async with get_db_ctx() as db:
             result = await db.execute(
-                delete(Zone).where(Zone.id.in_(zone_ids))
+                select(Zone).where(Zone.id.in_(zone_ids), Zone.deleted_at.is_(None))
             )
+            zones = result.scalars().all()
+            for zone in zones:
+                soft_delete_row(zone)
             await db.commit()
-            return result.rowcount or 0
+            return len(zones)
 
     async def update_sort(self, updates: list[dict]) -> int:
         async with get_db_ctx() as db:
             count = 0
             for item in updates:
                 zone = await db.get(Zone, item["id"])
-                if zone is not None:
+                if zone is not None and zone.deleted_at is None:
                     zone.sort_order = item["sort_order"]
                     count += 1
             await db.commit()
             return count
+
+    async def restore(self, zone_id: int) -> None:
+        """从回收站恢复。"""
+        async with get_db_ctx() as db:
+            zone = await db.get(Zone, zone_id)
+            if zone is None or zone.deleted_at is None:
+                raise NotFoundException("专区内容")
+            restore_row(zone)
+            await db.commit()

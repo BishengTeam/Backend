@@ -1,10 +1,10 @@
 from sqlalchemy import ForeignKey, String, Integer, Text, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.adapter.database import Base, TimestampMixin
+from app.adapter.database import Base, RecycleBinMixin, TimestampMixin
 
 
-class Job(Base, TimestampMixin):
+class Job(Base, RecycleBinMixin, TimestampMixin):
     __tablename__ = "job"
 
     title: Mapped[str] = mapped_column(String(256), nullable=False)

@@ -112,3 +112,19 @@ async def delete_job(
     """删除指定岗位及其投递记录"""
     await AdminJobService().delete(job_id)
     return success(message="岗位已删除")
+
+@router.post("/{job_id}/restore",
+    response_model=APIResponse,
+    summary="恢复岗位（回收站）",
+    description="""
+从回收站恢复已删除的岗位，删除后 **30 自然日** 内有效，过期自动永久删除。
+
+**认证**: 需 `job:write` 权限
+    """,
+)
+async def restore_job(
+    job_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("job:write")),
+):
+    await AdminJobService().restore(job_id)
+    return success(message="岗位已恢复")

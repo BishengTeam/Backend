@@ -85,7 +85,7 @@ from app.utils.audit import sanitize_audit_value
 from app.utils.excel import export_csv
 
 
-_RESTORE_WINDOW = timedelta(days=7)
+_RESTORE_WINDOW = timedelta(days=30)
 _ACCESS_MODE_TRANSITIONS = {
     QuizLibraryAccessMode.PENDING: {
         QuizLibraryAccessMode.PAID,
@@ -1113,7 +1113,7 @@ class AdminQuizV2Service:
                 if library.status != "deleted":
                     raise BusinessException("只有已删除题库可以撤销删除")
                 if library.restore_until is None or library.restore_until <= now:
-                    raise BusinessException("删除已超过 7 天，无法撤销")
+                    raise BusinessException("删除已超过 30 天，无法撤销")
                 library.status = "archived"
                 library.deleted_at = None
                 library.restore_until = None
@@ -1519,7 +1519,7 @@ class AdminQuizV2Service:
             if module.status != "deleted":
                 raise BusinessException("只有已删除模块可以撤销删除")
             if module.restore_until is None or module.restore_until <= now:
-                raise BusinessException("删除已超过 7 天，无法撤销")
+                raise BusinessException("删除已超过 30 天，无法撤销")
             before = self._module_fields(module)
             module.status = "disabled"
             module.deleted_at = None
@@ -1753,7 +1753,7 @@ class AdminQuizV2Service:
             if point.status != "deleted":
                 raise BusinessException("只有已删除知识点可以撤销删除")
             if point.restore_until is None or point.restore_until <= now:
-                raise BusinessException("删除已超过 7 天，无法撤销")
+                raise BusinessException("删除已超过 30 天，无法撤销")
             before = self._point_fields(point)
             point.status = "disabled"
             point.deleted_at = None
@@ -2474,7 +2474,7 @@ class AdminQuizV2Service:
                 if question.status != "deleted":
                     raise BusinessException("仅已删除题目可以撤销删除")
                 if question.restore_until is None or question.restore_until <= now:
-                    raise BusinessException("删除已超过 7 天，无法撤销")
+                    raise BusinessException("删除已超过 30 天，无法撤销")
                 question.status = "disabled" if question.ever_published else "draft"
                 question.deleted_at = None
                 question.restore_until = None
@@ -2646,6 +2646,183 @@ class AdminQuizV2Service:
             if _db is None:
                 await db.commit()
             return AdminQuizBatchResponse(succeeded=True, updated_count=len(questions), errors=[])
+
+    async def batch_delete_questions(
+        self,
+        data: AdminQuizBatchRequest,
+        *,
+        admin_id: int,
+    ) -> AdminQuizBatchResponse:
+        """勾选批量删除：草稿/已停用直接删，已发布题自动先停用再删（决策 2）。
+
+        全部进回收站（30 自然日倒计时）；已发布题库守住「至少保留一条
+        模块→知识点→已发布题」的可用路径，删到最后一条会被逐项拒绝。
+        """
+        errors: list[AdminQuizBatchItemError] = []
+        deleted_count = 0
+        async with get_db_ctx() as db:
+            now = self._now()
+            for item in data.items:
+                question = await self._locked(db, QuizQuestion, item.question_id)
+                if question is None or question.library_id is None:
+                    errors.append(
+                        AdminQuizBatchItemError(
+                            question_id=item.question_id, code=40300,
+                            field=None, message="V2 题目不存在",
+                        )
+                    )
+                    continue
+                if question.status == "deleted":
+                    errors.append(
+                        AdminQuizBatchItemError(
+                            question_id=item.question_id, code=40200,
+                            field="status", message="题目已在回收站",
+                        )
+                    )
+                    continue
+                if int(question.lock_version) != item.lock_version:
+                    errors.append(
+                        AdminQuizBatchItemError(
+                            question_id=item.question_id, code=40201,
+                            field="lock_version", message=self._CONFLICT,
+                        )
+                    )
+                    continue
+                try:
+                    await self._delete_question_row(
+                        db, question, now=now, admin_id=admin_id
+                    )
+                except (BusinessException, NotFoundException) as exc:
+                    errors.append(
+                        AdminQuizBatchItemError(
+                            question_id=item.question_id, code=40200,
+                            field="status", message=exc.message,
+                        )
+                    )
+                    continue
+                deleted_count += 1
+            await db.commit()
+        return AdminQuizBatchResponse(
+            succeeded=not errors, updated_count=deleted_count, errors=errors
+        )
+
+    async def delete_questions_by_scope(
+        self,
+        *,
+        library_id: int | None = None,
+        module_id: int | None = None,
+        knowledge_point_id: int | None = None,
+        admin_id: int,
+    ) -> AdminQuizBatchResponse:
+        """按范围一键清空：知识点 / 模块 / 题库三级（决策 8）。
+
+        题库范围要求题库未发布（已发布请先停用题库）；模块/知识点范围沿用
+        单题守卫（已发布题库需保留至少一条可用路径），无法删的逐项进 errors。
+        """
+        if sum(bool(v) for v in (library_id, module_id, knowledge_point_id)) != 1:
+            raise BusinessException("必须且只能指定一个清空范围")
+        errors: list[AdminQuizBatchItemError] = []
+        deleted_count = 0
+        async with get_db_ctx() as db:
+            now = self._now()
+            if library_id is not None:
+                library = await self._locked(db, QuizLibrary, library_id)
+                if library is None:
+                    raise NotFoundException("题库")
+                if library.status == "published":
+                    raise BusinessException("题库已发布，请先停用题库再一键清空")
+                rows = (
+                    await db.execute(
+                        select(QuizQuestion)
+                        .where(
+                            QuizQuestion.library_id == library_id,
+                            QuizQuestion.status != "deleted",
+                        )
+                        .with_for_update()
+                        .order_by(QuizQuestion.id)
+                    )
+                ).scalars().all()
+            elif module_id is not None:
+                module = await self._locked(db, QuizModule, module_id)
+                if module is None:
+                    raise NotFoundException("模块")
+                rows = (
+                    await db.execute(
+                        select(QuizQuestion)
+                        .where(
+                            QuizQuestion.knowledge_point_id.in_(
+                                select(QuizKnowledgePoint.id).where(
+                                    QuizKnowledgePoint.module_id == module_id
+                                )
+                            ),
+                            QuizQuestion.status != "deleted",
+                        )
+                        .with_for_update()
+                        .order_by(QuizQuestion.id)
+                    )
+                ).scalars().all()
+            else:
+                point = await self._locked(db, QuizKnowledgePoint, knowledge_point_id)
+                if point is None:
+                    raise NotFoundException("知识点")
+                rows = (
+                    await db.execute(
+                        select(QuizQuestion)
+                        .where(
+                            QuizQuestion.knowledge_point_id == knowledge_point_id,
+                            QuizQuestion.status != "deleted",
+                        )
+                        .with_for_update()
+                        .order_by(QuizQuestion.id)
+                    )
+                ).scalars().all()
+            for question in rows:
+                try:
+                    await self._delete_question_row(
+                        db, question, now=now, admin_id=admin_id
+                    )
+                except (BusinessException, NotFoundException) as exc:
+                    errors.append(
+                        AdminQuizBatchItemError(
+                            question_id=int(question.id), code=40200,
+                            field="status", message=exc.message,
+                        )
+                    )
+                    continue
+                deleted_count += 1
+            await db.commit()
+        return AdminQuizBatchResponse(
+            succeeded=not errors, updated_count=deleted_count, errors=errors
+        )
+
+    async def _delete_question_row(
+        self, db, question: QuizQuestion, *, now, admin_id: int
+    ) -> None:
+        """单题软删入回收站；已发布题先停用。调用方负责逐题捕获业务异常。"""
+        before = self._question_fields(question)
+        if question.status == "published":
+            await self._ensure_published_library_remains_usable(
+                db,
+                int(question.library_id),
+                excluded_question_ids={int(question.id)},
+            )
+            question.status = "disabled"
+            question.disabled_at = now
+        question.status = "deleted"
+        question.deleted_at = now
+        question.restore_until = now + _RESTORE_WINDOW
+        question.updated_by = admin_id
+        question.lock_version += 1
+        self._audit(
+            db,
+            admin_id=admin_id,
+            action="question.delete",
+            object_type="question",
+            object_id=int(question.id),
+            before=before,
+            after=self._question_fields(question),
+            permission="quiz_content_edit",
+        )
 
     async def is_v2_question(self, question_id: int) -> bool:
         async with get_db_ctx() as db:

@@ -300,13 +300,24 @@ async def preview_resource(course_id: int, chapter_id: int, _admin=Depends(requi
 async def delete_chapter(
     course_id: int = Path(..., ge=1),
     chapter_id: int = Path(..., ge=1),
-    force: bool = Query(False, description="确认删除有学习进度的章节"),
+    force: bool = Query(False, description="兼容参数：章节删除现进回收站，无需 force"),
     admin=Depends(require_permission("course:write")),
 ):
     await AdminCourseService().delete_chapter_completely(
         course_id, chapter_id, admin_id=admin.id, force=force
     )
     return success(message="章节已删除")
+
+
+@router.post("/{course_id}/chapters/{chapter_id}/restore", response_model=APIResponse)
+async def restore_chapter(
+    course_id: int = Path(..., ge=1),
+    chapter_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("course:write")),
+):
+    """从回收站恢复章节（30 自然日内）。"""
+    await AdminCourseService().restore_chapter(course_id, chapter_id, admin_id=admin.id)
+    return success(message="章节已恢复")
 
 
 @router.get("/{course_id}/quiz-bindings", response_model=APIResponse[list[AdminCourseBindingResponse]])

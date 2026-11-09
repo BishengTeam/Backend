@@ -4,6 +4,7 @@ import io
 from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
+from app.services.recycle_bin import restore_row, soft_delete_row
 from app.domain.certification.src.index import (
     Competition,
     CompetitionReg,
@@ -108,7 +109,7 @@ class AdminCompetitionService:
         self, keyword: str | None, page: int, page_size: int
     ) -> PaginatedData[AdminCompetitionListItem]:
         async with get_db_ctx() as db:
-            base = select(Competition)
+            base = select(Competition).where(Competition.deleted_at.is_(None))
             if keyword:
                 base = base.where(Competition.name.ilike(f"%{keyword}%"))
             total = (
@@ -199,7 +200,8 @@ class AdminCompetitionService:
         async with get_db_ctx() as db:
             async with db.begin():
                 competition = await db.get(Competition, competition_id)
-                if competition is None:
+                # getattr 兜底：旧单测用 SimpleNamespace 构造竞赛对象，无软删字段
+                if competition is None or getattr(competition, "deleted_at", None) is not None:
                     raise NotFoundException("赛事")
                 update_data = data.model_dump(exclude_unset=True)
                 tracks_input = update_data.pop("tracks", None)
@@ -261,36 +263,22 @@ class AdminCompetitionService:
             )
 
     async def delete(self, competition_id: int) -> None:
-        """Delete a competition, its tracks, and all associated registrations."""
+        """软删除进回收站，30 自然日内可恢复。报名记录（学生数据）保留不动。"""
         async with get_db_ctx() as db:
-            async with db.begin():
-                competition = await db.get(Competition, competition_id)
-                if competition is None:
-                    raise NotFoundException("赛事")
+            competition = await db.get(Competition, competition_id)
+            if competition is None or competition.deleted_at is not None:
+                raise NotFoundException("赛事")
+            soft_delete_row(competition)
+            await db.commit()
 
-                # Get all track IDs for this competition
-                track_ids = (
-                    await db.execute(
-                        select(CompetitionTrack.id).where(
-                            CompetitionTrack.competition_id == competition_id
-                        )
-                    )
-                ).scalars().all()
-
-                # Delete registrations pointing to those tracks
-                if track_ids:
-                    regs = (
-                        await db.execute(
-                            select(CompetitionReg).where(
-                                CompetitionReg.track_id.in_(track_ids)
-                            )
-                        )
-                    ).scalars().all()
-                    for reg in regs:
-                        await db.delete(reg)
-
-                # Delete the competition (tracks cascade via FK)
-                await db.delete(competition)
+    async def restore(self, competition_id: int) -> None:
+        """从回收站恢复。"""
+        async with get_db_ctx() as db:
+            competition = await db.get(Competition, competition_id)
+            if competition is None or competition.deleted_at is None:
+                raise NotFoundException("赛事")
+            restore_row(competition)
+            await db.commit()
 
     async def list_registrations(
         self,

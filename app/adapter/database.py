@@ -34,6 +34,13 @@ class TimestampMixin:
     )
 
 
+class RecycleBinMixin:
+    """软删除进回收站：删除时写 deleted_at 并给 30 自然日 restore_until，到期由清理任务永久删除。"""
+
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    restore_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 async def get_db() -> AsyncSession:
     async with async_session_factory() as session:
         yield session

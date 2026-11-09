@@ -63,6 +63,7 @@ class ZoneService:
                 select(Banner)
                 .where(
                     Banner.is_active == True,
+                    Banner.deleted_at.is_(None),
                     (Banner.start_time == None) | (Banner.start_time <= now),
                     (Banner.end_time == None) | (Banner.end_time >= now),
                 )
@@ -76,6 +77,7 @@ class ZoneService:
             # ── Popup（登录后弹窗海报；多条同时生效时随机取一条轮换曝光）──
             popup_stmt = select(Popup).where(
                 Popup.is_active == True,
+                Popup.deleted_at.is_(None),
                 (Popup.start_time == None) | (Popup.start_time <= now),
                 (Popup.end_time == None) | (Popup.end_time >= now),
             )
@@ -102,7 +104,11 @@ class ZoneService:
             for ztype in HOME_ZONE_CONTENT_TYPES:
                 zone_stmt = (
                     select(Zone)
-                    .where(Zone.zone_type == ztype, Zone.is_active == True)
+                    .where(
+                        Zone.zone_type == ztype,
+                        Zone.is_active == True,
+                        Zone.deleted_at.is_(None),
+                    )
                     .order_by(Zone.sort_order, Zone.id.desc())
                     .limit(HOME_ZONE_LIMIT)
                 )

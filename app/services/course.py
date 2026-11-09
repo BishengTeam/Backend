@@ -122,7 +122,10 @@ class CourseService:
             chapters = list(
                 await db.scalars(
                     select(CourseChapter)
-                    .where(CourseChapter.course_id == course_id)
+                    .where(
+                        CourseChapter.course_id == course_id,
+                        CourseChapter.deleted_at.is_(None),
+                    )
                     .order_by(CourseChapter.sort_order, CourseChapter.id)
                 )
             )
@@ -268,7 +271,10 @@ class CourseService:
             rows = list(
                 await db.scalars(
                     select(CourseChapter)
-                    .where(CourseChapter.course_id == course_id)
+                    .where(
+                        CourseChapter.course_id == course_id,
+                        CourseChapter.deleted_at.is_(None),
+                    )
                     .order_by(CourseChapter.sort_order, CourseChapter.id)
                 )
             )
@@ -359,7 +365,7 @@ class CourseService:
     ) -> ChapterProgressResponse:
         async with get_db_ctx() as db:
             chapter = await db.scalar(select(CourseChapter).where(CourseChapter.id == data.chapter_id).with_for_update())
-            if chapter is None or chapter.course_id != course_id:
+            if chapter is None or chapter.course_id != course_id or chapter.deleted_at is not None:
                 raise NotFoundException("课程章节")
             course = await db.get(Course, course_id)
             if not course or not course.is_active or course.status != "published" or not (

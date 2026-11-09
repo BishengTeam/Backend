@@ -3,10 +3,10 @@ from datetime import datetime
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.adapter.database import Base, TimestampMixin
+from app.adapter.database import Base, RecycleBinMixin, TimestampMixin
 
 
-class Activity(Base, TimestampMixin):
+class Activity(Base, RecycleBinMixin, TimestampMixin):
     __tablename__ = "activity"
 
     title: Mapped[str] = mapped_column(String(256), nullable=False)

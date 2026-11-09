@@ -11,10 +11,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.adapter.database import Base, TimestampMixin
+from app.adapter.database import Base, RecycleBinMixin, TimestampMixin
 
 
-class CourseChapter(Base, TimestampMixin):
+class CourseChapter(Base, RecycleBinMixin, TimestampMixin):
     __tablename__ = "course_chapter"
     __table_args__ = (
         UniqueConstraint("course_id", "sort_order", name="uq_course_chapter_sort"),

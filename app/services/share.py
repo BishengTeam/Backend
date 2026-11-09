@@ -46,7 +46,10 @@ class ShareService:
             poster = (
                 await db.execute(
                     select(SharePoster)
-                    .where(SharePoster.is_active == True)  # noqa: E712
+                    .where(
+                        SharePoster.is_active == True,  # noqa: E712
+                        SharePoster.deleted_at.is_(None),
+                    )
                     .order_by(SharePoster.id.desc())
                     .limit(1)
                 )

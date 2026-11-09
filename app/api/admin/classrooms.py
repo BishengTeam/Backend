@@ -245,3 +245,20 @@ async def review_submission(
     await ClassroomAdminService().review_submission(
         classroom_id, quiz_id, submission_id, _teacher_scope(admin), body)
     return success(message="批改已保存")
+
+@router.post("/{classroom_id}/videos/{video_id}/restore", response_model=APIResponse, summary="恢复视频（回收站）")
+async def restore_video(
+    classroom_id: int = Path(..., ge=1), video_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("classroom:manage")),
+):
+    await ClassroomAdminService().restore_video(classroom_id, video_id, _teacher_scope(admin))
+    return success(message="视频已恢复")
+
+
+@router.post("/{classroom_id}/questions/{question_id}/restore", response_model=APIResponse, summary="恢复题目（回收站）")
+async def restore_question(
+    classroom_id: int = Path(..., ge=1), question_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("classroom:manage")),
+):
+    await ClassroomAdminService().restore_question(classroom_id, question_id, _teacher_scope(admin))
+    return success(message="题目已恢复")

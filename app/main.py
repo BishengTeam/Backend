@@ -269,6 +269,8 @@ QUIZ_RATE_LIMITS = {
     ("post", "/admin/quiz/questions/{question_id}/restore"): 120,
     ("post", "/admin/quiz/questions/batch-publish"): 30,
     ("post", "/admin/quiz/questions/batch-disable"): 30,
+    ("post", "/admin/quiz/questions/batch-delete"): 30,
+    ("post", "/admin/quiz/questions/batch-delete-by-scope"): 30,
     ("post", "/admin/quiz/imports/csv"): 10,
     ("post", "/admin/quiz/imports/json"): 10,
     ("post", "/admin/quiz/imports/{job_id}/retry"): 10,

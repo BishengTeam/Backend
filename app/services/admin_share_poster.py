@@ -5,6 +5,7 @@ from app.port.exceptions import NotFoundException
 from app.domain.content.src.index import SharePoster
 from app.schemas.admin_share_poster import SharePosterCreate, SharePosterListItem, SharePosterUpdate
 from app.schemas.common import PaginatedData
+from app.services.recycle_bin import restore_row, soft_delete_row
 
 
 class AdminSharePosterService:
@@ -15,7 +16,7 @@ class AdminSharePosterService:
         page_size: int = 20,
     ) -> PaginatedData[SharePosterListItem]:
         async with get_db_ctx() as db:
-            base = select(SharePoster)
+            base = select(SharePoster).where(SharePoster.deleted_at.is_(None))
             total = (
                 await db.execute(
                     select(func.count()).select_from(base.subquery())
@@ -46,7 +47,7 @@ class AdminSharePosterService:
     async def update(self, poster_id: int, data: SharePosterUpdate) -> SharePosterListItem:
         async with get_db_ctx() as db:
             poster = await db.get(SharePoster, poster_id)
-            if poster is None:
+            if poster is None or poster.deleted_at is not None:
                 raise NotFoundException("SharePoster")
             update_data = data.model_dump(exclude_unset=True)
             for key, value in update_data.items():
@@ -56,20 +57,32 @@ class AdminSharePosterService:
             return SharePosterListItem.model_validate(poster)
 
     async def delete(self, poster_id: int) -> None:
+        """软删除进回收站，30 自然日内可恢复。"""
         async with get_db_ctx() as db:
             poster = await db.get(SharePoster, poster_id)
-            if poster is None:
+            if poster is None or poster.deleted_at is not None:
                 raise NotFoundException("SharePoster")
-            await db.delete(poster)
+            soft_delete_row(poster)
             await db.commit()
 
     async def batch_delete(self, poster_ids: list[int]) -> int:
         async with get_db_ctx() as db:
             result = await db.execute(
-                select(SharePoster).where(SharePoster.id.in_(poster_ids))
+                select(SharePoster).where(
+                    SharePoster.id.in_(poster_ids), SharePoster.deleted_at.is_(None)
+                )
             )
             posters = result.scalars().all()
             for poster in posters:
-                await db.delete(poster)
+                soft_delete_row(poster)
             await db.commit()
             return len(posters)
+
+    async def restore(self, poster_id: int) -> None:
+        """从回收站恢复。"""
+        async with get_db_ctx() as db:
+            poster = await db.get(SharePoster, poster_id)
+            if poster is None or poster.deleted_at is None:
+                raise NotFoundException("SharePoster")
+            restore_row(poster)
+            await db.commit()

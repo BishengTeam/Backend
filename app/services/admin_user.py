@@ -61,6 +61,8 @@ class AdminUserService:
                 )
                 .outerjoin(UserRealname, UserRealname.user_id == User.id)
                 .outerjoin(UserStudent, UserStudent.user_id == User.id)
+                # 禁用用户进回收站陈列、已注销用户后台不可见，列表与导出一律不再展示
+                .where(User.is_active == True)  # noqa: E712
             )
             if filters:
                 if filters.openid:
@@ -208,6 +210,8 @@ class AdminUserService:
                 select(User)
                 .outerjoin(UserRealname, UserRealname.user_id == User.id)
                 .outerjoin(UserStudent, UserStudent.user_id == User.id)
+                # 禁用用户进回收站陈列、已注销用户后台不可见，列表与导出一律不再展示
+                .where(User.is_active == True)  # noqa: E712
             )
             if filters:
                 if filters.openid:

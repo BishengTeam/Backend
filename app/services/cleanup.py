@@ -19,13 +19,31 @@ CLEANUP_DAYS = 30
 CLEANUP_INTERVAL_SECONDS = 24 * 3600
 ORDER_TIMEOUT_INTERVAL_SECONDS = 60
 POINTS_EXPIRY_INTERVAL_SECONDS = 3600
+RECYCLE_BIN_PURGE_INTERVAL_SECONDS = 3600
 
 
 async def cleanup_loop():
     next_account_cleanup_at = 0.0
     next_points_expiry_at = 0.0
+    next_recycle_purge_at = 0.0
     while True:
         now = time.monotonic()
+        if now >= next_recycle_purge_at:
+            try:
+                from app.services.recycle_bin import RecycleBinService
+
+                purged = await RecycleBinService().purge_expired()
+                if purged["physical"] or purged["tombstone"]:
+                    logger.info(
+                        "回收站到期清理: 物理删=%d 墓碑=%d",
+                        purged["physical"],
+                        purged["tombstone"],
+                    )
+            except Exception as exc:
+                logger.error(
+                    "回收站到期清理失败: exception_type=%s", type(exc).__name__
+                )
+            next_recycle_purge_at = now + RECYCLE_BIN_PURGE_INTERVAL_SECONDS
         if now >= next_points_expiry_at:
             try:
                 from app.services.points import PointsService

@@ -17,6 +17,7 @@ from app.domain.classroom.src.index import (
     ClassroomVideo,
 )
 from app.domain.user.src.index import AdminUser, User, UserProfile
+from app.services.recycle_bin import restore_row, soft_delete_row
 from app.port.exceptions import (
     BusinessException,
     ForbiddenException,
@@ -266,7 +267,10 @@ class ClassroomAdminService:
         async with get_db_ctx() as db:
             await _get_classroom(db, classroom_id, teacher_admin_id=teacher_admin_id)
             rows = (await db.execute(
-                select(ClassroomVideo).where(ClassroomVideo.classroom_id == classroom_id)
+                select(ClassroomVideo).where(
+                    ClassroomVideo.classroom_id == classroom_id,
+                    ClassroomVideo.deleted_at.is_(None),
+                )
                 .order_by(ClassroomVideo.sort_order, ClassroomVideo.id)
             )).scalars().all()
             return [
@@ -290,12 +294,23 @@ class ClassroomAdminService:
             return await CourseStorage.signed_url(video.storage_key)
 
     async def delete_video(self, classroom_id: int, video_id: int, teacher_admin_id: int | None) -> None:
+        """软删除进回收站，30 自然日内可恢复。"""
         async with get_db_ctx() as db:
             await _get_classroom(db, classroom_id, teacher_admin_id=teacher_admin_id)
             video = await db.get(ClassroomVideo, video_id)
-            if video is None or video.classroom_id != classroom_id:
+            if video is None or video.classroom_id != classroom_id or video.deleted_at is not None:
                 raise NotFoundException("课堂视频")
-            await db.delete(video)
+            soft_delete_row(video)
+            await db.commit()
+
+    async def restore_video(self, classroom_id: int, video_id: int, teacher_admin_id: int | None) -> None:
+        """从回收站恢复。"""
+        async with get_db_ctx() as db:
+            await _get_classroom(db, classroom_id, teacher_admin_id=teacher_admin_id)
+            video = await db.get(ClassroomVideo, video_id)
+            if video is None or video.classroom_id != classroom_id or video.deleted_at is None:
+                raise NotFoundException("课堂视频")
+            restore_row(video)
             await db.commit()
 
     # ── 题库 ────────────────────────────────────────────────
@@ -351,7 +366,8 @@ class ClassroomAdminService:
         async with get_db_ctx() as db:
             await _get_classroom(db, classroom_id, teacher_admin_id=teacher_admin_id)
             base = select(ClassroomQuestion).where(
-                ClassroomQuestion.classroom_id == classroom_id
+                ClassroomQuestion.classroom_id == classroom_id,
+                ClassroomQuestion.deleted_at.is_(None),
             )
             if status:
                 base = base.where(ClassroomQuestion.status == status)
@@ -382,6 +398,7 @@ class ClassroomAdminService:
                 select(ClassroomQuestion).where(
                     ClassroomQuestion.classroom_id == classroom_id,
                     ClassroomQuestion.id.in_(question_ids),
+                    ClassroomQuestion.deleted_at.is_(None),
                 )
             )).scalars().all()
             for q in rows:
@@ -392,12 +409,25 @@ class ClassroomAdminService:
     async def delete_question(
         self, classroom_id: int, question_id: int, teacher_admin_id: int | None
     ) -> None:
+        """软删除进回收站，30 自然日内可恢复。"""
         async with get_db_ctx() as db:
             await _get_classroom(db, classroom_id, teacher_admin_id=teacher_admin_id)
             q = await db.get(ClassroomQuestion, question_id)
-            if q is None or q.classroom_id != classroom_id:
+            if q is None or q.classroom_id != classroom_id or q.deleted_at is not None:
                 raise NotFoundException("题目")
-            await db.delete(q)
+            soft_delete_row(q)
+            await db.commit()
+
+    async def restore_question(
+        self, classroom_id: int, question_id: int, teacher_admin_id: int | None
+    ) -> None:
+        """从回收站恢复。"""
+        async with get_db_ctx() as db:
+            await _get_classroom(db, classroom_id, teacher_admin_id=teacher_admin_id)
+            q = await db.get(ClassroomQuestion, question_id)
+            if q is None or q.classroom_id != classroom_id or q.deleted_at is None:
+                raise NotFoundException("题目")
+            restore_row(q)
             await db.commit()
 
     # ── 测验 ────────────────────────────────────────────────
@@ -422,6 +452,7 @@ class ClassroomAdminService:
                     ClassroomQuestion.classroom_id == classroom_id,
                     ClassroomQuestion.id.in_(data.question_ids),
                     ClassroomQuestion.status == "published",
+                    ClassroomQuestion.deleted_at.is_(None),
                 )
             )).scalars().all()
             if len(questions) != len(set(data.question_ids)):

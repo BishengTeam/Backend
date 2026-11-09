@@ -184,3 +184,19 @@ async def get_form_field_presets(
 ):
     from app.schemas.competition_form import PRESET_FIELDS
     return success(data=PRESET_FIELDS)
+
+@router.post("/{competition_id}/restore",
+    response_model=APIResponse,
+    summary="恢复赛事（回收站）",
+    description="""
+从回收站恢复已删除的赛事，删除后 **30 自然日** 内有效，过期自动永久删除。
+
+**认证**: 需 `competition:write` 权限
+    """,
+)
+async def restore_competition(
+    competition_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("competition:write")),
+):
+    await AdminCompetitionService().restore(competition_id)
+    return success(message="赛事已恢复")

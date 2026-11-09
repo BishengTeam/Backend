@@ -112,3 +112,19 @@ async def delete_training(
     """删除指定培训"""
     await AdminTrainingService().delete(training_id)
     return success(message="培训已删除")
+
+@router.post("/{training_id}/restore",
+    response_model=APIResponse,
+    summary="恢复培训（回收站）",
+    description="""
+从回收站恢复已删除的培训，删除后 **30 自然日** 内有效，过期自动永久删除。
+
+**认证**: 需 `training:write` 权限
+    """,
+)
+async def restore_training(
+    training_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("training:write")),
+):
+    await AdminTrainingService().restore(training_id)
+    return success(message="培训已恢复")

@@ -5,6 +5,7 @@ from app.port.exceptions import NotFoundException
 from app.domain.content.src.index import Training
 from app.schemas.admin_training import AdminTrainingCreate, AdminTrainingListItem, AdminTrainingUpdate
 from app.schemas.common import PaginatedData
+from app.services.recycle_bin import restore_row, soft_delete_row
 
 
 class AdminTrainingService:
@@ -27,7 +28,7 @@ class AdminTrainingService:
         self, keyword: str | None, page: int, page_size: int
     ) -> PaginatedData[AdminTrainingListItem]:
         async with get_db_ctx() as db:
-            base = select(*self._list_columns)
+            base = select(*self._list_columns).where(Training.deleted_at.is_(None))
             if keyword:
                 base = base.where(Training.title.ilike(f"%{keyword}%"))
             count_stmt = select(func.count()).select_from(base.subquery())
@@ -53,7 +54,7 @@ class AdminTrainingService:
     async def update(self, training_id: int, data: AdminTrainingUpdate) -> AdminTrainingListItem:
         async with get_db_ctx() as db:
             training = await db.get(Training, training_id)
-            if training is None:
+            if training is None or training.deleted_at is not None:
                 raise NotFoundException("培训")
             update_data = data.model_dump(exclude_unset=True)
             for key, value in update_data.items():
@@ -63,9 +64,19 @@ class AdminTrainingService:
             return AdminTrainingListItem.model_validate(training)
 
     async def delete(self, training_id: int) -> None:
+        """软删除进回收站，30 自然日内可恢复。"""
         async with get_db_ctx() as db:
             training = await db.get(Training, training_id)
-            if training is None:
+            if training is None or training.deleted_at is not None:
                 raise NotFoundException("培训")
-            await db.delete(training)
+            soft_delete_row(training)
+            await db.commit()
+
+    async def restore(self, training_id: int) -> None:
+        """从回收站恢复。"""
+        async with get_db_ctx() as db:
+            training = await db.get(Training, training_id)
+            if training is None or training.deleted_at is None:
+                raise NotFoundException("培训")
+            restore_row(training)
             await db.commit()

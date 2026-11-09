@@ -11,6 +11,7 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizAuditLogResponse,
     AdminQuizAuditQuery,
     AdminQuizBatchRequest,
+    AdminQuizScopeDeleteRequest,
     AdminQuizBatchResponse,
     AdminQuizCategoryCreate,
     AdminQuizCategoryImpactQuery,
@@ -667,6 +668,26 @@ QUIZ_API_CONTRACTS: tuple[QuizEndpointContract, ...] = (
         errors=_RATE_ERRORS,
     ),
     QuizEndpointContract(
+        "POST",
+        "/admin/quiz/questions/batch-delete",
+        "admin",
+        APIResponse[AdminQuizBatchResponse],
+        body_model=AdminQuizBatchRequest,
+        permission="quiz:write",
+        rate_limit_per_minute=30,
+        errors=_RATE_ERRORS,
+    ),
+    QuizEndpointContract(
+        "POST",
+        "/admin/quiz/questions/batch-delete-by-scope",
+        "admin",
+        APIResponse[AdminQuizBatchResponse],
+        body_model=AdminQuizScopeDeleteRequest,
+        permission="quiz:write",
+        rate_limit_per_minute=30,
+        errors=_RATE_ERRORS,
+    ),
+    QuizEndpointContract(
         "GET",
         "/admin/quiz/questions/{question_id}/stats",
         "admin",
@@ -870,7 +891,7 @@ DELETED_QUIZ_ENDPOINTS: tuple[tuple[str, str], ...] = (
     ("GET", "/api/quiz/exam/{exam_id}"),
     ("GET", "/api/quiz/progress"),
     ("GET", "/api/quiz/recent"),
-    ("POST", "/admin/quiz/questions/batch-delete"),
+    # 2026-11 回收站改造：batch-delete 随「勾选批量删除」需求恢复上线（不再是废弃端点）
     ("POST", "/admin/quiz/import"),
     ("POST", "/admin/quiz/import/json"),
 )

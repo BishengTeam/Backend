@@ -185,3 +185,19 @@ async def batch_delete_zones(
 ):
     count = await AdminZoneService().batch_delete(body.ids)
     return success(data=count, message=f"已删除 {count} 个内容")
+
+@router.post("/{zone_id}/restore",
+    response_model=APIResponse,
+    summary="恢复专区内容（回收站）",
+    description="""
+从回收站恢复已删除的专区内容，删除后 **30 自然日** 内有效，过期自动永久删除。
+
+**认证**: 需 `homepage:write` 权限
+    """,
+)
+async def restore_zone(
+    zone_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("homepage:write")),
+):
+    await AdminZoneService().restore(zone_id)
+    return success(message="专区内容已恢复")

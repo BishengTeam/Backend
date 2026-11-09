@@ -5,6 +5,7 @@ from app.port.exceptions import NotFoundException
 from app.domain.content.src.index import Banner
 from app.schemas.admin_banner import BannerCreate, BannerListItem, BannerUpdate
 from app.schemas.common import PaginatedData
+from app.services.recycle_bin import restore_row, soft_delete_row
 
 
 class AdminBannerService:
@@ -16,7 +17,7 @@ class AdminBannerService:
         page_size: int = 20,
     ) -> PaginatedData[BannerListItem]:
         async with get_db_ctx() as db:
-            base = select(Banner)
+            base = select(Banner).where(Banner.deleted_at.is_(None))
             if keyword:
                 pattern = f"%{keyword}%"
                 base = base.where(
@@ -55,7 +56,7 @@ class AdminBannerService:
     async def update(self, banner_id: int, data: BannerUpdate) -> BannerListItem:
         async with get_db_ctx() as db:
             banner = await db.get(Banner, banner_id)
-            if banner is None:
+            if banner is None or banner.deleted_at is not None:
                 raise NotFoundException("Banner")
             update_data = data.model_dump(exclude_unset=True)
             for key, value in update_data.items():
@@ -65,20 +66,32 @@ class AdminBannerService:
             return BannerListItem.model_validate(banner)
 
     async def delete(self, banner_id: int) -> None:
+        """软删除进回收站，30 自然日内可恢复。"""
         async with get_db_ctx() as db:
             banner = await db.get(Banner, banner_id)
-            if banner is None:
+            if banner is None or banner.deleted_at is not None:
                 raise NotFoundException("Banner")
-            await db.delete(banner)
+            soft_delete_row(banner)
             await db.commit()
 
     async def batch_delete(self, banner_ids: list[int]) -> int:
         async with get_db_ctx() as db:
             result = await db.execute(
-                select(Banner).where(Banner.id.in_(banner_ids))
+                select(Banner).where(
+                    Banner.id.in_(banner_ids), Banner.deleted_at.is_(None)
+                )
             )
             banners = result.scalars().all()
             for banner in banners:
-                await db.delete(banner)
+                soft_delete_row(banner)
             await db.commit()
             return len(banners)
+
+    async def restore(self, banner_id: int) -> None:
+        """从回收站恢复。"""
+        async with get_db_ctx() as db:
+            banner = await db.get(Banner, banner_id)
+            if banner is None or banner.deleted_at is None:
+                raise NotFoundException("Banner")
+            restore_row(banner)
+            await db.commit()

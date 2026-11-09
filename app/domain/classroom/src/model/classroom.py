@@ -14,7 +14,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.adapter.database import Base, TimestampMixin
+from app.adapter.database import Base, RecycleBinMixin, TimestampMixin
 
 
 class Classroom(Base, TimestampMixin):
@@ -56,7 +56,7 @@ class ClassroomMember(Base, TimestampMixin):
     real_name_snapshot: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
-class ClassroomVideo(Base, TimestampMixin):
+class ClassroomVideo(Base, RecycleBinMixin, TimestampMixin):
     """课堂视频。storage_key 使用 classroom/ 前缀，与课程模块物理隔离。"""
 
     __tablename__ = "classroom_video"
@@ -71,7 +71,7 @@ class ClassroomVideo(Base, TimestampMixin):
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
-class ClassroomQuestion(Base, TimestampMixin):
+class ClassroomQuestion(Base, RecycleBinMixin, TimestampMixin):
     """随堂练习题。每个课堂独立题库，与其他课堂和线上题库完全隔离。"""
 
     __tablename__ = "classroom_question"

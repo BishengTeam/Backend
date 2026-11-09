@@ -19,13 +19,13 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.adapter.database import Base, TimestampMixin
+from app.adapter.database import Base, RecycleBinMixin, TimestampMixin
 
 if TYPE_CHECKING:
     from app.domain.order.src.model.order import Order
 
 
-class Course(Base, TimestampMixin):
+class Course(Base, RecycleBinMixin, TimestampMixin):
     __tablename__ = "course"
     __table_args__ = (
         CheckConstraint("price >= 0", name="ck_course_price_nonnegative"),

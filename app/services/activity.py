@@ -21,6 +21,7 @@ class ActivityService:
     ) -> PaginatedData[ActivityResponse]:
         stmt = select(Activity).where(
             Activity.is_active == True,
+            Activity.deleted_at.is_(None),
         )
         async with get_db_ctx() as db:
             total = (

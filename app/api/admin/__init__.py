@@ -28,6 +28,7 @@ from app.api.admin.reviews import router as reviews_router
 from app.api.admin.prices import router as prices_router
 from app.api.admin.quiz import router as quiz_router
 from app.api.admin.quiz_review import router as quiz_review_router
+from app.api.admin.recycle_bin import router as recycle_bin_router
 from app.api.admin.renshe import router as renshe_router
 from app.api.admin.settings import router as settings_router
 from app.api.admin.statistics import router as statistics_router
@@ -44,6 +45,7 @@ from app.api.admin.zones import router as zones_router
 router = APIRouter(prefix="/admin")
 router.include_router(certification_journey_router)
 router.include_router(activities_router)
+router.include_router(recycle_bin_router)
 router.include_router(auth_router)
 router.include_router(banners_router)
 router.include_router(cert_products_router)

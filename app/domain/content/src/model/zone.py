@@ -1,10 +1,10 @@
 from sqlalchemy import DateTime, String, Integer, Boolean, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.adapter.database import Base, TimestampMixin
+from app.adapter.database import Base, RecycleBinMixin, TimestampMixin
 
 
-class Zone(Base, TimestampMixin):
+class Zone(Base, RecycleBinMixin, TimestampMixin):
     __tablename__ = "zone"
 
     zone_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)

@@ -102,7 +102,7 @@ class CourseResourceUploadMixin:
                 if row.chapter_id:
                     await lock_chapter_resource_version(db, row.chapter_id)
                     chapter = await db.scalar(select(CourseChapter).where(CourseChapter.id == row.chapter_id).with_for_update())
-                    if not chapter or chapter.course_id != course.id or chapter.resource_version != row.expected_resource_version:
+                    if not chapter or chapter.course_id != course.id or chapter.deleted_at is not None or chapter.resource_version != row.expected_resource_version:
                         raise ConflictException("章节已由其他管理员更新，请刷新后重新替换")
                     old_upload = await db.scalar(select(CourseUpload).where(CourseUpload.object_key == chapter.resource_storage_key).with_for_update())
                     if old_upload and old_upload.id != row.id:

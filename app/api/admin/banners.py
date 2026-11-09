@@ -122,7 +122,7 @@ async def update_banner(
 
 **页面路径**: `/admin/banners`
 
-**使用场景**: 管理员删除指定 Banner（硬删除，数据不可恢复）。
+**使用场景**: 管理员删除指定 Banner（删除后进回收站，30 自然日内可恢复）。
 
 **路径参数**:
 
@@ -168,3 +168,19 @@ async def batch_delete_banners(
 ):
     count = await AdminBannerService().batch_delete(body.ids)
     return success(data=count, message=f"已删除 {count} 个 Banner")
+
+@router.post("/{banner_id}/restore",
+    response_model=APIResponse,
+    summary="恢复Banner（回收站）",
+    description="""
+从回收站恢复已删除的Banner，删除后 **30 自然日** 内有效，过期自动永久删除。
+
+**认证**: 需 `homepage:write` 权限
+    """,
+)
+async def restore_banner(
+    banner_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("homepage:write")),
+):
+    await AdminBannerService().restore(banner_id)
+    return success(message="Banner已恢复")

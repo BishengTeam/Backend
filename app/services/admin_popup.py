@@ -5,6 +5,7 @@ from app.port.exceptions import NotFoundException
 from app.domain.content.src.index import Popup
 from app.schemas.admin_popup import PopupCreate, PopupListItem, PopupUpdate
 from app.schemas.common import PaginatedData
+from app.services.recycle_bin import restore_row, soft_delete_row
 
 
 class AdminPopupService:
@@ -16,7 +17,7 @@ class AdminPopupService:
         page_size: int = 20,
     ) -> PaginatedData[PopupListItem]:
         async with get_db_ctx() as db:
-            base = select(Popup)
+            base = select(Popup).where(Popup.deleted_at.is_(None))
             if keyword:
                 pattern = f"%{keyword}%"
                 base = base.where(
@@ -55,7 +56,7 @@ class AdminPopupService:
     async def update(self, popup_id: int, data: PopupUpdate) -> PopupListItem:
         async with get_db_ctx() as db:
             popup = await db.get(Popup, popup_id)
-            if popup is None:
+            if popup is None or popup.deleted_at is not None:
                 raise NotFoundException("Popup")
             update_data = data.model_dump(exclude_unset=True)
             for key, value in update_data.items():
@@ -65,20 +66,30 @@ class AdminPopupService:
             return PopupListItem.model_validate(popup)
 
     async def delete(self, popup_id: int) -> None:
+        """软删除进回收站，30 自然日内可恢复。"""
         async with get_db_ctx() as db:
             popup = await db.get(Popup, popup_id)
-            if popup is None:
+            if popup is None or popup.deleted_at is not None:
                 raise NotFoundException("Popup")
-            await db.delete(popup)
+            soft_delete_row(popup)
             await db.commit()
 
     async def batch_delete(self, popup_ids: list[int]) -> int:
         async with get_db_ctx() as db:
             result = await db.execute(
-                select(Popup).where(Popup.id.in_(popup_ids))
+                select(Popup).where(Popup.id.in_(popup_ids), Popup.deleted_at.is_(None))
             )
             popups = result.scalars().all()
             for popup in popups:
-                await db.delete(popup)
+                soft_delete_row(popup)
             await db.commit()
             return len(popups)
+
+    async def restore(self, popup_id: int) -> None:
+        """从回收站恢复。"""
+        async with get_db_ctx() as db:
+            popup = await db.get(Popup, popup_id)
+            if popup is None or popup.deleted_at is None:
+                raise NotFoundException("Popup")
+            restore_row(popup)
+            await db.commit()

@@ -3,10 +3,10 @@ from datetime import datetime
 from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.adapter.database import Base, TimestampMixin
+from app.adapter.database import Base, RecycleBinMixin, TimestampMixin
 
 
-class Banner(Base, TimestampMixin):
+class Banner(Base, RecycleBinMixin, TimestampMixin):
     __tablename__ = "banner"
 
     image_url: Mapped[str] = mapped_column(String(512), nullable=False)

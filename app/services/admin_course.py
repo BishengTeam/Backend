@@ -41,6 +41,7 @@ from app.schemas.admin_course import (
 from app.schemas.common import PaginatedData
 from app.schemas.course_upload import CourseUploadCreate
 from app.services.course_entitlement import CourseEntitlementService
+from app.services.recycle_bin import restore_row, soft_delete_row
 from app.services.course_storage import CourseStorage
 from app.services.course_upload import CourseUploadService
 from app.services.order_fulfillment import OrderFulfillmentService
@@ -223,7 +224,9 @@ class AdminCourseService:
         page_size: int = 20,
     ) -> PaginatedData[AdminCourseListItem]:
         async with get_db_ctx() as db:
-            base = select(Course)
+            base = select(Course).where(
+                Course.deleted_at.is_(None), Course.status != "archived"
+            )
             if keyword:
                 base = base.where(Course.title.ilike(f"%{keyword}%"))
             if category:
@@ -337,7 +340,7 @@ class AdminCourseService:
     async def get_course(self, course_id: int) -> AdminCourseListItem:
         async with get_db_ctx() as db:
             course = await db.get(Course, course_id)
-            if course is None:
+            if course is None or course.deleted_at is not None:
                 raise NotFoundException("课程")
             return await self._list_item(db, course)
 
@@ -587,13 +590,16 @@ class AdminCourseService:
                     object_id=course.id,
                     after=self._course_fields(course),
                 )
-                await db.delete(course)
+                soft_delete_row(course)
 
     async def list_chapters(
         self, course_id: int, is_active: bool | None, page: int, page_size: int
     ) -> PaginatedData[AdminChapterResponse]:
         async with get_db_ctx() as db:
-            base = select(CourseChapter).where(CourseChapter.course_id == course_id)
+            base = select(CourseChapter).where(
+                CourseChapter.course_id == course_id,
+                CourseChapter.deleted_at.is_(None),
+            )
             total = int(
                 await db.scalar(select(func.count()).select_from(base.subquery())) or 0
             )
@@ -691,30 +697,16 @@ class AdminCourseService:
     async def delete_chapter_completely(
         self, course_id: int, chapter_id: int, *, admin_id: int, force: bool = False
     ) -> None:
-        from app.domain.certification.src.index import UserChapterProgress
+        """软删除章节进回收站，30 自然日内可恢复。
 
+        学习进度（学生数据）保留不动；存储对象待到期永久清理时再删，
+        恢复期内保持可播。force 参数保留兼容旧调用方，已无实际作用。
+        """
         async with get_db_ctx() as db:
             async with db.begin():
                 row = await db.get(CourseChapter, chapter_id)
-                if row is None or row.course_id != course_id:
+                if row is None or row.course_id != course_id or row.deleted_at is not None:
                     raise NotFoundException("章节")
-                progress_count = int(
-                    await db.scalar(
-                        select(func.count())
-                        .select_from(UserChapterProgress)
-                        .where(UserChapterProgress.chapter_id == chapter_id)
-                    )
-                    or 0
-                )
-                if progress_count and not force:
-                    raise BusinessException("已有学习进度的章节不能删除，确认删除请传 force=true")
-                if progress_count:
-                    await db.execute(
-                        delete(UserChapterProgress).where(
-                            UserChapterProgress.chapter_id == chapter_id
-                        )
-                    )
-                object_key = row.resource_storage_key
                 self._audit(
                     db,
                     admin_id=admin_id,
@@ -723,8 +715,18 @@ class AdminCourseService:
                     object_id=row.id,
                     after={"title": row.title},
                 )
-                await db.delete(row)
-        await self.storage.delete(object_key)
+                soft_delete_row(row)
+
+    async def restore_chapter(
+        self, course_id: int, chapter_id: int, *, admin_id: int
+    ) -> None:
+        """从回收站恢复章节。"""
+        async with get_db_ctx() as db:
+            async with db.begin():
+                row = await db.get(CourseChapter, chapter_id)
+                if row is None or row.course_id != course_id or row.deleted_at is None:
+                    raise NotFoundException("章节")
+                restore_row(row)
 
     async def list_enrollments(
         self,

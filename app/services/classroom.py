@@ -111,7 +111,10 @@ class ClassroomService:
                 db, user_id, classroom_id, allow_stopped=True
             )
             videos = (await db.execute(
-                select(ClassroomVideo).where(ClassroomVideo.classroom_id == classroom_id)
+                select(ClassroomVideo).where(
+                    ClassroomVideo.classroom_id == classroom_id,
+                    ClassroomVideo.deleted_at.is_(None),
+                )
                 .order_by(ClassroomVideo.sort_order, ClassroomVideo.id)
             )).scalars().all()
             quizzes = (await db.execute(
