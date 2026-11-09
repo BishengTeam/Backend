@@ -103,8 +103,8 @@ async def test_list_plans_returns_only_same_product_type(test_context):
     pt_a = f"{prefix}_a"
     pt_b = f"{prefix}_b"
 
-    await PlanService().create_plan(pt_a, PlanCreate(name="Batch A"))
-    await PlanService().create_plan(pt_b, PlanCreate(name="Batch B"))
+    await PlanService().create_plan(pt_a, PlanCreate(name=f"{pt_a} Batch A"))
+    await PlanService().create_plan(pt_b, PlanCreate(name=f"{pt_b} Batch B"))
 
     # List pt_a only
     plans_a = await PlanService().list_plans(pt_a)

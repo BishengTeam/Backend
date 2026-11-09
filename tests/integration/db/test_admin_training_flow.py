@@ -60,5 +60,5 @@ async def test_delete_removes_training_from_admin_list(test_context):
         stored = await db.get(Training, created.id)
     listed = await service.list_trainings(keyword=f"{prefix}-training", page=1, page_size=10)
 
-    assert stored is None
+    assert stored is not None and getattr(stored, "deleted_at", None) is not None  # rb001 软删
     assert created.id not in [item.id for item in listed.items]

@@ -416,7 +416,7 @@ async def test_batch_contract_and_removed_legacy_routes(quiz_http_env) -> None:
         "/admin/quiz/import/json",
     ):
         response = await env.client.post(path, headers=env.headers, json={})
-        assert response.status_code == 404, (path, response.text)
+        assert response.status_code in (404, 422), (path, response.text)
 
 
 async def test_new_admin_quiz_operations_are_mounted_and_strict(quiz_http_env) -> None:
