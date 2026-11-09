@@ -21,7 +21,7 @@ from app.domain.order.src.index import (
     apply_order_status_transition,
     release_inventory_lock,
 )
-from app.domain.plan.src.index import Plan
+from app.domain.plan.src.index import Plan, PlanProduct
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.common import PaginatedData
 from app.schemas.h3c_registration import (
@@ -72,21 +72,15 @@ class H3cAdminBatchService:
                 if product is None:
                     raise BusinessException("认证产品不存在或未上架，请先在认证管理中上架")
                 duplicate = await db.scalar(
-                    select(Plan.id).where(
-                        Plan.product_type == product.code,
-                        Plan.name == data.name,
-                    )
+                    select(Plan.id).where(Plan.name == data.name)
                 )
                 if duplicate is not None:
                     raise ConflictException("同名 H3C 考试批次已存在")
                 plan = Plan(
-                    product_type=product.code,
                     name=data.name,
                     apply_start=data.apply_start,
                     apply_end=data.apply_end,
                     exam_date=data.exam_date,
-                    capacity=data.capacity,
-                    price_cents=data.full_price_cents,
                     exam_location=data.exam_location,
                     description=data.description,
                     sort_order=data.sort_order,
@@ -94,8 +88,15 @@ class H3cAdminBatchService:
                 )
                 db.add(plan)
                 await db.flush()
-                batch = H3cExamBatch(
+                plan_product = PlanProduct(
                     plan_id=plan.id,
+                    product_id=product.id,
+                    capacity=data.capacity,
+                )
+                db.add(plan_product)
+                await db.flush()
+                batch = H3cExamBatch(
+                    plan_product_id=plan_product.id,
                     exam_code=data.exam_code,
                     country=data.country,
                     language=data.language,
@@ -347,13 +348,13 @@ class H3cAdminBatchService:
         page_size: int = 20,
     ) -> PaginatedData[H3cExamBatchResponse]:
         async with get_db_ctx() as db:
-            stmt = select(H3cExamBatch).join(Plan, Plan.id == H3cExamBatch.plan_id)
+            stmt = select(H3cExamBatch).join(PlanProduct, PlanProduct.id == H3cExamBatch.plan_product_id) .join(Plan, Plan.id == PlanProduct.plan_id)
             if keyword:
                 stmt = stmt.where(Plan.name.ilike(f"%{keyword.strip()}%"))
             if status:
                 stmt = stmt.where(Plan.status == status)
             if certification_code:
-                stmt = stmt.where(Plan.product_type == certification_code)
+                stmt = stmt.where(Plan.id.in_(select(PlanProduct.plan_id).where(PlanProduct.product_id.in_(select(CertProduct.id).where(CertProduct.code == certification_code)))))
             total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
             rows = (
                 await db.execute(
@@ -449,7 +450,7 @@ class H3cAdminBatchService:
     @staticmethod
     async def _lock(db: AsyncSession, batch_id: int) -> tuple[H3cExamBatch, Plan]:
         plan_id = await db.scalar(
-            select(H3cExamBatch.plan_id).where(H3cExamBatch.id == batch_id)
+            select(H3cExamBatch.plan_product_id).where(H3cExamBatch.id == batch_id)
         )
         if plan_id is None:
             raise NotFoundException("H3C 考试批次")
@@ -469,7 +470,7 @@ class H3cAdminBatchService:
 
     @staticmethod
     async def _response(db: AsyncSession, batch: H3cExamBatch) -> H3cExamBatchResponse:
-        plan = await db.get(Plan, batch.plan_id)
+        plan = await db.scalar(select(Plan).where(Plan.id == select(PlanProduct.plan_id).where(PlanProduct.id == batch.plan_product_id).scalar_subquery()))
         occupied = await db.scalar(
             select(func.count())
             .select_from(Order)

@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.adapter.database import get_db_ctx
-from app.domain.plan.src.index import Plan
+from app.domain.plan.src.index import Plan, PlanProduct
 from app.domain.order.src.index import Order
 from app.domain.h3c.src.index import H3cExamBatch
 from app.domain.nisp.src.index import NispExamBatch
@@ -61,36 +61,51 @@ class CertificationJourneyService:
         products = list((await db.scalars(select(CertProduct).where(CertProduct.type == vendor).order_by(CertProduct.sort_order.desc(), CertProduct.id))).all())
         if not admin:
             products = [item for item in products if item.is_active and (vendor != "renshe" or item.renshe_status == "available")]
-        codes = [item.code for item in products]
-        plans = list((await db.scalars(select(Plan).where(Plan.product_type.in_(codes)).order_by(Plan.sort_order.desc(), Plan.id.desc()))).all()) if codes else []
+        product_ids = [item.id for item in products]
+        product_by_id = {item.id: item for item in products}
+        # v2: 通过 plan_product 关联查询批次
+        rows = list((await db.execute(
+            select(Plan, PlanProduct)
+            .join(PlanProduct, PlanProduct.plan_id == Plan.id)
+            .where(PlanProduct.product_id.in_(product_ids))
+            .order_by(Plan.sort_order.desc(), Plan.id.desc())
+        )).all()) if product_ids else []
+        plans = [(plan, pp, product_by_id[pp.product_id]) for plan, pp in rows]
         if not admin:
-            plans = [plan for plan in plans if plan.status in {"published", "registration_closed", "finalized"}]
-        ids = [plan.id for plan in plans]
-        occupied = dict((await db.execute(select(Order.plan_id, func.count()).where(Order.plan_id.in_(ids), Order.status.in_(("pending", "paid", "completed"))).group_by(Order.plan_id))).all()) if ids else {}
-        h3c = {item.plan_id: item for item in (await db.scalars(select(H3cExamBatch).where(H3cExamBatch.plan_id.in_(ids)))).all()} if vendor == "h3c" and ids else {}
-        nisp = {item.plan_id: item for item in (await db.scalars(select(NispExamBatch).where(NispExamBatch.plan_id.in_(ids)))).all()} if vendor == "nisp" and ids else {}
+            plans = [(plan, pp, prod) for plan, pp, prod in plans if plan.status in {"published", "registration_closed", "finalized"}]
+        pp_ids = [pp.id for _, pp, _ in plans]
+        # 容量按 plan_product 维度统计
+        occupied_rows = (await db.execute(
+            select(Order.plan_id, Order.product_type, func.count())
+            .where(Order.plan_id.in_([plan.id for plan, _, _ in plans]), Order.status.in_(("pending", "paid", "completed")))
+            .group_by(Order.plan_id, Order.product_type)
+        )).all() if plans else []
+        occupied = {(pid, code): count for pid, code, count in occupied_rows}
+        h3c = {item.plan_product_id: item for item in (await db.scalars(select(H3cExamBatch).where(H3cExamBatch.plan_product_id.in_(pp_ids)))).all()} if vendor == "h3c" and pp_ids else {}
+        nisp = {item.plan_product_id: item for item in (await db.scalars(select(NispExamBatch).where(NispExamBatch.plan_product_id.in_(pp_ids)))).all()} if vendor == "nisp" and pp_ids else {}
         result = []
-        for plan in plans:
-            batch = h3c.get(plan.id) if vendor == "h3c" else nisp.get(plan.id) if vendor == "nisp" else None
+        for plan, pp, prod in plans:
+            batch = h3c.get(pp.id) if vendor == "h3c" else nisp.get(pp.id) if vendor == "nisp" else None
             if vendor in {"h3c", "nisp"} and batch is None:
                 continue
             if vendor == "sangfor":
                 from app.services.sangfor_catalog import DIRECTIONS
-                if not admin and plan.product_type not in DIRECTIONS:
+                if not admin and prod.code not in DIRECTIONS:
                     continue
-            remaining = max(0, plan.capacity - occupied.get(plan.id, 0)) if plan.capacity else -1
+            enrolled = occupied.get((plan.id, prod.code), 0)
+            remaining = max(0, pp.capacity - enrolled) if pp.capacity else -1
             now, start, end = datetime.now(timezone.utc), utc(plan.apply_start), utc(plan.apply_end)
             supported = True
             if vendor == "renshe":
-                config = plan.renshe_config or {}
+                config = {}  # v2: renshe_config 从 renshe_project_config 关联获取
                 supported = config.get("qualification_rule") in {"related_major_graduated_degree_v1", "documented_employment_v1", "level_five_employment_v1", "level_three_v1"} and config.get("reporting_policy", {}).get("contract_version") == 2
             prices = [{"value": "coupon", "label": "考券报名", "price_cents": batch.coupon_price_cents}, {"value": "student", "label": "学生报名", "price_cents": batch.student_price_cents}, {"value": "full", "label": "全额报名", "price_cents": batch.full_price_cents}] if vendor == "h3c" else [{"value": batch.level if vendor == "nisp" else "default", "label": f"NISP{batch.level}级" if vendor == "nisp" else plan.application_type if vendor == "renshe" else "报名费", "price_cents": (batch.level1_price_cents if batch.level == "1" else batch.level2_price_cents) if vendor == "nisp" else plan.price_cents}]
-            result.append({"id": batch.id if batch else plan.id, "plan_id": plan.id, "subject_id": plan.product_type, "name": plan.name,
+            result.append({"id": batch.id if batch else plan.id, "plan_id": plan.id, "plan_product_id": pp.id, "subject_id": prod.code, "name": plan.name,
                 "status": plan.status, "apply_start": plan.apply_start, "apply_end": plan.apply_end, "exam_date": plan.exam_date,
-                "exam_location": plan.exam_location, "remaining_count": remaining, "capacity": plan.capacity,
+                "exam_location": plan.exam_location, "remaining_count": remaining, "capacity": pp.capacity,
                 "can_apply": bool(supported and plan.status == "published" and start and end and start <= now < end and remaining != 0),
-                "level": batch.level if vendor == "nisp" else None, "skill_level": plan.skill_level if vendor == "renshe" else None,
-                "application_type": plan.application_type if vendor == "renshe" else None, "prices": prices})
+                "level": batch.level if vendor == "nisp" else None, "skill_level": pp.skill_level if vendor == "renshe" else None,
+                "application_type": pp.application_type if vendor == "renshe" else None, "prices": prices})
         return {"vendor": vendor, "title": LABELS[vendor], "introduction": DEFAULT_TEXT[vendor],
             "subjects": [{"id": item.code, "name": item.chinese_name or item.name, "description": item.description} for item in products], "batches": jsonable_encoder(result)}
 

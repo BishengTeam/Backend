@@ -58,9 +58,21 @@ class OrderFulfillmentService:
         ).scalar_one_or_none()
         if application is not None:
             from app.domain.plan.src.index import Plan
+            from app.domain.plan.src.index import PlanProduct
+            from app.models.cert_product import CertProduct
+            from sqlalchemy import select as _select
             from app.port.exceptions import ConflictException
             plan = await db.get(Plan, application.plan_id)
-            if plan is None or application.user_id != order.user_id or application.plan_id != order.plan_id or plan.product_type != order.product_type:
+            # v2: 产品编码从 PlanProduct→CertProduct 解析
+            _code = None
+            if plan is not None:
+                _code = await db.scalar(
+                    _select(CertProduct.code)
+                    .join(PlanProduct, PlanProduct.product_id == CertProduct.id)
+                    .where(PlanProduct.plan_id == plan.id)
+                    .limit(1)
+                )
+            if plan is None or application.user_id != order.user_id or application.plan_id != order.plan_id or _code != order.product_type:
                 raise ConflictException("人社订单与报名项目、批次或用户归属不一致")
         return application
 

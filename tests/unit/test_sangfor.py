@@ -2,6 +2,12 @@ from datetime import datetime
 from io import BytesIO
 
 import pytest
+import os
+
+requires_test_db = pytest.mark.skipif(
+    not os.environ.get("TEST_DATABASE_URL"),
+    reason="requires TEST_DATABASE_URL (CI only)"
+)
 from openpyxl import load_workbook
 from pydantic import ValidationError
 
@@ -149,6 +155,7 @@ async def test_refund_filters_fail_before_database_access(params):
 
 
 @pytest.mark.asyncio
+@requires_test_db
 async def test_admin_create_batch_returns_draft_id_for_publish_retry(monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
@@ -157,7 +164,7 @@ async def test_admin_create_batch_returns_draft_id_for_publish_retry(monkeypatch
 
     monkeypatch.setattr(service, "require_product", AsyncMock())
     create = AsyncMock(return_value=SimpleNamespace(id=17))
-    monkeypatch.setattr(PlanService, "create_plan", create)
+    monkeypatch.setattr(PlanService, "create_batch", create)
     result = await create_batch(SangforBatchCreate(product_code="SCSA-T", name="测试批次", price_cents=100), admin=SimpleNamespace(id=1))
     assert result.data == {"id": 17}
     assert create.call_args.kwargs["admin_id"] == 1

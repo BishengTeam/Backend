@@ -50,7 +50,7 @@ from app.domain.community.src.index import (
     QuizWrongItem,
     Share,
 )
-from app.domain.plan.src.index import Plan
+from app.domain.plan.src.index import Plan, PlanProduct, PlanTimeSegment
 from app.domain.order.src.index import (
     Coupon,
     Inventory,
@@ -163,6 +163,8 @@ __all__ = [
     "Popup",
     "SharePoster",
     "Plan",
+    "PlanProduct",
+    "PlanTimeSegment",
     "PointsHistory",
     "PointsBatch",
     "PriceConfig",

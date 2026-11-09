@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.certification.src.index import Certification
 from app.domain.h3c.src.index import H3cExamBatch
 from app.domain.nisp.src.index import NispExamBatch
-from app.domain.plan.src.index import Plan
+from app.domain.plan.src.index import Plan, PlanProduct
 from app.domain.user.src.index import UserRealname
 from app.models.cert_product import CertProduct
 from app.port.exceptions import (
@@ -101,16 +101,16 @@ async def resolve_dedicated_certification_vendor(
 
     linked_h3c = await db.scalar(
         select(H3cExamBatch.id)
-        .join(Plan, Plan.id == H3cExamBatch.plan_id)
-        .where(Plan.product_type == product_type)
+        .join(PlanProduct, PlanProduct.id == H3cExamBatch.plan_product_id) .join(Plan, Plan.id == PlanProduct.plan_id)
+        .where(Plan.id.in_(select(PlanProduct.plan_id).where(PlanProduct.product_id.in_(select(CertProduct.id).where(CertProduct.code == product_type)))))
         .limit(1)
     )
     if linked_h3c is not None:
         return "H3C"
     linked_nisp = await db.scalar(
         select(NispExamBatch.id)
-        .join(Plan, Plan.id == NispExamBatch.plan_id)
-        .where(Plan.product_type == product_type)
+        .join(PlanProduct, PlanProduct.id == NispExamBatch.plan_product_id) .join(Plan, Plan.id == PlanProduct.plan_id)
+        .where(Plan.id.in_(select(PlanProduct.plan_id).where(PlanProduct.product_id.in_(select(CertProduct.id).where(CertProduct.code == product_type)))))
         .limit(1)
     )
     if linked_nisp is not None:

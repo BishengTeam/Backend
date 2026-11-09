@@ -34,14 +34,15 @@ async def list_batches(
     """List published NISP exam batches."""
     from app.adapter.database import get_db_ctx
     from app.domain.nisp.src import NispExamBatch
-    from app.domain.plan.src.index import Plan
+    from app.domain.plan.src.index import Plan, PlanProduct
     from app.domain.order.src.index import Order
     from app.models.cert_product import CertProduct
 
     async with get_db_ctx() as db:
         stmt = (
             select(NispExamBatch, Plan)
-            .join(Plan, Plan.id == NispExamBatch.plan_id)
+            .join(PlanProduct, PlanProduct.id == NispExamBatch.plan_product_id)
+            .join(Plan, Plan.id == PlanProduct.plan_id)
             .join(
                 CertProduct,
                 CertProduct.code == func.concat("NISP-", NispExamBatch.level),

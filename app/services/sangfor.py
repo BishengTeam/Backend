@@ -136,7 +136,7 @@ class SangforService:
             if public:
                 query = query.where(CertProduct.is_active.is_(True), CertProduct.code.in_(DIRECTIONS), Plan.status.in_(("published", "registration_closed")))
             if product_code:
-                query = query.where(Plan.product_type == product_code)
+                query = query.where(Plan.id.in_(select(PlanProduct.plan_id).where(PlanProduct.product_id.in_(select(CertProduct.id).where(CertProduct.code == product_code)))))
             pairs = (await db.execute(query.order_by(Plan.id.desc()))).all()
             occupied, counts = await self.batch_statistics(db, [plan.id for plan, _ in pairs], public=public)
             return [self.batch_response(plan, product, enrolled=occupied.get(plan.id, 0), counts=None if public else counts.get(plan.id, {})) for plan, product in pairs]

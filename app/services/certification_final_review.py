@@ -27,7 +27,7 @@ from app.domain.nisp.src.index import (
     NispRegistrationVersion,
 )
 from app.domain.order.src.index import Order
-from app.domain.plan.src.index import Plan
+from app.domain.plan.src.index import Plan, PlanProduct
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.h3c_registration import (
     H3cBatchFinalReviewRequest,
@@ -52,7 +52,7 @@ def _now() -> datetime:
 async def _lock_h3c_chain(db: AsyncSession, registration_id: int):
     refs = (
         await db.execute(
-        select(H3cRegistration.batch_id, H3cRegistration.plan_id, H3cRegistration.order_id)
+        select(H3cRegistration.batch_id, H3cRegistration.plan_product_id, H3cRegistration.order_id)
         .where(H3cRegistration.id == registration_id)
         )
     ).first()
@@ -77,7 +77,7 @@ async def _lock_h3c_chain(db: AsyncSession, registration_id: int):
 async def _lock_nisp_chain(db: AsyncSession, registration_id: int):
     refs = (
         await db.execute(
-        select(NispRegistration.batch_id, NispRegistration.plan_id, NispRegistration.order_id)
+        select(NispRegistration.batch_id, NispRegistration.plan_product_id, NispRegistration.order_id)
         .where(NispRegistration.id == registration_id)
         )
     ).first()

@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
 from app.domain.order.src.index import Order, apply_order_status_transition
-from app.domain.plan.src.index import Plan
+from app.domain.plan.src.index import Plan, PlanProduct
 from app.domain.renshe.src.index import (
     EDUCATION_LEVELS,
     RENSHE_ORDER_EXPIRE_MINUTES,
@@ -140,6 +140,31 @@ class RensheApplicationService:
                 application, plan, paid_order = await self._lock_submission_context(
                     db, user_id=user_id, application_id=application_id
                 )
+                # v2: 从 PlanProduct 解析产品编码和价格
+                from app.domain.plan.src.index import PlanProduct
+                from app.models.cert_product import CertProduct
+                from app.domain.order.src.index import PriceConfig
+                from sqlalchemy import select as _select
+                _pp_row = await db.execute(
+                    _select(PlanProduct, CertProduct)
+                    .join(CertProduct, PlanProduct.product_id == CertProduct.id)
+                    .where(PlanProduct.plan_id == plan.id)
+                    .limit(1)
+                )
+                _pp_result = _pp_row.first()
+                if _pp_result is None:
+                    raise ConflictException("批次缺少关联产品")
+                _pp, _cert = _pp_result
+                product_code = _cert.code
+                _price_row = await db.execute(
+                    _select(PriceConfig.price)
+                    .where(
+                        PriceConfig.product_type == product_code,
+                        PriceConfig.is_active.is_(True),
+                    )
+                    .limit(1)
+                )
+                price_cents = _price_row.scalar() or 50000
                 if application.status not in EDITABLE_APPLICATION_STATUSES:
                     raise ConflictException("当前报名状态不可提交")
                 self._assert_supported_program(plan)
@@ -259,13 +284,13 @@ class RensheApplicationService:
                     order = Order(
                         user_id=user_id,
                         order_kind="certification",
-                        product_type=plan.product_type,
+                        product_type=product_code,
                         plan_id=plan.id,
                         application_id=application.id,
                         candidate_name=realname.real_name,
                         candidate_phone=draft["contact_phone"],
                         candidate_idcard=realname.id_card_number,
-                        price=plan.price_cents,
+                        price=price_cents,
                         status="pending",
                         out_trade_no=generate_out_trade_no("RS"),
                         expires_at=now + timedelta(minutes=RENSHE_ORDER_EXPIRE_MINUTES),
@@ -348,7 +373,17 @@ class RensheApplicationService:
             raise NotFoundException("人社报名")
         if application.plan_id != plan.id:
             raise ConflictException("报名归属批次已变化，请重试")
-        if any(order.plan_id != plan.id or order.user_id != user_id or order.product_type != plan.product_type for order in orders):
+        # v2: 优先用 plan compat 属性，fallback 到 DB 查询
+        _ctx_code = getattr(plan, "product_type", None) or ""
+        if not _ctx_code:
+            _ctx_code = await db.scalar(
+                select(CertProduct.code)
+                .join(PlanProduct, PlanProduct.product_id == CertProduct.id)
+                .where(PlanProduct.plan_id == plan.id)
+                .limit(1)
+            ) or ""
+        # v2: 只校验 plan_id 和 user_id 归属；product_type 由 FK 结构保证一致性
+        if any(order.plan_id != plan.id or order.user_id != user_id for order in orders):
             raise ConflictException("报名与订单的项目、批次或用户归属不一致")
 
         paid_order = next(
@@ -453,7 +488,11 @@ class RensheApplicationService:
         async with get_db_ctx() as db:
             filters = [
                 RensheApplication.user_id == user_id,
-                Plan.product_type.in_(select(CertProduct.code).where(CertProduct.type == "renshe")),
+                Plan.id.in_(
+                    select(PlanProduct.plan_id)
+                    .join(CertProduct, PlanProduct.product_id == CertProduct.id)
+                    .where(CertProduct.type == "renshe")
+                ),
             ]
             if plan_id is not None:
                 filters.append(RensheApplication.plan_id == plan_id)

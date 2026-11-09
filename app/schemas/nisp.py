@@ -52,7 +52,7 @@ class NispExamBatchBase(BaseModel):
 
 
 class NispExamBatchCreate(NispExamBatchBase):
-    plan_id: int
+    plan_product_id: int
 
 
 class NispExamBatchFullCreate(BaseModel):
@@ -125,7 +125,7 @@ class NispExamBatchUpdate(BaseModel):
 
 class NispExamBatchResponse(BaseModel):
     id: int
-    plan_id: int
+    plan_product_id: int
     level: NispLevel
     plan_name: str
     plan_status: str
@@ -216,7 +216,7 @@ class NispRegistrationResponse(BaseModel):
     registration_no: str
     batch_id: int
     batch_name: str | None = None
-    plan_id: int
+    plan_product_id: int
     order_id: int
     level: NispLevel
     status: NispRegistrationStatus

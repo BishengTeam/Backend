@@ -87,11 +87,11 @@ class NispExamBatch(Base, TimestampMixin):
             "max_material_bytes BETWEEN 1 AND 20971520",
             name="ck_nisp_max_material_size",
         ),
-        UniqueConstraint("plan_id", name="uq_nisp_batch_plan"),
+        UniqueConstraint("plan_product_id", name="uq_nisp_batch_plan_product"),
     )
 
-    plan_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("plan.id", ondelete="RESTRICT"), nullable=False
+    plan_product_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("plan_product.id", ondelete="RESTRICT"), nullable=False
     )
     level: Mapped[str] = mapped_column(String(4), nullable=False, default="1")
     training_org: Mapped[str | None] = mapped_column(String(128))
@@ -160,8 +160,8 @@ class NispRegistration(Base, TimestampMixin):
     batch_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("nisp_exam_batch.id", ondelete="RESTRICT"), nullable=False
     )
-    plan_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("plan.id", ondelete="RESTRICT"), nullable=False
+    plan_product_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("plan_product.id", ondelete="RESTRICT"), nullable=False
     )
     user_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("user.id", ondelete="RESTRICT"), nullable=False, index=True

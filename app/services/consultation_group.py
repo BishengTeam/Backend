@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db_ctx
-from app.domain.plan.src.index import Plan
+from app.domain.plan.src.index import Plan, PlanProduct
 from app.models.cert_product import CertProduct
 from app.models.consultation_group import CertConsultationGroup
 from app.port.exceptions import ConflictException, NotFoundException
@@ -63,7 +63,7 @@ class ConsultationGroupService:
                 raise NotFoundException("认证批次")
             row = await db.scalar(
                 select(CertConsultationGroup).where(
-                    CertConsultationGroup.plan_id == plan_id
+                    CertConsultationGroup.plan_product_id == plan_id
                 )
             )
             if row is None:
@@ -89,7 +89,7 @@ class ConsultationGroupService:
                     raise NotFoundException("认证批次")
                 row = await db.scalar(
                     select(CertConsultationGroup)
-                    .where(CertConsultationGroup.plan_id == plan_id)
+                    .where(CertConsultationGroup.plan_product_id == plan_id)
                     .with_for_update()
                 )
                 current_version = row.version if row is not None else 0
@@ -103,7 +103,9 @@ class ConsultationGroupService:
 
                 if row is None:
                     row = CertConsultationGroup(
-                        plan_id=plan_id,
+                        plan_product_id=await db.scalar(
+                            select(PlanProduct.id).where(PlanProduct.plan_id == plan_id).limit(1)
+                        ),
                         qrcode_url=data.qrcode_url,
                         join_instructions=data.join_instructions,
                         expires_at=_utc(data.expires_at),
@@ -165,7 +167,7 @@ class ConsultationGroupService:
             return None
         row = await db.scalar(
             select(CertConsultationGroup).where(
-                CertConsultationGroup.plan_id == plan.id
+                CertConsultationGroup.plan_product_id == plan.id
             )
         )
         if row is None or _is_expired(row):

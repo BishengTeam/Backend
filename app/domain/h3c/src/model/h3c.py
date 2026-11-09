@@ -58,11 +58,11 @@ class H3cExamBatch(Base, TimestampMixin):
             "max_material_bytes BETWEEN 1 AND 20971520",
             name="ck_h3c_material_size",
         ),
-        UniqueConstraint("plan_id", name="uq_h3c_batch_plan"),
+        UniqueConstraint("plan_product_id", name="uq_h3c_batch_plan_product"),
     )
 
-    plan_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("plan.id", ondelete="RESTRICT"), nullable=False
+    plan_product_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("plan_product.id", ondelete="RESTRICT"), nullable=False
     )
     exam_code: Mapped[str] = mapped_column(String(64), nullable=False)
     country: Mapped[str] = mapped_column(String(8), nullable=False, default="CHN")
@@ -138,8 +138,8 @@ class H3cRegistration(Base, TimestampMixin):
     batch_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("h3c_exam_batch.id", ondelete="RESTRICT"), nullable=False
     )
-    plan_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("plan.id", ondelete="RESTRICT"), nullable=False
+    plan_product_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("plan_product.id", ondelete="RESTRICT"), nullable=False
     )
     user_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("user.id", ondelete="RESTRICT"), nullable=False, index=True

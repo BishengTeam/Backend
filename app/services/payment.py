@@ -20,7 +20,7 @@ from app.domain.order.src.index import (
     release_inventory_lock,
 )
 from app.domain.user.src.index import User
-from app.domain.plan.src.index import Plan
+from app.domain.plan.src.index import Plan, PlanProduct
 from app.integrations.wechat_pay import (
     WECHAT_PAY_CURRENCY,
     WechatPayAPIError,
@@ -492,14 +492,22 @@ class PaymentService:
             plan_id = order_ref.plan_id
             if plan_id is None:
                 plan_id = await db.scalar(
-                    select(H3cRegistration.plan_id).where(
-                        H3cRegistration.order_id == order_ref.id
+                    select(PlanProduct.plan_id).where(
+                        PlanProduct.id.in_(
+                            select(H3cRegistration.plan_product_id).where(
+                                H3cRegistration.order_id == order_ref.id
+                            )
+                        )
                     )
                 )
             if plan_id is None:
                 plan_id = await db.scalar(
-                    select(NispRegistration.plan_id).where(
-                        NispRegistration.order_id == order_ref.id
+                    select(PlanProduct.plan_id).where(
+                        PlanProduct.id.in_(
+                            select(NispRegistration.plan_product_id).where(
+                                NispRegistration.order_id == order_ref.id
+                            )
+                        )
                     )
                 )
             if plan_id is not None:

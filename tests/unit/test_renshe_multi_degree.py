@@ -20,6 +20,7 @@ from app.schemas.renshe import RensheReviewCreate
 from app.schemas.renshe_project import RensheProjectWrite
 from app.services.order_fulfillment import OrderFulfillmentService
 from app.services.plan import PlanService
+from tests.unit.plan_v2_adapter import PlanServiceAdapter
 from app.services.renshe_application import RensheApplicationService
 from app.services.renshe_catalog import (
     ADAPTED_DEGREE_OCCUPATIONS,
@@ -33,6 +34,7 @@ from app.services.renshe_project import (
     RensheProjectService,
     configuration_errors,
     selection_configuration,
+    graduated_configuration,
 )
 from app.services.renshe_reporting import public_options
 from app.services.renshe_review import RensheReviewService
@@ -41,6 +43,29 @@ from tests.unit.test_renshe_projects import create_batch
 from tests.unit.test_renshe_projects import isolated as _isolated
 
 isolated = _isolated
+
+
+
+
+def _batch_field(batch, field: str, default=""):
+    """Safely get a field from batch (BatchResponse or mock) — checks products[0] first."""
+    products = getattr(batch, "products", None)
+    if products:
+        return getattr(products[0], field, default)
+    return getattr(batch, field, default)
+
+
+def _batch_occ(batch) -> str:
+    return _batch_field(batch, "occupation_name", "信息安全管理员")
+
+
+def _batch_occ_code(batch) -> str:
+    return _batch_field(batch, "occupation_code", "")
+
+
+def _batch_skill(batch) -> str:
+    return _batch_field(batch, "skill_level", "中级工")
+
 
 
 @pytest.mark.asyncio
@@ -57,8 +82,8 @@ async def test_each_degree_trade_uses_its_own_rules_through_real_zip(isolated, m
     assert project.config.occupation_name == chosen["occupation_name"]
     assert project.admission_requirements["rule_profile"]["related_majors"] == chosen["related_majors"]
     batch = await create_batch(project)
-    await PlanService().publish_plan(batch.id, project.code, admin_id=1)
-    config = deepcopy(batch.renshe_config)
+    await PlanServiceAdapter().publish_plan(batch.id, project.code, admin_id=1)
+    config = deepcopy((batch.products[0].renshe_config if batch.products else None))
     options = public_options({"config_id": project.config_id, "config": {"reporting_policy": {"commitment_template": project.config.commitment_template}}}, config)
     assert options["institution_types"] == chosen["institution_types"]
     assert options["rule_profile"]["occupation_name"] == chosen["occupation_name"]

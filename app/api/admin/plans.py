@@ -1,55 +1,287 @@
-from typing import Literal
+"""管理后台-认证批次管理 API v2。
 
-from fastapi import APIRouter, Depends, Path, Query
+挂载前缀: /admin/certifications
+核心路由: /batches（全局批次 CRUD + 生命周期 + 产品/时段管理）
+兼容路由: 旧 /{code}/plans 返回 410 Gone
+"""
+from fastapi import APIRouter, Depends, Path, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.middleware.auth import require_permission, require_super_admin
+from app.adapter.database import get_db
+from app.middleware.auth import require_permission
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.order import OrderResponse, OrderStatus
 from app.schemas.plan import (
-    PlanCreate,
-    PlanImpactAction,
-    PlanImpactResponse,
-    PlanResponse,
-    PlanUpdate,
+    BatchCreate,
+    BatchListResponse,
+    BatchResponse,
+    BatchUpdate,
+    PlanProductCreate,
+    PlanProductUpdate,
+    TimeSegmentCreate,
+    TimeSegmentUpdate,
 )
-from app.schemas.review import ReviewResponse
 from app.services.plan import PlanService
 from app.services.plan_order_management import PlanOrderManagementService
 
-router = APIRouter(tags=["管理后台-批次管理"])
+router = APIRouter(tags=["管理后台-认证批次管理"])
 
 
-@router.get("/{code}/plans",
-    response_model=APIResponse[list[PlanResponse]],
-    summary="某认证下的批次列表",
+# ============================================================
+# 批次 CRUD（全局）
+# ============================================================
+
+@router.get(
+    "/batches",
+    response_model=APIResponse[PaginatedData[BatchListResponse]],
+    summary="批次列表",
 )
-async def list_plans(
-    code: str = Path(..., description="认证产品代码，如 H3C-RE"),
-    _admin=Depends(require_permission("user:list")),
-):
-    """获取指定认证产品下的所有批次（含 enrolled 计数）"""
-    result = await PlanService().list_plans(code)
+async def list_batches(
+    status_filter: str | None = Query(None, alias="status", description="按状态筛选"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    _admin=Depends(require_permission("certification:list")),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[PaginatedData[BatchListResponse]]:
+    items, total = await PlanService.list_batches(
+        db, status=status_filter, page=page, page_size=page_size
+    )
+    return success(data=PaginatedData(items=items, total=total, page=page, page_size=page_size))
+
+
+@router.post(
+    "/batches",
+    response_model=APIResponse[BatchResponse],
+    status_code=status.HTTP_201_CREATED,
+    summary="创建批次",
+)
+async def create_batch(
+    data: BatchCreate,
+    _admin=Depends(require_permission("certification:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[BatchResponse]:
+    result = await PlanService.create_batch(db, data)
     return success(data=result)
 
 
 @router.get(
-    "/{code}/plans/{plan_id}/orders",
+    "/batches/{batch_id}",
+    response_model=APIResponse[BatchResponse],
+    summary="批次详情",
+)
+async def get_batch(
+    batch_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("certification:list")),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[BatchResponse]:
+    result = await PlanService.get_batch(db, batch_id)
+    return success(data=result)
+
+
+@router.put(
+    "/batches/{batch_id}",
+    response_model=APIResponse[BatchResponse],
+    summary="更新批次（仅草稿）",
+)
+async def update_batch(
+    data: BatchUpdate,
+    batch_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("certification:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[BatchResponse]:
+    result = await PlanService.update_batch(db, batch_id, data)
+    return success(data=result)
+
+
+@router.delete(
+    "/batches/{batch_id}",
+    response_model=APIResponse[None],
+    summary="删除批次（仅草稿且无订单）",
+)
+async def delete_batch(
+    batch_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("certification:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[None]:
+    await PlanService.delete_batch(db, batch_id)
+    return success(message="批次已删除")
+
+
+# ============================================================
+# 生命周期
+# ============================================================
+
+@router.post("/batches/{batch_id}/publish", response_model=APIResponse[BatchResponse], summary="发布批次")
+async def publish_batch(
+    batch_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("certification:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[BatchResponse]:
+    result = await PlanService.publish(db, batch_id)
+    return success(data=result, message="批次已发布")
+
+
+@router.post("/batches/{batch_id}/close-registration", response_model=APIResponse[BatchResponse], summary="关闭报名")
+async def close_registration(
+    batch_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("certification:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[BatchResponse]:
+    result = await PlanService.close_registration(db, batch_id)
+    return success(data=result, message="报名已关闭")
+
+
+@router.post("/batches/{batch_id}/finalize", response_model=APIResponse[BatchResponse], summary="终审归档")
+async def finalize_batch(
+    batch_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("certification:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[BatchResponse]:
+    result = await PlanService.finalize(db, batch_id)
+    return success(data=result, message="批次已终审")
+
+
+@router.post("/batches/{batch_id}/cancel", response_model=APIResponse[BatchResponse], summary="取消批次")
+async def cancel_batch(
+    batch_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("certification:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[BatchResponse]:
+    result = await PlanService.cancel(db, batch_id)
+    return success(data=result, message="批次已取消")
+
+
+@router.post("/batches/{batch_id}/archive", response_model=APIResponse[BatchResponse], summary="归档批次")
+async def archive_batch(
+    batch_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("certification:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[BatchResponse]:
+    result = await PlanService.archive(db, batch_id)
+    return success(data=result, message="批次已归档")
+
+
+# ============================================================
+# 批次内产品管理
+# ============================================================
+
+@router.post(
+    "/batches/{batch_id}/products",
+    response_model=APIResponse[BatchResponse],
+    summary="添加产品到批次（仅草稿）",
+)
+async def add_product(
+    data: PlanProductCreate,
+    batch_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("certification:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[BatchResponse]:
+    result = await PlanService.add_product(db, batch_id, data)
+    return success(data=result, message="产品已添加")
+
+
+@router.put(
+    "/batches/{batch_id}/products/{pp_id}",
+    response_model=APIResponse[BatchResponse],
+    summary="更新批次产品（仅草稿）",
+)
+async def update_product(
+    data: PlanProductUpdate,
+    batch_id: int = Path(..., ge=1),
+    pp_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("certification:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[BatchResponse]:
+    result = await PlanService.update_product(db, batch_id, pp_id, data)
+    return success(data=result, message="产品已更新")
+
+
+@router.delete(
+    "/batches/{batch_id}/products/{pp_id}",
+    response_model=APIResponse[BatchResponse],
+    summary="移除批次产品（仅草稿且无订单）",
+)
+async def remove_product(
+    batch_id: int = Path(..., ge=1),
+    pp_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("certification:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[BatchResponse]:
+    result = await PlanService.remove_product(db, batch_id, pp_id)
+    return success(data=result, message="产品已移除")
+
+
+# ============================================================
+# 批次内时段管理
+# ============================================================
+
+@router.post(
+    "/batches/{batch_id}/time-segments",
+    response_model=APIResponse[BatchResponse],
+    summary="添加考试时段（仅草稿）",
+)
+async def add_time_segment(
+    data: TimeSegmentCreate,
+    batch_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("certification:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[BatchResponse]:
+    result = await PlanService.add_time_segment(db, batch_id, data)
+    return success(data=result, message="时段已添加")
+
+
+@router.put(
+    "/batches/{batch_id}/time-segments/{ts_id}",
+    response_model=APIResponse[BatchResponse],
+    summary="更新考试时段（仅草稿）",
+)
+async def update_time_segment(
+    data: TimeSegmentUpdate,
+    batch_id: int = Path(..., ge=1),
+    ts_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("certification:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[BatchResponse]:
+    result = await PlanService.update_time_segment(db, batch_id, ts_id, data)
+    return success(data=result, message="时段已更新")
+
+
+@router.delete(
+    "/batches/{batch_id}/time-segments/{ts_id}",
+    response_model=APIResponse[BatchResponse],
+    summary="删除考试时段（仅草稿）",
+)
+async def remove_time_segment(
+    batch_id: int = Path(..., ge=1),
+    ts_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("certification:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> APIResponse[BatchResponse]:
+    result = await PlanService.remove_time_segment(db, batch_id, ts_id)
+    return success(data=result, message="时段已删除")
+
+
+# ============================================================
+# 批次订单查询（保留）
+# ============================================================
+
+@router.get(
+    "/batches/{batch_id}/orders",
     response_model=APIResponse[PaginatedData[OrderResponse]],
     summary="批次订单列表",
 )
-async def list_plan_orders(
-    code: str = Path(..., description="认证产品代码"),
-    plan_id: int = Path(..., ge=1, description="批次 ID"),
-    status: OrderStatus | None = Query(None, description="按订单状态筛选"),
+async def list_batch_orders(
+    batch_id: int = Path(..., ge=1),
+    status_filter: OrderStatus | None = Query(None, alias="status"),
     phone: str | None = Query(None, description="按考生手机号筛选"),
-    page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     _admin=Depends(require_permission("order:list")),
+    db: AsyncSession = Depends(get_db),
 ) -> APIResponse[PaginatedData[OrderResponse]]:
     result = await PlanOrderManagementService().list_orders(
-        product_type=code,
-        plan_id=plan_id,
-        status=status,
+        plan_id=batch_id,
+        status=status_filter,
         phone=phone,
         page=page,
         page_size=page_size,
@@ -57,172 +289,21 @@ async def list_plan_orders(
     return success(data=result)
 
 
-@router.get(
-    "/{code}/plans/{plan_id}/approvals",
-    response_model=APIResponse[PaginatedData[ReviewResponse]],
-    summary="批次审核记录",
-)
-async def list_plan_approvals(
-    code: str = Path(..., description="认证产品代码"),
-    plan_id: int = Path(..., ge=1, description="批次 ID"),
-    action: Literal["approve", "reject"] | None = Query(
-        None,
-        description="按审核动作筛选",
-    ),
-    page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
-    _admin=Depends(require_permission("order:list")),
-) -> APIResponse[PaginatedData[ReviewResponse]]:
-    result = await PlanOrderManagementService().list_approvals(
-        product_type=code,
-        plan_id=plan_id,
-        action=action,
-        page=page,
-        page_size=page_size,
-    )
-    return success(data=result)
-
-
-@router.post("/{code}/plans",
-    response_model=APIResponse[PlanResponse],
-    summary="创建批次",
-)
-async def create_plan(
-    body: PlanCreate,
-    code: str = Path(..., description="认证产品代码"),
-    admin=Depends(require_permission("user:write")),
-):
-    result = await PlanService().create_plan(code, body, admin_id=admin.id)
-    return success(data=result)
-
-
-@router.put("/{code}/plans/{plan_id}",
-    response_model=APIResponse[PlanResponse],
-    summary="编辑批次",
-)
-async def update_plan(
-    body: PlanUpdate,
-    code: str = Path(..., description="认证产品代码"),
-    plan_id: int = Path(..., description="批次 ID"),
-    admin=Depends(require_permission("user:write")),
-):
-    result = await PlanService().update_plan(
-        plan_id, body, product_type=code, admin_id=admin.id
-    )
-    return success(data=result)
-
-
-@router.put("/{code}/plans/{plan_id}/publish",
-    response_model=APIResponse[PlanResponse],
-    summary="发布批次",
-)
-async def publish_plan(
-    code: str = Path(..., description="认证产品代码"),
-    plan_id: int = Path(..., description="批次 ID"),
-    admin=Depends(require_permission("user:write")),
-):
-    result = await PlanService().publish_plan(
-        plan_id, product_type=code, admin_id=admin.id
-    )
-    return success(data=result, message="批次已发布")
-
-
-@router.put("/{code}/plans/{plan_id}/archive",
-    response_model=APIResponse[PlanResponse],
-    summary="归档批次",
-)
-async def archive_plan(
-    code: str = Path(..., description="认证产品代码"),
-    plan_id: int = Path(..., description="批次 ID"),
-    admin=Depends(require_permission("user:write")),
-):
-    result = await PlanService().archive_plan(
-        plan_id, product_type=code, admin_id=admin.id
-    )
-    return success(data=result, message="批次已归档")
-
-
-@router.put("/{code}/plans/{plan_id}/cancel",
-    response_model=APIResponse[PlanResponse],
-    summary="取消批次",
-)
-async def cancel_plan(
-    code: str = Path(..., description="认证产品代码"),
-    plan_id: int = Path(..., description="批次 ID"),
-    admin=Depends(require_permission("user:write")),
-):
-    result = await PlanService().cancel_plan(
-        plan_id, product_type=code, admin_id=admin.id
-    )
-    return success(data=result, message="批次已取消")
-
-
-@router.put(
-    "/{code}/plans/{plan_id}/close-registration",
-    response_model=APIResponse[PlanResponse],
-    summary="关闭批次报名",
-)
-async def close_registration(
-    code: str = Path(..., description="认证产品代码"),
-    plan_id: int = Path(..., ge=1),
-    admin=Depends(require_permission("user:write")),
-):
-    result = await PlanService().close_registration(
-        plan_id, product_type=code, admin_id=admin.id
-    )
-    return success(data=result, message="批次报名已关闭")
-
+# ============================================================
+# 旧接口：410 Gone
+# ============================================================
 
 @router.get(
-    "/{code}/plans/{plan_id}/impact",
-    response_model=APIResponse[PlanImpactResponse],
-    summary="预览取消或终结人社批次的影响",
-    description=(
-        "只读统计，不锁定资源，也不替代执行取消或终结时的权限、状态和并发重校验；"
-        "终结影响仅超级管理员可查看。"
-    ),
+    "/{code}/plans",
+    status_code=status.HTTP_410_GONE,
+    summary="[已废弃] 按认证产品查批次列表",
 )
-async def preview_plan_impact(
-    code: str = Path(..., description="人社报考项目的系统标识"),
-    plan_id: int = Path(..., ge=1, description="批次 ID"),
-    action: PlanImpactAction = Query(..., description="危险操作：cancel 或 finalize"),
-    admin=Depends(require_permission("user:write")),
-) -> APIResponse[PlanImpactResponse]:
-    if action == "finalize":
-        await require_super_admin(admin)
-    result = await PlanService().preview_impact(
-        plan_id,
-        product_type=code,
-        action=action,
-    )
-    return success(data=result)
-
-
-@router.put(
-    "/{code}/plans/{plan_id}/finalize",
-    response_model=APIResponse[PlanResponse],
-    summary="终结人社批次（仅超级管理员）",
-    description="待审核记录会阻止终结；驳回且已付款报名将逐名建立自动退款任务。",
-)
-async def finalize_plan(
-    code: str = Path(..., description="认证产品代码"),
-    plan_id: int = Path(..., ge=1),
-    admin=Depends(require_super_admin),
+async def list_plans_deprecated(
+    code: str = Path(...),
+    _admin=Depends(require_permission("certification:list")),
 ):
-    result = await PlanService().finalize_plan(
-        plan_id, product_type=code, admin_id=admin.id
+    from fastapi import HTTPException
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="此接口已废弃，请使用 GET /admin/certifications/batches",
     )
-    return success(data=result, message="批次已终结")
-
-
-@router.delete("/{code}/plans/{plan_id}",
-    response_model=APIResponse,
-    summary="删除批次",
-)
-async def delete_plan(
-    code: str = Path(..., description="认证产品代码"),
-    plan_id: int = Path(..., description="批次 ID"),
-    _admin=Depends(require_permission("user:write")),
-):
-    await PlanService().delete_plan(plan_id, product_type=code)
-    return success(message="批次已删除")

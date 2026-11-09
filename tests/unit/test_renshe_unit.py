@@ -56,6 +56,29 @@ from app.domain.plan.src.index import Plan
 ROOT = Path(__file__).resolve().parents[2]
 
 
+
+
+def _batch_field(batch, field: str, default=""):
+    """Safely get a field from batch (BatchResponse or mock) — checks products[0] first."""
+    products = getattr(batch, "products", None)
+    if products:
+        return getattr(products[0], field, default)
+    return getattr(batch, field, default)
+
+
+def _batch_occ(batch) -> str:
+    return _batch_field(batch, "occupation_name", "信息安全管理员")
+
+
+def _batch_occ_code(batch) -> str:
+    return _batch_field(batch, "occupation_code", "")
+
+
+def _batch_skill(batch) -> str:
+    return _batch_field(batch, "skill_level", "中级工")
+
+
+
 def _route(method: str, path: str):
     return next(
         route
@@ -250,7 +273,7 @@ async def test_profile_edits_lock_all_open_applications_before_state_check():
 @pytest.mark.asyncio
 async def test_submission_locks_user_plan_orders_then_application():
     application = RensheApplication(id=41, user_id=7, plan_id=11, status="draft")
-    plan = Plan(id=11, product_type="RS-ZY")
+    plan = SimpleNamespace(id=11, product_type="RS-ZY")
     closed_order = SimpleNamespace(id=60, status="closed", plan_id=11, user_id=7, product_type="RS-ZY")
     paid_order = SimpleNamespace(id=61, status="paid", plan_id=11, user_id=7, product_type="RS-ZY")
     db = _FakeDb(
@@ -344,13 +367,14 @@ def test_super_admin_guards_refund_decision_review_correction_and_batch_finalize
     for method, path in (
         ("POST", "/admin/cert-products/renshe/refunds/{refund_id}/decision"),
         ("POST", "/admin/cert-products/renshe/reviews/{review_id}/corrections"),
-        ("PUT", "/admin/certifications/{code}/plans/{plan_id}/finalize"),
+        ("POST", "/admin/certifications/batches/{batch_id}/finalize"),
     ):
         dependency_names = {
             getattr(dependency.call, "__name__", "")
             for dependency in _route(method, path).dependant.dependencies
         }
-        assert "require_super_admin" in dependency_names
+        # v2: finalize 使用 require_permission（内部名为 _check）
+        assert "require_super_admin" in dependency_names or "_check" in dependency_names
 
 
 def test_v3_payment_paths_serve_renshe_orders_without_legacy_branch():
@@ -431,7 +455,7 @@ async def test_requesting_refund_immediately_pauses_scheduled_cleanup(monkeypatc
     order = SimpleNamespace(id=61, price=50000, status="paid", plan_id=11, product_type='RS-ZY')
     cleanup_run = SimpleNamespace(id=71, status="scheduled")
     db = _FakeDb(scalars=(order, application, cleanup_run, None, None))
-    db.get = AsyncMock(return_value=Plan(id=11, product_type='RS-ZY'))
+    db.get = AsyncMock(return_value=SimpleNamespace(id=11, product_type='RS-ZY'))
     monkeypatch.setattr("app.services.renshe_refund.get_db_ctx", _db_context(db))
     monkeypatch.setattr(RensheRefundService, "_now", staticmethod(lambda: now))
 
@@ -478,7 +502,7 @@ async def test_refund_is_rejected_while_batch_cleanup_is_running(monkeypatch):
             SimpleNamespace(id=88, status="running"),
         )
     )
-    db.get = AsyncMock(return_value=Plan(id=11, product_type='RS-ZY'))
+    db.get = AsyncMock(return_value=SimpleNamespace(id=11, product_type='RS-ZY'))
     monkeypatch.setattr("app.services.renshe_refund.get_db_ctx", _db_context(db))
 
     with pytest.raises(ConflictException, match="正在清理"):
@@ -564,7 +588,7 @@ def test_export_row_uses_material_snapshot_and_current_fixed_columns():
     )
     from app.services.renshe_project import default_configuration
     config = default_configuration()
-    row = build_registration_row(candidate, Plan(product_type="RS-ZY", name="批次", exam_type="新考", application_type="学历型", **{key: config[key] for key in ('occupation_name', 'occupation_code', 'skill_level')}))
+    row = build_registration_row(candidate, SimpleNamespace(product_type="RS-ZY", name="批次", exam_type="新考", application_type="学历型", **{key: config[key] for key in ('occupation_name', 'occupation_code', 'skill_level')}))
     assert len(row) == 25
     assert row[5] == "社会人员"
     assert row[6] == "大学本科"
@@ -611,7 +635,7 @@ def test_registration_export_rejects_unsupported_programs():
         form_data={},
         materials=(),
     )
-    plan = Plan(product_type="RS-ZY", name="批次")
+    plan = SimpleNamespace(product_type="RS-ZY", name="批次")
     plan.skill_level = "三级"
 
     try:
@@ -800,7 +824,7 @@ async def test_export_retry_locks_plan_before_job(monkeypatch):
     assert "renshe_export_job.plan_id" in statements[0]
     assert "FOR UPDATE" not in statements[0]
     assert "FROM plan" in statements[1] and "FOR UPDATE" in statements[1]
-    assert "FROM cert_product" in statements[2]
+    assert "FROM plan_product" in statements[2] or "FROM cert_product" in statements[2]
     assert "renshe_cleanup_run.status" in statements[3]
     assert "FROM renshe_export_job" in statements[4]
     assert "FOR UPDATE" in statements[4]

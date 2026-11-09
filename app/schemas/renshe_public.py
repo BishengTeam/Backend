@@ -11,12 +11,19 @@ PUBLIC_CONFIG_FIELDS = {"qualification_rule", "education_levels", "institution_t
 PUBLIC_PROFILE_FIELDS = {"source_conditions", "admission_paths", "occupation_name", "related_majors", "related_occupations", "project_limits", "sources"}
 
 def public_plan(plan: PlanResponse) -> dict:
-    result = plan.model_dump(include=PUBLIC_PLAN_FIELDS)
-    config = {key: value for key, value in (plan.renshe_config or {}).items() if key in PUBLIC_CONFIG_FIELDS}
+    # v2: renshe_config 在 products[0] 上
+    _pp_config = {}
+    if getattr(plan, "products", None):
+        _pp_config = getattr(plan.products[0], "renshe_config", None) or {}
+    else:
+        _pp_config = getattr(plan, "renshe_config", None) or {}
+    # 兼容：合并 plan 级和 product 级字段
+    result = plan.model_dump(exclude={"products", "time_segments"})
+    config = {key: value for key, value in _pp_config.items() if key in PUBLIC_CONFIG_FIELDS}
     if isinstance(config.get("rule_profile"), dict):
         config["rule_profile"] = {key: value for key, value in config["rule_profile"].items() if key in PUBLIC_PROFILE_FIELDS}
     result["renshe_config"] = config
     result["can_apply"] = config.get("qualification_rule") in {
         "related_major_graduated_degree_v1", "documented_employment_v1", "level_five_employment_v1", "level_three_v1",
-    } and (plan.renshe_config or {}).get("reporting_policy", {}).get("contract_version") == 2
+    } and _pp_config.get("reporting_policy", {}).get("contract_version") == 2
     return result

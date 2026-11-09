@@ -50,7 +50,7 @@ def test_valid_contacts_and_optional_level_one_postcode(phone):
 
 
 def test_legacy_batch_input_only_accepts_the_actual_upload_limit():
-    data = dict(plan_id=1, level="1", level1_price_cents=100, level2_price_cents=100)
+    data = dict(plan_product_id=1, level="1", level1_price_cents=100, level2_price_cents=100)
     assert NispExamBatchCreate(**data).max_material_bytes == NISP_MAX_MATERIAL_BYTES
     for limit in [5 * 1024 * 1024, 20 * 1024 * 1024]:
         with pytest.raises(ValidationError):
@@ -126,7 +126,7 @@ async def test_batch_responses_advertise_actual_limit_for_legacy_rows(monkeypatc
 
     now = datetime.now(timezone.utc)
     batch = SimpleNamespace(
-        id=1, plan_id=1, level="1", training_org=None, training_teacher=None,
+        id=1, plan_product_id=1, level="1", training_org=None, training_teacher=None,
         training_address=None, training_start=None, training_end=None,
         level1_price_cents=100, level2_price_cents=200, payment_timeout_minutes=30,
         resubmission_window_hours=72, max_resubmissions=2, max_material_bytes=stored_limit,

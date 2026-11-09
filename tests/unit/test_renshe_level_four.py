@@ -14,6 +14,29 @@ from app.services.renshe_project import selection_configuration
 from tests.unit.test_renshe_employment import payload
 
 
+
+
+def _batch_field(batch, field: str, default=""):
+    """Safely get a field from batch (BatchResponse or mock) — checks products[0] first."""
+    products = getattr(batch, "products", None)
+    if products:
+        return getattr(products[0], field, default)
+    return getattr(batch, field, default)
+
+
+def _batch_occ(batch) -> str:
+    return _batch_field(batch, "occupation_name", "信息安全管理员")
+
+
+def _batch_occ_code(batch) -> str:
+    return _batch_field(batch, "occupation_code", "")
+
+
+def _batch_skill(batch) -> str:
+    return _batch_field(batch, "skill_level", "中级工")
+
+
+
 def test_fourth_level_has_exactly_twenty_one_source_backed_combinations():
     selected = [item for item in combinations() if item["grade"] == 4 and item["adapted"]]
     assert len(selected) == 21

@@ -42,6 +42,7 @@ from app.services.renshe_project import (
 from app.services.renshe_review import RensheReviewService
 from app.services.renshe_export import RensheExportService
 from app.services.plan import PlanService
+from tests.unit.plan_v2_adapter import PlanServiceAdapter
 from app.services.order_fulfillment import OrderFulfillmentService
 from app.services.renshe_reporting import default_policy, DEGREE_CONDITION, assert_template
 
@@ -69,7 +70,7 @@ async def graduated_batch(env, monkeypatch):
         admin_id=1,
     )
     batch = await create_batch(project)
-    await PlanService().publish_plan(batch.id, project.code, admin_id=1)
+    await PlanServiceAdapter().publish_plan(batch.id, project.code, admin_id=1)
     await verified_student(env)
     async with env.db() as db:
         await db.execute(delete(UserStudent))
@@ -79,13 +80,21 @@ async def graduated_batch(env, monkeypatch):
     return project, batch
 
 
+
+def _batch_field(batch, field: str, default=None):
+    """Safely get a field from batch (BatchResponse or mock)."""
+    products = getattr(batch, "products", None)
+    if products:
+        return getattr(products[0], field, default)
+    return getattr(batch, field, default)
+
 def draft_payload(batch, **changes):
     values = dict(
         plan_id=batch.id,
         contact_phone="13800138000",
         email="graduate@example.com",
         mailing_address="毕业报名地址",
-        reporting_config_id=batch.renshe_config_id,
+        reporting_config_id=_batch_field(batch, "renshe_config_id"),
         reporting_info={"occupation_status": "失业人员", "ethnicity": "汉族", "political_status": "群众", "has_work_experience": True, "work_start_date": "2022-09-21", "occupation_years": 0},
         education_info={
             "graduated": True,
@@ -101,8 +110,10 @@ def draft_payload(batch, **changes):
     return RensheDraftUpsert(**values)
 
 
-async def uploads(service, batch, *, exclude=()):
-    for kind in [item["kind"] for item in batch.renshe_config["materials"]]:
+async def uploads(service, batch, *, exclude=(), config=None):
+    from app.services.renshe_project import graduated_configuration
+    _cfg = config or graduated_configuration()
+    for kind in [item["kind"] for item in _cfg["materials"]]:
         if kind in {"id_card_front", "id_card_back", "portrait", *exclude}:
             continue
         pdf = kind in {"education_report", "xuexin_registration", "education_report", "commitment_letter"}
@@ -398,7 +409,7 @@ async def test_graduated_http_upload_download_and_draft_ownership(
         ) as client:
             options = await client.get(f"/api/renshe/batches/{batch.id}/reporting-options")
             assert options.status_code == 200, options.text
-            assert options.json()["data"]["config_id"] == batch.renshe_config_id
+            assert options.json()["data"]["config_id"] == _batch_field(batch, "renshe_config_id")
             assert options.json()["data"]["application_condition"] == DEGREE_CONDITION
             response = await client.post(
                 f"/api/renshe/batches/{batch.id}/materials/commitment_letter",

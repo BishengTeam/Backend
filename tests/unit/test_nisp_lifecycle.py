@@ -43,7 +43,7 @@ def payload():
 
 
 def batch(**kwargs):
-    return NS(id=1, plan_id=2, level='1', level1_price_cents=100,
+    return NS(id=1, plan_product_id=1, level='1', level1_price_cents=100,
               level2_price_cents=200, payment_timeout_minutes=30,
               max_resubmissions=2, resubmission_window_hours=72, training_org=None, **kwargs)
 

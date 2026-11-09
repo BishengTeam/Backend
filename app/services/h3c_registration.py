@@ -35,7 +35,7 @@ from app.domain.order.src.index import (
     lock_inventory,
     release_inventory_lock,
 )
-from app.domain.plan.src.index import Plan
+from app.domain.plan.src.index import Plan, PlanProduct
 from app.domain.user.src.index import User, UserRealname
 from app.integrations.wechat import WechatClient
 from app.port.config import settings
@@ -149,7 +149,7 @@ class H3cRegistrationService:
             rows = (
                 await db.execute(
                     select(H3cExamBatch, Plan, CertProduct)
-                    .join(Plan, Plan.id == H3cExamBatch.plan_id)
+                    .join(PlanProduct, PlanProduct.id == H3cExamBatch.plan_product_id) .join(Plan, Plan.id == PlanProduct.plan_id)
                     .join(CertProduct, CertProduct.code == Plan.product_type)
                     .where(
                         Plan.status.in_(H3C_VISIBLE_PLAN_STATUSES),
@@ -256,7 +256,7 @@ class H3cRegistrationService:
                 )
 
                 batch_plan_id = await db.scalar(
-                    select(H3cExamBatch.plan_id).where(
+                    select(H3cExamBatch.plan_product_id).where(
                         H3cExamBatch.id == data.batch_id
                     )
                 )

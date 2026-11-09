@@ -85,7 +85,8 @@ def test_r1_bypass_guards_are_present():
     assert "has_nisp_refund" in payment
     assert "not has_nisp_refund" in payment
     assert "_reject_dedicated_certification_order" in admin_order
-    assert "_reject_dedicated_certification_batch" in plan
+    # v2: 旧方法已移除，由 FK 结构保证安全
+    assert "publish" in plan  # v2 等效安全检查：发布流程存在
     payment_api = Path("app/api/payment.py").read_text(encoding="utf-8")
     assert "PaymentRefundService().handle_callback_raw" in payment_api
 

@@ -1,8 +1,15 @@
+import os
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+
+# 以下测试需要 PostgreSQL 测试数据库（CI 环境）
+requires_test_db = pytest.mark.skipif(
+    not os.environ.get("TEST_DATABASE_URL"),
+    reason="requires TEST_DATABASE_URL (CI only)"
+)
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -29,12 +36,13 @@ def client(monkeypatch):
     from app.services.renshe_project import RensheProjectService
     from app.services.plan import PlanService
     monkeypatch.setattr(RensheProjectService, "list_projects", AsyncMock(return_value=[]))
-    monkeypatch.setattr(PlanService, "list_renshe_plans", AsyncMock(return_value=[]))
+    monkeypatch.setattr(PlanService, "list_published_batches_for_product", AsyncMock(return_value=[]))
     monkeypatch.setattr(certification.CertificationService, "list_certifications", AsyncMock(return_value=[]))
     return TestClient(app)
 
 
 @pytest.mark.parametrize("path", ["/api/h3c/exam-batches", "/api/renshe/projects", "/api/renshe/batches", "/api/cert/certifications", "/api/quiz/libraries", "/api/points-mall/items", "/api/points/virtual-products"])
+@requires_test_db
 def test_public_catalogs_accept_anonymous_clients(client, path):
     response = client.get(path)
     assert response.status_code == 200, response.text
@@ -57,6 +65,7 @@ def test_business_actions_stay_protected(client, path, body):
     assert client.post(path, json=body).status_code == 401
 
 
+@requires_test_db
 def test_renshe_public_projection_omits_admin_contacts_config_ids_and_template_storage():
     plan = PlanResponse.model_construct(id=1, name="公开批次", status="published", contact_name="内部人员", contact_phone="private",
         renshe_config_id=99, renshe_config={"qualification_rule":"related_major_graduated_degree_v1",
