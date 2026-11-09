@@ -476,7 +476,24 @@ class PlanService:
         db.add(pp)
         await db.flush()
 
+        # Fix #3+#6: 人社产品写入配置快照到 PlanProduct.renshe_config
+        if cert.type == "renshe" and data.renshe_config_id is not None:
+            from app.models.renshe_project import RensheProjectConfig as _RPC
+            _config = await db.get(_RPC, data.renshe_config_id)
+            if _config is not None:
+                pp.renshe_config = _config.config
+                await db.flush()
+
         # P1 #5: H3C/NISP 产品自动派生厂商批次表（通用批次可直接报名）
+        # 遗留 #1: 派生价格从 PriceConfig 取默认，避免 0 元下单
+        from app.domain.order.src.index import PriceConfig as _PC
+        _default_price = await db.scalar(
+            select(_PC.price).where(
+                _PC.product_type == cert.code,
+                _PC.is_active.is_(True),
+            ).limit(1)
+        ) or 0
+
         if cert.type == "h3c":
             from app.domain.h3c.src.index import H3cExamBatch
             _existing_h3c = await db.scalar(
@@ -488,7 +505,9 @@ class PlanService:
                     exam_code=f"AUTO-{cert.code[:20]}",
                     country="CHN", language="CHS",
                     identity_tag="自动派生",
-                    coupon_price_cents=0, student_price_cents=0, full_price_cents=0,
+                    coupon_price_cents=_default_price,
+                    student_price_cents=_default_price,
+                    full_price_cents=_default_price,
                 ))
         elif cert.type == "nisp":
             from app.domain.nisp.src.index import NispExamBatch
@@ -499,7 +518,8 @@ class PlanService:
                 db.add(NispExamBatch(
                     plan_product_id=pp.id,
                     level="1",
-                    level1_price_cents=0, level2_price_cents=0,
+                    level1_price_cents=_default_price,
+                    level2_price_cents=_default_price,
                 ))
 
         return pp

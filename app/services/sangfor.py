@@ -210,7 +210,9 @@ class SangforService:
                 async with db.begin():
                     plan = await PlanEnrollmentService().lock_enrollable_plan(db, plan_id=data.batch_id, user_id=user_id, expected_vendor="sangfor")
                     # v2: 通过 PlanProduct 解析产品编码
-                    _sf_code = plan.product_type or await db.scalar(
+                    # v2: 只用过滤 type=="sangfor" 的查询；plan.product_type 兼容属性
+                    # 返回第一个产品编码（跨厂商批次首位可能是 H3C），不能依赖
+                    _sf_code = await db.scalar(
                         select(CertProduct.code)
                         .join(PlanProduct, PlanProduct.product_id == CertProduct.id)
                         .where(PlanProduct.plan_id == plan.id, CertProduct.type == "sangfor")
