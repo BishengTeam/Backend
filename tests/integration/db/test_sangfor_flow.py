@@ -41,7 +41,7 @@ async def test_unified_notice_snapshot_payment_progress_and_consultation_scope(c
     assert record["candidate_snapshot"]["enrollment_notice"]["notice_hash"] == notice["notice_hash"]
     assert record["versions"][0]["snapshot"]["enrollment_notice"]["batch"]["plan_id"] == context.plan_id
     async with context.db() as db, db.begin():
-        db.add(CertConsultationGroup(plan_id=context.plan_id, qrcode_url="/api/media/test-group.png", expires_at=datetime.now(timezone.utc) + timedelta(days=1)))
+        db.add(CertConsultationGroup(plan_product_id=context.plan_id, qrcode_url="/api/media/test-group.png", expires_at=datetime.now(timezone.utc) + timedelta(days=1)))
     journey = await user_journey("sangfor", record["id"], context.uid)
     assert journey["progress"]["stage"] == 0 and journey["consultation_group"] is None
     assert journey["contact"]["contact_phone"] == "13800000000"

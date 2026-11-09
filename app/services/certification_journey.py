@@ -190,7 +190,14 @@ class CertificationJourneyService:
         material_limits = {}
         batch_model = {"h3c": H3cExamBatch, "nisp": NispExamBatch}.get(vendor)
         if batch_model:
-            domain_batch = await db.scalar(select(batch_model).where(batch_model.plan_id == plan.id))
+            # v2: plan_product_id → plan_product.plan_id
+            _jp = PlanProduct if hasattr(batch_model, 'plan_product_id') else None
+            if _jp is not None:
+                domain_batch = await db.scalar(
+                    select(batch_model).join(PlanProduct, PlanProduct.id == batch_model.plan_product_id).where(PlanProduct.plan_id == plan.id)
+                )
+            else:
+                domain_batch = await db.scalar(select(batch_model).where(batch_model.plan_id == plan.id))
             material_limits = {"max_material_bytes": domain_batch.max_material_bytes}
         snapshot = {"vendor": vendor, "subject": subject, "batch": fixed_batch, "price": price,
             "notice": general.content if general else default_content(vendor),

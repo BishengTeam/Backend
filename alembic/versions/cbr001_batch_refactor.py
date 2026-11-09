@@ -91,6 +91,7 @@ def upgrade() -> None:
         sa.Column("product_id", sa.BigInteger(), sa.ForeignKey("cert_product.id", ondelete="RESTRICT"), nullable=False),
         sa.Column("capacity", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("renshe_config_id", sa.BigInteger(), sa.ForeignKey("renshe_project_config.id", ondelete="RESTRICT"), nullable=True),
+        sa.Column("renshe_config", sa.JSON(), nullable=True),
         sa.Column("occupation_name", sa.String(64), nullable=True),
         sa.Column("occupation_code", sa.String(160), nullable=True),
         sa.Column("skill_level", sa.String(32), nullable=True),

@@ -1008,6 +1008,7 @@ class NispRegistrationService:
             batch_id=registration.batch_id,
             batch_name=plan.name if plan is not None else None,
             plan_id=(await db.scalar(select(PlanProduct.plan_id).where(PlanProduct.id == registration.plan_product_id))),
+            plan_product_id=registration.plan_product_id,
             order_id=registration.order_id,
             level=registration.level,
             status=registration.status,

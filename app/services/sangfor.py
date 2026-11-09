@@ -17,7 +17,7 @@ from sqlalchemy.orm import aliased
 
 from app.adapter.database import get_db_ctx
 from app.domain.order.src.index import Order, apply_order_status_transition
-from app.domain.plan.src.index import Plan
+from app.domain.plan.src.index import Plan, PlanProduct
 from app.models.cert_product import CertProduct
 from app.models.offline_payment import OfflineBankEntry, OfflinePayment, OfflinePaymentAudit, OfflinePaymentSubmission
 from app.port.config import settings
@@ -102,7 +102,7 @@ class SangforService:
         return select(Order).where(Order.order_kind == "certification", Order.extra_data["business_type"].as_string() == "sangfor")
 
     async def batch(self, db, batch_id, *, public=False):
-        pair = (await db.execute(select(Plan, CertProduct).join(CertProduct, CertProduct.code == Plan.product_type)
+        pair = (await db.execute(select(Plan, CertProduct).join(PlanProduct, PlanProduct.plan_id == Plan.id).join(CertProduct, CertProduct.id == PlanProduct.product_id)
                                  .where(Plan.id == batch_id, CertProduct.type == "sangfor"))).first()
         if pair is None or (public and (not pair[1].is_active or pair[0].status not in {"published", "registration_closed"} or pair[1].code not in DIRECTIONS)):
             raise NotFoundException("深信服考试批次")
@@ -132,7 +132,7 @@ class SangforService:
 
     async def batches(self, *, public=False, product_code=None):
         async with get_db_ctx() as db:
-            query = select(Plan, CertProduct).join(CertProduct, CertProduct.code == Plan.product_type).where(CertProduct.type == "sangfor")
+            query = select(Plan, CertProduct).join(PlanProduct, PlanProduct.plan_id == Plan.id).join(CertProduct, CertProduct.id == PlanProduct.product_id).where(CertProduct.type == "sangfor")
             if public:
                 query = query.where(CertProduct.is_active.is_(True), CertProduct.code.in_(DIRECTIONS), Plan.status.in_(("published", "registration_closed")))
             if product_code:

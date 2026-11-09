@@ -10,7 +10,7 @@ from sqlalchemy import func, or_, select
 
 from app.adapter.database import get_db_ctx
 from app.domain.h3c.src.index import H3cRefundRequest, H3cRegistration
-from app.domain.plan.src.index import Plan
+from app.domain.plan.src.index import Plan, PlanProduct
 from app.domain.order.src.index import (
     Order,
     apply_order_status_transition,
@@ -117,7 +117,7 @@ class H3cRefundService:
                 .join(H3cRegistration, H3cRegistration.id == H3cRefundRequest.registration_id)
                 .join(Plan, Plan.id == H3cRegistration.plan_id)
                 .join(Order, Order.id == H3cRefundRequest.order_id)
-                .outerjoin(CertProduct, CertProduct.code == Plan.product_type)
+                .outerjoin(PlanProduct, PlanProduct.plan_id == Plan.id).outerjoin(CertProduct, CertProduct.id == PlanProduct.product_id)
             )
             if registration_id is not None:
                 stmt = stmt.where(H3cRegistration.id == registration_id)

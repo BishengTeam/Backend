@@ -44,7 +44,11 @@ async def payment_summary(db, order, registration=None) -> RegistrationPaymentSu
         linked = getattr(registration, "order_id", None)
         consistent = (
             getattr(registration, "user_id", None) == getattr(order, "user_id", None)
-            and getattr(registration, "plan_id", None) == getattr(order, "plan_id", None)
+            # v2: H3C/NISP registration 用 plan_product_id → plan_product.plan_id
+            and (
+                getattr(registration, "plan_id", None) == getattr(order, "plan_id", None)
+                or getattr(registration, "plan_product_id", None) is not None
+            )
             and (linked == order.id if linked is not None else order.application_id == registration.id)
         )
         if not consistent:

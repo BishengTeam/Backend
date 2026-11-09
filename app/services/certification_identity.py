@@ -138,7 +138,10 @@ async def validate_nisp_batch_product(
     """Ensure a NISP batch belongs to the active product for its level."""
     product = await db.scalar(
         select(CertProduct)
-        .where(CertProduct.code == plan.product_type)
+        .join(PlanProduct, PlanProduct.product_id == CertProduct.id)
+        .where(PlanProduct.plan_id == plan.id)
+        .order_by(CertProduct.id)
+        .limit(1)
         .with_for_update()
     )
     expected_code = f"NISP-{level}"

@@ -75,6 +75,30 @@ def _first_pp(plan):
     return None
 
 
+def _compat_buffer(plan, key, value):
+    """v1 构造兼容：尚无 PlanProduct 时先缓存，后续 flush 到首个产品行。"""
+    buf = plan.__dict__.setdefault("_compat_pending", {})
+    buf[key] = value
+
+
+def _compat_read_buffer(plan, key, default=None):
+    buf = plan.__dict__.get("_compat_pending", {})
+    return buf.get(key, default)
+
+
+def _flush_compat_buffer(plan):
+    """将缓存的 v1 字段写入首个 PlanProduct（服务层创建产品行后调用）。"""
+    buf = plan.__dict__.pop("_compat_pending", None)
+    if not buf:
+        return
+    pp = _first_pp(plan)
+    if pp is None:
+        return
+    for key, value in buf.items():
+        if hasattr(pp, key):
+            setattr(pp, key, value)
+
+
 @property
 def _compat_product_type(self) -> str:
     """v2 兼容：返回第一个关联产品的编码。
@@ -110,11 +134,20 @@ def _compat_capacity(self, value: int) -> None:
     pp = _first_pp(self)
     if pp is not None:
         pp.capacity = value
+    else:
+        _compat_buffer(self, "capacity", value)
 
 
 @property
 def _compat_price_cents(self) -> int:
-    return 0  # v2: 批次不存价格
+    pp = _first_pp(self)
+    return getattr(pp, "price_cents", 0) if pp else 0
+
+
+@_compat_price_cents.setter
+def _compat_price_cents(self, value: int) -> None:
+    # v2: 价格由 PriceConfig/厂商表管理，此处仅缓存不落库
+    _compat_buffer(self, "price_cents", value)
 
 
 @property
@@ -128,6 +161,8 @@ def _compat_skill_level(self, value) -> None:
     pp = _first_pp(self)
     if pp is not None:
         pp.skill_level = value
+    else:
+        _compat_buffer(self, "skill_level", value)
 
 
 @property
@@ -141,6 +176,8 @@ def _compat_occupation_name(self, value) -> None:
     pp = _first_pp(self)
     if pp is not None:
         pp.occupation_name = value
+    else:
+        _compat_buffer(self, "occupation_name", value)
 
 
 @property
@@ -154,6 +191,8 @@ def _compat_occupation_code(self, value) -> None:
     pp = _first_pp(self)
     if pp is not None:
         pp.occupation_code = value
+    else:
+        _compat_buffer(self, "occupation_code", value)
 
 
 @property
@@ -167,6 +206,8 @@ def _compat_exam_type(self, value) -> None:
     pp = _first_pp(self)
     if pp is not None:
         pp.exam_type = value
+    else:
+        _compat_buffer(self, "exam_type", value)
 
 
 @property
@@ -180,6 +221,8 @@ def _compat_application_type(self, value) -> None:
     pp = _first_pp(self)
     if pp is not None:
         pp.application_type = value
+    else:
+        _compat_buffer(self, "application_type", value)
 
 
 @property
@@ -193,6 +236,8 @@ def _compat_renshe_config(self, value: dict | None) -> None:
     pp = _first_pp(self)
     if pp is not None:
         pp.renshe_config = value
+    else:
+        _compat_buffer(self, "renshe_config", value)
 
 
 @property
@@ -206,6 +251,8 @@ def _compat_renshe_config_id(self, value: int | None) -> None:
     pp = _first_pp(self)
     if pp is not None:
         pp.renshe_config_id = value
+    else:
+        _compat_buffer(self, "renshe_config_id", value)
 
 
 @property

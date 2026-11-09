@@ -8,7 +8,7 @@ from sqlalchemy import func, or_, select
 
 from app.adapter.database import get_db_ctx
 from app.domain.nisp.src import NispRefundRequest, NispRegistration
-from app.domain.plan.src.index import Plan
+from app.domain.plan.src.index import Plan, PlanProduct
 from app.domain.order.src.index import Order, apply_order_status_transition
 from app.models.cert_product import CertProduct
 from app.integrations.wechat_pay import (
@@ -95,7 +95,7 @@ class NispRefundService:
                 .join(NispRegistration, NispRegistration.id == NispRefundRequest.registration_id)
                 .join(Plan, Plan.id == NispRegistration.plan_id)
                 .join(Order, Order.id == NispRefundRequest.order_id)
-                .outerjoin(CertProduct, CertProduct.code == Plan.product_type)
+                .outerjoin(PlanProduct, PlanProduct.plan_id == Plan.id).outerjoin(CertProduct, CertProduct.id == PlanProduct.product_id)
             )
             if registration_id is not None:
                 base = base.where(NispRegistration.id == registration_id)

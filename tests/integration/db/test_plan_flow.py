@@ -53,7 +53,15 @@ async def test_context(monkeypatch):
         yield factory, prefix
     finally:
         async with factory() as db:
-            await db.execute(text("DELETE FROM plan WHERE product_type LIKE :pl"), {"pl": f"{prefix}%"})
+            # v2: product_type 存于 plan_product → cert_product，需联删
+            await db.execute(text("""
+                DELETE FROM plan WHERE id IN (
+                    SELECT pp.plan_id FROM plan_product pp
+                    JOIN cert_product cp ON cp.id = pp.product_id
+                    WHERE cp.code LIKE :pl
+                )
+            """), {"pl": f"{prefix}%"})
+            await db.execute(text("DELETE FROM cert_product WHERE code LIKE :pl"), {"pl": f"{prefix}%"})
             await db.commit()
         await engine.dispose()
 
@@ -75,10 +83,10 @@ async def test_create_plan_returns_draft(test_context):
         PlanCreate(name="2026第一期", capacity=30),
     )
     assert result.id > 0
-    assert result.product_type == product_type
+    assert any(pp.product_code == product_type for pp in result.products)  # v2
     assert result.name == "2026第一期"
-    assert result.capacity == 30
-    assert result.enrolled == 0
+    assert result.products[0].capacity == 30  # v2
+    assert result.total_enrolled == 0  # v2
     assert result.status == "draft"
 
 
@@ -306,9 +314,9 @@ async def test_get_plan_detail(test_context):
     detail = await PlanService().get_plan(plan.id)
     assert detail.id == plan.id
     assert detail.name == "Detail Test"
-    assert detail.capacity == 100
+    assert detail.products[0].capacity == 100
     assert detail.status == "published"
-    assert detail.enrolled == 0
+    assert detail.total_enrolled == 0
 
 
 async def test_update_rejects_invalid_effective_window(test_context):

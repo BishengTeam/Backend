@@ -40,7 +40,7 @@ async def context(monkeypatch):
                 apply_start=datetime.now(timezone.utc) - timedelta(days=1), apply_end=datetime.now(timezone.utc) + timedelta(days=1),
                 exam_date=datetime.now(timezone.utc) + timedelta(days=5), renshe_config={"qualification_rule": "level_five_employment_v1", "reporting_policy": {"contract_version": 2}} if vendor == "renshe" else None)
             db.add(plan); await db.flush(); plans.append(plan)
-            batch = H3cExamBatch(plan_id=plan.id, exam_code="TEST", identity_tag="TEST", coupon_price_cents=1000, student_price_cents=2000, full_price_cents=3000) if vendor == "h3c" else NispExamBatch(plan_id=plan.id, level="1", level1_price_cents=1000, level2_price_cents=2000) if vendor == "nisp" else None
+            batch = H3cExamBatch(plan_id=plan.id, exam_code="TEST", identity_tag="TEST", coupon_price_cents=1000, student_price_cents=2000, full_price_cents=3000) if vendor == "h3c" else NispExamBatch(plan_product_id=_pp_plan.id, level="1", level1_price_cents=1000, level2_price_cents=2000) if vendor == "nisp" else None
             if batch: db.add(batch); await db.flush()
             batches.append(batch)
         await db.commit()

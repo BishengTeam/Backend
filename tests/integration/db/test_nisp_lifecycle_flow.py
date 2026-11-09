@@ -89,14 +89,19 @@ async def seed(context, *, capacity=10, price=0):
                 is_active=True,
             )
             db.add(product)
-        plan = Plan(product_type='NISP-1', name=uuid4().hex,
-                    status='published', capacity=capacity,
+        plan = Plan(name=uuid4().hex,
+                    status='published',
                     apply_start=now-timedelta(days=1), apply_end=now+timedelta(days=1))
         admin = AdminUser(username=uuid4().hex, password_hash='test-only', role='cert_admin')
-        db.add_all([product, plan, admin])
+        db.add_all([plan, admin])
         db.add(admin)
         await db.flush()
-        batch = NispExamBatch(plan_id=plan.id, level='1',
+        # v2: PlanProduct + NispExamBatch(plan_product_id)
+        from app.domain.plan.src.index import PlanProduct
+        pp = PlanProduct(plan_id=plan.id, product_id=product.id, capacity=capacity)
+        db.add(pp)
+        await db.flush()
+        batch = NispExamBatch(plan_product_id=pp.id, level='1',
                               level1_price_cents=price, level2_price_cents=price)
         db.add(batch)
         if price:
@@ -174,7 +179,12 @@ async def test_review_batch_options_include_history_and_search_every_page(contex
             )
             db.add(plan)
             await db.flush()
-            db.add(NispExamBatch(id=18 + index, plan_id=plan.id, level=level))
+            # v2: plan_product_id
+            from app.domain.plan.src.index import PlanProduct as _NP
+            _np = _NP(plan_product_id=pp.id, product_id=product.id, capacity=0)
+            db.add(_np)
+            await db.flush()
+            db.add(NispExamBatch(id=18 + index, plan_product_id=_np.id, level=level))
         # A non-NISP plan without a batch never becomes a review option.
         db.add(Plan(product_type='other', name='不应出现', status='published'))
         await db.commit()
@@ -231,7 +241,9 @@ async def test_review_batch_name_and_existing_registration_filters_intersect(con
     ]
     ids = {}
     async with context.factory() as db:
-        plan = await db.get(Plan, batch.plan_id)
+        from app.domain.plan.src.index import PlanProduct as _PP2
+        _plan_id = await db.scalar(select(PlanProduct.plan_id).where(PlanProduct.id == batch.plan_product_id))
+        plan = await db.get(Plan, _plan_id)
         plan.name = '审核所属批次'
         plan.status = 'archived'
         for key, selected_batch, status, name, payment_state, exported in examples:
@@ -239,7 +251,7 @@ async def test_review_batch_name_and_existing_registration_filters_intersect(con
             db.add(user)
             await db.flush()
             order = Order(
-                user_id=user.id, plan_id=selected_batch.plan_id,
+                user_id=user.id, plan_id=_plan_id,
                 product_type='NISP-1', price=0,
                 payment_channel='free' if payment_state == 'confirmed' else 'bank_transfer',
                 status='paid' if payment_state == 'confirmed' else 'pending',
@@ -249,7 +261,7 @@ async def test_review_batch_name_and_existing_registration_filters_intersect(con
             db.add(order)
             await db.flush()
             registration = NispRegistration(
-                batch_id=selected_batch.id, plan_id=selected_batch.plan_id,
+                batch_id=selected_batch.id, plan_id=_plan_id,
                 user_id=user.id, order_id=order.id, registration_no=uuid4().hex,
                 level='1', status=status, candidate_idcard=f'{user.id:018d}',
                 candidate_snapshot={'name': name},
@@ -481,7 +493,7 @@ async def test_legacy_nisp_plan_still_lists_and_supports_order(context, monkeypa
         db.add_all([product, plan])
         await db.flush()
         batch = NispExamBatch(
-            plan_id=plan.id,
+            plan_product_id=pp.id,
             level='2',
             level1_price_cents=0,
             level2_price_cents=0,

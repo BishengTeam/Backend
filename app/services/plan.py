@@ -326,7 +326,16 @@ class PlanService:
         return await cls.get_batch(db, plan_id)
 
     @classmethod
-    async def close_registration(cls, db: AsyncSession, plan_id: int) -> BatchResponse:
+    async def close_registration(cls, db_or_plan_id, plan_id: int | None = None,
+                                 product_code: str | None = None, **kw) -> BatchResponse:
+        """v2: close_registration(db, plan_id) / v1: close_registration(plan_id, product_code, ...)"""
+        if isinstance(db_or_plan_id, AsyncSession):
+            return await cls._close_registration_impl(db_or_plan_id, plan_id)
+        async with get_db_ctx() as db:
+            return await cls._close_registration_impl(db, db_or_plan_id)
+
+    @classmethod
+    async def _close_registration_impl(cls, db: AsyncSession, plan_id: int) -> BatchResponse:
         plan = await cls._get_plan(db, plan_id, for_update=True)
         if plan.status != "published":
             raise BusinessException("仅已发布的批次可以关闭报名")
@@ -595,6 +604,74 @@ class PlanService:
             results.append(await cls.get_batch(db, plan.id))
         return results
 
+    # ------------------------------------------------------------------
+    # v1 兼容方法（过渡期，测试与旧路由仍在使用）
+    # ------------------------------------------------------------------
+
+    async def create_plan(self, product_type: str, data) -> BatchResponse:
+        """v1: PlanService().create_plan(pt, PlanCreate(...))"""
+        from app.schemas.plan import BatchCreate, PlanProductCreate
+        from app.models.cert_product import CertProduct
+        async with get_db_ctx() as db:
+            cert = (await db.execute(
+                select(CertProduct).where(CertProduct.code == product_type)
+            )).scalar_one_or_none()
+            if cert is None:
+                # v1 允许任意 product_type 字符串；v2 需要 FK，
+                # 兼容层自动创建占位产品（测试/旧调用方依赖此行为）
+                vendor = "renshe" if "renshe" in product_type else (
+                    "h3c" if "h3c" in product_type else (
+                    "nisp" if "nisp" in product_type else (
+                    "sangfor" if "sangfor" in product_type or "scsa" in product_type.lower() else "generic")))
+                cert = CertProduct(
+                    type=vendor, code=product_type, name=product_type,
+                    chinese_name=product_type, is_active=True,
+                )
+                db.add(cert)
+                await db.flush()
+            batch_data = data if isinstance(data, BatchCreate) else BatchCreate.model_validate(
+                data.model_dump(exclude={"product_code", "price_cents", "program_code", "project_config_id"}, exclude_none=True)
+                if hasattr(data, "model_dump") else data
+            )
+            if not batch_data.products:
+                capacity = getattr(data, "capacity", 0) or 0
+                batch_data.products = [PlanProductCreate(product_id=cert.id, capacity=capacity)]
+            return await self.create_batch(db, batch_data)
+
+    async def list_plans(self, product_type: str) -> list[BatchResponse]:
+        async with get_db_ctx() as db:
+            return await self.list_published_batches_for_product(db, product_type)
+
+    async def list_published_plans(self, product_type: str) -> list[BatchResponse]:
+        return await self.list_plans(product_type)
+
+    async def list_renshe_plans(self) -> list[BatchResponse]:
+        async with get_db_ctx() as db:
+            return await self.list_published_batches_for_product(db, "renshe")
+
+    async def get_plan(self, plan_id: int) -> BatchResponse:
+        async with get_db_ctx() as db:
+            return await self.get_batch(db, plan_id)
+
+    async def publish_plan(self, plan_id: int, product_code: str | None = None, **kw) -> BatchResponse:
+        async with get_db_ctx() as db:
+            return await self.publish(db, plan_id)
+
+    async def update_plan(self, plan_id: int, data, product_code: str | None = None, **kw) -> BatchResponse:
+        async with get_db_ctx() as db:
+            return await self.update_batch(db, plan_id, data)
+
+    async def delete_plan(self, plan_id: int) -> None:
+        async with get_db_ctx() as db:
+            return await self.delete_batch(db, plan_id)
+
+    async def archive_plan(self, plan_id: int) -> BatchResponse:
+        async with get_db_ctx() as db:
+            return await self.archive(db, plan_id)
+
+    async def cancel_plan(self, plan_id: int) -> BatchResponse:
+        async with get_db_ctx() as db:
+            return await self.cancel(db, plan_id)
 
 # ============================================================
 # 兼容旧接口签名（过渡期，内部逐步替换）
