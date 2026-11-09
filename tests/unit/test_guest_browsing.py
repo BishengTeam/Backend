@@ -67,10 +67,15 @@ def test_business_actions_stay_protected(client, path, body):
 
 @requires_test_db
 def test_renshe_public_projection_omits_admin_contacts_config_ids_and_template_storage():
+    from app.schemas.plan import PlanProductResponse
+    product = PlanProductResponse.model_construct(
+        id=1, plan_id=1, product_id=10, product_code="RNSH-01", product_name="人社认证",
+        product_type="renshe", capacity=30,
+        renshe_config={"qualification_rule": "related_major_graduated_degree_v1",
+        "reporting_policy": {"contract_version": 2, "commitment_template": {"filename": "private.pdf", "sha256": "secret"}},
+        "materials": [], "rule_profile": {"source_conditions": ["已毕业"], "internal_note": "private"}})
     plan = PlanResponse.model_construct(id=1, name="公开批次", status="published", contact_name="内部人员", contact_phone="private",
-        renshe_config_id=99, renshe_config={"qualification_rule":"related_major_graduated_degree_v1",
-        "reporting_policy":{"contract_version":2, "commitment_template":{"filename":"private.pdf", "sha256":"secret"}},
-        "materials":[], "rule_profile":{"source_conditions":["已毕业"], "internal_note":"private"}})
+        products=[product])
     result = public_plan(plan)
     assert result["can_apply"] is True
     assert not {"renshe_config_id", "contact_name", "contact_phone"} & result.keys()

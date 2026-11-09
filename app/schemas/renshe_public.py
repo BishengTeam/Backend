@@ -18,7 +18,7 @@ def public_plan(plan: PlanResponse) -> dict:
     else:
         _pp_config = getattr(plan, "renshe_config", None) or {}
     # 兼容：合并 plan 级和 product 级字段
-    result = plan.model_dump(exclude={"products", "time_segments"})
+    result = {key: value for key, value in plan.model_dump(exclude={"products", "time_segments"}).items() if key in PUBLIC_PLAN_FIELDS}
     config = {key: value for key, value in _pp_config.items() if key in PUBLIC_CONFIG_FIELDS}
     if isinstance(config.get("rule_profile"), dict):
         config["rule_profile"] = {key: value for key, value in config["rule_profile"].items() if key in PUBLIC_PROFILE_FIELDS}
