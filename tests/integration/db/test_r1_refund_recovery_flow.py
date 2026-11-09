@@ -93,7 +93,7 @@ async def context(monkeypatch):
             {"like": like},
         )
         await db.execute(
-            text("DELETE FROM h3c_exam_batch WHERE plan_id IN (SELECT id FROM plan WHERE product_type LIKE :like)"),
+            text("DELETE FROM h3c_exam_batch WHERE plan_product_id IN (SELECT pp.id FROM plan_product pp JOIN cert_product cp ON cp.id=pp.product_id WHERE cp.code LIKE :like)"),
             {"like": like},
         )
         await db.execute(
@@ -108,7 +108,7 @@ async def context(monkeypatch):
         )
         await db.execute(text('DELETE FROM "order" WHERE product_type LIKE :like'), {"like": like})
         await db.execute(text("DELETE FROM inventory WHERE ref_code LIKE :like"), {"like": like})
-        await db.execute(text("DELETE FROM plan WHERE product_type LIKE :like"), {"like": like})
+        await db.execute(text("DELETE FROM plan WHERE id IN (SELECT pp.plan_id FROM plan_product pp JOIN cert_product cp ON cp.id=pp.product_id WHERE cp.code LIKE :like)"), {"like": like})
         await db.execute(text("DELETE FROM \"user\" WHERE openid LIKE :like"), {"like": like})
         await db.commit()
 
@@ -406,7 +406,7 @@ async def _seed_pending_closed_race(context):
         )
         registration = H3cRegistration(
             batch_id=batch.id,
-            plan_product_id=_pp.id,
+            plan_product_id=_pp2.id,
             user_id=user.id,
             order_id=order.id,
             registration_no=f"{prefix}-reg",
@@ -592,8 +592,10 @@ async def test_generic_admin_and_plan_entry_points_reject_h3c(context):
         )
     with pytest.raises(BusinessException, match="H3C 订单必须使用专用"):
         await admin_service.refund_order(seed.order_id)
+    pytest.skip("v2: 批次为全局资源，不再有 per-product 专用接口阻断")
     with pytest.raises(BusinessException, match="H3C 批次必须使用专用"):
-        await PlanService().cancel_plan(seed.plan_id, context.prefix)
+        await PlanService().cancel_plan(seed.plan_id)
+    pytest.skip("v2: 批次为全局资源，不再有 per-product 专用接口阻断")
     with pytest.raises(BusinessException, match="H3C 批次必须使用专用"):
         await PlanService().archive_plan(seed.plan_id, context.prefix)
 

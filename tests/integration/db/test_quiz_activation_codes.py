@@ -90,7 +90,7 @@ async def activation_env(monkeypatch):
         admin = AdminUser(
             username=f"{prefix}_admin",
             password_hash="integration-test-only",
-            role="super_admin",
+            role="quiz_admin",
         )
         db.add(admin)
         await db.flush()
@@ -466,7 +466,7 @@ async def test_exact_deadline_idempotence_and_versioned_api(activation_env, monk
     monkeypatch.setattr("app.services.quiz_activation._now", lambda: now)
     app = FastAPI()
     app.include_router(admin_quiz_router)
-    app.dependency_overrides[require_normal_admin] = lambda: SimpleNamespace(id=env.admin_id, role="super_admin")
+    app.dependency_overrides[require_normal_admin] = lambda: SimpleNamespace(id=env.admin_id, role="quiz_admin")
     path = f"/quiz/libraries/{env.library.id}/activation-codes"
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         legacy_libraries = (await client.get("/quiz/libraries", params={"keyword": env.prefix})).json()["data"]

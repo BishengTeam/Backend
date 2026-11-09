@@ -131,7 +131,7 @@ async def quiz_v2_exam_env(monkeypatch):
         admin = AdminUser(
             username=f"{prefix}_admin",
             password_hash="test-only",
-            role="super_admin",
+            role="quiz_admin",
         )
         free_user = User(openid=f"{prefix}_free", is_active=True)
         entitled_user = User(openid=f"{prefix}_entitled", is_active=True)

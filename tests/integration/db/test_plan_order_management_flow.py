@@ -37,7 +37,8 @@ async def management_context(monkeypatch):
         async with factory() as session:
             yield session
 
-    monkeypatch.setattr(service_module, "get_db_ctx", test_db_ctx)
+    # v2: plan_order_management 不再使用模块级 get_db_ctx
+    # 测试直接传 db 参数
 
     try:
         yield SimpleNamespace(
@@ -104,7 +105,7 @@ async def _seed_management_data(context):
         admin = AdminUser(
             username=f"{context.prefix}_admin",
             password_hash="test-hash",
-            role="super_admin",
+            role="quiz_admin",
             is_active=True,
         )
         db.add_all([paid_user, pending_user, admin])

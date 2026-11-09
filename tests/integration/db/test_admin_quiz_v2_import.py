@@ -57,7 +57,7 @@ async def test_v2_import_imports_duplicate_stems_verbatim(
         admin = AdminUser(
             username=f"{prefix}_admin",
             password_hash="test-only",
-            role="super_admin",
+            role="quiz_admin",
         )
         db.add(admin)
         await db.commit()
@@ -204,7 +204,7 @@ async def test_v2_import_requires_two_level_path_and_confirms_atomically(
         admin = AdminUser(
             username=f"{prefix}_admin",
             password_hash="test-only",
-            role="super_admin",
+            role="quiz_admin",
         )
         db.add(admin)
         await db.commit()

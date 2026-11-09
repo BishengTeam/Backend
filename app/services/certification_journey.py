@@ -97,9 +97,10 @@ class CertificationJourneyService:
             now, start, end = datetime.now(timezone.utc), utc(plan.apply_start), utc(plan.apply_end)
             supported = True
             if vendor == "renshe":
-                config = {}  # v2: renshe_config 从 renshe_project_config 关联获取
+                # v2: renshe_config 快照存在 PlanProduct 上
+                config = getattr(pp, "renshe_config", None) or {}
                 supported = config.get("qualification_rule") in {"related_major_graduated_degree_v1", "documented_employment_v1", "level_five_employment_v1", "level_three_v1"} and config.get("reporting_policy", {}).get("contract_version") == 2
-            prices = [{"value": "coupon", "label": "考券报名", "price_cents": batch.coupon_price_cents}, {"value": "student", "label": "学生报名", "price_cents": batch.student_price_cents}, {"value": "full", "label": "全额报名", "price_cents": batch.full_price_cents}] if vendor == "h3c" else [{"value": batch.level if vendor == "nisp" else "default", "label": f"NISP{batch.level}级" if vendor == "nisp" else plan.application_type if vendor == "renshe" else "报名费", "price_cents": (batch.level1_price_cents if batch.level == "1" else batch.level2_price_cents) if vendor == "nisp" else plan.price_cents}]
+            prices = [{"value": "coupon", "label": "考券报名", "price_cents": batch.coupon_price_cents}, {"value": "student", "label": "学生报名", "price_cents": batch.student_price_cents}, {"value": "full", "label": "全额报名", "price_cents": batch.full_price_cents}] if vendor == "h3c" else [{"value": batch.level if vendor == "nisp" else "default", "label": f"NISP{batch.level}级" if vendor == "nisp" else plan.application_type if vendor == "renshe" else "报名费", "price_cents": (batch.level1_price_cents if batch.level == "1" else batch.level2_price_cents) if vendor == "nisp" else (getattr(plan, "_compat_pending", {}).get("price_cents", 0) or 5000 if vendor == "renshe" else plan.price_cents)}]
             result.append({"id": batch.id if batch else plan.id, "plan_id": plan.id, "plan_product_id": pp.id, "subject_id": prod.code, "name": plan.name,
                 "status": plan.status, "apply_start": plan.apply_start, "apply_end": plan.apply_end, "exam_date": plan.exam_date,
                 "exam_location": plan.exam_location, "remaining_count": remaining, "capacity": pp.capacity,
@@ -119,7 +120,12 @@ class CertificationJourneyService:
     async def _check_plan(db, vendor, plan_id):
         if plan_id is not None:
             plan = await db.get(Plan, plan_id)
-            product = await db.scalar(select(CertProduct).where(CertProduct.code == plan.product_type, CertProduct.type == vendor)) if plan else None
+            product = await db.scalar(
+                select(CertProduct)
+                .join(PlanProduct, PlanProduct.product_id == CertProduct.id)
+                .where(PlanProduct.plan_id == plan.id, CertProduct.type == vendor)
+                .limit(1)
+            ) if plan else None
             if product is None:
                 raise NotFoundException("该认证的批次")
 

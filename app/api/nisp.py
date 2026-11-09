@@ -51,12 +51,7 @@ async def list_batches(
                 Plan.status == "published",
                 CertProduct.type == "nisp",
                 CertProduct.is_active.is_(True),
-                # Plans created before NISP was split into NISP-1/NISP-2 use
-                # the legacy product_type "nisp". Their level is authoritative.
-                or_(
-                    Plan.product_type == CertProduct.code,
-                    func.lower(Plan.product_type) == "nisp",
-                ),
+                # v2: PlanProduct join 已保证 product 关联正确
             )
             .order_by(Plan.sort_order.desc(), NispExamBatch.id.desc())
         )

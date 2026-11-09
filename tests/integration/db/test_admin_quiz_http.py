@@ -59,7 +59,7 @@ async def quiz_http_env(monkeypatch, tmp_path):
         admin = AdminUser(
             username=f"{prefix}_admin",
             password_hash="integration-test-only",
-            role="super_admin",
+            role="quiz_admin",
             must_change_password=False,
         )
         db.add(admin)

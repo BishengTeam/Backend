@@ -449,13 +449,12 @@ class H3cAdminBatchService:
 
     @staticmethod
     async def _lock(db: AsyncSession, batch_id: int) -> tuple[H3cExamBatch, Plan]:
-        plan_id = await db.scalar(
-            select(H3cExamBatch.plan_product_id).where(H3cExamBatch.id == batch_id)
-        )
-        if plan_id is None:
-            raise NotFoundException("H3C 考试批次")
         plan = await db.scalar(
-            select(Plan).where(Plan.id == plan_id).with_for_update()
+            select(Plan)
+            .join(PlanProduct, PlanProduct.plan_id == Plan.id)
+            .join(H3cExamBatch, H3cExamBatch.plan_product_id == PlanProduct.id)
+            .where(H3cExamBatch.id == batch_id)
+            .with_for_update()
         )
         if plan is None:
             raise NotFoundException("H3C 考试批次")

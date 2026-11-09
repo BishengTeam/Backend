@@ -72,7 +72,7 @@ async def quiz_v2_env(monkeypatch):
         admin = AdminUser(
             username=f"{prefix}_admin",
             password_hash="integration-test-only",
-            role="super_admin",
+            role="quiz_admin",
         )
         db.add(admin)
         await db.commit()

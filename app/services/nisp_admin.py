@@ -119,7 +119,8 @@ class NispAdminService:
     async def create_batch(self, data: NispExamBatchCreate) -> NispExamBatchResponse:
         async with get_db_ctx() as db:
             plan = await db.scalar(
-                select(Plan).where(Plan.id == data.plan_id).with_for_update()
+                select(Plan).join(PlanProduct, PlanProduct.plan_id == Plan.id)
+                    .where(PlanProduct.id == data.plan_product_id).with_for_update()
             )
             if plan is None:
                 raise NotFoundException("Plan")

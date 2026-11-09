@@ -71,7 +71,7 @@ async def quiz_practice_env(monkeypatch):
         admin = AdminUser(
             username=f"{prefix}_admin",
             password_hash="integration-test-only",
-            role="super_admin",
+            role="quiz_admin",
         )
         user = User(openid=f"{prefix}_user")
         other_user = User(openid=f"{prefix}_other")
