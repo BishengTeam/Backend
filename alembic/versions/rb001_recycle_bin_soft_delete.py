@@ -47,6 +47,12 @@ def upgrade():
     for table in _SOFT_DELETE_TABLES:
         op.add_column(table, sa.Column("deleted_at", sa.DateTime(timezone=True)))
         op.add_column(table, sa.Column("restore_until", sa.DateTime(timezone=True)))
+        # 部分索引：列表查询 WHERE deleted_at IS NULL 走索引扫描
+        op.create_index(
+            f"ix_{table}_deleted_at", table, ["deleted_at"],
+            postgresql_where=sa.text("deleted_at IS NULL"),
+            sqlite_where=sa.text("deleted_at IS NULL"),
+        )
 
     op.add_column("user", sa.Column("deactivated_at", sa.DateTime(timezone=True)))
 
@@ -69,6 +75,8 @@ def upgrade():
 
 
 def downgrade():
+    for table in _SOFT_DELETE_TABLES:
+        op.drop_index(f"ix_{table}_deleted_at", table_name=table)
     op.drop_column("user", "deactivated_at")
     for table in _SOFT_DELETE_TABLES:
         op.drop_column(table, "restore_until")

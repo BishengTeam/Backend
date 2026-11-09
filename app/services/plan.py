@@ -216,6 +216,38 @@ class PlanService:
         )
 
     @classmethod
+    async def get_user_batch(cls, db: AsyncSession, plan_id: int) -> "UserBatchResponse":
+        """用户端批次详情：字段白名单投影，不暴露内部配置。"""
+        from app.schemas.plan import UserBatchResponse, UserPlanProductResponse
+        full = await cls.get_batch(db, plan_id)
+        return UserBatchResponse(
+            id=full.id,
+            name=full.name,
+            apply_start=full.apply_start,
+            apply_end=full.apply_end,
+            exam_date=full.exam_date,
+            exam_location=full.exam_location,
+            description=full.description,
+            status=full.status,
+            products=[
+                UserPlanProductResponse(
+                    id=p.id,
+                    product_code=p.product_code,
+                    product_name=p.product_name,
+                    product_type=p.product_type,
+                    capacity=p.capacity,
+                    enrolled=p.enrolled,
+                    remaining=p.remaining,
+                    skill_level=p.skill_level,
+                    application_type=p.application_type,
+                )
+                for p in full.products
+            ],
+            time_segments=full.time_segments,
+            total_enrolled=full.total_enrolled,
+        )
+
+    @classmethod
     async def create_batch(cls, db: AsyncSession, data: BatchCreate) -> BatchResponse:
         cls._validate_schedule(
             apply_start=data.apply_start,
@@ -607,6 +639,28 @@ class PlanService:
             results.append(await cls.get_batch(db, plan.id))
         return results
 
+    @classmethod
+    async def list_user_batches_for_product(
+        cls, db: AsyncSession, product_code: str
+    ) -> list["UserBatchResponse"]:
+        """用户端批次列表：字段白名单投影。"""
+        from app.schemas.plan import UserBatchResponse, UserPlanProductResponse
+        full_list = await cls.list_published_batches_for_product(db, product_code)
+        return [
+            UserBatchResponse(
+                id=f.id, name=f.name, apply_start=f.apply_start, apply_end=f.apply_end,
+                exam_date=f.exam_date, exam_location=f.exam_location, description=f.description,
+                status=f.status, time_segments=f.time_segments, total_enrolled=f.total_enrolled,
+                products=[
+                    UserPlanProductResponse(
+                        id=p.id, product_code=p.product_code, product_name=p.product_name,
+                        product_type=p.product_type, capacity=p.capacity, enrolled=p.enrolled,
+                        remaining=p.remaining, skill_level=p.skill_level, application_type=p.application_type,
+                    ) for p in f.products
+                ],
+            ) for f in full_list
+        ]
+
     # ------------------------------------------------------------------
     # v1 兼容方法（过渡期，测试与旧路由仍在使用）
     # ------------------------------------------------------------------
@@ -620,18 +674,10 @@ class PlanService:
                 select(CertProduct).where(CertProduct.code == product_type)
             )).scalar_one_or_none()
             if cert is None:
-                # v1 允许任意 product_type 字符串；v2 需要 FK，
-                # 兼容层自动创建占位产品（测试/旧调用方依赖此行为）
-                vendor = "renshe" if "renshe" in product_type else (
-                    "h3c" if "h3c" in product_type else (
-                    "nisp" if "nisp" in product_type else (
-                    "sangfor" if "sangfor" in product_type or "scsa" in product_type.lower() else "generic")))
-                cert = CertProduct(
-                    type=vendor, code=product_type, name=product_type,
-                    chinese_name=product_type, is_active=True,
+                raise BusinessException(
+                    f"认证产品 {product_type} 不存在；请先通过管理后台创建产品，"
+                    "v2 不再自动创建占位产品"
                 )
-                db.add(cert)
-                await db.flush()
             batch_data = data if isinstance(data, BatchCreate) else BatchCreate.model_validate(
                 data.model_dump(exclude={"product_code", "price_cents", "program_code", "project_config_id"}, exclude_none=True)
                 if hasattr(data, "model_dump") else data

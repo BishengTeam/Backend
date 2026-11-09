@@ -9,13 +9,27 @@ from sqlalchemy.exc import IntegrityError
 
 from app.adapter.database import get_db_ctx
 from app.domain.plan.src.index import Plan, PlanProduct
-from app.domain.order.src.index import Order
+from app.domain.order.src.index import Order, PriceConfig
 from app.domain.h3c.src.index import H3cExamBatch
 from app.domain.nisp.src.index import NispExamBatch
 from app.models.cert_product import CertProduct
 from app.models.certification_journey import CertificationJourneyContent
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.certification_journey import JourneyContent
+
+
+async def _price_config_cents(db, product_code: str) -> int:
+    """从 PriceConfig 查产品定价；未配置时抛错而非静默回退。"""
+    from sqlalchemy import select as _select
+    row = (await db.execute(
+        _select(PriceConfig.price)
+        .where(PriceConfig.product_type == product_code, PriceConfig.is_active.is_(True))
+        .order_by(PriceConfig.id.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    if row is None or row <= 0:
+        raise BusinessException(f"产品 {product_code} 尚未配置价格，请联系管理员")
+    return int(row)
 
 LABELS = {"h3c": "H3C认证", "nisp": "NISP认证", "renshe": "人社认证", "sangfor": "深信服认证"}
 DEFAULT_TEXT = {
@@ -100,7 +114,14 @@ class CertificationJourneyService:
                 # v2: renshe_config 快照存在 PlanProduct 上
                 config = getattr(pp, "renshe_config", None) or {}
                 supported = config.get("qualification_rule") in {"related_major_graduated_degree_v1", "documented_employment_v1", "level_five_employment_v1", "level_three_v1"} and config.get("reporting_policy", {}).get("contract_version") == 2
-            prices = [{"value": "coupon", "label": "考券报名", "price_cents": batch.coupon_price_cents}, {"value": "student", "label": "学生报名", "price_cents": batch.student_price_cents}, {"value": "full", "label": "全额报名", "price_cents": batch.full_price_cents}] if vendor == "h3c" else [{"value": batch.level if vendor == "nisp" else "default", "label": f"NISP{batch.level}级" if vendor == "nisp" else plan.application_type if vendor == "renshe" else "报名费", "price_cents": (batch.level1_price_cents if batch.level == "1" else batch.level2_price_cents) if vendor == "nisp" else (getattr(plan, "_compat_pending", {}).get("price_cents", 0) or 5000 if vendor == "renshe" else plan.price_cents)}]
+            if vendor == "h3c":
+                prices = [{"value": "coupon", "label": "考券报名", "price_cents": batch.coupon_price_cents}, {"value": "student", "label": "学生报名", "price_cents": batch.student_price_cents}, {"value": "full", "label": "全额报名", "price_cents": batch.full_price_cents}]
+            elif vendor == "nisp":
+                prices = [{"value": batch.level, "label": f"NISP{batch.level}级", "price_cents": batch.level1_price_cents if batch.level == "1" else batch.level2_price_cents}]
+            else:
+                # renshe / sangfor: 从 PriceConfig 查实际定价，不再硬编码回退
+                price = await _price_config_cents(db, prod.code)
+                prices = [{"value": "default", "label": plan.application_type if vendor == "renshe" else "报名费", "price_cents": price}]
             result.append({"id": batch.id if batch else plan.id, "plan_id": plan.id, "plan_product_id": pp.id, "subject_id": prod.code, "name": plan.name,
                 "status": plan.status, "apply_start": plan.apply_start, "apply_end": plan.apply_end, "exam_date": plan.exam_date,
                 "exam_location": plan.exam_location, "remaining_count": remaining, "capacity": pp.capacity,

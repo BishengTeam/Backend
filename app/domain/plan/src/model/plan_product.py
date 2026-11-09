@@ -4,7 +4,7 @@
 """
 from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, Index, Integer, String, UniqueConstraint
 from sqlalchemy import JSON
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import BigInteger as _BigInteger, Integer as _Integer
 
 from app.adapter.database import Base, TimestampMixin
@@ -43,3 +43,6 @@ class PlanProduct(Base, TimestampMixin):
     skill_level: Mapped[str | None] = mapped_column(String(32))
     exam_type: Mapped[str | None] = mapped_column(String(16))
     application_type: Mapped[str | None] = mapped_column(String(16))
+
+    # v2: 关联认证产品（供兼容层 _compat_product_type 等使用）
+    cert_product = relationship("CertProduct", lazy="joined", viewonly=True)

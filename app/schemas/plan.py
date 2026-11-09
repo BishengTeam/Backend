@@ -169,6 +169,35 @@ class BatchResponse(BaseModel):
     total_enrolled: int = 0
 
 
+class UserPlanProductResponse(BaseModel):
+    """用户端产品投影：隐藏内部配置（renshe_config 等）。"""
+    id: int
+    product_code: str
+    product_name: str
+    product_type: str
+    capacity: int
+    enrolled: int = 0
+    remaining: int | None = None
+    # 用户报名时需要看到的属性
+    skill_level: str | None = None
+    application_type: str | None = None
+
+
+class UserBatchResponse(BaseModel):
+    """用户端批次投影：隐藏联系人、内部时间戳与跨厂商内部配置。"""
+    id: int
+    name: str
+    apply_start: datetime | None = None
+    apply_end: datetime | None = None
+    exam_date: datetime | None = None
+    exam_location: str | None = None
+    description: str | None = None
+    status: PlanStatus
+    products: list[UserPlanProductResponse] = []
+    time_segments: list[TimeSegmentResponse] = []
+    total_enrolled: int = 0
+
+
 class BatchListResponse(BaseModel):
     """批次列表项（精简）。"""
     id: int

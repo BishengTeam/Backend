@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
 from app.adapter.database import get_db_ctx
-from app.domain.order.src.index import Order, apply_order_status_transition
+from app.domain.order.src.index import Order, PriceConfig, apply_order_status_transition
 from app.domain.plan.src.index import Plan, PlanProduct
 from app.models.cert_product import CertProduct
 from app.models.offline_payment import OfflineBankEntry, OfflinePayment, OfflinePaymentAudit, OfflinePaymentSubmission
@@ -30,6 +30,20 @@ from app.services.plan_enrollment import PlanEnrollmentService
 from app.services.registration_payment_guard import payment_filter, payment_summary, require_review_payment
 from app.services.sangfor_catalog import DIRECTIONS, HEADERS, require_direction
 from app.utils.payment import generate_out_trade_no
+
+
+async def _sangfor_price_cents(db, product_code: str) -> int:
+    """从 PriceConfig 查深信服产品定价；未配置时抛错。"""
+    from sqlalchemy import select as _select
+    row = (await db.execute(
+        _select(PriceConfig.price)
+        .where(PriceConfig.product_type == product_code, PriceConfig.is_active.is_(True))
+        .order_by(PriceConfig.id.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    if row is None or row <= 0:
+        raise BusinessException(f"产品 {product_code} 尚未配置价格，请联系管理员")
+    return int(row)
 
 
 def now():
@@ -119,12 +133,12 @@ class SangforService:
         return occupied, counts
 
     @staticmethod
-    def batch_response(plan, product, *, enrolled=0, counts=None):
+    async def batch_response(self, db, plan, product, *, enrolled=0, counts=None):
         result = {"id": plan.id, "product_code": product.code, "product_name": product.chinese_name,
                 "description": plan.description or product.description, "name": plan.name, "status": plan.status,
                 "exam_direction": DIRECTIONS.get(product.code, product.code), "apply_start": plan.apply_start,
                 "apply_end": plan.apply_end, "exam_date": plan.exam_date, "exam_location": plan.exam_location,
-                "price_cents": getattr(plan, "_compat_pending", {}).get("price_cents", 0) or 0, "capacity": getattr(plan, "capacity", 0), "enrolled": enrolled,
+                "price_cents": await _sangfor_price_cents(db, product.code), "capacity": getattr(plan, "capacity", 0), "enrolled": enrolled,
                 "remaining_count": max(0, plan.capacity - enrolled) if plan.capacity else -1}
         if counts is not None:
             result["registration_counts"] = counts
@@ -139,7 +153,7 @@ class SangforService:
                 query = query.where(Plan.id.in_(select(PlanProduct.plan_id).where(PlanProduct.product_id.in_(select(CertProduct.id).where(CertProduct.code == product_code)))))
             pairs = (await db.execute(query.order_by(Plan.id.desc()))).all()
             occupied, counts = await self.batch_statistics(db, [plan.id for plan, _ in pairs], public=public)
-            return [self.batch_response(plan, product, enrolled=occupied.get(plan.id, 0), counts=None if public else counts.get(plan.id, {})) for plan, product in pairs]
+            return [await self.batch_response(db, plan, product, enrolled=occupied.get(plan.id, 0), counts=None if public else counts.get(plan.id, {})) for plan, product in pairs]
 
     async def get_batch(self, batch_id, *, public=False):
         async with get_db_ctx() as db:
@@ -215,7 +229,7 @@ class SangforService:
                         snapshot["enrollment_notice"] = await confirmed_notice(db, vendor="sangfor", batch_id=plan.id, notice_hash=data.notice_hash)
                     order = Order(user_id=user_id, order_kind="certification", product_type=_sf_code, plan_id=plan.id,
                         candidate_name=identity.real_name, candidate_idcard=identity.id_card_number, candidate_phone=data.phone,
-                        price=int(getattr(plan, "_compat_pending", {}).get("price_cents", 0) or plan.price_cents or 0) or 12345,
+                        price=await _sangfor_price_cents(db, _sf_code),
                         extra_data={"business_type": "sangfor", "revision": 1, "current_version": 1,
                             "registration_state": "pending_review", "candidate_snapshot": snapshot,
                             "batch_snapshot": {"name": plan.name, "product_code": _sf_code,
