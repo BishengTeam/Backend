@@ -213,7 +213,7 @@ class SangforService:
                     _sf_code = plan.product_type or await db.scalar(
                         select(CertProduct.code)
                         .join(PlanProduct, PlanProduct.product_id == CertProduct.id)
-                        .where(PlanProduct.plan_id == plan.id)
+                        .where(PlanProduct.plan_id == plan.id, CertProduct.type == "sangfor")
                         .limit(1)
                     ) or ""
                     direction = require_direction(_sf_code)

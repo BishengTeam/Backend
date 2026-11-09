@@ -164,7 +164,11 @@ class RensheApplicationService:
                     )
                     .limit(1)
                 )
-                price_cents = _price_row.scalar() or 50000
+                # P2 #8: 区分 0 元价（合法）和未配置（报错）
+                _price_val = _price_row.scalar()
+                if _price_val is None:
+                    raise ConflictException("该批次未配置报名价格，请联系管理员")
+                price_cents = _price_val
                 if application.status not in EDITABLE_APPLICATION_STATUSES:
                     raise ConflictException("当前报名状态不可提交")
                 self._assert_supported_program(plan)

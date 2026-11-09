@@ -98,7 +98,7 @@ class NispAdminService:
                 await db.flush()
 
                 batch = NispExamBatch(
-                    plan_id=plan.id,
+                    plan_product_id=plan_product.id,
                     level=data.level,
                     training_org=data.training_org,
                     consultation_group_qrcode_url=data.consultation_group_qrcode_url,

@@ -285,6 +285,16 @@ def name_review_notices(name: str, config: dict) -> list[str]:
 
 
 def batch_configuration(plan: Plan) -> dict:
+    # v2: 优先从 PlanProduct 读配置快照
+    _pp = None
+    products = getattr(plan, "products", None)
+    if products:
+        for _p in products:
+            if getattr(_p, "renshe_config", None):
+                _pp = _p
+                break
+    if _pp is not None:
+        plan = _pp  # 用 PlanProduct 的字段做校验
     config = getattr(plan, "renshe_config", None)
     if config:
         errors = configuration_errors(config)

@@ -84,6 +84,22 @@ class CertificationJourneyService:
             .where(PlanProduct.product_id.in_(product_ids))
             .order_by(Plan.sort_order.desc(), Plan.id.desc())
         )).all()) if product_ids else []
+        # P1 #4: 加载考试时段
+        plan_ids_for_segments = list({plan.id for plan, _ in rows})
+        from app.domain.plan.src.index import PlanTimeSegment
+        segments_by_plan: dict[int, list] = {}
+        if plan_ids_for_segments:
+            seg_rows = (await db.execute(
+                select(PlanTimeSegment)
+                .where(PlanTimeSegment.plan_id.in_(plan_ids_for_segments))
+                .order_by(PlanTimeSegment.sort_order, PlanTimeSegment.id)
+            )).scalars().all()
+            for seg in seg_rows:
+                segments_by_plan.setdefault(seg.plan_id, []).append({
+                    "id": seg.id, "label": seg.label,
+                    "start_time": seg.start_time.isoformat() if seg.start_time else None,
+                    "end_time": seg.end_time.isoformat() if seg.end_time else None,
+                })
         plans = [(plan, pp, product_by_id[pp.product_id]) for plan, pp in rows]
         if not admin:
             plans = [(plan, pp, prod) for plan, pp, prod in plans if plan.status in {"published", "registration_closed", "finalized"}]
@@ -123,6 +139,7 @@ class CertificationJourneyService:
                 price = await _price_config_cents(db, prod.code)
                 prices = [{"value": "default", "label": plan.application_type if vendor == "renshe" else "报名费", "price_cents": price}]
             result.append({"id": batch.id if batch else plan.id, "plan_id": plan.id, "plan_product_id": pp.id, "subject_id": prod.code, "name": plan.name,
+                "time_segments": segments_by_plan.get(plan.id, []),
                 "status": plan.status, "apply_start": plan.apply_start, "apply_end": plan.apply_end, "exam_date": plan.exam_date,
                 "exam_location": plan.exam_location, "remaining_count": remaining, "capacity": pp.capacity,
                 "can_apply": bool(supported and plan.status == "published" and start and end and start <= now < end and remaining != 0),

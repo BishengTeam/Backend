@@ -130,6 +130,9 @@ class PlanService:
         conditions = []
         if status:
             conditions.append(Plan.status == status)
+        else:
+            # P3 #9: 默认排除归档/取消批次
+            conditions.append(Plan.status.notin_(("archived", "cancelled")))
         base = select(Plan).where(*conditions) if conditions else select(Plan)
         total = (await db.execute(
             select(func.count()).select_from(base.subquery())
@@ -472,6 +475,33 @@ class PlanService:
         )
         db.add(pp)
         await db.flush()
+
+        # P1 #5: H3C/NISP 产品自动派生厂商批次表（通用批次可直接报名）
+        if cert.type == "h3c":
+            from app.domain.h3c.src.index import H3cExamBatch
+            _existing_h3c = await db.scalar(
+                select(H3cExamBatch.id).where(H3cExamBatch.plan_product_id == pp.id).limit(1)
+            )
+            if _existing_h3c is None:
+                db.add(H3cExamBatch(
+                    plan_product_id=pp.id,
+                    exam_code=f"AUTO-{cert.code[:20]}",
+                    country="CHN", language="CHS",
+                    identity_tag="自动派生",
+                    coupon_price_cents=0, student_price_cents=0, full_price_cents=0,
+                ))
+        elif cert.type == "nisp":
+            from app.domain.nisp.src.index import NispExamBatch
+            _existing_nisp = await db.scalar(
+                select(NispExamBatch.id).where(NispExamBatch.plan_product_id == pp.id).limit(1)
+            )
+            if _existing_nisp is None:
+                db.add(NispExamBatch(
+                    plan_product_id=pp.id,
+                    level="1",
+                    level1_price_cents=0, level2_price_cents=0,
+                ))
+
         return pp
 
     @classmethod
@@ -548,6 +578,15 @@ class PlanService:
             raise BusinessException("仅草稿状态的批次可以添加时段")
         if data.end_time <= data.start_time:
             raise ValidationException("时段结束时间必须晚于开始时间")
+        # P2 #7: 时段名称查重
+        _existing_seg = await db.scalar(
+            select(PlanTimeSegment.id).where(
+                PlanTimeSegment.plan_id == plan_id,
+                PlanTimeSegment.label == data.label,
+            ).limit(1)
+        )
+        if _existing_seg is not None:
+            raise BusinessException("时段名称已存在")
         db.add(PlanTimeSegment(
             plan_id=plan_id,
             label=data.label,

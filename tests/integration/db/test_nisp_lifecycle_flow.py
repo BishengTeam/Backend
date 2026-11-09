@@ -376,28 +376,27 @@ async def test_nisp_rejects_registration_when_product_is_inactive(context):
 
 
 async def test_nisp_admin_rejects_wrong_level_product_binding(context):
-    pytest.skip("v2: NISP 专用批次创建 API 需专项重写")
     from app.port.exceptions import BusinessException
     from app.schemas.nisp import NispExamBatchCreate
+    from app.domain.plan.src.index import PlanProduct
+    from app.models.cert_product import CertProduct as _WCP
 
     async with context.factory() as db:
-        plan = Plan(
-            product_type='NISP-2',
-            name=uuid4().hex,
-            capacity=10,
-            status='draft',
-        )
+        _cert = await db.scalar(select(_WCP).where(_WCP.code == 'NISP-2'))
+        if _cert is None:
+            _cert = _WCP(type='nisp', code='NISP-2', name='NISP-2', chinese_name='NISP 二级', is_active=True)
+            db.add(_cert)
+        plan = Plan(name=uuid4().hex, status='draft')
         db.add(plan)
+        await db.flush()
+        _wpp = PlanProduct(plan_id=plan.id, product_id=_cert.id, capacity=10)
+        db.add(_wpp)
         await db.commit()
-        plan_id = plan.id
 
+    # NISP-2 产品绑定 level='1' → 应报"对应级别"不匹配
     with pytest.raises(BusinessException, match='对应级别'):
-        from app.domain.plan.src.index import PlanProduct as _WPP
-        from sqlalchemy import select as _ws
-        async with context.factory() as _db:
-            _wpp = await _db.scalar(_ws(_WPP.id).limit(1))
         await NispAdminService().create_batch(NispExamBatchCreate(
-            plan_product_id=_wpp or 1,
+            plan_product_id=_wpp.id,
             level='1',
             level1_price_cents=100,
             level2_price_cents=200,
@@ -405,7 +404,6 @@ async def test_nisp_admin_rejects_wrong_level_product_binding(context):
 
 
 async def test_nisp_full_batch_create_publish_and_edit_flow(context):
-    pytest.skip("v2: NISP 专用批次创建 API 需专项重写")
     now = datetime.now(timezone.utc)
     async with context.factory() as db:
         db.add(CertProduct(
