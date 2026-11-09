@@ -75,6 +75,15 @@ def _first_pp(plan):
     return None
 
 
+def _renshe_pp(plan):
+    """跨厂商安全：优先返回有 renshe_config 的产品，而非首个产品。"""
+    products = getattr(plan, "products", None) or []
+    for pp in products:
+        if getattr(pp, "renshe_config_id", None) is not None or getattr(pp, "renshe_config", None) is not None:
+            return pp
+    return products[0] if products else None
+
+
 def _compat_buffer(plan, key, value):
     """v1 构造兼容：尚无 PlanProduct 时先缓存，后续 flush 到首个产品行。"""
     buf = plan.__dict__.setdefault("_compat_pending", {})
@@ -152,7 +161,7 @@ def _compat_price_cents(self, value: int) -> None:
 
 @property
 def _compat_skill_level(self) -> str | None:
-    pp = _first_pp(self)
+    pp = _renshe_pp(self)
     return pp.skill_level if pp else None
 
 
@@ -167,7 +176,7 @@ def _compat_skill_level(self, value) -> None:
 
 @property
 def _compat_occupation_name(self) -> str | None:
-    pp = _first_pp(self)
+    pp = _renshe_pp(self)
     return pp.occupation_name if pp else None
 
 
@@ -182,7 +191,7 @@ def _compat_occupation_name(self, value) -> None:
 
 @property
 def _compat_occupation_code(self) -> str | None:
-    pp = _first_pp(self)
+    pp = _renshe_pp(self)
     return pp.occupation_code if pp else None
 
 
@@ -197,7 +206,7 @@ def _compat_occupation_code(self, value) -> None:
 
 @property
 def _compat_exam_type(self) -> str | None:
-    pp = _first_pp(self)
+    pp = _renshe_pp(self)
     return pp.exam_type if pp else None
 
 
@@ -212,7 +221,7 @@ def _compat_exam_type(self, value) -> None:
 
 @property
 def _compat_application_type(self) -> str | None:
-    pp = _first_pp(self)
+    pp = _renshe_pp(self)
     return pp.application_type if pp else None
 
 
@@ -227,7 +236,7 @@ def _compat_application_type(self, value) -> None:
 
 @property
 def _compat_renshe_config(self) -> dict | None:
-    pp = _first_pp(self)
+    pp = _renshe_pp(self)
     return pp.renshe_config if pp else None
 
 
@@ -242,7 +251,7 @@ def _compat_renshe_config(self, value: dict | None) -> None:
 
 @property
 def _compat_renshe_config_id(self) -> int | None:
-    pp = _first_pp(self)
+    pp = _renshe_pp(self)
     return pp.renshe_config_id if pp else None
 
 

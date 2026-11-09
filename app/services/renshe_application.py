@@ -84,7 +84,10 @@ class RensheApplicationService:
                 )
                 .with_for_update()
             )
-            if plan.renshe_config_id is None:
+            from app.services.renshe_project import get_renshe_plan_product
+            _rs_pp = await get_renshe_plan_product(db, plan)
+            _rs_config_id = _rs_pp.renshe_config_id if _rs_pp else None
+            if _rs_config_id is None:
                 raise ConflictException("批次尚未确认项目配置，请联系管理员核实历史归属")
             if application is None and not is_self_reported(batch_configuration(plan)):
                 raise ConflictException("本期新报名仅开放已适配批次；历史报名请从我的报名继续办理")
@@ -172,7 +175,10 @@ class RensheApplicationService:
                 if application.status not in EDITABLE_APPLICATION_STATUSES:
                     raise ConflictException("当前报名状态不可提交")
                 self._assert_supported_program(plan)
-                if plan.renshe_config_id is None:
+                from app.services.renshe_project import get_renshe_plan_product
+                _rs_pp_submit = await get_renshe_plan_product(db, plan)
+                _rs_config_id_submit = _rs_pp_submit.renshe_config_id if _rs_pp_submit else None
+                if _rs_config_id_submit is None:
                     raise ConflictException("批次尚未确认项目配置，请联系管理员核实历史归属")
                 if application.frozen_at is not None:
                     raise ConflictException("退款处理中，报名已冻结")
@@ -220,7 +226,7 @@ class RensheApplicationService:
                 version = RensheApplicationVersion(
                     application_id=application.id,
                     version_no=version_no,
-                    project_config_id=plan.renshe_config_id,
+                    project_config_id=_rs_config_id_submit,
                     submitted_by_user_id=user_id,
                     realname_snapshot=self._realname_snapshot(realname),
                     student_snapshot={} if graduated else self._student_snapshot(student),
@@ -298,7 +304,7 @@ class RensheApplicationService:
                         status="pending",
                         out_trade_no=generate_out_trade_no("RS"),
                         expires_at=now + timedelta(minutes=RENSHE_ORDER_EXPIRE_MINUTES),
-                        extra_data={"application_version_id": version.id, "business_type": "renshe", "project_name": plan.project_name, "project_config_id": plan.renshe_config_id},
+                        extra_data={"application_version_id": version.id, "business_type": "renshe", "project_name": getattr(_rs_pp_submit, "occupation_name", None) or "", "project_config_id": _rs_config_id_submit},
                     )
                     db.add(order)
                     await db.flush()

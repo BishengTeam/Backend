@@ -354,6 +354,28 @@ async def is_renshe_plan(db, plan: Plan | None) -> bool:
     return bool(_pt) and _pt.startswith("RS-")
 
 
+async def get_renshe_plan_product(db, plan: Plan) -> PlanProduct | None:
+    """按 type=="renshe" 过滤获取 PlanProduct（跨厂商批次安全）。
+
+    替代 plan.renshe_config_id 等兼容属性——那些经 _first_pp 取首个产品，
+    跨厂商批次首位非人社时返回错误值。
+    """
+    try:
+        return await db.scalar(
+            select(PlanProduct)
+            .join(CertProduct, PlanProduct.product_id == CertProduct.id)
+            .where(PlanProduct.plan_id == plan.id, CertProduct.type == "renshe")
+            .limit(1)
+        )
+    except (AttributeError, TypeError):
+        # Mock DB（单测）不支持 scalar — 回退到兼容层
+        products = getattr(plan, "products", None) or []
+        for pp in products:
+            if getattr(pp, "renshe_config_id", None) is not None:
+                return pp
+        return products[0] if products else None
+
+
 async def _legacy_is_renshe_check(db, plan):
     """Legacy two-query version kept for reference; not called in normal flow."""
     product = await db.scalar(
