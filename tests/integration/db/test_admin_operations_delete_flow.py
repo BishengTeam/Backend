@@ -123,10 +123,14 @@ async def test_activity_delete_removes_registrations_and_reminders(test_context)
             )
         ).first()
 
-    assert stored_activity is None
+    # 2026-11 回收站改造：删除改为软删进回收站（30 自然日恢复窗口），
+    # 活动/报名/提醒行全部保留，仅列表不再展示。
+    assert stored_activity is not None
+    assert stored_activity.deleted_at is not None
+    assert stored_activity.restore_until is not None
     assert activity.id not in [item.id for item in listed.items]
-    assert registration is None
-    assert reminder is None
+    assert registration is not None
+    assert reminder is not None
 
 
 async def test_job_delete_removes_applications(test_context):
@@ -157,6 +161,9 @@ async def test_job_delete_removes_applications(test_context):
             )
         ).first()
 
-    assert stored_job is None
+    # 软删进回收站：岗位行保留（deleted_at/restore_until 置位），投递记录保留
+    assert stored_job is not None
+    assert stored_job.deleted_at is not None
+    assert stored_job.restore_until is not None
     assert job.id not in [item.id for item in listed.items]
-    assert application is None
+    assert application is not None
