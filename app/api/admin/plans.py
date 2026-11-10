@@ -4,7 +4,7 @@
 核心路由: /batches（全局批次 CRUD + 生命周期 + 产品/时段管理）
 兼容路由: 旧 /{code}/plans 返回 410 Gone
 """
-from fastapi import APIRouter, Depends, Path, Query, status
+from fastapi import APIRouter, Depends, Path, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db
@@ -287,6 +287,139 @@ async def list_batch_orders(
         page_size=page_size,
     )
     return success(data=result)
+
+
+# ============================================================
+# F1: 批次整批导出（轻量只读汇总 XLSX）
+# ============================================================
+
+@router.get(
+    "/batches/{batch_id}/export",
+    summary="导出整批报名表（多 Sheet XLSX）",
+    response_class=Response,
+)
+async def export_batch_registrations(
+    batch_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("certification:manage")),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """按厂商分 Sheet 导出整批所有产品的有效订单。"""
+    from io import BytesIO
+    from openpyxl import Workbook
+    from app.domain.plan.src.index import Plan, PlanProduct
+    from app.models.cert_product import CertProduct
+    from app.domain.order.src.index import Order
+    from sqlalchemy import select
+
+    plan = await db.get(Plan, batch_id)
+    if plan is None:
+        from app.port.exceptions import NotFoundException
+        raise NotFoundException("批次")
+
+    rows = (await db.execute(
+        select(Order, CertProduct)
+        .join(PlanProduct, PlanProduct.plan_id == Order.plan_id)
+        .join(CertProduct, CertProduct.id == PlanProduct.product_id)
+        .where(
+            Order.plan_id == batch_id,
+            Order.product_type == CertProduct.code,
+            Order.status.in_(("paid", "completed")),
+        )
+        .order_by(CertProduct.type, Order.id)
+    )).all()
+
+    if not rows:
+        from app.port.exceptions import BusinessException
+        raise BusinessException("该批次暂无有效订单可导出")
+
+    # 按厂商分组
+    by_vendor: dict[str, list] = {}
+    for order, cert in rows:
+        by_vendor.setdefault(cert.type, []).append((order, cert))
+
+    vendor_labels = {"h3c": "H3C", "nisp": "NISP", "renshe": "人社", "sangfor": "深信服", "generic": "通用"}
+
+    wb = Workbook()
+
+    # Sheet 1: 汇总
+    ws = wb.active
+    ws.title = "汇总"
+    ws.append(["厂商", "产品", "报名数", "总收入（分）"])
+    revenue = {}
+    for vendor_type, items in sorted(by_vendor.items()):
+        for order, cert in items:
+            key = (vendor_labels.get(vendor_type, vendor_type), cert.name)
+            if key not in revenue:
+                revenue[key] = {"count": 0, "total": 0}
+            revenue[key]["count"] += 1
+            revenue[key]["total"] += order.price
+    for (vendor, product), data in sorted(revenue.items()):
+        ws.append([vendor, product, data["count"], data["total"]])
+
+    # Sheet 2+: 各厂商明细
+    detail_headers = {
+        "h3c": ["考生姓名", "手机号", "身份证号", "产品", "报名方式", "价格（分）", "订单状态", "下单时间"],
+        "nisp": ["考生姓名", "手机号", "身份证号", "产品", "等级", "价格（分）", "订单状态", "下单时间"],
+        "renshe": ["考生姓名", "手机号", "身份证号", "产品", "职业", "技能等级", "价格（分）", "订单状态", "下单时间"],
+        "sangfor": ["考生姓名", "手机号", "身份证号", "产品", "报考方向", "价格（分）", "订单状态", "下单时间"],
+        "generic": ["考生姓名", "手机号", "身份证号", "产品", "价格（分）", "订单状态", "下单时间"],
+    }
+
+    for vendor_type, items in sorted(by_vendor.items()):
+        label = vendor_labels.get(vendor_type, vendor_type)
+        ws_detail = wb.create_sheet(title=label)
+        ws_detail.append(detail_headers.get(vendor_type, detail_headers["generic"]))
+
+        for order, cert in items:
+            extra = order.extra_data or {}
+            base = [
+                order.candidate_name or "",
+                order.candidate_phone or "",
+                order.candidate_idcard or "",
+                cert.name,
+ ]
+            if vendor_type == "h3c":
+                base.append(extra.get("registration_type", ""))
+            elif vendor_type == "nisp":
+                base.append(extra.get("level", ""))
+            elif vendor_type == "renshe":
+                _pp = None
+                for _p in (await db.execute(
+                    select(PlanProduct).where(
+                        PlanProduct.plan_id == batch_id,
+                        PlanProduct.product_id == cert.id,
+                    ).limit(1)
+                )).scalars():
+                    _pp = _p
+                base.append(getattr(_pp, "occupation_name", "") or "")
+                base.append(getattr(_pp, "skill_level", "") or "")
+            elif vendor_type == "sangfor":
+                base.append(extra.get("exam_direction", "") or (extra.get("candidate_snapshot", {}) or {}).get("exam_direction", ""))
+
+            base.extend([
+                order.price,
+                order.status,
+                order.created_at.strftime("%Y-%m-%d %H:%M:%S") if order.created_at else "",
+            ])
+            ws_detail.append(base)
+
+    # 自适应列宽
+    for ws_x in wb.worksheets:
+        for column in ws_x.columns:
+            max_len = max(len(str(cell.value or "")) for cell in column)
+            ws_x.column_dimensions[column[0].column_letter].width = min(max_len + 2, 50)
+
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    return Response(
+        content=buffer.read(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="batch_{batch_id}_registrations.xlsx"'
+        },
+    )
 
 
 # ============================================================
