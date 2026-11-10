@@ -244,16 +244,8 @@ async def _purge_quiz_question(db, question: QuizQuestion) -> str:
     question.pending_revision_id = None
     await db.flush()
 
-    # 此时安全删除修订与统计（无 RESTRICT 引用）
-    await db.execute(
-        delete(QuizQuestionRevisionStats).where(
-            QuizQuestionRevisionStats.question_id == question.id
-        )
-    )
-    await db.execute(
-        delete(QuizQuestionRevision).where(QuizQuestionRevision.question_id == question.id)
-    )
     if referenced:
+        # 墓碑路径：不清修订（练习/考试会话的 RESTRICT FK 依赖它们）
         question.question_text = TOMBSTONE_TEXT
         question.normalized_question_text = TOMBSTONE_TEXT
         question.options = None
@@ -263,6 +255,16 @@ async def _purge_quiz_question(db, question: QuizQuestion) -> str:
         question.image_urls = []
         question.restore_until = None
         return "tombstone"
+
+    # 物理删路径：无外部引用，安全删修订与统计
+    await db.execute(
+        delete(QuizQuestionRevisionStats).where(
+            QuizQuestionRevisionStats.question_id == question.id
+        )
+    )
+    await db.execute(
+        delete(QuizQuestionRevision).where(QuizQuestionRevision.question_id == question.id)
+    )
     await db.delete(question)
     return "physical"
 

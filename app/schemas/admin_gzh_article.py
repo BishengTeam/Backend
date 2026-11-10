@@ -1,6 +1,13 @@
 from datetime import datetime
 
 from pydantic import BaseModel, Field
+from pydantic import field_validator
+
+
+def _validate_https_url(v: str | None, field_name: str) -> str | None:
+    if v is not None and not v.startswith("https://"):
+        raise ValueError(f"{field_name}必须以 https:// 开头")
+    return v
 
 
 class GzhArticleCreate(BaseModel):
@@ -9,12 +16,32 @@ class GzhArticleCreate(BaseModel):
     thumb_url: str | None = Field(None, max_length=512, description="封面图 URL")
     publish_time: datetime | None = Field(None, description="发布时间，ISO 8601")
 
+    @field_validator("url")
+    @classmethod
+    def validate_url_https(cls, v: str) -> str:
+        return _validate_https_url(v, "文章链接")
+
+    @field_validator("thumb_url")
+    @classmethod
+    def validate_thumb_https(cls, v: str | None) -> str | None:
+        return _validate_https_url(v, "封面图链接")
+
 
 class GzhArticleUpdate(BaseModel):
     title: str | None = Field(None, min_length=1, max_length=256, description="文章标题")
     url: str | None = Field(None, min_length=1, max_length=512, description="文章链接")
     thumb_url: str | None = Field(None, max_length=512, description="封面图 URL")
     publish_time: datetime | None = Field(None, description="发布时间，ISO 8601")
+
+    @field_validator("url")
+    @classmethod
+    def validate_url_https(cls, v: str | None) -> str | None:
+        return _validate_https_url(v, "文章链接")
+
+    @field_validator("thumb_url")
+    @classmethod
+    def validate_thumb_https(cls, v: str | None) -> str | None:
+        return _validate_https_url(v, "封面图链接")
 
 
 class GzhArticleListItem(BaseModel):
@@ -41,6 +68,16 @@ class GzhArticleImportItem(BaseModel):
     url: str = Field(..., min_length=1, max_length=512, description="文章链接")
     thumb_url: str | None = Field(None, max_length=512, description="封面图 URL")
     publish_time: datetime | None = Field(None, description="发布时间，ISO 8601")
+
+    @field_validator("url")
+    @classmethod
+    def validate_url_https(cls, v: str) -> str:
+        return _validate_https_url(v, "文章链接")
+
+    @field_validator("thumb_url")
+    @classmethod
+    def validate_thumb_https(cls, v: str | None) -> str | None:
+        return _validate_https_url(v, "封面图链接")
 
 
 class GzhArticleBatchImportRequest(BaseModel):

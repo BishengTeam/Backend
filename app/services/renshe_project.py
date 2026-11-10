@@ -294,7 +294,8 @@ def batch_configuration(plan: Plan) -> dict:
                 _pp = _p
                 break
     if _pp is not None:
-        plan = _pp  # 用 PlanProduct 的字段做校验
+        # 用 PlanProduct 的字段做校验
+        plan = _pp
     config = getattr(plan, "renshe_config", None)
     if config:
         errors = configuration_errors(config)
@@ -313,7 +314,7 @@ def batch_configuration(plan: Plan) -> dict:
         return config
     # Only confirmed legacy combinations can use compatibility reads.
     if (
-        plan.product_type == "RS-ZY"
+        getattr(plan, "product_type", "") == "RS-ZY"
         and all(
             getattr(plan, key, None)
             for key in (
