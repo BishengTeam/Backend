@@ -206,7 +206,6 @@ async def _quiz_question_has_refs(db, question_id: int) -> bool:
         (QuizWrongItem, QuizWrongItem.question_id),
         (QuizCollection, QuizCollection.question_id),
         (QuizExamQuestion, QuizExamQuestion.question_id),
-        (QuizQuestionRevision, QuizQuestionRevision.question_id),
     ]
     # any(await ... for ...) 产生 async generator，内置 any() 不接受 — 改显式循环
     for m, c in checks:
@@ -414,7 +413,7 @@ class RecycleBinService:
             "status": "deleted",
             "deleted_at": row.deleted_at,
             "restore_until": row.restore_until,
-            "expired": bool(row.restore_until and row.restore_until <= now),
+            "expired": bool(row.restore_until is None or row.restore_until <= now),
         }
 
     # -- 恢复 ---------------------------------------------------------------
