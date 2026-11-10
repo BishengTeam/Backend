@@ -554,6 +554,72 @@ async def test_library_publication_gate_and_safe_delete_restore(quiz_v2_env, mon
     assert library.id not in await visible("trash")
 
 
+async def test_draft_library_delete_and_restore_to_draft(quiz_v2_env) -> None:
+    env = quiz_v2_env
+    library = await env.service.create_library(
+        AdminQuizLibraryCreate(name=f"{env.prefix}草稿删除题库"),
+        admin_id=env.admin_id,
+    )
+
+    async def visible(view=None, **kwargs):
+        return {item.id for item in await env.service.list_libraries(
+            AdminQuizLibraryQuery(view=view, keyword=env.prefix, **kwargs)
+        )}
+
+    # 归档仅面向已发布/停用题库，草稿不可归档。
+    with pytest.raises(BusinessException, match="仅已发布或停用题库可以归档"):
+        await env.service.transition_library(
+            library.id,
+            AdminQuizLibraryStatusUpdate(
+                action="archive", lock_version=library.lock_version
+            ),
+            admin_id=env.admin_id,
+        )
+
+    # 未发布题库可直接移入回收站（archived_at 保持为空）。
+    deleted = await env.service.transition_library(
+        library.id,
+        AdminQuizLibraryStatusUpdate(
+            action="delete", lock_version=library.lock_version
+        ),
+        admin_id=env.admin_id,
+    )
+    assert deleted.status == "deleted"
+    assert deleted.deleted_at is not None
+    assert deleted.restore_until is not None
+    assert deleted.archived_at is None
+    assert deleted.v2_enabled is False
+    assert library.id not in await visible("working")
+    assert library.id not in await visible("archived")
+    assert library.id in await visible("trash")
+
+    # 撤销删除按来源恢复：删自草稿 → 回草稿。
+    restored = await env.service.transition_library(
+        library.id,
+        AdminQuizLibraryStatusUpdate(
+            action="undo_delete", lock_version=deleted.lock_version
+        ),
+        admin_id=env.admin_id,
+    )
+    assert restored.status == "draft"
+    assert restored.archived_at is None
+    assert restored.deleted_at is None
+    assert restored.restore_until is None
+    assert library.id in await visible("working")
+    assert library.id not in await visible("trash")
+
+    # 恢复后的草稿可再次移入回收站，链路可重复。
+    redeleted = await env.service.transition_library(
+        library.id,
+        AdminQuizLibraryStatusUpdate(
+            action="delete", lock_version=restored.lock_version
+        ),
+        admin_id=env.admin_id,
+    )
+    assert redeleted.status == "deleted"
+    assert library.id in await visible("trash")
+
+
 async def test_migration_recheck_resolves_reorganized_and_deleted_questions(
     quiz_v2_env,
 ) -> None:

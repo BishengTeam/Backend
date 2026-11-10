@@ -131,7 +131,8 @@ TRASH_MODULES: dict[str, TrashModuleSpec] = {
         TrashModuleSpec("quiz_module", "题库模块", QuizModule, "name", "quiz:write"),
         TrashModuleSpec("quiz_knowledge_point", "知识点", QuizKnowledgePoint, "name",
                         "quiz:write"),
-        TrashModuleSpec("quiz_library", "题库", QuizLibrary, "name", "quiz_library_manage"),
+        TrashModuleSpec("quiz_library", "题库", QuizLibrary, "name", "quiz_library_manage",
+                        "tombstone", {"name": TOMBSTONE_TEXT, "name_reserved": False}),
     ]
 }
 

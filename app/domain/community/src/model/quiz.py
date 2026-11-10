@@ -152,7 +152,7 @@ class QuizLibrary(Base, _QuizTimestampMixin):
             "(status = 'suspended' AND published_at IS NOT NULL "
             "AND suspended_at IS NOT NULL AND archived_at IS NULL AND deleted_at IS NULL) OR "
             "(status = 'archived' AND archived_at IS NOT NULL AND deleted_at IS NULL) OR "
-            "(status = 'deleted' AND archived_at IS NOT NULL AND deleted_at IS NOT NULL))",
+            "(status = 'deleted' AND deleted_at IS NOT NULL))",
             name="ck_quiz_library_lifecycle",
         ),
         Index(

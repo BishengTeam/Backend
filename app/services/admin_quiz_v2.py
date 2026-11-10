@@ -1103,8 +1103,8 @@ class AdminQuizV2Service:
                 library.archived_at = now
                 library.v2_enabled = False
             elif action == "delete":
-                if library.status != "archived":
-                    raise BusinessException("只有已归档题库可以删除")
+                if library.status not in {"draft", "archived"}:
+                    raise BusinessException("只有未发布或已归档题库可以删除")
                 library.status = "deleted"
                 library.deleted_at = now
                 library.restore_until = now + _RESTORE_WINDOW
@@ -1114,7 +1114,11 @@ class AdminQuizV2Service:
                     raise BusinessException("只有已删除题库可以撤销删除")
                 if library.restore_until is None or library.restore_until <= now:
                     raise BusinessException("删除已超过 30 天，无法撤销")
-                library.status = "archived"
+                # archived_at 在归档与撤销删除全程不清除：NULL 即删自草稿，
+                # 恢复回草稿；非空即删自已归档，恢复回归档。
+                library.status = (
+                    "draft" if library.archived_at is None else "archived"
+                )
                 library.deleted_at = None
                 library.restore_until = None
                 library.v2_enabled = False
