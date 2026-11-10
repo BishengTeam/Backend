@@ -232,7 +232,12 @@ async def _quiz_library_has_refs(db, library_id: int) -> bool:
 async def _purge_quiz_question(db, question: QuizQuestion) -> str:
     """到期题目：无引用物理删（含修订/统计）；有引用转墓碑。返回动作。"""
     referenced = await _quiz_question_has_refs(db, int(question.id))
-    # 修订与统计在两种路径下都清掉（墓碑不留历史内容，物理删为 RESTRICT 外键让路）
+    # N1: 先置空 FK 指针并刷入 DB，再删修订（否则 RESTRICT FK 在 DELETE 时报 IntegrityError）
+    question.current_revision_id = None
+    question.pending_revision_id = None
+    await db.flush()
+
+    # 此时安全删除修订与统计（无 RESTRICT 引用）
     await db.execute(
         delete(QuizQuestionRevisionStats).where(
             QuizQuestionRevisionStats.question_id == question.id
@@ -241,8 +246,6 @@ async def _purge_quiz_question(db, question: QuizQuestion) -> str:
     await db.execute(
         delete(QuizQuestionRevision).where(QuizQuestionRevision.question_id == question.id)
     )
-    question.current_revision_id = None
-    question.pending_revision_id = None
     if referenced:
         question.question_text = TOMBSTONE_TEXT
         question.normalized_question_text = TOMBSTONE_TEXT

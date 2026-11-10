@@ -115,9 +115,11 @@ class H3cRefundService:
             stmt = (
                 select(H3cRefundRequest, H3cRegistration, Plan, Order, CertProduct)
                 .join(H3cRegistration, H3cRegistration.id == H3cRefundRequest.registration_id)
-                .join(Plan, Plan.id == H3cRegistration.plan_id)
+                # N4: v2 H3cRegistration 无 plan_id — 先 join PlanProduct 再 join Plan
+                .join(PlanProduct, PlanProduct.id == H3cRegistration.plan_product_id)
+                .join(Plan, Plan.id == PlanProduct.plan_id)
                 .join(Order, Order.id == H3cRefundRequest.order_id)
-                .outerjoin(PlanProduct, PlanProduct.plan_id == Plan.id).outerjoin(CertProduct, CertProduct.id == PlanProduct.product_id)
+                .outerjoin(CertProduct, CertProduct.id == PlanProduct.product_id)
             )
             if registration_id is not None:
                 stmt = stmt.where(H3cRegistration.id == registration_id)

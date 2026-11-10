@@ -514,12 +514,18 @@ class PlanService:
         ) or 0
 
         if cert.type == "h3c":
+            # N3: 通用批次添加 H3C 产品必须 capacity > 0（Inventory 需要 available_quota >= 1）
+            if data.capacity <= 0:
+                raise ValidationException(
+                    f"H3C 产品「{cert.name}」加入通用批次时必须设置名额（capacity > 0），"
+                    "不限名额场景请使用 H3C 专用批次入口"
+                )
             from app.domain.h3c.src.index import H3cExamBatch
             _existing_h3c = await db.scalar(
                 select(H3cExamBatch.id).where(H3cExamBatch.plan_product_id == pp.id).limit(1)
             )
             if _existing_h3c is None:
-                db.add(H3cExamBatch(
+                _h3c_batch = H3cExamBatch(
                     plan_product_id=pp.id,
                     exam_code=f"AUTO-{cert.code[:20]}",
                     country="CHN", language="CHS",
@@ -527,6 +533,28 @@ class PlanService:
                     coupon_price_cents=_default_price,
                     student_price_cents=_default_price,
                     full_price_cents=_default_price,
+                )
+                db.add(_h3c_batch)
+                await db.flush()
+
+                # N3: 补建 Inventory（H3C 下单链路强依赖）
+                from app.models.inventory import Inventory, InventoryRecord
+                _inv = Inventory(
+                    inventory_type="h3c_batch",
+                    ref_code=f"h3c-batch-{_h3c_batch.id}",
+                    total_quota=data.capacity,
+                    available_quota=data.capacity,
+                    locked_quota=0, sold_quota=0, is_active=True,
+                )
+                db.add(_inv)
+                await db.flush()
+                db.add(InventoryRecord(
+                    inventory_id=_inv.id,
+                    action="initialize",
+                    quantity=data.capacity,
+                    after_total_quota=data.capacity,
+                    after_available_quota=data.capacity,
+                    reason="plan_product_derived",
                 ))
         elif cert.type == "nisp":
             from app.domain.nisp.src.index import NispExamBatch
