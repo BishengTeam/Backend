@@ -308,7 +308,7 @@ class RecycleBinService:
                     await db.scalar(
                         select(func.count())
                         .select_from(spec.model)
-                        .where(spec.model.deleted_at.is_not_null())
+                        .where(spec.model.deleted_at.isnot(None))
                     )
                     or 0
                 )
@@ -329,7 +329,7 @@ class RecycleBinService:
                 return await self._list_disabled_users(
                     db, keyword=keyword, page=page, page_size=page_size
                 )
-            base = select(spec.model).where(spec.model.deleted_at.is_not_null())
+            base = select(spec.model).where(spec.model.deleted_at.isnot(None))
             if keyword and spec.title_attr:
                 base = base.where(getattr(spec.model, spec.title_attr).ilike(f"%{keyword}%"))
             if spec.teacher_scoped and teacher_admin_id is not None:
@@ -430,7 +430,7 @@ class RecycleBinService:
             rows = (
                 await db.execute(
                     select(spec.model).where(
-                        spec.model.id.in_(ids), spec.model.deleted_at.is_not_null()
+                        spec.model.id.in_(ids), spec.model.deleted_at.isnot(None)
                     )
                 )
             ).scalars().all()
@@ -462,7 +462,7 @@ class RecycleBinService:
             model = TRASH_MODULES[key].model
             rows = (
                 await db.execute(
-                    select(model).where(model.id.in_(ids), model.deleted_at.is_not_null())
+                    select(model).where(model.id.in_(ids), model.deleted_at.isnot(None))
                 )
             ).scalars().all()
             for row in rows:
@@ -519,7 +519,7 @@ class RecycleBinService:
             rows = (
                 await db.execute(
                     select(spec.model).where(
-                        spec.model.id.in_(ids), spec.model.deleted_at.is_not_null()
+                        spec.model.id.in_(ids), spec.model.deleted_at.isnot(None)
                     )
                 )
             ).scalars().all()
@@ -689,8 +689,8 @@ class RecycleBinService:
                     await db.execute(
                         select(spec.model)
                         .where(
-                            spec.model.deleted_at.is_not_null(),
-                            spec.model.restore_until.is_not_null(),
+                            spec.model.deleted_at.isnot(None),
+                            spec.model.restore_until.isnot(None),
                             spec.model.restore_until <= now,
                         )
                         .limit(500)

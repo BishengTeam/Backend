@@ -319,11 +319,11 @@ class QuizActivationCodeService:
                     status_labels[_display_status(row, now, schema_v2=schema_v2)],
                     "" if row.redeemed_by is None else str(int(row.redeemed_by)),
                     phones.get(int(row.id), ""),
-                    "" if row.redeemed_at is None else row.redeemed_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    "" if row.redeemed_at is None else row.redeemed_at.astimezone(zone).strftime("%Y-%m-%d %H:%M:%S"),
                     row.note or "",
-                    row.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    row.created_at.astimezone(zone).strftime("%Y-%m-%d %H:%M:%S"),
                     *([
-                        row.expires_at.astimezone(zone).isoformat(sep=" ", timespec="seconds")
+                        row.expires_at.astimezone(zone).strftime("%Y-%m-%d %H:%M:%S")
                         if row.expires_at else "无截止时间"
                     ] if schema_v2 else []),
                 ]
