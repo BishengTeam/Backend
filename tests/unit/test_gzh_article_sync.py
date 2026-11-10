@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 import app.services.gzh_article as gzh_module
+from app.domain.content.src.model.gzh_article import SOURCE_MANUAL
 from app.port.config import settings
 
 
@@ -136,7 +137,7 @@ async def test_sync_upserts_new_and_existing(
 
     existing = SimpleNamespace(
         id=9, title="旧标题", url="https://mp.weixin.qq.com/s/b",
-        thumb_url=None, publish_time=None,
+        thumb_url=None, publish_time=None, source="sync",
     )
     session = _FakeSession([existing])
 
@@ -156,3 +157,94 @@ async def test_sync_upserts_new_and_existing(
     ]
     assert session.prune_executed is True
     assert session.commits == 2
+
+
+@pytest.mark.asyncio
+async def test_sync_never_overwrites_manual_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Admin 手动维护条目（source=manual）：同步拉到同链接也不得覆盖字段。"""
+    monkeypatch.setattr(settings, "GZH_APPID", "wx-gzh-app")
+    monkeypatch.setattr(settings, "GZH_APP_SECRET", "secret")
+
+    class _StubClient:
+        async def fetch_published_articles(self, count: int = 20) -> dict:
+            return _payload()
+
+    monkeypatch.setattr(gzh_module, "GzhClient", _StubClient)
+
+    manual_row = SimpleNamespace(
+        id=7, title="运营手填标题", url="https://mp.weixin.qq.com/s/b",
+        thumb_url="https://mmbiz.example.com/manual.jpg", publish_time=None,
+        source=SOURCE_MANUAL,
+    )
+    session = _FakeSession([manual_row])
+
+    @asynccontextmanager
+    async def _ctx():
+        yield session
+
+    monkeypatch.setattr(gzh_module, "get_db_ctx", _ctx)
+
+    count = await gzh_module.sync_gzh_articles_once()
+
+    assert count == 3
+    # manual 行字段保持原样，未被微信内容覆盖
+    assert manual_row.title == "运营手填标题"
+    assert manual_row.thumb_url == "https://mmbiz.example.com/manual.jpg"
+    assert manual_row.publish_time is None
+    # 其他两条链接照常新插
+    assert sorted(a.url for a in session.added) == [
+        "https://mp.weixin.qq.com/s/a",
+        "https://mp.weixin.qq.com/s/old",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_prune_only_touches_sync_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """prune 只清 sync 来源的未删除行：manual 条目与回收站软删行不参与。"""
+    monkeypatch.setattr(settings, "GZH_APPID", "wx-gzh-app")
+    monkeypatch.setattr(settings, "GZH_APP_SECRET", "secret")
+
+    class _StubClient:
+        async def fetch_published_articles(self, count: int = 20) -> dict:
+            return _payload()
+
+    monkeypatch.setattr(gzh_module, "GzhClient", _StubClient)
+
+    session = _PruneCapturingSession([])
+
+    @asynccontextmanager
+    async def _ctx():
+        yield session
+
+    monkeypatch.setattr(gzh_module, "get_db_ctx", _ctx)
+
+    await gzh_module.sync_gzh_articles_once()
+
+    from sqlalchemy.dialects import postgresql
+
+    stmt = session.delete_stmt
+    assert stmt is not None, "prune 未执行 DELETE"
+    compiled = stmt.compile(dialect=postgresql.dialect())
+    sql = str(compiled)
+    # 删除条件必须排除 manual 与软删行
+    assert "deleted_at IS NULL" in sql
+    assert "gzh_articles.source" in sql
+    assert "manual" in compiled.params.values()
+
+
+class _PruneCapturingSession(_FakeSession):
+    """额外捕获 prune 的 DELETE 语句以便断言 WHERE 条件。"""
+
+    def __init__(self, existing: list[Any]) -> None:
+        super().__init__(existing)
+        self.delete_stmt: Any = None
+
+    async def execute(self, stmt: Any) -> _FakeResult:
+        from sqlalchemy import Delete
+
+        if isinstance(stmt, Delete):
+            self.delete_stmt = stmt
+            return _FakeResult([])
+        return await super().execute(stmt)

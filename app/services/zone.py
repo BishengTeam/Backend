@@ -91,6 +91,7 @@ class ZoneService:
             # ── 公众号资讯（首页 ticker / 新闻资讯 tab，最新 10 条；无数据时字段缺省）──
             gzh_stmt = (
                 select(GzhArticle)
+                .where(GzhArticle.deleted_at.is_(None))
                 .order_by(GzhArticle.publish_time.desc().nullslast(), GzhArticle.id.desc())
                 .limit(GZH_ARTICLE_LIMIT)
             )

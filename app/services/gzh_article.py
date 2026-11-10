@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from sqlalchemy import delete, select
 
 from app.adapter.database import get_db_ctx
-from app.domain.content.src.model.gzh_article import GzhArticle
+from app.domain.content.src.model.gzh_article import SOURCE_MANUAL, GzhArticle
 from app.integrations.gzh import GzhClient, is_configured
 
 logger = logging.getLogger(__name__)
@@ -84,7 +84,8 @@ async def sync_gzh_articles_once() -> int:
             row = by_url.get(article["url"])
             if row is None:
                 db.add(GzhArticle(**article))
-            else:
+            elif row.source != SOURCE_MANUAL:
+                # Admin 手动维护的条目不被同步覆盖
                 row.title = article["title"]
                 row.thumb_url = article["thumb_url"]
                 row.publish_time = article["publish_time"]
@@ -94,12 +95,23 @@ async def sync_gzh_articles_once() -> int:
 
 
 async def _prune_stale(db) -> None:
+    # 只清理同步来源的未删除行：manual 条目由运营在 Admin 管理，软删行归回收站到期清理
     keep_ids = (
         select(GzhArticle.id)
+        .where(
+            GzhArticle.source != SOURCE_MANUAL,
+            GzhArticle.deleted_at.is_(None),
+        )
         .order_by(GzhArticle.publish_time.desc().nullslast(), GzhArticle.id.desc())
         .limit(KEEP_ROWS)
     )
-    await db.execute(delete(GzhArticle).where(GzhArticle.id.not_in(keep_ids)))
+    await db.execute(
+        delete(GzhArticle).where(
+            GzhArticle.id.not_in(keep_ids),
+            GzhArticle.source != SOURCE_MANUAL,
+            GzhArticle.deleted_at.is_(None),
+        )
+    )
     await db.commit()
 
 

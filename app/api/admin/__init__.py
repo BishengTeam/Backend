@@ -17,6 +17,7 @@ from app.api.admin.courses import router as courses_router
 from app.api.admin.classrooms import router as classrooms_router
 from app.api.admin.course_uploads import router as course_uploads_router
 from app.api.admin.documents import router as documents_router
+from app.api.admin.gzh_articles import router as gzh_articles_router
 from app.api.offline_payment import admin_router as offline_payment_router
 from app.api.admin.orders import router as orders_router
 from app.api.admin.points_mall import router as points_mall_router
@@ -67,6 +68,7 @@ router.include_router(quiz_router)
 router.include_router(quiz_review_router)
 router.include_router(renshe_router)
 router.include_router(zones_router)
+router.include_router(gzh_articles_router)
 router.include_router(popups_router)
 router.include_router(share_posters_router)
 router.include_router(coupons_router)
