@@ -208,7 +208,11 @@ async def _quiz_question_has_refs(db, question_id: int) -> bool:
         (QuizExamQuestion, QuizExamQuestion.question_id),
         (QuizQuestionRevision, QuizQuestionRevision.question_id),
     ]
-    return any(await _has_reference(db, m, c, question_id) for m, c in checks)
+    # any(await ... for ...) 产生 async generator，内置 any() 不接受 — 改显式循环
+    for m, c in checks:
+        if await _has_reference(db, m, c, question_id):
+            return True
+    return False
 
 
 async def _quiz_point_has_refs(db, point_id: int) -> bool:
@@ -226,7 +230,10 @@ async def _quiz_library_has_refs(db, library_id: int) -> bool:
         (QuizCourseLibraryBinding, QuizCourseLibraryBinding.library_id),
         (QuizActivationCode, QuizActivationCode.library_id),
     ]
-    return any(await _has_reference(db, m, c, library_id) for m, c in checks)
+    for m, c in checks:
+        if await _has_reference(db, m, c, library_id):
+            return True
+    return False
 
 
 async def _purge_quiz_question(db, question: QuizQuestion) -> str:

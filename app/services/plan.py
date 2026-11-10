@@ -552,8 +552,14 @@ class PlanService:
                     inventory_id=_inv.id,
                     action="initialize",
                     quantity=data.capacity,
+                    before_total_quota=0,
+                    before_available_quota=0,
+                    before_locked_quota=0,
+                    before_sold_quota=0,
                     after_total_quota=data.capacity,
                     after_available_quota=data.capacity,
+                    after_locked_quota=0,
+                    after_sold_quota=0,
                     reason="plan_product_derived",
                 ))
         elif cert.type == "nisp":

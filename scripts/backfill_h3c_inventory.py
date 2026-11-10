@@ -78,8 +78,14 @@ async def backfill(db, items: list[dict]) -> tuple[int, int]:
             inventory_id=inv.id,
             action="initialize",
             quantity=capacity,
+            before_total_quota=0,
+            before_available_quota=0,
+            before_locked_quota=0,
+            before_sold_quota=0,
             after_total_quota=capacity,
             after_available_quota=capacity,
+            after_locked_quota=0,
+            after_sold_quota=0,
             reason="backfill_missing_inventory_20261110",
         ))
         created += 1
