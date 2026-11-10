@@ -60,6 +60,30 @@ class PlanProductCreate(BaseModel):
     exam_type: str | None = Field(None, max_length=16)
     application_type: str | None = Field(None, max_length=16)
 
+    # H3C 专属（产品 type='h3c' 时必填）
+    h3c_config: "H3CBatchConfig | None" = None
+
+    # NISP 专属（产品 type='nisp' 时必填）
+    nisp_config: "NispBatchConfig | None" = None
+
+
+class H3CBatchConfig(BaseModel):
+    """H3C 产品加入批次时的专属配置。"""
+    exam_code: str = Field(..., max_length=64)
+    coupon_price_cents: int = Field(..., ge=0)
+    student_price_cents: int = Field(..., ge=0)
+    full_price_cents: int = Field(..., ge=0)
+    payment_timeout_minutes: int = Field(30, ge=1, le=1440)
+    resubmission_window_hours: int = Field(48, ge=1, le=720)
+    max_resubmissions: int = Field(3, ge=0, le=10)
+
+
+class NispBatchConfig(BaseModel):
+    """NISP 产品加入批次时的专属配置。"""
+    level: Literal["1", "2"]
+    level1_price_cents: int = Field(..., ge=0)
+    level2_price_cents: int = Field(..., ge=0)
+
 
 class PlanProductUpdate(BaseModel):
     capacity: int | None = Field(None, ge=0)
@@ -69,6 +93,8 @@ class PlanProductUpdate(BaseModel):
     skill_level: str | None = Field(None, max_length=32)
     exam_type: str | None = Field(None, max_length=16)
     application_type: str | None = Field(None, max_length=16)
+    h3c_config: "H3CBatchConfig | None" = None
+    nisp_config: "NispBatchConfig | None" = None
 
 
 class PlanProductResponse(BaseModel):

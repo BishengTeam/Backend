@@ -28,6 +28,8 @@ async def batch(batch_id: int, admin=Depends(require_permission("content:read"))
 
 @router.post("/batches")
 async def create_batch(body: SangforBatchCreate, admin=Depends(require_permission("content:write"))):
+    from fastapi import HTTPException
+    raise HTTPException(status_code=410, detail="此接口已废弃，请使用全局批次管理：POST /admin/certifications/batches")
     await service.require_product(body.product_code)
     from app.adapter.database import get_db_ctx
     from app.domain.plan.src.index import PlanProduct

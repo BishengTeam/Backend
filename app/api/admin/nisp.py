@@ -235,6 +235,8 @@ async def create_export_job(
     body: NispExportCreate,
     _admin=Depends(require_permission("nisp:export")),
 ):
+    from fastapi import HTTPException
+    raise HTTPException(status_code=410, detail="此接口已废弃，请使用全局批次管理：POST /admin/certifications/batches")
     """Create an async NISP export job."""
     result = await NispExportService().create_job(
         admin_id=_admin.id,

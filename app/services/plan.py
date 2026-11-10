@@ -503,22 +503,15 @@ class PlanService:
                 pp.renshe_config = _config.config
                 await db.flush()
 
-        # P1 #5: H3C/NISP 产品自动派生厂商批次表（通用批次可直接报名）
-        # 遗留 #1: 派生价格从 PriceConfig 取默认，避免 0 元下单
-        from app.domain.order.src.index import PriceConfig as _PC
-        _default_price = await db.scalar(
-            select(_PC.price).where(
-                _PC.product_type == cert.code,
-                _PC.is_active.is_(True),
-            ).limit(1)
-        ) or 0
-
         if cert.type == "h3c":
             # N3: 通用批次添加 H3C 产品必须 capacity > 0（Inventory 需要 available_quota >= 1）
             if data.capacity <= 0:
                 raise ValidationException(
-                    f"H3C 产品「{cert.name}」加入通用批次时必须设置名额（capacity > 0），"
-                    "不限名额场景请使用 H3C 专用批次入口"
+                    f"H3C 产品「{cert.name}」加入批次时必须设置名额（capacity > 0）"
+                )
+            if data.h3c_config is None:
+                raise ValidationException(
+                    f"H3C 产品「{cert.name}」必须配置专属字段（三档价/考试编码）"
                 )
             from app.domain.h3c.src.index import H3cExamBatch
             _existing_h3c = await db.scalar(
@@ -527,12 +520,15 @@ class PlanService:
             if _existing_h3c is None:
                 _h3c_batch = H3cExamBatch(
                     plan_product_id=pp.id,
-                    exam_code=f"AUTO-{cert.code[:20]}",
+                    exam_code=data.h3c_config.exam_code,
                     country="CHN", language="CHS",
-                    identity_tag="自动派生",
-                    coupon_price_cents=_default_price,
-                    student_price_cents=_default_price,
-                    full_price_cents=_default_price,
+                    identity_tag="全局批次",
+                    coupon_price_cents=data.h3c_config.coupon_price_cents,
+                    student_price_cents=data.h3c_config.student_price_cents,
+                    full_price_cents=data.h3c_config.full_price_cents,
+                    payment_timeout_minutes=data.h3c_config.payment_timeout_minutes,
+                    resubmission_window_hours=data.h3c_config.resubmission_window_hours,
+                    max_resubmissions=data.h3c_config.max_resubmissions,
                 )
                 db.add(_h3c_batch)
                 await db.flush()
@@ -563,6 +559,10 @@ class PlanService:
                     reason="plan_product_derived",
                 ))
         elif cert.type == "nisp":
+            if data.nisp_config is None:
+                raise ValidationException(
+                    f"NISP 产品「{cert.name}」必须配置专属字段（等级/分级价）"
+                )
             from app.domain.nisp.src.index import NispExamBatch
             _existing_nisp = await db.scalar(
                 select(NispExamBatch.id).where(NispExamBatch.plan_product_id == pp.id).limit(1)
@@ -570,9 +570,9 @@ class PlanService:
             if _existing_nisp is None:
                 db.add(NispExamBatch(
                     plan_product_id=pp.id,
-                    level="1",
-                    level1_price_cents=_default_price,
-                    level2_price_cents=_default_price,
+                    level=data.nisp_config.level,
+                    level1_price_cents=data.nisp_config.level1_price_cents,
+                    level2_price_cents=data.nisp_config.level2_price_cents,
                 ))
 
         return pp
@@ -607,6 +607,29 @@ class PlanService:
             value = getattr(data, field)
             if value is not None:
                 setattr(pp, field, value)
+
+        # 厂商扩展配置更新（H3C/NISP）
+        if data.h3c_config is not None:
+            from app.domain.h3c.src.index import H3cExamBatch as _UH3B
+            _h3c = await db.scalar(select(_UH3B).where(_UH3B.plan_product_id == pp_id))
+            if _h3c is not None:
+                for field in (
+                    "exam_code", "coupon_price_cents", "student_price_cents", "full_price_cents",
+                    "payment_timeout_minutes", "resubmission_window_hours", "max_resubmissions",
+                ):
+                    value = getattr(data.h3c_config, field)
+                    if value is not None:
+                        setattr(_h3c, field, value)
+
+        if data.nisp_config is not None:
+            from app.domain.nisp.src.index import NispExamBatch as _UNB
+            _nisp = await db.scalar(select(_UNB).where(_UNB.plan_product_id == pp_id))
+            if _nisp is not None:
+                for field in ("level", "level1_price_cents", "level2_price_cents"):
+                    value = getattr(data.nisp_config, field)
+                    if value is not None:
+                        setattr(_nisp, field, value)
+
         await db.commit()
         return await cls.get_batch(db, plan_id)
 

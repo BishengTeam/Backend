@@ -157,6 +157,7 @@ async def test_refund_filters_fail_before_database_access(params):
 @pytest.mark.asyncio
 @requires_test_db
 async def test_admin_create_batch_returns_draft_id_for_publish_retry(monkeypatch):
+    pytest.skip("v2: 厂商专属创建 API 已废弃 (410)，统一到全局批次管理")
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
     from app.api.admin.sangfor import create_batch, service, PlanService
