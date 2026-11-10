@@ -143,12 +143,20 @@ class PlanService:
             .limit(page_size)
         )).scalars().all()
 
+        # P3-1: 聚合 SQL 统计本页批次的真实报名数（一条查询）
+        plan_ids_page = [p.id for p in plans]
+        enrolled_by_plan = dict((await db.execute(
+            select(Order.plan_id, func.count())
+            .where(
+                Order.plan_id.in_(plan_ids_page),
+                Order.status.in_(CAPACITY_OCCUPYING_ORDER_STATUSES),
+            )
+            .group_by(Order.plan_id)
+        )).all()) if plan_ids_page else {}
+
         items: list[BatchListResponse] = []
         for plan in plans:
             products = await cls._get_products(db, plan.id)
-            enrolled = sum(
-                p.capacity for p, _ in products if p.capacity > 0
-            )  # 粗略：仅返回产品数和总容量
             items.append(BatchListResponse(
                 id=plan.id,
                 name=plan.name,
@@ -157,7 +165,7 @@ class PlanService:
                 apply_end=plan.apply_end,
                 exam_date=plan.exam_date,
                 product_count=len(products),
-                total_enrolled=0,  # 列表页不逐个统计，详情页有精确数
+                total_enrolled=enrolled_by_plan.get(plan.id, 0),
             ))
         return items, total
 
@@ -352,6 +360,17 @@ class PlanService:
                 raise BusinessException(f"批次包含已下架产品：{cert.name}，无法发布")
             if cert.type == "renshe" and cert.renshe_status not in (None, "available"):
                 raise BusinessException(f"人社项目当前不可用：{cert.name}，无法发布")
+            # P3-2: H3C/NISP 派生批次价格必须 > 0
+            if cert.type == "h3c":
+                from app.domain.h3c.src.index import H3cExamBatch as _H3B
+                _h3b = await db.scalar(select(_H3B).where(_H3B.plan_product_id == pp.id).limit(1))
+                if _h3b is not None and (_h3b.coupon_price_cents <= 0 and _h3b.student_price_cents <= 0 and _h3b.full_price_cents <= 0):
+                    raise ValidationException(f"H3C 产品「{cert.name}」批次价格未配置（全为 0 元），请在专用批次入口设置价格后发布")
+            elif cert.type == "nisp":
+                from app.domain.nisp.src.index import NispExamBatch as _NB
+                _nb = await db.scalar(select(_NB).where(_NB.plan_product_id == pp.id).limit(1))
+                if _nb is not None and _nb.level1_price_cents <= 0 and _nb.level2_price_cents <= 0:
+                    raise ValidationException(f"NISP 产品「{cert.name}」批次价格未配置（全为 0 元），请在专用批次入口设置价格后发布")
         cls._validate_schedule(
             apply_start=plan.apply_start,
             apply_end=plan.apply_end,
