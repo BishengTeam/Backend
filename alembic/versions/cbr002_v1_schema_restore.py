@@ -28,6 +28,26 @@ def upgrade() -> None:
             certification_journey_content
         CASCADE
     """)
+    # 先删除引用 order 的全部子表行，避免 FK 约束阻塞
+    for child_table in (
+        "inventory_record",
+        "course_enrollment",
+        "h3c_refund_request",
+        "nisp_refund_request",
+        "renshe_refund_request",
+        "offline_bank_entry",
+        "offline_payment_audit",
+        "offline_payment_material",
+        "offline_payment_submission",
+        "offline_payment",
+        "payment_refund_task",
+        "points_mall_redemption",
+        "quiz_library_entitlement",
+    ):
+        op.execute(f"""
+            DELETE FROM {child_table}
+            WHERE order_id IN (SELECT id FROM "order" WHERE order_kind = 'certification')
+        """)
     op.execute("""DELETE FROM "order" WHERE order_kind = 'certification'""")
 
     # ================================================================
