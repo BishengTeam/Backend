@@ -109,7 +109,7 @@ async def get_schedule(
     s = await db.get(ExamSchedule, schedule_id)
     if s is None:
         raise NotFoundException("考场计划")
-    subjects = (await db.execute(
+        subjects = (await db.execute(
         select(ExamScheduleSubject, CertProduct)
         .join(CertProduct, CertProduct.id == ExamScheduleSubject.product_id)
         .where(ExamScheduleSubject.schedule_id == schedule_id)
@@ -121,6 +121,18 @@ async def get_schedule(
     quotas = (await db.execute(
         select(ExamSeatQuota).where(ExamSeatQuota.schedule_id == schedule_id)
     )).scalars().all()
+    # P2 #8: 计算各配额的已约人数
+    from app.domain.exam.src.index import ExamBooking
+    from sqlalchemy import func
+    booking_counts = dict((await db.execute(
+        select(ExamBooking.subject_id, ExamBooking.slot_id, func.count())
+        .where(
+            ExamBooking.schedule_id == schedule_id,
+            ExamBooking.status == "booked",
+        )
+        .group_by(ExamBooking.subject_id, ExamBooking.slot_id)
+    )).all())
+
     return success(data={
         "id": s.id, "name": s.name, "vendor": s.vendor,
         "open_date_start": s.open_date_start.isoformat(),
@@ -130,7 +142,13 @@ async def get_schedule(
         "status": s.status,
         "subjects": [{"id": ss.id, "product_id": ss.product_id, "product_name": p.name} for ss, p in subjects],
         "time_slots": [{"id": t.id, "label": t.label, "start_time": t.start_time.isoformat()} for t in slots],
-        "seat_quotas": [{"subject_id": q.subject_id, "slot_id": q.slot_id, "total_seats": q.total_seats} for q in quotas],
+        "seat_quotas": [{
+            "subject_id": q.subject_id,
+            "slot_id": q.slot_id,
+            "total_seats": q.total_seats,
+            "booked": booking_counts.get((q.subject_id, q.slot_id), 0),
+            "remaining": -1 if q.total_seats == 0 else max(0, q.total_seats - booking_counts.get((q.subject_id, q.slot_id), 0)),
+        } for q in quotas],
     })
 
 
@@ -322,3 +340,64 @@ async def delete_holiday(
     await db.delete(h)
     await db.commit()
     return success(message="假期已删除")
+
+
+# ============================================================
+# 预约管理
+# ============================================================
+
+@router.get("/{schedule_id}/bookings", response_model=APIResponse[list], summary="预约总览")
+async def list_bookings(
+    schedule_id: int,
+    exam_date: date | None = Query(None, alias="date"),
+    slot_id: int | None = Query(None, ge=1),
+    _admin=Depends(require_permission("h3c:batch_manage")),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.domain.exam.src.index import ExamBooking, ExamTimeSlot, ExamScheduleSubject
+    from app.models.cert_product import CertProduct
+    from app.domain.h3c.src.index import H3cRegistration
+
+    stmt = (
+        select(ExamBooking, ExamTimeSlot, CertProduct, H3cRegistration)
+        .join(ExamTimeSlot, ExamTimeSlot.id == ExamBooking.slot_id)
+        .outerjoin(ExamScheduleSubject, ExamScheduleSubject.id == ExamBooking.subject_id)
+        .outerjoin(CertProduct, CertProduct.id == ExamScheduleSubject.product_id)
+        .join(H3cRegistration, H3cRegistration.id == ExamBooking.registration_id)
+        .where(ExamBooking.schedule_id == schedule_id)
+        .order_by(ExamBooking.exam_date, ExamTimeSlot.start_time)
+    )
+    if exam_date:
+        stmt = stmt.where(ExamBooking.exam_date == exam_date)
+    if slot_id:
+        stmt = stmt.where(ExamBooking.slot_id == slot_id)
+
+    rows = (await db.execute(stmt)).all()
+    return success(data=[{
+        "id": b.id,
+        "registration_id": b.registration_id,
+        "candidate_name": reg.candidate_snapshot.get("name", "") if reg.candidate_snapshot else "",
+        "subject": p.name if p else "",
+        "slot_label": slot.label,
+        "slot_time": slot.start_time.isoformat(),
+        "exam_date": b.exam_date.isoformat(),
+        "status": b.status,
+    } for b, slot, p, reg in rows])
+
+
+@router.post("/{schedule_id}/bookings/{booking_id}/no-show", response_model=APIResponse[dict], summary="标记缺考")
+async def mark_no_show(
+    schedule_id: int,
+    booking_id: int,
+    _admin=Depends(require_permission("h3c:batch_manage")),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.domain.exam.src.index import ExamBooking
+    booking = await db.get(ExamBooking, booking_id)
+    if booking is None or booking.schedule_id != schedule_id:
+        raise NotFoundException("预约记录")
+    if booking.status != "booked":
+        raise BusinessException("仅已预约的记录可标记缺考")
+    booking.status = "no_show"
+    await db.commit()
+    return success(message="已标记缺考")

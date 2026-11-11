@@ -12,7 +12,7 @@ from sqlalchemy import (
     Time,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.adapter.database import Base, TimestampMixin
@@ -28,7 +28,7 @@ class ExamSchedule(Base, TimestampMixin):
         ),
         CheckConstraint("open_date_start <= open_date_end", name="ck_exam_schedule_dates"),
         CheckConstraint(
-            "array_length(allowed_weekdays, 1) > 0",
+            "json_array_length(allowed_weekdays) > 0",
             name="ck_exam_schedule_weekdays_not_empty",
         ),
         Index("ix_exam_schedule_status", "status"),
@@ -41,8 +41,8 @@ class ExamSchedule(Base, TimestampMixin):
     open_date_start: Mapped[date] = mapped_column(Date, nullable=False)
     open_date_end: Mapped[date] = mapped_column(Date, nullable=False)
     allowed_weekdays: Mapped[list[int]] = mapped_column(
-        ARRAY(Integer), nullable=False, default=[4], server_default="{4}"
-    )  # Python weekday(): 4=周五
+        JSON, nullable=False, default=[4], server_default='[4]'
+    )  # Python weekday(): 4=周五；JSON 兼容 SQLite
     pre_exam_notice: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="draft", server_default="draft"

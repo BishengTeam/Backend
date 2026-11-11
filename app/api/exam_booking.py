@@ -55,6 +55,16 @@ async def get_dates(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # P1 #5: 校验用户有 approved 的 H3C 报名
+    has_approved = await db.scalar(
+        select(H3cRegistration.id).where(
+            H3cRegistration.user_id == current_user.id,
+            H3cRegistration.status.in_(("approved", "final_approved")),
+        ).limit(1)
+    )
+    if has_approved is None:
+        return success(data={"dates": []})
+
     dates = await ExamBookingService.get_bookable_dates(db, schedule_id)
     return success(data={"dates": [d.isoformat() for d in dates]})
 
@@ -63,10 +73,43 @@ async def get_dates(
 async def get_slots(
     schedule_id: int = Path(..., ge=1),
     exam_date: date = Query(..., alias="date"),
-    subject_id: int = Query(..., ge=1),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """P0 #2: 自动从用户报名记录解析科目，无需前端传 subject_id。"""
+    # 从该用户最近的 H3C 报名解析科目
+    from app.domain.h3c.src.index import H3cExamBatch
+    from app.domain.plan.src.index import Plan
+    from app.models.cert_product import CertProduct
+    from app.domain.exam.src.index import ExamScheduleSubject
+
+    registration = (await db.execute(
+        select(H3cRegistration)
+        .where(
+            H3cRegistration.user_id == current_user.id,
+            H3cRegistration.status.in_(("approved", "final_approved")),
+        )
+        .order_by(H3cRegistration.id.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    if registration is None:
+        raise NotFoundException("报名记录")
+
+    batch = await db.get(H3cExamBatch, registration.batch_id)
+    plan = await db.get(Plan, batch.plan_id) if batch else None
+    product = await db.scalar(
+        select(CertProduct).where(CertProduct.code == plan.product_type)
+    ) if plan else None
+
+    subject_id = await db.scalar(
+        select(ExamScheduleSubject.id).where(
+            ExamScheduleSubject.schedule_id == schedule_id,
+            ExamScheduleSubject.product_id == product.id,
+        )
+    ) if product else None
+    if subject_id is None:
+        return success(data={"slots": []})
+
     slots = await ExamBookingService.get_slots_with_remaining(db, schedule_id, subject_id, exam_date)
     return success(data={"slots": slots})
 

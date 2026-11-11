@@ -154,19 +154,33 @@ class ExamBookingService:
         if registration is None:
             raise NotFoundException("报名记录")
 
-        # 查该计划中此考生对应的科目
+        # P0 #1: 通过报名记录追溯考生的实际科目（registration → batch → plan → product_type → CertProduct）
         from app.models.cert_product import CertProduct
+        from app.domain.h3c.src.index import H3cExamBatch
+        from app.domain.plan.src.index import Plan
+
+        batch = await db.get(H3cExamBatch, registration.batch_id)
+        if batch is None:
+            raise BusinessException("报名记录缺少批次关联")
+        plan = await db.get(Plan, batch.plan_id)
+        if plan is None:
+            raise BusinessException("批次缺少关联计划")
+        product = await db.scalar(
+            select(CertProduct).where(CertProduct.code == plan.product_type)
+        )
+        if product is None:
+            raise BusinessException("未找到考生的认证产品")
+
         subject = (await db.execute(
             select(ExamScheduleSubject)
-            .join(CertProduct, CertProduct.id == ExamScheduleSubject.product_id)
             .where(
                 ExamScheduleSubject.schedule_id == schedule_id,
-                CertProduct.type == "h3c",
+                ExamScheduleSubject.product_id == product.id,
             )
             .limit(1)
         )).scalar_one_or_none()
         if subject is None:
-            raise BusinessException("该考场计划不包含您的考试科目")
+            raise BusinessException(f"该考场计划不包含您的科目（{product.name}）")
 
         # 锁配额行
         quota = await db.scalar(

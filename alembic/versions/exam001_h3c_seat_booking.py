@@ -6,7 +6,7 @@ Create Date: 2026-11-12
 """
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import ARRAY
+
 
 revision = "exam001"
 down_revision = "cbr002"
@@ -36,7 +36,7 @@ def upgrade() -> None:
         sa.Column("name", sa.String(128), nullable=False),
         sa.Column("open_date_start", sa.Date(), nullable=False),
         sa.Column("open_date_end", sa.Date(), nullable=False),
-        sa.Column("allowed_weekdays", ARRAY(sa.Integer()), nullable=False, server_default="{4}"),
+        sa.Column("allowed_weekdays", sa.JSON(), nullable=False, server_default="[4]"),
         sa.Column("pre_exam_notice", sa.Text(), nullable=True),
         sa.Column("status", sa.String(16), nullable=False, server_default="draft"),
         sa.Column("published_at", sa.Date(), nullable=True),
@@ -45,7 +45,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.CheckConstraint("status IN ('draft','published','closed')", name="ck_exam_schedule_status"),
         sa.CheckConstraint("open_date_start <= open_date_end", name="ck_exam_schedule_dates"),
-        sa.CheckConstraint("array_length(allowed_weekdays, 1) > 0", name="ck_exam_schedule_weekdays_not_empty"),
+        sa.CheckConstraint("json_array_length(allowed_weekdays) > 0", name="ck_exam_schedule_weekdays_not_empty"),
     )
     op.create_index("ix_exam_schedule_status", "exam_schedule", ["status"])
     op.create_index("ix_exam_schedule_vendor", "exam_schedule", ["vendor"])
