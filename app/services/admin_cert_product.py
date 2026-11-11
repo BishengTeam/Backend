@@ -4,7 +4,7 @@ from openpyxl import load_workbook
 
 from app.adapter.database import get_db_ctx
 from app.domain.order.src.index import Order, PriceConfig
-from app.domain.plan.src.index import Plan, PlanProduct
+from app.domain.plan.src.index import Plan
 from app.models.cert_product import CertProduct
 from app.models.cert_product_catalog import CertProductCatalog
 from app.port.exceptions import BusinessException, NotFoundException
@@ -293,7 +293,7 @@ class AdminCertProductService:
                     from app.services.sangfor_catalog import require_direction
                     if update_data.get("is_active", product.is_active):
                         require_direction(update_data.get("code", product.code))
-                    if update_data.get("code", product.code) != product.code and await db.scalar(select(Plan.id).where(Plan.id.in_(select(PlanProduct.plan_id).where(PlanProduct.product_id.in_(select(CertProduct.id).where(CertProduct.code == product.code))))).limit(1)):
+                    if update_data.get("code", product.code) != product.code and await db.scalar(select(Plan.id).where(Plan.product_type == product.code).limit(1)):
                         raise BusinessException("产品已有批次，不能更换报考方向，请创建新产品")
                 if product.type == "renshe":
                     if "is_active" in update_data:
@@ -344,8 +344,7 @@ class AdminCertProductService:
                     func.count().label("active_batch_count"),
                 )
                 .select_from(Plan)
-                .join(PlanProduct, PlanProduct.plan_id == Plan.id)
-                .join(CertProduct, CertProduct.id == PlanProduct.product_id)
+                .join(CertProduct, CertProduct.code == Plan.product_type)
                 .where(Plan.status == "published")
                 .group_by(CertProduct.type)
                 .subquery()

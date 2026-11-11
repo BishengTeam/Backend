@@ -33,29 +33,6 @@ from tests.unit.test_renshe_projects import isolated as _isolated
 isolated = _isolated
 
 
-
-
-def _batch_field(batch, field: str, default=""):
-    """Safely get a field from batch (BatchResponse or mock) — checks products[0] first."""
-    products = getattr(batch, "products", None)
-    if products:
-        return getattr(products[0], field, default)
-    return getattr(batch, field, default)
-
-
-def _batch_occ(batch) -> str:
-    return _batch_field(batch, "occupation_name", "信息安全管理员")
-
-
-def _batch_occ_code(batch) -> str:
-    return _batch_field(batch, "occupation_code", "")
-
-
-def _batch_skill(batch) -> str:
-    return _batch_field(batch, "skill_level", "中级工")
-
-
-
 async def approved(env, monkeypatch):
     project, batch = await graduated_batch(env, monkeypatch)
     service = RensheApplicationService(env.storage)

@@ -38,12 +38,10 @@ async def audit() -> dict:
             (
                 await db.execute(
                     text(f"""
-            SELECT p.id, cp.code AS product_type, pp.occupation_name, pp.occupation_code, pp.skill_level, pp.exam_type, pp.application_type,
-                   cp.id AS project_id, cp.type AS business_type, pp.renshe_config_id AS config_id
-            FROM plan p
-            LEFT JOIN plan_product pp ON pp.plan_id=p.id
-            LEFT JOIN cert_product cp ON cp.id=pp.product_id
-            WHERE cp.type='renshe' OR cp.code='RS-ZY' OR pp.id IS NULL
+            SELECT p.id, p.product_type, p.occupation_name, p.occupation_code, p.skill_level, p.exam_type, p.application_type,
+                   cp.id AS project_id, cp.type AS business_type, {config_column} AS config_id
+            FROM plan p LEFT JOIN cert_product cp ON cp.code=p.product_type
+            WHERE cp.type='renshe' OR p.product_type='RS-ZY'
                OR EXISTS (SELECT 1 FROM renshe_application a WHERE a.plan_id=p.id)
             ORDER BY p.id
         """)
@@ -58,8 +56,7 @@ async def audit() -> dict:
                     text("""
             SELECT o.id FROM "order" o JOIN renshe_application a ON a.id=o.application_id
             JOIN plan p ON p.id=a.plan_id
-            WHERE o.user_id<>a.user_id OR o.plan_id IS NULL OR o.plan_id<>a.plan_id
-               OR o.product_type NOT IN (SELECT cp2.code FROM plan_product pp2 JOIN cert_product cp2 ON cp2.id=pp2.product_id WHERE pp2.plan_id=p.id)
+            WHERE o.user_id<>a.user_id OR o.plan_id IS NULL OR o.plan_id<>a.plan_id OR o.product_type<>p.product_type
         """)
                 )
             )

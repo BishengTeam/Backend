@@ -596,12 +596,7 @@ class H3cExportService:
             batch = await db.get(H3cExamBatch, job.batch_id)
             if batch is None:
                 raise NotFoundException("H3C 考试批次")
-            # N2: v2 H3cExamBatch 无 plan_id — 通过 PlanProduct 中间表
-            from app.domain.plan.src.index import PlanProduct as _ExpPP
-            _exp_pp = await db.get(_ExpPP, batch.plan_product_id)
-            if _exp_pp is None:
-                raise NotFoundException("H3C 批次关联产品")
-            plan = await db.get(Plan, _exp_pp.plan_id)
+            plan = await db.get(Plan, batch.plan_id)
             export_rows = (
                 await db.execute(
                     select(H3cRegistration, H3cExportItem)

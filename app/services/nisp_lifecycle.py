@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 
 from sqlalchemy import func, or_, select
 
-from app.domain.plan.src.index import PlanProduct
 from app.domain.nisp.src import NispRegistration, NispRefundRequest
 from app.domain.order.src.index import Order
 from app.port.exceptions import ConflictException
@@ -21,7 +20,7 @@ def occupied_orders(plan_id: int):
     return select(Order).outerjoin(
         NispRegistration, NispRegistration.order_id == Order.id
     ).where(
-        or_(Order.plan_id == plan_id, NispRegistration.plan_product_id == plan_id),
+        or_(Order.plan_id == plan_id, NispRegistration.plan_id == plan_id),
         Order.status.in_(("pending", "paid", "completed")),
     )
 

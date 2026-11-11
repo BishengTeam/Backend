@@ -16,8 +16,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
 from app.adapter.database import get_db_ctx
-from app.domain.order.src.index import Order, PriceConfig, apply_order_status_transition
-from app.domain.plan.src.index import Plan, PlanProduct
+from app.domain.order.src.index import Order, apply_order_status_transition
+from app.domain.plan.src.index import Plan
 from app.models.cert_product import CertProduct
 from app.models.offline_payment import OfflineBankEntry, OfflinePayment, OfflinePaymentAudit, OfflinePaymentSubmission
 from app.port.config import settings
@@ -30,20 +30,6 @@ from app.services.plan_enrollment import PlanEnrollmentService
 from app.services.registration_payment_guard import payment_filter, payment_summary, require_review_payment
 from app.services.sangfor_catalog import DIRECTIONS, HEADERS, require_direction
 from app.utils.payment import generate_out_trade_no
-
-
-async def _sangfor_price_cents(db, product_code: str) -> int:
-    """从 PriceConfig 查深信服产品定价；未配置时抛错。"""
-    from sqlalchemy import select as _select
-    row = (await db.execute(
-        _select(PriceConfig.price)
-        .where(PriceConfig.product_type == product_code, PriceConfig.is_active.is_(True))
-        .order_by(PriceConfig.id.desc())
-        .limit(1)
-    )).scalar_one_or_none()
-    if row is None or row <= 0:
-        raise BusinessException(f"产品 {product_code} 尚未配置价格，请联系管理员")
-    return int(row)
 
 
 def now():
@@ -116,7 +102,7 @@ class SangforService:
         return select(Order).where(Order.order_kind == "certification", Order.extra_data["business_type"].as_string() == "sangfor")
 
     async def batch(self, db, batch_id, *, public=False):
-        pair = (await db.execute(select(Plan, CertProduct).join(PlanProduct, PlanProduct.plan_id == Plan.id).join(CertProduct, CertProduct.id == PlanProduct.product_id)
+        pair = (await db.execute(select(Plan, CertProduct).join(CertProduct, CertProduct.code == Plan.product_type)
                                  .where(Plan.id == batch_id, CertProduct.type == "sangfor"))).first()
         if pair is None or (public and (not pair[1].is_active or pair[0].status not in {"published", "registration_closed"} or pair[1].code not in DIRECTIONS)):
             raise NotFoundException("深信服考试批次")
@@ -132,12 +118,13 @@ class SangforService:
                 counts.setdefault(plan_id, {})[state] = count
         return occupied, counts
 
-    async def batch_response(self, db, plan, product, *, enrolled=0, counts=None):
+    @staticmethod
+    def batch_response(plan, product, *, enrolled=0, counts=None):
         result = {"id": plan.id, "product_code": product.code, "product_name": product.chinese_name,
                 "description": plan.description or product.description, "name": plan.name, "status": plan.status,
                 "exam_direction": DIRECTIONS.get(product.code, product.code), "apply_start": plan.apply_start,
                 "apply_end": plan.apply_end, "exam_date": plan.exam_date, "exam_location": plan.exam_location,
-                "price_cents": await _sangfor_price_cents(db, product.code), "capacity": getattr(plan, "capacity", 0), "enrolled": enrolled,
+                "price_cents": plan.price_cents, "capacity": plan.capacity, "enrolled": enrolled,
                 "remaining_count": max(0, plan.capacity - enrolled) if plan.capacity else -1}
         if counts is not None:
             result["registration_counts"] = counts
@@ -145,33 +132,26 @@ class SangforService:
 
     async def batches(self, *, public=False, product_code=None):
         async with get_db_ctx() as db:
-            query = select(Plan, CertProduct).join(PlanProduct, PlanProduct.plan_id == Plan.id).join(CertProduct, CertProduct.id == PlanProduct.product_id).where(CertProduct.type == "sangfor")
+            query = select(Plan, CertProduct).join(CertProduct, CertProduct.code == Plan.product_type).where(CertProduct.type == "sangfor")
             if public:
                 query = query.where(CertProduct.is_active.is_(True), CertProduct.code.in_(DIRECTIONS), Plan.status.in_(("published", "registration_closed")))
             if product_code:
-                query = query.where(Plan.id.in_(select(PlanProduct.plan_id).where(PlanProduct.product_id.in_(select(CertProduct.id).where(CertProduct.code == product_code)))))
+                query = query.where(Plan.product_type == product_code)
             pairs = (await db.execute(query.order_by(Plan.id.desc()))).all()
             occupied, counts = await self.batch_statistics(db, [plan.id for plan, _ in pairs], public=public)
-            return [await self.batch_response(db, plan, product, enrolled=occupied.get(plan.id, 0), counts=None if public else counts.get(plan.id, {})) for plan, product in pairs]
+            return [self.batch_response(plan, product, enrolled=occupied.get(plan.id, 0), counts=None if public else counts.get(plan.id, {})) for plan, product in pairs]
 
     async def get_batch(self, batch_id, *, public=False):
         async with get_db_ctx() as db:
             plan, product = await self.batch(db, batch_id, public=public)
             occupied, counts = await self.batch_statistics(db, [batch_id], public=public)
-            return await self.batch_response(db, plan, product, enrolled=occupied.get(batch_id, 0), counts=None if public else counts.get(batch_id, {}))
+            return self.batch_response(plan, product, enrolled=occupied.get(batch_id, 0), counts=None if public else counts.get(batch_id, {}))
 
     async def refund_batches(self):
         """Minimal batch selector for ledger readers, without content permissions."""
         async with get_db_ctx() as db:
-            # v2: 通过 PlanProduct join
-            from app.domain.plan.src.index import PlanProduct as _RPP
-            rows = (await db.execute(
-                select(Plan.id, Plan.name)
-                .join(_RPP, _RPP.plan_id == Plan.id)
-                .join(CertProduct, CertProduct.id == _RPP.product_id)
-                .where(CertProduct.type == "sangfor")
-                .order_by(Plan.id.desc())
-            )).mappings().all()
+            rows = (await db.execute(select(Plan.id, Plan.name).join(CertProduct,
+                CertProduct.code == Plan.product_type).where(CertProduct.type == "sangfor").order_by(Plan.id.desc()))).mappings().all()
             return [dict(row) for row in rows]
 
     @staticmethod
@@ -209,31 +189,22 @@ class SangforService:
             async with get_db_ctx() as db:
                 async with db.begin():
                     plan = await PlanEnrollmentService().lock_enrollable_plan(db, plan_id=data.batch_id, user_id=user_id, expected_vendor="sangfor")
-                    # v2: 通过 PlanProduct 解析产品编码
-                    # v2: 只用过滤 type=="sangfor" 的查询；plan.product_type 兼容属性
-                    # 返回第一个产品编码（跨厂商批次首位可能是 H3C），不能依赖
-                    _sf_code = await db.scalar(
-                        select(CertProduct.code)
-                        .join(PlanProduct, PlanProduct.product_id == CertProduct.id)
-                        .where(PlanProduct.plan_id == plan.id, CertProduct.type == "sangfor")
-                        .limit(1)
-                    ) or ""
-                    direction = require_direction(_sf_code)
+                    direction = require_direction(plan.product_type)
                     if not plan.exam_date:
                         raise BusinessException("该批次未配置考试时间")
                     identity = await lock_verified_identity(db, user_id=user_id)
                     await ensure_accepted(db, user_id, "cert_registration", message="请先阅读并同意认证报名信息处理授权协议")
                     snapshot = data.model_dump(exclude={"batch_id", "notice_hash"}) | {"name": identity.real_name, "id_card": identity.id_card_number,
-                        "exam_direction": direction, "exam_direction_code": _sf_code, "exam_date": plan.exam_date.isoformat()}
+                        "exam_direction": direction, "exam_direction_code": plan.product_type, "exam_date": plan.exam_date.isoformat()}
                     if data.notice_hash:
                         from app.services.certification_journey import confirmed_notice
                         snapshot["enrollment_notice"] = await confirmed_notice(db, vendor="sangfor", batch_id=plan.id, notice_hash=data.notice_hash)
-                    order = Order(user_id=user_id, order_kind="certification", product_type=_sf_code, plan_id=plan.id,
+                    order = Order(user_id=user_id, order_kind="certification", product_type=plan.product_type, plan_id=plan.id,
                         candidate_name=identity.real_name, candidate_idcard=identity.id_card_number, candidate_phone=data.phone,
-                        price=await _sangfor_price_cents(db, _sf_code),
+                        price=plan.price_cents, status="pending", out_trade_no=generate_out_trade_no("SF"),
                         extra_data={"business_type": "sangfor", "revision": 1, "current_version": 1,
                             "registration_state": "pending_review", "candidate_snapshot": snapshot,
-                            "batch_snapshot": {"name": plan.name, "product_code": _sf_code,
+                            "batch_snapshot": {"name": plan.name, "product_code": plan.product_type,
                                 "exam_direction": direction, "exam_date": plan.exam_date.isoformat(), "exam_location": plan.exam_location},
                             "versions": [{"version": 1, "submitted_at": now().isoformat(), "snapshot": snapshot}], "reviews": [], "exports": []})
                     db.add(order)

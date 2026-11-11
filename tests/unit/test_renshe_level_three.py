@@ -13,7 +13,6 @@ from app.port.exceptions import BusinessException
 from app.schemas.renshe import RensheDraftUpsert, RensheReviewCreate
 from app.schemas.renshe_project import RensheProjectWrite
 from app.services.plan import PlanService
-from tests.unit.plan_v2_adapter import PlanServiceAdapter
 from app.services.renshe_application import RensheApplicationService
 from app.services.renshe_catalog import ADAPTED_DEGREE_OCCUPATIONS, find_selection
 from app.services.renshe_employment import anniversary
@@ -27,29 +26,6 @@ from tests.unit.test_renshe_graduated import graduated_batch
 from tests.unit.test_renshe_projects import create_batch, isolated as _isolated
 
 isolated = _isolated
-
-
-
-
-def _batch_field(batch, field: str, default=""):
-    """Safely get a field from batch (BatchResponse or mock) — checks products[0] first."""
-    products = getattr(batch, "products", None)
-    if products:
-        return getattr(products[0], field, default)
-    return getattr(batch, field, default)
-
-
-def _batch_occ(batch) -> str:
-    return _batch_field(batch, "occupation_name", "信息安全管理员")
-
-
-def _batch_occ_code(batch) -> str:
-    return _batch_field(batch, "occupation_code", "")
-
-
-def _batch_skill(batch) -> str:
-    return _batch_field(batch, "skill_level", "中级工")
-
 
 
 def test_all_six_conditions_and_title_grade_match_original_client_workbook():
@@ -164,13 +140,13 @@ async def test_full_path_material_review_and_actual_zip(isolated, monkeypatch, p
     service = RensheProjectService()
     project = await service.save(RensheProjectWrite(chinese_name=f"三级-{path}", selection_id=config(path)["selection_id"], commitment_template=original.config.commitment_template, status="available"), admin_id=1)
     batch = await create_batch(project)
-    await PlanServiceAdapter().publish_plan(batch.id, project.code, admin_id=1)
+    await PlanService().publish_plan(batch.id, project.code, admin_id=1)
     applicant = RensheApplicationService(isolated.storage)
     data = payload(path, batch.id)
     if PATHS[path]["type"] == "学历型":
         data["reporting_info"].update(has_work_experience=False, work_start_date=None, occupation_years=0, work_unit=None, social_insurance_unit=None)
     draft = await applicant.save_draft(1, RensheDraftUpsert.model_validate(data))
-    requirements = material_requirements(_batch_field(batch, "renshe_config", {}), data)
+    requirements = material_requirements(batch.renshe_config, data)
     for requirement in requirements:
         kind = requirement["kind"]
         if kind.startswith("id_card_"):
@@ -184,7 +160,7 @@ async def test_full_path_material_review_and_actual_zip(isolated, monkeypatch, p
     reviewer = RensheReviewService()
     with pytest.raises(BusinessException, match="逐项"):
         await reviewer.review(reviewer_id=1, application_id=draft.id, stage="initial", data=RensheReviewCreate(decision="approved", expected_version_id=submitted.version.id))
-    await reviewer.review(reviewer_id=1, application_id=draft.id, stage="initial", data=RensheReviewCreate(decision="approved", expected_version_id=submitted.version.id, checklist={key: True for key in review_checks(_batch_field(batch, "renshe_config", {}), form_data=data)}))
+    await reviewer.review(reviewer_id=1, application_id=draft.id, stage="initial", data=RensheReviewCreate(decision="approved", expected_version_id=submitted.version.id, checklist={key: True for key in review_checks(batch.renshe_config, form_data=data)}))
     exporter = RensheExportService(isolated.storage)
     job = await exporter.create_job(plan_id=batch.id, admin_id=1)
     await exporter.process_next_job()
@@ -200,7 +176,7 @@ async def test_full_path_material_review_and_actual_zip(isolated, monkeypatch, p
             assert row["R2"].value is None
             assert row["S2"].value == 0
         assert row["O2"].value == "三级"
-        assert row["U2"].value == selected_path(_batch_field(batch, "renshe_config", {}), data)["condition"]
+        assert row["U2"].value == selected_path(batch.renshe_config, data)["condition"]
         assert row["V2"].value == PATHS[path]["type"]
         assert row["P2"].value == ("信息安全" if path == "title_work_1" else None)
         assert row["Q2"].value == ("初级职称" if path == "title_work_1" else None)
@@ -217,7 +193,7 @@ async def test_paid_branch_correction_reuses_order_and_only_snapshots_current_ma
     original, _ = await graduated_batch(isolated, monkeypatch)
     project = await RensheProjectService().save(RensheProjectWrite(chinese_name="三级复合型补正", selection_id=config("skill_4_work_4")["selection_id"], commitment_template=original.config.commitment_template, status="available"), admin_id=1)
     batch = await create_batch(project)
-    await PlanServiceAdapter().publish_plan(batch.id, project.code, admin_id=1)
+    await PlanService().publish_plan(batch.id, project.code, admin_id=1)
     applicant = RensheApplicationService(isolated.storage)
     data = payload("skill_4_work_4", batch.id)
     draft = await applicant.save_draft(1, RensheDraftUpsert.model_validate(data))
@@ -226,7 +202,7 @@ async def test_paid_branch_correction_reuses_order_and_only_snapshots_current_ma
         pdf = ".pdf" in extensions and kind not in {"registration_portrait", "graduation_certificate"}
         await applicant.upload_application_material(1, batch.id, kind, filename="材料.pdf" if pdf else "材料.jpg", content_type="application/pdf" if pdf else "image/jpeg", content=b"%PDF-1.4\nfixture" if pdf else b"\xff\xd8\xfffixture")
 
-    for item in material_requirements(_batch_field(batch, "renshe_config", {}), data):
+    for item in material_requirements(batch.renshe_config, data):
         if not item["kind"].startswith("id_card_"):
             await upload(item["kind"], item["extensions"])
     submitted = await applicant.submit(1, draft.id)
@@ -235,7 +211,7 @@ async def test_paid_branch_correction_reuses_order_and_only_snapshots_current_ma
         decision="rejected", expected_version_id=submitted.version.id, reason="请核实实际申报路径", required_changes=["qualification_info.admission_path"], correction_due_at=datetime.now(timezone.utc) + timedelta(days=3)))
     data = payload("skill_4_degree", batch.id)
     await applicant.save_draft(1, RensheDraftUpsert.model_validate(data))
-    for item in material_requirements(_batch_field(batch, "renshe_config", {}), data):
+    for item in material_requirements(batch.renshe_config, data):
         if item["kind"] in {"graduation_certificate", "education_report"}:
             await upload(item["kind"], item["extensions"])
     corrected = await applicant.submit(1, draft.id)
@@ -243,5 +219,5 @@ async def test_paid_branch_correction_reuses_order_and_only_snapshots_current_ma
     assert corrected.version.id != submitted.version.id
     async with isolated.db() as db:
         rows = (await db.execute(select(RensheMaterial).where(RensheMaterial.application_id == draft.id))).scalars().all()
-    assert {r.kind for r in rows if r.version_id == corrected.version.id} == set(selected_path(_batch_field(batch, "renshe_config", {}), data)["material_kinds"])
+    assert {r.kind for r in rows if r.version_id == corrected.version.id} == set(selected_path(batch.renshe_config, data)["material_kinds"])
     assert "work_proof" in {r.kind for r in rows if r.version_id == submitted.version.id}

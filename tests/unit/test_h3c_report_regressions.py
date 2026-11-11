@@ -15,8 +15,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.adapter.database import Base
 from app.domain.h3c.src.index import H3cExamBatch
 from app.domain.order.src.index import Inventory, InventoryRecord, Order
-from app.domain.plan.src.index import Plan, PlanProduct
-from app.models.cert_product import CertProduct
+from app.domain.plan.src.index import Plan
 from app.integrations.h3c_storage import H3cObjectStorage, validate_h3c_jpeg
 from app.port.exceptions import BusinessException, ConflictException, ValidationException
 from app.schemas.h3c_registration import H3cExamBatchUpdate, H3cOrderCreate, H3cResubmissionCreate
@@ -29,8 +28,7 @@ async def batches(monkeypatch):
     try:
         async with engine.begin() as connection:
             await connection.run_sync(lambda db: Base.metadata.create_all(db, tables=[
-                Plan.__table__, PlanProduct.__table__, CertProduct.__table__,
-                H3cExamBatch.__table__, Order.__table__,
+                Plan.__table__, H3cExamBatch.__table__, Order.__table__,
                 Inventory.__table__, InventoryRecord.__table__,
             ]))
         factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -47,15 +45,10 @@ async def batches(monkeypatch):
         now = datetime.now()
         monkeypatch.setattr("app.services.h3c_admin._now", lambda: now)  # SQLite drops tzinfo.
         async with factory() as db, db.begin():
-            db.add(Plan(id=1, name="草稿批次", status="draft",
+            db.add(Plan(id=1, product_type="H3C-TEST", name="草稿批次", capacity=10, status="draft",
                         apply_start=now - timedelta(days=1), apply_end=now + timedelta(days=1),
                         exam_date=now + timedelta(days=2)))
-            # v2: 先建产品再关联
-            db.add(CertProduct(id=1, type="h3c", code="H3C-TEST", name="H3C-TEST",
-                               chinese_name="H3C测试", is_active=True))
-            await db.flush()
-            db.add(PlanProduct(id=1, plan_id=1, product_id=1, capacity=10))
-            db.add(H3cExamBatch(id=1, plan_product_id=1, exam_code="H3C-TEST", identity_tag="TEST",
+            db.add(H3cExamBatch(id=1, plan_id=1, exam_code="H3C-TEST", identity_tag="TEST",
                                 coupon_price_cents=100, student_price_cents=200, full_price_cents=300))
             db.add(Inventory(id=1, inventory_type="h3c_batch", ref_code="h3c-batch-1",
                              total_quota=10, available_quota=10, locked_quota=0, sold_quota=0))

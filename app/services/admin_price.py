@@ -9,17 +9,6 @@ class AdminPriceService:
 
     async def create(self, data: AdminPriceCreate) -> PriceResponse:
         async with get_db_ctx() as db:
-            from sqlalchemy import select
-            from app.port.exceptions import ConflictException
-            existing = await db.scalar(
-                select(PriceConfig.id).where(
-                    PriceConfig.product_type == data.product_type,
-                    PriceConfig.user_type == data.user_type,
-                    PriceConfig.is_active.is_(True),
-                ).limit(1)
-            )
-            if existing is not None:
-                raise ConflictException("价格配置已存在，请编辑现有价格")
             price = PriceConfig(**data.model_dump())
             db.add(price)
             await db.commit()

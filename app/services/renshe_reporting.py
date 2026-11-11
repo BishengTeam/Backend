@@ -165,16 +165,13 @@ async def resolve_contract(db, plan, config_id: int | None = None) -> dict:
     frozen = batch_configuration(plan)
     if not is_self_reported(frozen):
         return {
-            "config_id": getattr(plan, "renshe_config_id", None),
+            "config_id": plan.renshe_config_id,
             "config": {**frozen, "reporting_policy": {"commitment_template": None}},
         }
-    # v2: 通过 PlanProduct 解析产品
-    from app.domain.plan.src.index import PlanProduct as _RP
     product = await db.scalar(
-        select(CertProduct)
-        .join(_RP, _RP.product_id == CertProduct.id)
-        .where(_RP.plan_id == plan.id, CertProduct.type == "renshe")
-        .limit(1)
+        select(CertProduct).where(
+            CertProduct.code == plan.product_type, CertProduct.type == "renshe"
+        )
     )
     if product is None:
         raise ConflictException("承诺书配置缺少项目归属")

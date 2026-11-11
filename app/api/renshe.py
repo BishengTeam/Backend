@@ -49,20 +49,7 @@ async def list_projects():
 async def list_batches(project_id: int | None = Query(None, ge=1)):
     from app.services.plan import PlanService
     from app.schemas.renshe_public import public_plan
-    # v2: 查询已发布的 renshe 产品批次
-    from app.adapter.database import get_db_ctx
-    from app.domain.plan.src.index import Plan, PlanProduct
-    from app.models.cert_product import CertProduct
-    from sqlalchemy import select
-    async with get_db_ctx() as db:
-        stmt = (
-            select(Plan)
-            .join(PlanProduct, PlanProduct.plan_id == Plan.id)
-            .join(CertProduct, CertProduct.id == PlanProduct.product_id)
-            .where(Plan.status == "published", CertProduct.type == "renshe")
-        )
-        plans = (await db.execute(stmt.order_by(Plan.sort_order, Plan.id.desc()))).scalars().all()
-        return success(data=[public_plan(plan) for plan in plans])
+    return success(data=[public_plan(plan) for plan in await PlanService().list_renshe_plans(public=True, project_id=project_id)])
 
 
 def _client_ip(request: Request) -> str | None:

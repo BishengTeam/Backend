@@ -16,7 +16,7 @@ import app.models  # Register all foreign-key targets before create_all.
 from app.adapter.database import Base
 from app.domain.nisp.src import NispExamBatch, NispRegistration, NispMaterialFile, NispRefundRequest
 from app.domain.order.src.index import Order
-from app.domain.plan.src.index import Plan, PlanProduct
+from app.domain.plan.src.index import Plan
 from app.domain.user.src.index import User, UserRealname, AdminUser
 from app.models.cert_product import CertProduct
 from app.models.offline_payment import OfflinePaymentSettings
@@ -89,19 +89,14 @@ async def seed(context, *, capacity=10, price=0):
                 is_active=True,
             )
             db.add(product)
-        plan = Plan(name=uuid4().hex,
-                    status='published',
+        plan = Plan(product_type='NISP-1', name=uuid4().hex,
+                    status='published', capacity=capacity,
                     apply_start=now-timedelta(days=1), apply_end=now+timedelta(days=1))
         admin = AdminUser(username=uuid4().hex, password_hash='test-only', role='cert_admin')
-        db.add_all([plan, admin])
+        db.add_all([product, plan, admin])
         db.add(admin)
         await db.flush()
-        # v2: PlanProduct + NispExamBatch(plan_product_id)
-        from app.domain.plan.src.index import PlanProduct
-        pp = PlanProduct(plan_id=plan.id, product_id=product.id, capacity=capacity)
-        db.add(pp)
-        await db.flush()
-        batch = NispExamBatch(plan_product_id=pp.id, level='1',
+        batch = NispExamBatch(plan_id=plan.id, level='1',
                               level1_price_cents=price, level2_price_cents=price)
         db.add(batch)
         if price:
@@ -117,7 +112,6 @@ async def seed(context, *, capacity=10, price=0):
                     'contact_phone': '13800000000',
                 }))
         await db.commit()
-        batch.plan_id_resolved = plan.id  # v2: 附加 plan_id 供测试使用
         return batch, admin.id
 
 
@@ -159,7 +153,7 @@ async def test_nisp_notice_snapshot_accepts_the_last_available_seat(context, mon
     user_id, request = await applicant(context, batch)
     notice = await CertificationJourneyService().notice('nisp', batch.id, '1')
     created = await NispRegistrationService().create_order(user_id, request.model_copy(update={'notice_hash': notice['notice_hash']}))
-    assert created.candidate_snapshot['enrollment_notice']['batch']['plan_id'] == batch.plan_id_resolved  # v2
+    assert created.candidate_snapshot['enrollment_notice']['batch']['plan_id'] == batch.plan_id
     async with context.factory() as db:
         version = await db.scalar(select(NispRegistrationVersion).where(NispRegistrationVersion.registration_id == created.id))
         assert version.candidate_snapshot['enrollment_notice']['notice_hash'] == notice['notice_hash']
@@ -170,28 +164,19 @@ async def test_nisp_notice_snapshot_accepts_the_last_available_seat(context, mon
 async def test_review_batch_options_include_history_and_search_every_page(context, monkeypatch):
     statuses = ['draft', 'published', 'registration_closed', 'cancelled', 'finalized', 'archived']
     async with context.factory() as db:
-        from app.domain.plan.src.index import PlanProduct as _NP
-        from app.models.cert_product import CertProduct as _CP
         for index in range(125):
             level = '2' if index == 1 else '1'
-            _cert = await db.scalar(select(_CP).where(_CP.code == f'NISP-{level}'))
-            if _cert is None:
-                _cert = _CP(type='nisp', code=f'NISP-{level}', name=f'NISP-{level}',
-                            chinese_name=f'NISP {level}级', is_active=True)
-                db.add(_cert); await db.flush()
             plan = Plan(
                 id=1000 + index,
-                name=f'同名历史批次-{chr(65+index)}' if index < 2 else f'历史批次 {index}',
+                product_type=f'NISP-{level}',
+                name='同名历史批次' if index < 2 else f'历史批次 {index}',
                 status=statuses[index % len(statuses)],
             )
             db.add(plan)
             await db.flush()
-            _np = _NP(plan_id=plan.id, product_id=_cert.id, capacity=0)
-            db.add(_np)
-            await db.flush()
-            db.add(NispExamBatch(id=18 + index, plan_product_id=_np.id, level=level))
+            db.add(NispExamBatch(id=18 + index, plan_id=plan.id, level=level))
         # A non-NISP plan without a batch never becomes a review option.
-        db.add(Plan(name='不应出现', status='published'))
+        db.add(Plan(product_type='other', name='不应出现', status='published'))
         await db.commit()
 
     full_response = AsyncMock(side_effect=AssertionError('options must use a lightweight projection'))
@@ -213,7 +198,7 @@ async def test_review_batch_options_include_history_and_search_every_page(contex
     same_name, count = await service.list_review_batch_options(keyword='  同名历史  ')
     assert count == 2
     assert [(item.id, item.name, item.level) for item in same_name] == [
-        (19, '同名历史批次-B', '2'), (18, '同名历史批次-A', '1'),
+        (19, '同名历史批次', '2'), (18, '同名历史批次', '1'),
     ]
     for keyword in ['18', '#18', '  #18  ']:
         matches, count = await service.list_review_batch_options(keyword=keyword)
@@ -246,9 +231,7 @@ async def test_review_batch_name_and_existing_registration_filters_intersect(con
     ]
     ids = {}
     async with context.factory() as db:
-        from app.domain.plan.src.index import PlanProduct as _PP2
-        _plan_id = await db.scalar(select(PlanProduct.plan_id).where(PlanProduct.id == batch.plan_product_id))
-        plan = await db.get(Plan, _plan_id)
+        plan = await db.get(Plan, batch.plan_id)
         plan.name = '审核所属批次'
         plan.status = 'archived'
         for key, selected_batch, status, name, payment_state, exported in examples:
@@ -256,7 +239,7 @@ async def test_review_batch_name_and_existing_registration_filters_intersect(con
             db.add(user)
             await db.flush()
             order = Order(
-                user_id=user.id, plan_id=getattr(batch, "plan_id_resolved", None) or getattr(selected_batch, "plan_id_resolved", None),
+                user_id=user.id, plan_id=selected_batch.plan_id,
                 product_type='NISP-1', price=0,
                 payment_channel='free' if payment_state == 'confirmed' else 'bank_transfer',
                 status='paid' if payment_state == 'confirmed' else 'pending',
@@ -266,7 +249,7 @@ async def test_review_batch_name_and_existing_registration_filters_intersect(con
             db.add(order)
             await db.flush()
             registration = NispRegistration(
-                batch_id=selected_batch.id, plan_product_id=selected_batch.plan_product_id,
+                batch_id=selected_batch.id, plan_id=selected_batch.plan_id,
                 user_id=user.id, order_id=order.id, registration_no=uuid4().hex,
                 level='1', status=status, candidate_idcard=f'{user.id:018d}',
                 candidate_snapshot={'name': name},
@@ -293,7 +276,7 @@ async def test_review_batch_name_and_existing_registration_filters_intersect(con
     assert total == 1 and [row.id for row in rows] == [ids['target']]
     assert rows[0].batch_name == '审核所属批次'
     assert rows[0].batch_id == batch.id
-    assert rows[0].plan_product_id == batch.plan_product_id  # v2
+    assert rows[0].plan_id == batch.plan_id
 
     for key, changed_filter in [
         ('other_batch', {'batch_id': other_batch.id}),
@@ -318,7 +301,7 @@ async def test_review_batch_name_and_existing_registration_filters_intersect(con
     old_payload = detail.model_dump(exclude={'batch_name'})
     assert NispRegistrationResponse.model_validate(old_payload).batch_name is None
     async with context.factory() as db:
-        assert (await db.get(Plan, batch.plan_id_resolved)).status == 'archived'
+        assert (await db.get(Plan, batch.plan_id)).status == 'archived'
         for key, _, status, _, _, _ in examples:
             assert (await db.get(NispRegistration, ids[key])).status == status
 
@@ -378,25 +361,21 @@ async def test_nisp_rejects_registration_when_product_is_inactive(context):
 async def test_nisp_admin_rejects_wrong_level_product_binding(context):
     from app.port.exceptions import BusinessException
     from app.schemas.nisp import NispExamBatchCreate
-    from app.domain.plan.src.index import PlanProduct
-    from app.models.cert_product import CertProduct as _WCP
 
     async with context.factory() as db:
-        _cert = await db.scalar(select(_WCP).where(_WCP.code == 'NISP-2'))
-        if _cert is None:
-            _cert = _WCP(type='nisp', code='NISP-2', name='NISP-2', chinese_name='NISP 二级', is_active=True)
-            db.add(_cert)
-        plan = Plan(name=uuid4().hex, status='draft')
+        plan = Plan(
+            product_type='NISP-2',
+            name=uuid4().hex,
+            capacity=10,
+            status='draft',
+        )
         db.add(plan)
-        await db.flush()
-        _wpp = PlanProduct(plan_id=plan.id, product_id=_cert.id, capacity=10)
-        db.add(_wpp)
         await db.commit()
+        plan_id = plan.id
 
-    # NISP-2 产品绑定 level='1' → 应报"对应级别"不匹配
     with pytest.raises(BusinessException, match='对应级别'):
         await NispAdminService().create_batch(NispExamBatchCreate(
-            plan_product_id=_wpp.id,
+            plan_id=plan_id,
             level='1',
             level1_price_cents=100,
             level2_price_cents=200,
@@ -501,12 +480,8 @@ async def test_legacy_nisp_plan_still_lists_and_supports_order(context, monkeypa
         )
         db.add_all([product, plan])
         await db.flush()
-        from app.domain.plan.src.index import PlanProduct as _LPP
-        _lp = _LPP(plan_id=plan.id, product_id=product.id, capacity=0)
-        db.add(_lp)
-        await db.flush()
         batch = NispExamBatch(
-            plan_product_id=_lp.id,
+            plan_id=plan.id,
             level='2',
             level1_price_cents=0,
             level2_price_cents=0,
@@ -654,7 +629,7 @@ async def test_last_seat_is_not_oversold(context):
     assert sum(isinstance(value, ConflictException) for value in results) == 1
     assert sum(not isinstance(value, Exception) for value in results) == 1
     async with context.factory() as db:
-        assert await occupied_count(db, batch.plan_id_resolved) == 1
+        assert await occupied_count(db, batch.plan_id) == 1
 
 
 async def test_parallel_batches_have_distinct_registration_numbers(context):
@@ -674,7 +649,7 @@ async def test_legacy_order_without_plan_still_occupies_last_seat(context):
         order = await db.get(Order, first.order_id)
         order.plan_id = None
         await db.commit()
-        assert await occupied_count(db, batch.plan_id_resolved) == 1
+        assert await occupied_count(db, batch.plan_id) == 1
     with pytest.raises(ConflictException):
         await NispRegistrationService().create_order(*await applicant(context, batch))
 
@@ -735,7 +710,7 @@ async def test_batch_cancellation_closes_unpaid_order(context):
     async with context.factory() as db:
         assert (await db.get(Order, reg.order_id)).status == 'closed'
         assert (await db.get(NispRegistration, reg.id)).status == 'cancelled'
-        assert await occupied_count(db, batch.plan_id_resolved) == 0
+        assert await occupied_count(db, batch.plan_id) == 0
 
 
 async def test_nisp_final_review_binds_effective_export_version(context):

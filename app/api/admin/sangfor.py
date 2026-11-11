@@ -6,11 +6,10 @@ from fastapi.responses import Response
 
 from app.middleware.auth import require_permission, require_reauthenticated_admin
 from app.schemas.common import APIResponse, PaginatedDataWithCounts, success
-from app.schemas.plan import PlanCreate, PlanProductCreate, PlanUpdate
+from app.schemas.plan import PlanCreate, PlanUpdate
 from app.schemas.sangfor import SangforBatchCreate, SangforDecision, SangforExport, SangforRefundResponse
 from app.services.plan import PlanService
 from app.services.sangfor import SangforService
-from app.port.exceptions import BusinessException
 
 router = APIRouter(prefix="/cert-products/sangfor", tags=["管理后台-深信服认证"])
 service = SangforService()
@@ -28,21 +27,8 @@ async def batch(batch_id: int, admin=Depends(require_permission("content:read"))
 
 @router.post("/batches")
 async def create_batch(body: SangforBatchCreate, admin=Depends(require_permission("content:write"))):
-    from fastapi import HTTPException
-    raise HTTPException(status_code=410, detail="此接口已废弃，请使用全局批次管理：POST /admin/certifications/batches")
     await service.require_product(body.product_code)
-    from app.adapter.database import get_db_ctx
-    from app.domain.plan.src.index import PlanProduct
-    from app.models.cert_product import CertProduct
-    from sqlalchemy import select
-    async with get_db_ctx() as db:
-        product = await db.scalar(select(CertProduct).where(CertProduct.code == body.product_code))
-        if product is None:
-            raise BusinessException("认证产品不存在")
-        batch_data = PlanCreate.model_validate(body.model_dump(exclude={"product_code"}))
-        if not batch_data.products:
-            batch_data.products = [PlanProductCreate(product_id=product.id, capacity=0)]
-        plan = await PlanService.create_batch(db, batch_data)
+    plan = await PlanService().create_plan(body.product_code, PlanCreate.model_validate(body.model_dump(exclude={"product_code"})), admin_id=admin.id)
     return success(data={"id": plan.id}, message="草稿批次已创建")
 
 

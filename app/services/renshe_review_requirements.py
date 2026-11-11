@@ -2,7 +2,6 @@
 from copy import deepcopy
 import re
 
-from sqlalchemy import select as _select
 from app.domain.renshe.src.index import MATERIAL_SPECS
 from app.models.renshe_project import RensheProjectConfig
 from app.port.exceptions import BusinessException, ConflictException
@@ -148,14 +147,7 @@ async def version_configuration(db, plan, version):
         config = RensheProjectConfiguration.model_validate(deepcopy(row.config)).model_dump()
         from app.models.cert_product import CertProduct
         product = await db.get(CertProduct, row.product_id)
-        # v2: 从 PlanProduct 读取批次产品属性
-        from app.domain.plan.src.index import PlanProduct as _PP
-        _pp = await db.scalar(
-            _select(_PP).where(_PP.plan_id == plan.id).limit(1)
-        )
-        if _pp is None:
-            raise ConflictException("批次缺少关联产品")
-        if product is None or any(config.get(key) != getattr(_pp, key) for key in ("occupation_name", "occupation_code", "skill_level")) or _pp.exam_type not in config.get("exam_types", []) or _pp.application_type not in config.get("application_types", []):
+        if product is None or product.code != plan.product_type or any(config.get(key) != getattr(plan, key) for key in ("occupation_name", "occupation_code", "skill_level")) or plan.application_type not in config.get("application_types", []):
             raise ConflictException("报名版本配置与报考项目或批次不一致")
         return config
     if plan.renshe_config_id is not None:

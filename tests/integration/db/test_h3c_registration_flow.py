@@ -116,26 +116,11 @@ async def context(monkeypatch):
             ))
         )
         await db.execute(delete(Order).where(Order.id.in_(order_ids)))
-        # v2: 清理引用此库存的其他订单
-        await db.execute(
-            delete(Order).where(Order.inventory_id.in_(inventory_ids))
-        )
         await db.execute(
             delete(Inventory).where(Inventory.ref_code.in_(inventory_refs))
         )
         await db.execute(delete(H3cExamBatch).where(H3cExamBatch.id.in_(batch_ids)))
-        # v2: 通过 cert_product code 清理关联 plan
-        from app.domain.plan.src.index import PlanProduct as _DP
-        from app.models.cert_product import CertProduct as _DC
-        plan_ids_to_del = await db.execute(
-            select(Plan.id)
-            .join(_DP, _DP.plan_id == Plan.id)
-            .join(_DC, _DC.id == _DP.product_id)
-            .where(_DC.code.like(f"{prefix}%"))
-        )
-        plan_ids_list = [row[0] for row in plan_ids_to_del]
-        if plan_ids_list:
-            await db.execute(delete(Plan).where(Plan.id.in_(plan_ids_list)))
+        await db.execute(delete(Plan).where(Plan.product_type.like(f"{prefix}%")))
         await db.execute(
             delete(Certification).where(Certification.code.like(f"{prefix}%"))
         )
@@ -179,18 +164,6 @@ async def _seed(context, *, product_source="certification"):
                 status="verified",
             )
         )
-        from app.models.cert_product import CertProduct
-        # v2: 始终创建 CertProduct（Certification 仅为兼容旧查询路径）
-        db.add(
-            CertProduct(
-                type="h3c",
-                code=code,
-                name=code,
-                chinese_name=code,
-                is_active=True,
-            )
-        )
-        await db.flush()
         if product_source == "certification":
             db.add(
                 Certification(
@@ -201,25 +174,34 @@ async def _seed(context, *, product_source="certification"):
                     is_active=True,
                 )
             )
+        else:
+            from app.models.cert_product import CertProduct
+
+            db.add(
+                CertProduct(
+                    type="h3c",
+                    code=code,
+                    name=code,
+                    chinese_name=code,
+                    is_active=True,
+                )
+            )
         plan = Plan(
+            product_type=code,
             name=f"{context.prefix} batch",
             apply_start=now - timedelta(hours=1),
             apply_end=now + timedelta(days=7),
             exam_date=now + timedelta(days=30),
+            capacity=1,
+            price_cents=20000,
             exam_location="成都",
             status="published",
             published_at=now,
         )
         db.add(plan)
         await db.flush()
-        # v2: 创建 PlanProduct 关联
-        from app.domain.plan.src.index import PlanProduct
-        _cert = await db.scalar(select(CertProduct).where(CertProduct.code == code))
-        _pp = PlanProduct(plan_id=plan.id, product_id=_cert.id, capacity=1)
-        db.add(_pp)
-        await db.flush()
         batch = H3cExamBatch(
-            plan_product_id=_pp.id,
+            plan_id=plan.id,
             exam_code=f"{context.prefix}_GB0",
             country="CHN",
             language="CHS",
@@ -692,7 +674,6 @@ async def test_h3c_final_review_requires_effective_export_version(context):
 
 
 async def test_inactive_product_cannot_return_through_legacy_or_public_batches(context, monkeypatch):
-    pytest.skip("v2: legacy certification 路径已变更")
     from app.domain.user.src.index import User, UserRealname
     import app.services.certification as certification_module
     from app.domain.certification.src.index import Certification
@@ -725,7 +706,7 @@ async def test_inactive_product_cannot_return_through_legacy_or_public_batches(c
         db.add(UserRealname(user_id=second_user.id, user_type="normal", real_name="另一人",
                             id_card_number="510101200001010124", status="verified"))
         await db.commit()
-    with pytest.raises(BusinessException, match="已下架|不包含"):
+    with pytest.raises(BusinessException, match="已下架"):
         await service.create_order(second_user.id, _request(context, seed).model_copy(update={
             "candidate_name":"另一人", "candidate_idcard":"510101200001010124",
         }))

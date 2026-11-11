@@ -79,19 +79,7 @@ class OrderTimeoutCloseService:
                     await release_inventory_lock(db, order, reason=close_reason)
                     from app.services.order import OrderService
                     await OrderService._release_coupon(db, order)
-                    # v2: 有活跃线下凭证的订单不能关闭 — 回退状态变更，保留 pending
-                    from app.port.exceptions import ConflictException as _CE
-                    try:
-                        await self.fulfillment.on_closed(db, order)
-                    except _CE:
-                        # 回退关闭，标记为 exception 并保留 pending
-                        order.status = "pending"
-                        order.closed_at = None
-                        order.close_reason = None
-                        order.offline_status = "exception"
-                        order.expires_at = None
-                        exceptions += 1
-                        continue
+                    await self.fulfillment.on_closed(db, order)
                     closed_order_ids.append(order.id)
 
             if closed_order_ids or exceptions:
