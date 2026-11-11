@@ -10,6 +10,7 @@ from app.domain.certification.src.index import (
     CompetitionReg,
     CompetitionTrack,
 )
+from app.domain.community.src.index import QuizLibrary
 from app.port.exceptions import BusinessException, NotFoundException
 from app.schemas.competition_form import validate_field_values
 from app.schemas.competition import (
@@ -17,6 +18,7 @@ from app.schemas.competition import (
     CompetitionDetail,
     CompetitionMyRegistrationItem,
     CompetitionListItem,
+    CompetitionQuizLibraryBrief,
     CompetitionSignupRequest,
     CompetitionRegistrationUpdateRequest,
     CompetitionTrackBrief,
@@ -60,6 +62,28 @@ def _as_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+async def _bound_quiz_library(
+    db, library_id: int | None
+) -> CompetitionQuizLibraryBrief | None:
+    """赛事绑定的练习题库；仅已发布且开启 V2 用户入口的题库透出。"""
+    if library_id is None:
+        return None
+    library = await db.get(QuizLibrary, library_id)
+    if (
+        library is None
+        or library.status != "published"
+        or not library.v2_enabled
+    ):
+        return None
+    return CompetitionQuizLibraryBrief(
+        id=library.id,
+        name=library.name,
+        cover_url=library.cover_url,
+        access_mode=library.access_mode,
+        vendor_tag=library.vendor_tag,
+    )
 
 
 class CompetitionService:
@@ -116,6 +140,9 @@ class CompetitionService:
                     for a in (competition.attachments or [])
                 ],
                 tracks=await _track_briefs(db, competition.id),
+                quiz_library=await _bound_quiz_library(
+                    db, competition.quiz_library_id
+                ),
                 created_at=competition.created_at,
             )
 

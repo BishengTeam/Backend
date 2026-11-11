@@ -31,6 +31,8 @@ class AdminCompetitionCreate(BaseModel):
     tracks: list[AdminCompetitionTrackInput] = Field(default_factory=list)
     custom_fields: list[FormFieldConfig] | None = None
     attachments: list[CompetitionAttachment] | None = None
+    # 绑定的练习题库（None=不绑定）
+    quiz_library_id: int | None = Field(None, ge=1)
 
 
 class AdminCompetitionUpdate(BaseModel):
@@ -47,6 +49,8 @@ class AdminCompetitionUpdate(BaseModel):
     show_signup: bool | None = None
     tracks: list[AdminCompetitionTrackInput] | None = None
     attachments: list[CompetitionAttachment] | None = None
+    # 绑定的练习题库（None=解绑）
+    quiz_library_id: int | None = Field(None, ge=1)
 
 
 class AdminCompetitionListItem(BaseModel):
@@ -66,6 +70,9 @@ class AdminCompetitionListItem(BaseModel):
     created_at: datetime
     custom_fields: list[dict] | None = None
     attachments: list[CompetitionAttachment] = Field(default_factory=list)
+    # 绑定的练习题库（id + 名称供列表展示）
+    quiz_library_id: int | None = None
+    quiz_library_name: str | None = None
 
 
 class AdminCompetitionRegistrationItem(BaseModel):

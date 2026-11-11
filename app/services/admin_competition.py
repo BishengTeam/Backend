@@ -10,7 +10,8 @@ from app.domain.certification.src.index import (
     CompetitionReg,
     CompetitionTrack,
 )
-from app.port.exceptions import NotFoundException
+from app.domain.community.src.index import QuizLibrary
+from app.port.exceptions import BusinessException, NotFoundException
 from app.schemas.admin_competition import (
     AdminCompetitionCreate,
     AdminCompetitionListItem,
@@ -22,6 +23,31 @@ from app.schemas.common import PaginatedData
 from app.services.competition import _track_briefs
 from app.schemas.competition_form import validate_custom_fields
 from app.utils.excel import export_csv
+
+
+# 列表/创建/更新响应共用的竞赛表字段（不含关联子表）
+_ITEM_FIELDS = (
+    "id", "name", "description", "cover_url", "poster_url", "start_time",
+    "end_time", "registration_deadline", "is_active",
+    "show_schedule", "show_signup", "custom_fields",
+    "attachments", "created_at", "quiz_library_id",
+)
+
+
+async def _validate_quiz_library(db, library_id: int | None) -> None:
+    """绑定的练习题库必须存在且未进归档/回收站。"""
+    if library_id is None:
+        return
+    library = await db.get(QuizLibrary, library_id)
+    if library is None or getattr(library, "status", None) in ("archived", "deleted"):
+        raise BusinessException("题库不存在或不可绑定")
+
+
+async def _quiz_library_name(db, library_id: int | None) -> str | None:
+    if library_id is None:
+        return None
+    library = await db.get(QuizLibrary, library_id)
+    return library.name if library is not None else None
 
 
 class AdminCompetitionService:
@@ -124,6 +150,18 @@ class AdminCompetitionService:
                     .limit(page_size)
                 )
             ).scalars().all()
+            # 批量取绑定题库名称，避免逐行查询
+            library_ids = {
+                c.quiz_library_id for c in rows if c.quiz_library_id is not None
+            }
+            library_names: dict[int, str] = {}
+            if library_ids:
+                libs = (
+                    await db.execute(
+                        select(QuizLibrary).where(QuizLibrary.id.in_(library_ids))
+                    )
+                ).scalars().all()
+                library_names = {lib.id: lib.name for lib in libs}
             items: list[AdminCompetitionListItem] = []
             for c in rows:
                 tracks = await _track_briefs(db, c.id)
@@ -131,15 +169,11 @@ class AdminCompetitionService:
                     AdminCompetitionListItem(
                         **{
                             k: getattr(c, k)
-                            for k in (
-                                "id", "name", "description", "cover_url", "poster_url", "start_time",
-                                "end_time", "registration_deadline", "is_active",
-                                "show_schedule", "show_signup",
-                                "custom_fields", "attachments", "created_at",
-                            )
+                            for k in _ITEM_FIELDS
                         },
                         tracks=tracks,
                         total_enrolled=sum(t.enrolled for t in tracks),
+                        quiz_library_name=library_names.get(c.quiz_library_id),
                     )
                 )
             return PaginatedData(
@@ -149,6 +183,7 @@ class AdminCompetitionService:
     async def create(self, data: AdminCompetitionCreate) -> AdminCompetitionListItem:
         async with get_db_ctx() as db:
             async with db.begin():
+                await _validate_quiz_library(db, data.quiz_library_id)
                 competition = Competition(
                     name=data.name,
                     description=data.description,
@@ -166,6 +201,7 @@ class AdminCompetitionService:
                     attachments=[
                         a.model_dump() for a in data.attachments
                     ] if data.attachments is not None else [],
+                    quiz_library_id=data.quiz_library_id,
                 )
                 db.add(competition)
                 await db.flush()
@@ -183,15 +219,13 @@ class AdminCompetitionService:
             return AdminCompetitionListItem(
                 **{
                     k: getattr(competition, k)
-                    for k in (
-                        "id", "name", "description", "cover_url", "poster_url", "start_time",
-                        "end_time", "registration_deadline", "is_active",
-                        "show_schedule", "show_signup", "custom_fields",
-                        "attachments", "created_at",
-                    )
+                    for k in _ITEM_FIELDS
                 },
                 tracks=tracks,
                 total_enrolled=0,
+                quiz_library_name=await _quiz_library_name(
+                    db, competition.quiz_library_id
+                ),
             )
 
     async def update(
@@ -208,6 +242,8 @@ class AdminCompetitionService:
                 custom_fields_input = update_data.pop("custom_fields", None)
                 if custom_fields_input is not None:
                     competition.custom_fields = validate_custom_fields(custom_fields_input)
+                if "quiz_library_id" in update_data:
+                    await _validate_quiz_library(db, update_data["quiz_library_id"])
                 for key, value in update_data.items():
                     setattr(competition, key, value)
                 if tracks_input is not None:
@@ -251,15 +287,13 @@ class AdminCompetitionService:
             return AdminCompetitionListItem(
                 **{
                     k: getattr(competition, k)
-                    for k in (
-                        "id", "name", "description", "cover_url", "poster_url", "start_time",
-                        "end_time", "registration_deadline", "is_active",
-                        "show_schedule", "show_signup", "custom_fields",
-                        "attachments", "created_at",
-                    )
+                    for k in _ITEM_FIELDS
                 },
                 tracks=tracks,
                 total_enrolled=sum(t.enrolled for t in tracks),
+                quiz_library_name=await _quiz_library_name(
+                    db, competition.quiz_library_id
+                ),
             )
 
     async def delete(self, competition_id: int) -> None:

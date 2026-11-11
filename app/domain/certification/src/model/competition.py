@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -27,6 +27,10 @@ class Competition(Base, RecycleBinMixin, TimestampMixin):
     show_schedule: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     show_signup: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     custom_fields: Mapped[list | None] = mapped_column(JSONB, nullable=True, default=list, server_default="[]")
+    # 绑定的练习题库（quiz_library.id）：小程序赛事详情页据此透出「前往题库练习」入口
+    quiz_library_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("quiz_library.id", ondelete="RESTRICT"), index=True
+    )
 
 
 class CompetitionTrack(Base, TimestampMixin):

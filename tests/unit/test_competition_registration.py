@@ -150,6 +150,7 @@ def _make_competition(**overrides: Any) -> SimpleNamespace:
         is_active=True,
         show_schedule=True,
         show_signup=True,
+        quiz_library_id=None,
         custom_fields=[
             {"key": "student_id", "label": "学号", "type": "text",
              "required": True, "max_length": 20, "sort_order": 0},

@@ -44,6 +44,16 @@ class CompetitionListItem(BaseModel):
     custom_fields: list[dict] | None = None
 
 
+class CompetitionQuizLibraryBrief(BaseModel):
+    """赛事绑定的练习题库（详情页底部练习入口）"""
+
+    id: int
+    name: str
+    cover_url: str | None = None
+    access_mode: str = "free"
+    vendor_tag: str = "none"
+
+
 class CompetitionDetail(BaseModel):
     """赛事详情（小程序详情页专用，列表接口不携带附件页图）"""
 
@@ -62,6 +72,8 @@ class CompetitionDetail(BaseModel):
     custom_fields: list[dict] | None = None
     attachments: list[CompetitionAttachment] = Field(default_factory=list)
     tracks: list[CompetitionTrackBrief] = Field(default_factory=list)
+    # 绑定的练习题库（仅已发布且开启 V2 用户入口的题库透出）
+    quiz_library: CompetitionQuizLibraryBrief | None = None
     created_at: datetime
 
 

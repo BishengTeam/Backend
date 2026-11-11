@@ -93,6 +93,7 @@ def _make_competition(**overrides: Any) -> SimpleNamespace:
         is_active=True,
         show_schedule=True,
         show_signup=True,
+        quiz_library_id=None,
         custom_fields=[],
         created_at=now - timedelta(days=3),
     )
