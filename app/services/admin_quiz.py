@@ -4746,27 +4746,16 @@ class AdminQuizService:
         for _, item, target in valid:
             if not isinstance(target, int):
                 raise ValidationException("导入模块和知识点尚未确认")
-            # quiz023：_direct_module 行的 target 是模块 id，题目直挂模块无知识点。
-            if getattr(item, "_direct_module", False):
-                module = await db.get(QuizModule, target)
-                if (
-                    module is None
-                    or int(module.library_id) != int(current.library_id)
-                    or module.status == "deleted"
-                ):
-                    raise ValidationException("导入目标模块不可用")
-                knowledge_point_id: int | None = None
-                module_id = int(module.id)
-            else:
-                point = await db.get(QuizKnowledgePoint, target)
-                if (
-                    point is None
-                    or int(point.library_id) != int(current.library_id)
-                    or point.status == "deleted"
-                ):
-                    raise ValidationException("导入目标知识点不可用")
-                knowledge_point_id = int(point.id)
-                module_id = int(point.module_id)
+            point = await db.get(QuizKnowledgePoint, target)
+            if (
+                point is None
+                or int(point.library_id) != int(current.library_id)
+                or point.status == "deleted"
+            ):
+                raise ValidationException("导入目标知识点不可用")
+            knowledge_point_id = int(point.id)
+            # quiz023 起题目恒有 module_id（知识点所属模块），便于模块级直查。
+            module_id = int(point.module_id)
             normalized = normalize_question_payload(
                 question_type=item.question_type,
                 question_text=item.question_text,
@@ -4936,8 +4925,7 @@ class AdminQuizService:
             if item.status != "deleted"
         }
         created_count = 0
-        # quiz023：值可为 QuizModule（该路径题目直挂模块，无知识点）。
-        resolved: dict[tuple[str, ...], QuizModule | QuizKnowledgePoint] = {}
+        resolved: dict[tuple[str, ...], QuizKnowledgePoint] = {}
         for path in sorted(
             {tuple(item.category_path) for _, item, _ in valid}
         ):
@@ -4963,14 +4951,6 @@ class AdminQuizService:
                 module_by_name[path[0]] = module
             point = point_by_parent_name.get((int(module.id), path[1]))
             if point is None:
-                if any(
-                    i._default_point and tuple(i.category_path) == path
-                    for _, i, _ in valid
-                ):
-                    # quiz023：默认知识点兜底取消——无知识点路径的题直挂模块，
-                    # 不再生成「综合练习」式包装层。
-                    resolved[path] = module
-                    continue
                 created_count += 1
                 point = QuizKnowledgePoint(
                     library_id=current.library_id,
@@ -4997,15 +4977,10 @@ class AdminQuizService:
             resolved[path] = point
         if created_count > 500:
             raise ValidationException("单个导入任务最多新建 500 个模块或知识点")
-        final = []
-        for locator, item, _target in valid:
-            entity = resolved[tuple(item.category_path)]
-            if isinstance(entity, QuizModule):
-                # 直挂模块：target 暂存模块 id，由 _create_v2_import_questions 落库。
-                item._direct_module = True
-                final.append((locator, item, int(entity.id)))
-            else:
-                final.append((locator, item, int(entity.id)))
+        final = [
+            (locator, item, int(resolved[tuple(item.category_path)].id))
+            for locator, item, _target in valid
+        ]
         await self._create_v2_import_questions(db, current=current, valid=final)
         return final
 
