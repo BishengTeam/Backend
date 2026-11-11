@@ -51,7 +51,6 @@ async def context(monkeypatch):
 
 
 async def test_consultation_group_crud_visibility_and_version(context):
-    pytest.skip("v2: 咨询群 FK 链路需专项重写")
     plan, db_ctx = context
     service = ConsultationGroupService()
 
@@ -125,7 +124,6 @@ async def test_consultation_group_crud_visibility_and_version(context):
 
 
 async def test_consultation_group_lookup_uses_plan_id_not_row_id(context):
-    pytest.skip("v2: 咨询群 FK 链路需专项重写")
     """Regression: rows must be found by plan_id, not by the row's own id.
 
     Production incident: a config row created with id != plan_id made every
@@ -135,12 +133,9 @@ async def test_consultation_group_lookup_uses_plan_id_not_row_id(context):
     plan, db_ctx = context
     service = ConsultationGroupService()
     async with db_ctx() as db:
-        from app.domain.plan.src.index import PlanProduct as _CGPP
-        from sqlalchemy import select as _cgs
-        _cg_pp_id = await db.scalar(_cgs(_CGPP.id).where(_CGPP.plan_id == plan.id).limit(1))
         db.add(CertConsultationGroup(
             id=990001,
-            plan_product_id=_cg_pp_id or plan.id,
+            plan_id=plan.id,
             qrcode_url="/api/media/existing.png",
             version=1,
         ))
@@ -165,7 +160,7 @@ async def test_consultation_group_lookup_uses_plan_id_not_row_id(context):
         async with db_ctx() as db:
             row = await db.scalar(
                 select(CertConsultationGroup).where(
-                    CertConsultationGroup.plan_product_id == plan.id
+                    CertConsultationGroup.plan_id == plan.id
                 )
             )
             if row is not None:
