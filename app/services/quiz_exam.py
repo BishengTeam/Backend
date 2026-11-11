@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
@@ -640,32 +640,32 @@ class QuizExamService:
             is_v2 = bool(selections)
             if is_v2:
                 resolved_library = None
-                point_ids: list[int] = []
+                scope_filters = []
                 path_by_point: dict[int, list] = {}
+                path_by_module: dict[int, list] = {}
                 for scope_type, scope_id in selections:
-                    scope_library, scope_point_ids, scope_paths = await self.v2._resolve_scope(
-                        db, user_id, scope_type, scope_id
-                    )
+                    (
+                        scope_library,
+                        scope_filter,
+                        point_paths,
+                        module_paths,
+                    ) = await self.v2._resolve_scope(db, user_id, scope_type, scope_id)
                     if resolved_library is None:
                         resolved_library = scope_library
                     elif int(resolved_library.id) != int(scope_library.id):
                         raise ValidationException("智能组卷仅支持同一题库内的范围")
-                    for point_id in scope_point_ids:
-                        if point_id not in path_by_point:
-                            point_ids.append(point_id)
-                    for path_item in scope_paths:
-                        path_by_point.setdefault(
-                            int(path_item["point_id"]), path_item["path"]
-                        )
+                    scope_filters.append(scope_filter)
+                    path_by_point.update(point_paths)
+                    path_by_module.update(module_paths)
                 library = resolved_library
+                scope_condition = (
+                    or_(*scope_filters) if len(scope_filters) > 1 else scope_filters[0]
+                )
                 rows = list(
                     (
                         await db.execute(
                             practice_pool(select(QuizQuestion, QuizQuestionRevision))
-                            .where(
-                                QuizQuestion.library_id == library.id,
-                                QuizQuestion.knowledge_point_id.in_(point_ids),
-                            )
+                            .where(scope_condition)
                             .order_by(func.random())
                             .limit(data.question_count)
                         )
@@ -675,8 +675,7 @@ class QuizExamService:
                     (
                         await db.execute(
                             practice_pool(select(func.count(QuizQuestion.id))).where(
-                                QuizQuestion.library_id == library.id,
-                                QuizQuestion.knowledge_point_id.in_(point_ids),
+                                scope_condition
                             )
                         )
                     ).scalar()
@@ -750,11 +749,14 @@ class QuizExamService:
             await db.flush()
             for position, (question, revision) in enumerate(rows, start=1):
                 if revision is not None:
+                    category_path = (
+                        path_by_point[int(question.knowledge_point_id)]
+                        if question.knowledge_point_id is not None
+                        else path_by_module[int(question.module_id)]
+                    )
                     snapshot = {
                         "category_id": None,
-                        "category_path": path_by_point[
-                            int(question.knowledge_point_id)
-                        ],
+                        "category_path": category_path,
                         "question_type": revision.question_type,
                         "question_text": revision.question_text,
                         "options": dict(revision.options or {}),
@@ -909,11 +911,37 @@ class QuizExamService:
                 ]
                 for point, module in point_rows
             }
-            if any(
-                int(question.knowledge_point_id) not in path_by_point
-                for question, _revision in rows
-            ):
-                raise ValidationException("手动组卷包含不可用的知识点")
+            # quiz023：模块直挂题没有知识点，按模块落两层级联路径。
+            module_ids = sorted(
+                {
+                    int(question.module_id)
+                    for question, _revision in rows
+                    if question.module_id is not None
+                }
+            )
+            module_rows = list(
+                (
+                    await db.execute(
+                        select(QuizModule).where(QuizModule.id.in_(module_ids))
+                    )
+                ).scalars()
+            )
+            path_by_module = {
+                int(module.id): [
+                    {"id": int(library.id), "name": library.name, "kind": "library"},
+                    {"id": int(module.id), "name": module.name, "kind": "module"},
+                ]
+                for module in module_rows
+            }
+            question_paths: dict[int, list] = {}
+            for question, _revision in rows:
+                if question.knowledge_point_id is not None:
+                    path = path_by_point.get(int(question.knowledge_point_id))
+                else:
+                    path = path_by_module.get(int(question.module_id))
+                if path is None:
+                    raise ValidationException("手动组卷包含不可用的知识点")
+                question_paths[int(question.id)] = path
 
             exam = QuizExam(
                 user_id=user_id,
@@ -934,7 +962,7 @@ class QuizExamService:
                 question, revision = by_question[int(question_id)]
                 snapshot = {
                     "category_id": None,
-                    "category_path": path_by_point[int(question.knowledge_point_id)],
+                    "category_path": question_paths[int(question_id)],
                     "question_type": revision.question_type,
                     "question_text": revision.question_text,
                     "options": dict(revision.options or {}),

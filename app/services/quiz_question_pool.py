@@ -1,6 +1,10 @@
-"""Question eligibility shared by the V2 catalog, practice, and admin counts."""
+"""Question eligibility shared by the V2 catalog, practice, and admin counts.
 
-from sqlalchemy import and_, case, func, select
+quiz023 起：模块是练习资格的必经层（V2 题恒挂模块），知识点可选——
+直挂模块的题目无需知识点即可练习；知识点若存在，则必须可用且归属同一模块。
+"""
+
+from sqlalchemy import and_, case, func, or_, select
 
 from app.domain.community.src.index import (
     QuizKnowledgePoint,
@@ -12,12 +16,17 @@ from app.domain.community.src.index import (
 
 def usable_ownership():
     return and_(
-        QuizKnowledgePoint.library_id == QuizQuestion.library_id,
         QuizModule.library_id == QuizQuestion.library_id,
-        QuizKnowledgePoint.status == "active",
         QuizModule.status == "active",
-        QuizKnowledgePoint.system_kind == "none",
         QuizModule.system_kind == "none",
+        or_(
+            QuizQuestion.knowledge_point_id.is_(None),
+            and_(
+                QuizKnowledgePoint.library_id == QuizQuestion.library_id,
+                QuizKnowledgePoint.status == "active",
+                QuizKnowledgePoint.system_kind == "none",
+            ),
+        ),
     )
 
 
@@ -26,15 +35,19 @@ def with_question_relations(stmt, *, outer=False):
         stmt.select_from(QuizQuestion)
         .join_from(
             QuizQuestion,
-            QuizKnowledgePoint,
-            QuizKnowledgePoint.id == QuizQuestion.knowledge_point_id,
+            QuizModule,
+            QuizModule.id == QuizQuestion.module_id,
             isouter=outer,
         )
+        # 知识点恒为左联：模块直挂题没有知识点，内联会丢行。
         .join_from(
+            QuizQuestion,
             QuizKnowledgePoint,
-            QuizModule,
-            QuizModule.id == QuizKnowledgePoint.module_id,
-            isouter=outer,
+            and_(
+                QuizKnowledgePoint.id == QuizQuestion.knowledge_point_id,
+                QuizKnowledgePoint.module_id == QuizQuestion.module_id,
+            ),
+            isouter=True,
         )
         .join_from(
             QuizQuestion,

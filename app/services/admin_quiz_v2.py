@@ -13,7 +13,7 @@ import io
 import json
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.services.quiz_question_pool import practice_count_breakdown, practice_pool
@@ -230,6 +230,7 @@ class AdminQuizV2Service:
         return {
             "library_id": question.library_id,
             "knowledge_point_id": question.knowledge_point_id,
+            "module_id": question.module_id,
             "status": question.status,
             "question_type": question.question_type,
             "question_text": question.question_text,
@@ -287,6 +288,7 @@ class AdminQuizV2Service:
             category_id=question.category_id,
             library_id=question.library_id,
             knowledge_point_id=question.knowledge_point_id,
+            module_id=question.module_id,
             question_type=question.question_type,
             status=question.status,
             question_text=question.question_text,
@@ -337,6 +339,27 @@ class AdminQuizV2Service:
         if module.status != "active" or point.status != "active":
             raise BusinessException("题目只能写入有效模块下的有效知识点")
         return library, module, point
+
+    @staticmethod
+    async def _active_module(db, module_id: int) -> tuple[QuizLibrary, QuizModule]:
+        """模块直挂题（quiz023）的位置校验：模块必须有效且属于可用题库。"""
+
+        row = (
+            await db.execute(
+                select(QuizLibrary, QuizModule)
+                .join(QuizLibrary, QuizModule.library_id == QuizLibrary.id)
+                .where(QuizModule.id == module_id)
+                .with_for_update()
+            )
+        ).one_or_none()
+        if row is None:
+            raise NotFoundException("模块")
+        library, module = row
+        if library.status in {"archived", "deleted"}:
+            raise BusinessException("已归档或删除题库不可写入题目")
+        if module.status != "active":
+            raise BusinessException("题目只能写入有效模块")
+        return library, module
 
     @staticmethod
     def _normalize_question(
@@ -775,11 +798,11 @@ class AdminQuizV2Service:
                 await db.execute(
                     select(func.count())
                     .select_from(QuizQuestion)
-                    .join(
+                    .join(QuizModule, QuizModule.id == QuizQuestion.module_id)
+                    .outerjoin(
                         QuizKnowledgePoint,
                         QuizKnowledgePoint.id == QuizQuestion.knowledge_point_id,
                     )
-                    .join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
                     .where(
                         QuizQuestion.library_id == library.id,
                         QuizQuestion.status != "deleted",
@@ -875,7 +898,12 @@ class AdminQuizV2Service:
             if point_ids
             else {}
         )
-        module_ids = {int(item.module_id) for item in points.values()}
+        # quiz023：直挂题的模块位置直接取 question.module_id。
+        module_ids = {int(item.module_id) for item in points.values()} | {
+            int(item.module_id)
+            for item in questions
+            if item.module_id is not None
+        }
         modules = (
             {
                 int(item.id): item
@@ -892,17 +920,22 @@ class AdminQuizV2Service:
         def has_normal_location(question: QuizQuestion) -> bool:
             if question.status == "deleted" or int(question.library_id or 0) != int(library.id):
                 return True
-            point = points.get(int(question.knowledge_point_id or 0))
-            module = modules.get(int(point.module_id)) if point is not None else None
+            module = modules.get(int(question.module_id or 0))
+            if (
+                module is None
+                or module.status == "deleted"
+                or module.system_kind != "none"
+                or int(module.library_id) != int(library.id)
+            ):
+                return False
+            if question.knowledge_point_id is None:
+                return True
+            point = points.get(int(question.knowledge_point_id))
             return bool(
                 point is not None
-                and module is not None
                 and int(point.library_id) == int(library.id)
-                and int(module.library_id) == int(library.id)
                 and point.status != "deleted"
-                and module.status != "deleted"
                 and point.system_kind == "none"
-                and module.system_kind == "none"
             )
 
         resolved_count = 0
@@ -961,11 +994,11 @@ class AdminQuizV2Service:
                 await db.execute(
                     select(func.count())
                     .select_from(QuizQuestion)
-                    .join(
+                    .join(QuizModule, QuizModule.id == QuizQuestion.module_id)
+                    .outerjoin(
                         QuizKnowledgePoint,
                         QuizKnowledgePoint.id == QuizQuestion.knowledge_point_id,
                     )
-                    .join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
                     .where(
                         QuizQuestion.library_id == library.id,
                         QuizQuestion.status != "deleted",
@@ -1266,11 +1299,15 @@ class AdminQuizV2Service:
         module: QuizModule,
         points: list[QuizKnowledgePoint],
         question_counts: dict[int, int],
+        direct_question_counts: dict[int, int] | None = None,
     ) -> AdminQuizModuleResponse:
         point_responses = [
             cls._point_response(point, question_counts.get(int(point.id), 0))
             for point in points
         ]
+        direct_count = (
+            (direct_question_counts or {}).get(int(module.id), 0)
+        )
         return AdminQuizModuleResponse(
             id=int(module.id),
             library_id=int(module.library_id),
@@ -1282,7 +1319,10 @@ class AdminQuizV2Service:
             is_import_default=bool(module.is_import_default),
             sort_order=int(module.sort_order),
             lock_version=int(module.lock_version),
-            question_count=sum(item.question_count for item in point_responses),
+            # 模块总题量含直挂题（quiz023）。
+            question_count=sum(item.question_count for item in point_responses)
+            + direct_count,
+            direct_question_count=direct_count,
             knowledge_points=point_responses,
             disabled_at=module.disabled_at,
             deleted_at=module.deleted_at,
@@ -1333,6 +1373,22 @@ class AdminQuizV2Service:
                     )
                 ).all()
             }
+            # 直挂模块的题目（无知识点）单独计数，供树展示与模块题量。
+            direct_question_counts = {
+                int(module_id): int(count)
+                for module_id, count in (
+                    await db.execute(
+                        select(QuizQuestion.module_id, func.count())
+                        .where(
+                            QuizQuestion.library_id == library_id,
+                            QuizQuestion.module_id.is_not(None),
+                            QuizQuestion.knowledge_point_id.is_(None),
+                            QuizQuestion.status != "deleted",
+                        )
+                        .group_by(QuizQuestion.module_id)
+                    )
+                ).all()
+            }
             by_module: dict[int, list[QuizKnowledgePoint]] = {}
             for point in points:
                 by_module.setdefault(int(point.module_id), []).append(point)
@@ -1343,6 +1399,7 @@ class AdminQuizV2Service:
                         module,
                         by_module.get(int(module.id), []),
                         question_counts,
+                        direct_question_counts,
                     )
                     for module in modules
                 ],
@@ -1399,8 +1456,9 @@ class AdminQuizV2Service:
             if module is None:
                 raise NotFoundException("模块")
             self._check_version(module, data.lock_version)
-            if module.status == "deleted" or module.system_kind != "none":
-                raise BusinessException("系统或已删除模块不可编辑")
+            # quiz023：默认/迁移模块（system_kind 非 none）允许改名，删除闸门不变。
+            if module.status == "deleted":
+                raise BusinessException("已删除模块不可编辑")
             before = self._module_fields(module)
             fields = data.model_fields_set - {"lock_version"}
             if "name" in fields and data.name is not None:
@@ -1437,8 +1495,9 @@ class AdminQuizV2Service:
             if module is None:
                 raise NotFoundException("模块")
             self._check_version(module, data.lock_version)
-            if module.status == "deleted" or module.system_kind != "none":
-                raise BusinessException("系统或已删除模块不可变更状态")
+            # quiz023：默认/迁移模块允许停用/启用，删除闸门不变。
+            if module.status == "deleted":
+                raise BusinessException("已删除模块不可变更状态")
             target = str(data.status)
             if module.status == target:
                 raise BusinessException("模块已经是目标状态")
@@ -1600,8 +1659,9 @@ class AdminQuizV2Service:
             if point is None:
                 raise NotFoundException("知识点")
             self._check_version(point, data.lock_version)
-            if point.status == "deleted" or point.system_kind != "none":
-                raise BusinessException("系统或已删除知识点不可编辑")
+            # quiz023：默认/未分类知识点（system_kind 非 none）允许改名，删除闸门见 delete。
+            if point.status == "deleted":
+                raise BusinessException("已删除知识点不可编辑")
             before = self._point_fields(point)
             fields = data.model_fields_set - {"lock_version"}
             if "module_id" in fields and data.module_id is not None:
@@ -1660,8 +1720,9 @@ class AdminQuizV2Service:
             if point is None:
                 raise NotFoundException("知识点")
             self._check_version(point, data.lock_version)
-            if point.status == "deleted" or point.system_kind != "none":
-                raise BusinessException("系统或已删除知识点不可变更状态")
+            # quiz023：默认/未分类知识点允许停用/启用（删除前置），删除闸门见 delete。
+            if point.status == "deleted":
+                raise BusinessException("已删除知识点不可变更状态")
             target = str(data.status)
             if point.status == target:
                 raise BusinessException("知识点已经是目标状态")
@@ -1702,15 +1763,13 @@ class AdminQuizV2Service:
             return self._point_response(point, question_count)
 
     async def delete_knowledge_point(
-        self, point_id: int, data: AdminQuizVersionRequest, *, admin_id: int
+        self, point_id: int, data: AdminQuizKnowledgePointDelete, *, admin_id: int
     ) -> None:
         async with get_db_ctx() as db:
             point = await self._locked(db, QuizKnowledgePoint, point_id)
             if point is None:
                 raise NotFoundException("知识点")
             self._check_version(point, data.lock_version)
-            if point.system_kind != "none":
-                raise BusinessException("系统未分类知识点需先清空，由迁移清理流程移除")
             if point.status != "disabled":
                 raise BusinessException("只有已停用知识点可以删除")
             question_count = int(
@@ -1724,10 +1783,30 @@ class AdminQuizV2Service:
                 ).scalar()
                 or 0
             )
-            if question_count:
-                raise BusinessException(f"知识点仍有 {question_count} 道题，请先逐项删除")
-            before = self._point_fields(point)
+            if question_count and not data.move_questions_to_module:
+                raise BusinessException(
+                    f"知识点仍有 {question_count} 道题，请先逐项删除，或选择「题目下沉到模块」后删除"
+                )
             now = self._now()
+            if question_count:
+                # quiz023 下沉删除：题目保留在原模块改为直挂，不级联删题。
+                rows = (
+                    await db.execute(
+                        select(QuizQuestion).where(
+                            QuizQuestion.knowledge_point_id == point_id,
+                            QuizQuestion.status != "deleted",
+                        )
+                    )
+                ).scalars()
+                for question in rows:
+                    question.knowledge_point_id = None
+                    question.import_default_ownership = False
+                if point.status == "disabled":
+                    await self._ensure_published_library_remains_usable(
+                        db,
+                        int(point.library_id),
+                    )
+            before = self._point_fields(point)
             point.status = "deleted"
             point.deleted_at = now
             point.restore_until = now + _RESTORE_WINDOW
@@ -1790,20 +1869,37 @@ class AdminQuizV2Service:
             if query.import_default_ownership is not None:
                 stmt = stmt.where(QuizQuestion.import_default_ownership == query.import_default_ownership)
             if query.unavailable_ownership is not None:
-                available = select(QuizKnowledgePoint.id).join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id).where(
-                    QuizKnowledgePoint.library_id == QuizQuestion.library_id, QuizModule.library_id == QuizQuestion.library_id,
-                    QuizKnowledgePoint.status == "active", QuizModule.status == "active",
-                    QuizKnowledgePoint.system_kind == "none", QuizModule.system_kind == "none")
-                stmt = stmt.where(or_(QuizQuestion.knowledge_point_id.is_(None), ~QuizQuestion.knowledge_point_id.in_(available)) if query.unavailable_ownership else QuizQuestion.knowledge_point_id.in_(available))
+                # quiz023：模块直挂即可用（模块须可用），知识点可选须可用。
+                usable_modules = select(QuizModule.id).where(
+                    QuizModule.library_id == QuizQuestion.library_id,
+                    QuizModule.status == "active",
+                    QuizModule.system_kind == "none",
+                )
+                usable_points = select(QuizKnowledgePoint.id).join(
+                    QuizModule, QuizModule.id == QuizKnowledgePoint.module_id
+                ).where(
+                    QuizKnowledgePoint.library_id == QuizQuestion.library_id,
+                    QuizModule.library_id == QuizQuestion.library_id,
+                    QuizKnowledgePoint.status == "active",
+                    QuizModule.status == "active",
+                    QuizKnowledgePoint.system_kind == "none",
+                    QuizModule.system_kind == "none",
+                )
+                owned = and_(
+                    QuizQuestion.module_id.in_(usable_modules),
+                    or_(
+                        QuizQuestion.knowledge_point_id.is_(None),
+                        QuizQuestion.knowledge_point_id.in_(usable_points),
+                    ),
+                )
+                stmt = stmt.where(~owned if query.unavailable_ownership else owned)
             if query.question_id is not None:
                 stmt = stmt.where(QuizQuestion.id == query.question_id)
             if query.library_id is not None:
                 stmt = stmt.where(QuizQuestion.library_id == query.library_id)
             if query.module_id is not None:
-                point_ids = select(QuizKnowledgePoint.id).where(
-                    QuizKnowledgePoint.module_id == query.module_id
-                )
-                stmt = stmt.where(QuizQuestion.knowledge_point_id.in_(point_ids))
+                # quiz023：模块过滤直查题目 module_id（覆盖直挂题）。
+                stmt = stmt.where(QuizQuestion.module_id == query.module_id)
             if query.knowledge_point_id is not None:
                 stmt = stmt.where(
                     QuizQuestion.knowledge_point_id == query.knowledge_point_id
@@ -1854,23 +1950,19 @@ class AdminQuizV2Service:
             )
 
     async def export_questions_csv(self, query: AdminQuizQuestionQuery) -> str:
-        """按题库导出题目为导入兼容 CSV（路径固定为模块、知识点两级）。"""
+        """按题库导出题目为导入兼容 CSV（模块、知识点两级；直挂题知识点留空）。"""
         if query.library_id is None:
             raise ValidationException("导出必须指定题库")
         async with get_db_ctx() as db:
             stmt = select(QuizQuestion).where(
                 QuizQuestion.library_id == query.library_id,
-                QuizQuestion.knowledge_point_id.is_not(None),
             )
             if not query.include_deleted:
                 stmt = stmt.where(QuizQuestion.status != "deleted")
             if query.question_id is not None:
                 stmt = stmt.where(QuizQuestion.id == query.question_id)
             if query.module_id is not None:
-                point_ids = select(QuizKnowledgePoint.id).where(
-                    QuizKnowledgePoint.module_id == query.module_id
-                )
-                stmt = stmt.where(QuizQuestion.knowledge_point_id.in_(point_ids))
+                stmt = stmt.where(QuizQuestion.module_id == query.module_id)
             if query.knowledge_point_id is not None:
                 stmt = stmt.where(
                     QuizQuestion.knowledge_point_id == query.knowledge_point_id
@@ -1911,9 +2003,18 @@ class AdminQuizV2Service:
                 ).scalars()
             }
 
-        def path_cell(point_id: int | None) -> str:
-            point = points.get(point_id) if point_id is not None else None
-            module = modules.get(int(point.module_id)) if point is not None else None
+        def path_cell(question: QuizQuestion) -> str:
+            point = (
+                points.get(int(question.knowledge_point_id))
+                if question.knowledge_point_id is not None
+                else None
+            )
+            if point is not None:
+                module = modules.get(int(point.module_id))
+            elif question.module_id is not None:
+                module = modules.get(int(question.module_id))
+            else:
+                module = None
             path = [
                 module.name if module is not None else "",
                 point.name if point is not None else "",
@@ -1964,7 +2065,7 @@ class AdminQuizV2Service:
         for question in questions:
             option_images = question.option_image_urls or {}
             row = [
-                path_cell(question.knowledge_point_id),
+                path_cell(question),
                 question.question_type,
                 question.question_text,
                 options_cell(question.options),
@@ -1998,17 +2099,13 @@ class AdminQuizV2Service:
         async with get_db_ctx() as db:
             stmt = select(QuizQuestion).where(
                 QuizQuestion.library_id == query.library_id,
-                QuizQuestion.knowledge_point_id.is_not(None),
             )
             if not query.include_deleted:
                 stmt = stmt.where(QuizQuestion.status != "deleted")
             if query.question_id is not None:
                 stmt = stmt.where(QuizQuestion.id == query.question_id)
             if query.module_id is not None:
-                point_ids = select(QuizKnowledgePoint.id).where(
-                    QuizKnowledgePoint.module_id == query.module_id
-                )
-                stmt = stmt.where(QuizQuestion.knowledge_point_id.in_(point_ids))
+                stmt = stmt.where(QuizQuestion.module_id == query.module_id)
             if query.knowledge_point_id is not None:
                 stmt = stmt.where(
                     QuizQuestion.knowledge_point_id == query.knowledge_point_id
@@ -2050,8 +2147,17 @@ class AdminQuizV2Service:
             }
 
         def category_path(question: QuizQuestion) -> str:
-            point = points.get(question.knowledge_point_id)
-            module = modules.get(int(point.module_id)) if point is not None else None
+            point = (
+                points.get(int(question.knowledge_point_id))
+                if question.knowledge_point_id is not None
+                else None
+            )
+            if point is not None:
+                module = modules.get(int(point.module_id))
+            elif question.module_id is not None:
+                module = modules.get(int(question.module_id))
+            else:
+                module = None
             names = [
                 module.name if module is not None else "",
                 point.name if point is not None else "",
@@ -2160,8 +2266,8 @@ class AdminQuizV2Service:
     async def create_question(
         self, data: AdminQuizQuestionCreate, *, admin_id: int
     ) -> AdminQuizQuestionResponse:
-        if data.knowledge_point_id is None or data.category_id is not None:
-            raise ValidationException("V2 题目必须且只能选择知识点")
+        if data.category_id is not None:
+            raise ValidationException("V2 题目不能挂在旧分类上")
         normalized = self._normalize_question(
             question_type=data.question_type,
             question_text=data.question_text,
@@ -2175,13 +2281,24 @@ class AdminQuizV2Service:
             tags=data.tags,
         )
         async with get_db_ctx() as db:
-            library, _module, point = await self._active_point(
-                db, data.knowledge_point_id
-            )
+            # quiz023：知识点或模块二选一，直挂模块的题目无知识点。
+            if data.knowledge_point_id is not None:
+                library, _module, point = await self._active_point(
+                    db, data.knowledge_point_id
+                )
+                module_id = int(point.module_id)
+                knowledge_point_id: int | None = int(point.id)
+            else:
+                library, module = await self._active_module(
+                    db, int(data.module_id)
+                )
+                module_id = int(module.id)
+                knowledge_point_id = None
             # 同库题干唯一性已随 quiz017 降级索引废除（2026-10-24 产品决策：同题干多版本共存）。
             question = QuizQuestion(
                 library_id=library.id,
-                knowledge_point_id=point.id,
+                knowledge_point_id=knowledge_point_id,
+                module_id=module_id,
                 category_id=None,
                 question_type=normalized.question_type.value,
                 status="draft",
@@ -2247,16 +2364,27 @@ class AdminQuizV2Service:
             if data.category_id is not None:
                 raise ValidationException("V2 题目不能移动到旧分类")
             target_point = None
+            target_module_id: int | None = None
             if data.knowledge_point_id is not None:
                 target_library, _module, target_point = await self._active_point(
                     db, data.knowledge_point_id
                 )
                 if int(target_library.id) != int(question.library_id):
                     raise BusinessException("题目只能在同一题库内移动")
+                target_module_id = int(target_point.module_id)
+            elif data.module_id is not None:
+                # quiz023：移动到模块直挂（知识点置空）。
+                target_library, target_module = await self._active_module(
+                    db, int(data.module_id)
+                )
+                if int(target_library.id) != int(question.library_id):
+                    raise BusinessException("题目只能在同一题库内移动")
+                target_module_id = int(target_module.id)
             fields = data.model_fields_set - {
                 "lock_version",
                 "category_id",
                 "knowledge_point_id",
+                "module_id",
             }
             # score/tags are question-level metadata without revision snapshots:
             # editing them alone must not spawn a new revision.
@@ -2302,6 +2430,11 @@ class AdminQuizV2Service:
             before = self._question_fields(question)
             if target_point is not None:
                 question.knowledge_point_id = target_point.id
+                question.module_id = int(target_point.module_id)
+                question.import_default_ownership = False
+            elif target_module_id is not None:
+                question.knowledge_point_id = None
+                question.module_id = target_module_id
                 question.import_default_ownership = False
             if "score" in meta_fields:
                 question.score = normalized.score
@@ -2375,13 +2508,19 @@ class AdminQuizV2Service:
                 raise BusinessException("已删除题目不可发布版本")
             if question.pending_revision_id is None:
                 raise BusinessException("题目没有待发布版本")
-            library, _module, point = await self._active_point(
-                db, int(question.knowledge_point_id)
-            )
-            if int(library.id) != int(question.library_id) or int(point.id) != int(
-                question.knowledge_point_id
-            ):
-                raise BusinessException("题目归属无效")
+            # quiz023：位置校验按题目归属二选一（知识点 / 模块直挂）。
+            if question.knowledge_point_id is not None:
+                library, _module, point = await self._active_point(
+                    db, int(question.knowledge_point_id)
+                )
+                if int(library.id) != int(question.library_id) or int(point.id) != int(
+                    question.knowledge_point_id
+                ):
+                    raise BusinessException("题目归属无效")
+            else:
+                library, _module = await self._active_module(
+                    db, int(question.module_id)
+                )
             pending = await db.get(
                 QuizQuestionRevision, question.pending_revision_id
             )
@@ -2461,7 +2600,11 @@ class AdminQuizV2Service:
             elif action == "restore":
                 if question.status != "disabled":
                     raise BusinessException("仅已停用题目可以恢复")
-                await self._active_point(db, int(question.knowledge_point_id))
+                # quiz023：按题目归属二选一校验位置。
+                if question.knowledge_point_id is not None:
+                    await self._active_point(db, int(question.knowledge_point_id))
+                else:
+                    await self._active_module(db, int(question.module_id))
                 question.status = "published"
                 # Preserve disabled_at as historical metadata, matching the
                 # database lifecycle rule and legacy behavior.
@@ -2540,12 +2683,23 @@ class AdminQuizV2Service:
                         errors.append(AdminQuizBatchItemError(question_id=item.question_id, code=40200, field="pending_revision_id", message="题目没有待发布版本"))
                         continue
                     try:
-                        library, _module, point = await self._active_point(db, int(question.knowledge_point_id))
+                        # quiz023：按题目归属二选一校验位置（知识点 / 模块直挂）。
+                        if question.knowledge_point_id is not None:
+                            library, _module, point = await self._active_point(db, int(question.knowledge_point_id))
+                            location_field = "knowledge_point_id"
+                            location_valid = (
+                                int(library.id) == int(question.library_id)
+                                and int(point.id) == int(question.knowledge_point_id)
+                            )
+                        else:
+                            library, _module = await self._active_module(db, int(question.module_id))
+                            location_field = "module_id"
+                            location_valid = int(library.id) == int(question.library_id)
                     except (BusinessException, NotFoundException) as exc:
                         errors.append(AdminQuizBatchItemError(question_id=item.question_id, code=40200, field="knowledge_point_id", message=exc.message))
                         continue
-                    if int(library.id) != int(question.library_id) or int(point.id) != int(question.knowledge_point_id):
-                        errors.append(AdminQuizBatchItemError(question_id=item.question_id, code=40200, field="knowledge_point_id", message="题目归属无效"))
+                    if not location_valid:
+                        errors.append(AdminQuizBatchItemError(question_id=item.question_id, code=40200, field=location_field, message="题目归属无效"))
                         continue
                     pending = await db.get(QuizQuestionRevision, question.pending_revision_id)
                     if pending is None or pending.status != "draft":
@@ -2750,15 +2904,12 @@ class AdminQuizV2Service:
                 module = await self._locked(db, QuizModule, module_id)
                 if module is None:
                     raise NotFoundException("模块")
+                # quiz023：直查题目 module_id，覆盖模块直挂题。
                 rows = (
                     await db.execute(
                         select(QuizQuestion)
                         .where(
-                            QuizQuestion.knowledge_point_id.in_(
-                                select(QuizKnowledgePoint.id).where(
-                                    QuizKnowledgePoint.module_id == module_id
-                                )
-                            ),
+                            QuizQuestion.module_id == module_id,
                             QuizQuestion.status != "deleted",
                         )
                         .with_for_update()

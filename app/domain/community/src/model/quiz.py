@@ -387,8 +387,8 @@ class QuizQuestion(Base, _QuizTimestampMixin):
         ),
         CheckConstraint("lock_version >= 1", name="ck_quiz_question_lock_version"),
         CheckConstraint(
-            "(library_id IS NULL AND knowledge_point_id IS NULL) OR "
-            "(library_id IS NOT NULL AND knowledge_point_id IS NOT NULL)",
+            "(library_id IS NULL AND knowledge_point_id IS NULL AND module_id IS NULL) OR "
+            "(library_id IS NOT NULL AND module_id IS NOT NULL)",
             name="ck_quiz_question_v2_assignment",
         ),
         UniqueConstraint(
@@ -400,6 +400,12 @@ class QuizQuestion(Base, _QuizTimestampMixin):
             ["knowledge_point_id", "library_id"],
             ["quiz_knowledge_point.id", "quiz_knowledge_point.library_id"],
             name="fk_quiz_question_knowledge_point_library",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["module_id", "library_id"],
+            ["quiz_module.id", "quiz_module.library_id"],
+            name="fk_quiz_question_module_library",
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
@@ -439,6 +445,13 @@ class QuizQuestion(Base, _QuizTimestampMixin):
             "status",
             "id",
         ),
+        Index(
+            "ix_quiz_question_module_pool",
+            "library_id",
+            "module_id",
+            "status",
+            "id",
+        ),
     )
 
     import_default_ownership: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
@@ -446,6 +459,10 @@ class QuizQuestion(Base, _QuizTimestampMixin):
         BigInteger, ForeignKey("quiz_library.id", ondelete="RESTRICT")
     )
     knowledge_point_id: Mapped[int | None] = mapped_column(
+        BigInteger
+    )
+    # quiz023：模块直挂；V2 题（library_id 非空）恒非空，知识点可选。
+    module_id: Mapped[int | None] = mapped_column(
         BigInteger
     )
     category_id: Mapped[int | None] = mapped_column(
@@ -618,7 +635,9 @@ class QuizActivationCode(Base, _QuizTimestampMixin):
         Integer, ForeignKey("user.id", ondelete="SET NULL")
     )
     redeemed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 效期天数：兑换后权益持续 N 天，NULL = 激活后永久（quiz022）。
+    validity_days: Mapped[int | None] = mapped_column(Integer)
+    is_custom: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     created_by: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("admin_user.id", ondelete="SET NULL")
     )

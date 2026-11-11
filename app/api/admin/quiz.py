@@ -68,6 +68,7 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizActivationDisplayStatus,
     AdminQuizContentTreeResponse,
     AdminQuizKnowledgePointCreate,
+    AdminQuizKnowledgePointDelete,
     AdminQuizKnowledgePointResponse,
     AdminQuizKnowledgePointUpdate,
     AdminQuizLibraryAccessModeConvert,
@@ -243,17 +244,18 @@ async def convert_library_access_mode(
     summary="批量生成题库激活码",
     description="""
 管理后台 **题库管理** 使用：为激活码模式题库批量生成激活码（一次 ≤500），
-返回展示格式（XXXX-XXXX-XXXX-XXXX）码列表，可直接复制或走导出 CSV 交发放方。
+支持自定义码内容（custom_code，仍一码一用）；效期自兑换时起算（quiz022）。
+返回码列表，可直接复制或走导出 CSV 交发放方。
 """,
 )
 async def create_activation_codes(
     body: AdminQuizActivationCodeCreate,
     library_id: int = Path(..., ge=1),
-    code_schema: Literal["2"] | None = Query(None),
+    code_schema: Literal["3"] | None = Query(None),
     admin=Depends(require_permission("quiz_library_manage")),
 ) -> APIResponse[AdminQuizActivationCodeGenerateResponse]:
     return success(data=await QuizActivationCodeService().generate_codes(
-        library_id, body, admin_id=admin.id, schema_v2=code_schema == "2"
+        library_id, body, admin_id=admin.id, schema_version=3 if code_schema == "3" else 0
     ))
 
 
@@ -265,14 +267,14 @@ async def create_activation_codes(
 )
 async def list_activation_codes(
     library_id: int = Path(..., ge=1),
-    code_schema: Literal["2"] | None = Query(None),
+    code_schema: Literal["2", "3"] | None = Query(None),
     status: AdminQuizActivationDisplayStatus | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     _admin=Depends(require_permission("quiz:list")),
 ) -> APIResponse[PaginatedData[AdminQuizActivationCodeItem]]:
-    if status == "expired" and code_schema != "2":
-        raise ValidationException("请使用新版页面筛选已过期激活码")
+    if status == "expired":
+        raise ValidationException("已过期状态已取消，请刷新后台页面")
     query = _validated_query(
         AdminQuizActivationCodeQuery,
         {
@@ -282,7 +284,8 @@ async def list_activation_codes(
             "page_size": page_size,
         },
     )
-    return success(data=await QuizActivationCodeService().list_codes(query, schema_v2=code_schema == "2"))
+    schema_version = 3 if code_schema == "3" else 2
+    return success(data=await QuizActivationCodeService().list_codes(query, schema_version=schema_version))
 
 
 @router.get(
@@ -293,15 +296,14 @@ async def list_activation_codes(
 )
 async def export_activation_codes(
     library_id: int = Path(..., ge=1),
-    code_schema: Literal["2"] | None = Query(None),
+    code_schema: Literal["2", "3"] | None = Query(None),
     status: AdminQuizActivationDisplayStatus | None = Query(None),
     _admin=Depends(require_permission("quiz:list")),
 ) -> Response:
-    schema_v2 = code_schema == "2"
-    if status == "expired" and not schema_v2:
-        raise ValidationException("请使用新版页面导出已过期激活码")
-    rows = await QuizActivationCodeService().export_rows(library_id, status, schema_v2=schema_v2)
-    headers = [*ACTIVATION_CODE_CSV_HEADERS, "兑换截止时间"] if schema_v2 else ACTIVATION_CODE_CSV_HEADERS
+    if status == "expired":
+        raise ValidationException("已过期状态已取消，请刷新后台页面")
+    rows = await QuizActivationCodeService().export_rows(library_id, status)
+    headers = [*ACTIVATION_CODE_CSV_HEADERS, "激活后有效天数"]
     output = export_csv(headers, rows)
     return PlainTextResponse(
         content=output.getvalue(),
@@ -517,7 +519,7 @@ async def set_knowledge_point_status(
     summary="逻辑删除知识点",
 )
 async def delete_knowledge_point(
-    body: AdminQuizVersionRequest,
+    body: AdminQuizKnowledgePointDelete,
     point_id: int = Path(..., ge=1),
     admin=Depends(require_permission("quiz_content_edit")),
 ) -> APIResponse[None]:

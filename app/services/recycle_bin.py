@@ -220,6 +220,9 @@ async def _quiz_point_has_refs(db, point_id: int) -> bool:
 
 
 async def _quiz_module_has_refs(db, module_id: int) -> bool:
+    # quiz023：模块直挂题（无知识点）也算模块引用，不可物理删。
+    if await _has_reference(db, QuizQuestion, QuizQuestion.module_id, module_id):
+        return True
     return await _has_reference(db, QuizKnowledgePoint, QuizKnowledgePoint.module_id, module_id)
 
 

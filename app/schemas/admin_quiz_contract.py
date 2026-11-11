@@ -142,6 +142,8 @@ class AdminQuizQuestionQuery(QuizContractModel):
 class AdminQuizQuestionCreate(QuizContractModel):
     category_id: int | None = Field(default=None, ge=1)
     knowledge_point_id: int | None = Field(default=None, ge=1)
+    # quiz023：模块直挂——module_id 与 knowledge_point_id 二选一（与 category_id 互斥）。
+    module_id: int | None = Field(default=None, ge=1)
     question_type: QuizQuestionType
     question_text: str = Field(min_length=1, max_length=1024)
     options: dict[str, str] | None = None
@@ -154,8 +156,16 @@ class AdminQuizQuestionCreate(QuizContractModel):
 
     @model_validator(mode="after")
     def normalize_draft(self) -> "AdminQuizQuestionCreate":
-        if (self.category_id is None) == (self.knowledge_point_id is None):
-            raise ValueError("exactly one of category_id or knowledge_point_id is required")
+        if (
+            sum(
+                value is not None
+                for value in (self.category_id, self.knowledge_point_id, self.module_id)
+            )
+            != 1
+        ):
+            raise ValueError(
+                "exactly one of category_id, knowledge_point_id or module_id is required"
+            )
         normalized = normalize_question_payload(
             question_type=self.question_type,
             question_text=self.question_text,
@@ -184,6 +194,8 @@ class AdminQuizQuestionUpdate(QuizContractModel):
     lock_version: int = Field(ge=1)
     category_id: int | None = Field(default=None, ge=1)
     knowledge_point_id: int | None = Field(default=None, ge=1)
+    # quiz023：模块直挂——改归属时 module_id 与 knowledge_point_id 二选一。
+    module_id: int | None = Field(default=None, ge=1)
     question_type: QuizQuestionType | None = None
     question_text: str | None = Field(default=None, min_length=1, max_length=1024)
     options: dict[str, str] | None = None
@@ -198,8 +210,16 @@ class AdminQuizQuestionUpdate(QuizContractModel):
     def require_change(self) -> "AdminQuizQuestionUpdate":
         if not (self.model_fields_set - {"lock_version"}):
             raise ValueError("at least one question field must be supplied")
-        if self.category_id is not None and self.knowledge_point_id is not None:
-            raise ValueError("category_id and knowledge_point_id cannot be supplied together")
+        if (
+            sum(
+                value is not None
+                for value in (self.category_id, self.knowledge_point_id, self.module_id)
+            )
+            > 1
+        ):
+            raise ValueError(
+                "category_id, knowledge_point_id and module_id are mutually exclusive"
+            )
         return self
 
 
@@ -209,6 +229,7 @@ class AdminQuizQuestionResponse(QuizContractModel):
     category_id: int | None = None
     library_id: int | None = None
     knowledge_point_id: int | None = None
+    module_id: int | None = None
     question_type: QuizQuestionType
     status: QuizQuestionStatus
     question_text: str
@@ -369,8 +390,9 @@ class AdminQuizQuestionStatsListItem(QuizContractModel):
     library_name: str
     module_id: int
     module_name: str
-    knowledge_point_id: int
-    knowledge_point_name: str
+    # quiz023：模块直挂题无知识点。
+    knowledge_point_id: int | None = None
+    knowledge_point_name: str | None = None
     question_type: QuizQuestionType
     status: QuizQuestionStatus
     practice_first_attempts: int = Field(ge=0)
@@ -984,6 +1006,8 @@ class AdminQuizModuleResponse(QuizContractModel):
     sort_order: int
     lock_version: int = Field(ge=1)
     question_count: int = Field(default=0, ge=0)
+    # quiz023：模块直挂题（无知识点）数量。
+    direct_question_count: int = Field(default=0, ge=0)
     knowledge_points: list[AdminQuizKnowledgePointResponse] = Field(default_factory=list)
     disabled_at: datetime | None = None
     deleted_at: datetime | None = None
@@ -1026,18 +1050,19 @@ AdminQuizActivationDisplayStatus = Literal["issued", "redeemed", "revoked", "exp
 
 
 class AdminQuizActivationCodeCreate(QuizContractModel):
-    """批量生成题库激活码（quiz018）。"""
+    """批量生成题库激活码（quiz018）；quiz022 起效期自兑换时起算，支持自定义码内容。"""
 
     quantity: int = Field(default=1, ge=1, le=500)
     note: str | None = Field(default=None, max_length=512)
 
     validity_days: Literal[1, 3, 7, 30, 60, 90, 365] | None = None
+    custom_code: str | None = Field(default=None, max_length=64)
 
     @field_validator("validity_days", mode="before")
     @classmethod
     def validate_validity_days(cls, value):
         if value is not None and type(value) is not int:
-            raise ValueError("兑换有效期必须使用指定的天数档位")
+            raise ValueError("激活后有效期必须使用指定的天数档位")
         return value
 
 
@@ -1050,24 +1075,47 @@ class AdminQuizActivationCodeQuery(QuizContractModel):
 
 class AdminQuizActivationCodeItem(QuizContractModel):
     id: int
-    code: str  # 展示格式 XXXX-XXXX-XXXX-XXXX
+    code: str  # 随机码展示格式 XXXX-XXXX-XXXX-XXXX；自定义码原样展示
     status: AdminQuizActivationDisplayStatus
     note: str | None = None
     redeemed_by: int | None = None
     redeemed_by_phone: str | None = None
     redeemed_at: datetime | None = None
     created_at: datetime
+    # quiz022：expires_at 仅为 code_schema=2 旧版兼容占位（恒 None），
+    # validity_days 为 code_schema=3 新形状字段（NULL = 激活后永久）。
     expires_at: datetime | None = None
+    validity_days: int | None = None
 
 
 class AdminQuizActivationCodeGenerateResponse(QuizContractModel):
     codes: list[str] = Field(min_length=1)
     expires_at: datetime | None = None
+    validity_days: int | None = None
 
 
 class AdminQuizOwnershipMoveRequest(AdminQuizBatchRequest):
     library_id: int = Field(ge=1)
-    knowledge_point_id: int = Field(ge=1)
+    # quiz023：下沉/移动支持仅模块目标，与知识点目标二选一。
+    knowledge_point_id: int | None = Field(default=None, ge=1)
+    module_id: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_target(self) -> "AdminQuizOwnershipMoveRequest":
+        if (
+            self.knowledge_point_id is None
+        ) == (
+            self.module_id is None
+        ):
+            raise ValueError("exactly one of knowledge_point_id or module_id is required")
+        return self
+
+
+class AdminQuizKnowledgePointDelete(QuizContractModel):
+    """删除知识点（quiz023）：题目可下沉为模块直挂后再删。"""
+
+    lock_version: int = Field(ge=1)
+    move_questions_to_module: bool = False
 
 
 class AdminQuizPublicationRequest(QuizContractModel):

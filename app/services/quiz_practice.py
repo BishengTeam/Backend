@@ -2110,9 +2110,8 @@ class QuizPracticeService:
                 scope_exists = await db.scalar(select(QuizModule.id).join(QuizLibrary, QuizLibrary.id == QuizModule.library_id).where(
                     QuizModule.id == query.scope_id, QuizModule.status == "active", QuizModule.system_kind == "none", visible_library,
                 ))
-                question_scope = QuizQuestion.knowledge_point_id.in_(select(QuizKnowledgePoint.id).where(
-                    QuizKnowledgePoint.module_id == query.scope_id, QuizKnowledgePoint.status == "active", QuizKnowledgePoint.system_kind == "none",
-                ))
+                # quiz023：模块 scope 直接按题目 module_id 过滤，覆盖模块直挂题。
+                question_scope = QuizQuestion.module_id == query.scope_id
             else:
                 scope_exists = await db.scalar(select(QuizKnowledgePoint.id).join(QuizLibrary, QuizLibrary.id == QuizKnowledgePoint.library_id).where(
                     QuizKnowledgePoint.id == query.scope_id, QuizKnowledgePoint.status == "active", QuizKnowledgePoint.system_kind == "none", visible_library,

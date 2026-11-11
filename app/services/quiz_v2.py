@@ -64,15 +64,12 @@ class QuizV2Service:
         async with get_db_ctx() as db:
             await self._require_user(db, user_id)
             scope_id = int(query.scope_id) if query.scope_type != "library" else int(library_id)
-            library, point_ids, _paths = await self._resolve_scope(
+            library, scope_filter, _point_paths, _module_paths = await self._resolve_scope(
                 db, user_id, query.scope_type, scope_id
             )
             if library.id != library_id:
                 raise self._not_found()
-            base = practice_pool(select(QuizQuestion, QuizQuestionRevision)).where(
-                QuizQuestion.library_id == library_id,
-                QuizQuestion.knowledge_point_id.in_(point_ids),
-            )
+            base = practice_pool(select(QuizQuestion, QuizQuestionRevision)).where(scope_filter)
             if query.question_type is not None:
                 base = base.where(QuizQuestionRevision.question_type == query.question_type)
             total = int(
@@ -242,7 +239,7 @@ class QuizV2Service:
                 practice_pool(select(
                     QuizQuestion.library_id,
                     func.count(QuizQuestion.id),
-                    func.count(func.distinct(QuizKnowledgePoint.module_id)),
+                    func.count(func.distinct(QuizQuestion.module_id)),
                 ))
                 .where(QuizQuestion.library_id.in_(library_ids))
                 .group_by(QuizQuestion.library_id)
@@ -614,6 +611,17 @@ class QuizV2Service:
                         .group_by(QuizQuestion.knowledge_point_id)
                     )
                 ).all()
+                if point_id is not None
+            }
+            module_counts = {
+                int(module_id): int(count)
+                for module_id, count in (
+                    await db.execute(
+                        practice_pool(select(QuizQuestion.module_id, func.count()))
+                        .where(QuizQuestion.library_id == library_id)
+                        .group_by(QuizQuestion.module_id)
+                    )
+                ).all()
             }
             by_module: dict[int, list[QuizKnowledgePointCatalogItem]] = {}
             for point in points:
@@ -637,16 +645,18 @@ class QuizV2Service:
                     name=module.name,
                     description=module.description,
                     sort_order=int(module.sort_order),
-                    question_count=sum(
-                        item.question_count
-                        for item in by_module.get(int(module.id), [])
-                    ),
+                    # 模块题量含直挂题（无知识点），与练习池口径一致。
+                    question_count=module_counts.get(int(module.id), 0),
                     knowledge_points=by_module.get(int(module.id), []),
                 )
                 for module in modules
-                if by_module.get(int(module.id))
+                if module_counts.get(int(module.id), 0) > 0
             ]
-            question_count = sum(item.question_count for item in module_items)
+            question_count = sum(module_counts.values())
+            if len(module_items) == 1 and len(module_items[0].knowledge_points) <= 1:
+                # 单链塌缩（quiz023）：唯一模块且至多一个知识点时目录不再重复三层，
+                # 学生按库直选即可练习（scope=library 已覆盖直挂题）。
+                module_items = []
             if schema_v2:
                 summary = self._summary(
                     library, question_count, len(module_items)
@@ -707,6 +717,7 @@ class QuizV2Service:
             rows = (
                 await db.execute(
                     practice_pool(select(
+                        QuizQuestion.module_id,
                         QuizQuestion.knowledge_point_id,
                         func.count(func.distinct(QuizQuestion.id)),
                         func.count(func.distinct(QuizQuestion.id)).filter(
@@ -743,11 +754,14 @@ class QuizV2Service:
                         ),
                     )
                     .where(QuizQuestion.library_id == library_id)
-                    .group_by(QuizQuestion.knowledge_point_id)
+                    .group_by(QuizQuestion.module_id, QuizQuestion.knowledge_point_id)
                 )
             ).all()
             by_point: dict[int, tuple[int, int, int, int, int]] = {}
+            # 模块直挂题（无知识点）的进度按模块单独聚合。
+            by_module_direct: dict[int, tuple[int, int, int, int, int]] = {}
             for (
+                module_id,
                 point_id,
                 total,
                 answered,
@@ -755,13 +769,17 @@ class QuizV2Service:
                 first_correct,
                 latest_correct,
             ) in rows:
-                by_point[int(point_id)] = (
+                stats = (
                     int(total),
                     int(answered),
                     int(first_attempts),
                     int(first_correct),
                     int(latest_correct),
                 )
+                if point_id is None:
+                    by_module_direct[int(module_id)] = stats
+                else:
+                    by_point[int(point_id)] = stats
 
             def summarize(
                 totals: list[tuple[int, int, int, int, int]],
@@ -825,7 +843,8 @@ class QuizV2Service:
             module_items: list[QuizModuleProgress] = []
             for module in modules:
                 module_points = points_by_module.get(int(module.id), [])
-                if not module_points:
+                direct_stats = by_module_direct.get(int(module.id))
+                if not module_points and direct_stats is None:
                     continue
                 point_items: list[QuizKnowledgePointProgress] = []
                 for point in module_points:
@@ -841,8 +860,11 @@ class QuizV2Service:
                             latest_accuracy=point_latest,
                         )
                     )
+                module_stats = [by_point[int(point.id)] for point in module_points]
+                if direct_stats is not None:
+                    module_stats.append(direct_stats)
                 module_total, module_answered, module_accuracy, module_latest = summarize(
-                    [by_point[int(point.id)] for point in module_points]
+                    module_stats
                 )
                 module_items.append(
                     QuizModuleProgress(
@@ -855,8 +877,11 @@ class QuizV2Service:
                     )
                 )
             library_total, library_answered, library_accuracy, library_latest = summarize(
-                [by_point[int(point.id)] for point in points if int(point.id) in by_point]
+                [*by_point.values(), *by_module_direct.values()]
             )
+            if len(module_items) == 1 and len(module_items[0].knowledge_points) <= 1:
+                # 与目录同规则的单链塌缩：进度视图也不再重复中间层。
+                module_items = []
             return QuizLibraryProgressResponse(
                 library_id=library_id,
                 question_count=library_total,
@@ -868,93 +893,138 @@ class QuizV2Service:
 
     async def _resolve_scope(
         self, db, user_id: int, scope_type: str, scope_id: int
-    ) -> tuple[QuizLibrary, list[int], list[dict[str, object]]]:
+    ) -> tuple[
+        QuizLibrary,
+        object,
+        dict[int, list[dict[str, object]]],
+        dict[int, list[dict[str, object]]],
+    ]:
+        """解析练习范围为单列题目过滤条件（quiz023：支持模块直挂题）。
+
+        返回 ``(library, scope_filter, point_paths, module_paths)``：
+        ``scope_filter`` 已含库约束，可直接 ``.where()`` 进练习池查询；
+        ``point_paths``/``module_paths`` 供会话快照渲染面包屑
+        （直挂题取 module_paths，两层级联 [库, 模块]）。
+        """
+
+        def _path(
+            library: QuizLibrary,
+            module: QuizModule,
+            point: QuizKnowledgePoint | None = None,
+        ) -> list[dict[str, object]]:
+            nodes: list[dict[str, object]] = [
+                {"id": int(library.id), "name": library.name, "kind": "library"},
+                {"id": int(module.id), "name": module.name, "kind": "module"},
+            ]
+            if point is not None:
+                nodes.append(
+                    {
+                        "id": int(point.id),
+                        "name": point.name,
+                        "kind": "knowledge_point",
+                    }
+                )
+            return nodes
+
+        usable_point_conditions = (
+            QuizKnowledgePoint.status == "active",
+            QuizKnowledgePoint.system_kind == "none",
+            QuizModule.status == "active",
+            QuizModule.system_kind == "none",
+            QuizKnowledgePoint.library_id == QuizModule.library_id,
+        )
         if scope_type == "library":
             library_id = scope_id
-            point_rows = (
-                await db.execute(
-                    select(QuizKnowledgePoint, QuizModule)
-                    .join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
-                    .where(
-                        QuizKnowledgePoint.library_id == library_id,
-                        QuizKnowledgePoint.library_id == QuizModule.library_id,
-                        QuizKnowledgePoint.status == "active",
-                        QuizKnowledgePoint.system_kind == "none",
-                        QuizModule.status == "active",
-                        QuizModule.system_kind == "none",
+            point_rows = list(
+                (
+                    await db.execute(
+                        select(QuizKnowledgePoint, QuizModule)
+                        .join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
+                        .where(
+                            QuizKnowledgePoint.library_id == library_id,
+                            *usable_point_conditions,
+                        )
+                        .order_by(
+                            QuizModule.sort_order.asc(),
+                            QuizModule.id.asc(),
+                            QuizKnowledgePoint.sort_order.asc(),
+                            QuizKnowledgePoint.id.asc(),
+                        )
                     )
-                    .order_by(
-                        QuizModule.sort_order.asc(),
-                        QuizModule.id.asc(),
-                        QuizKnowledgePoint.sort_order.asc(),
-                        QuizKnowledgePoint.id.asc(),
+                ).all()
+            )
+            module_rows = list(
+                (
+                    await db.execute(
+                        select(QuizModule)
+                        .where(
+                            QuizModule.library_id == library_id,
+                            QuizModule.status == "active",
+                            QuizModule.system_kind == "none",
+                        )
+                        .order_by(QuizModule.sort_order.asc(), QuizModule.id.asc())
                     )
-                )
-            ).all()
-            path_prefix: list[dict[str, object]] = []
+                ).scalars()
+            )
+            scope_filter = QuizQuestion.library_id == library_id
         elif scope_type == "module":
             module = await db.get(QuizModule, scope_id)
             if module is None or module.status != "active":
                 raise self._not_found()
             library_id = int(module.library_id)
-            point_rows = (
-                await db.execute(
-                    select(QuizKnowledgePoint, QuizModule)
-                    .join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
-                    .where(
-                        QuizKnowledgePoint.module_id == scope_id,
-                        QuizKnowledgePoint.library_id == QuizModule.library_id,
-                        QuizKnowledgePoint.status == "active",
-                        QuizKnowledgePoint.system_kind == "none",
-                        QuizModule.status == "active",
-                        QuizModule.system_kind == "none",
+            point_rows = list(
+                (
+                    await db.execute(
+                        select(QuizKnowledgePoint, QuizModule)
+                        .join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
+                        .where(
+                            QuizKnowledgePoint.module_id == scope_id,
+                            *usable_point_conditions,
+                        )
+                        .order_by(
+                            QuizKnowledgePoint.sort_order.asc(),
+                            QuizKnowledgePoint.id.asc(),
+                        )
                     )
-                    .order_by(
-                        QuizKnowledgePoint.sort_order.asc(),
-                        QuizKnowledgePoint.id.asc(),
-                    )
-                )
-            ).all()
-            path_prefix = []
+                ).all()
+            )
+            module_rows = [module]
+            scope_filter = and_(
+                QuizQuestion.library_id == library_id,
+                QuizQuestion.module_id == scope_id,
+            )
         elif scope_type == "knowledge_point":
-            point_rows = (
-                await db.execute(
-                    select(QuizKnowledgePoint, QuizModule)
-                    .join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
-                    .where(
-                        QuizKnowledgePoint.id == scope_id,
-                        QuizKnowledgePoint.library_id == QuizModule.library_id,
-                        QuizKnowledgePoint.status == "active",
-                        QuizKnowledgePoint.system_kind == "none",
-                        QuizModule.status == "active",
-                        QuizModule.system_kind == "none",
+            point_rows = list(
+                (
+                    await db.execute(
+                        select(QuizKnowledgePoint, QuizModule)
+                        .join(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
+                        .where(
+                            QuizKnowledgePoint.id == scope_id,
+                            *usable_point_conditions,
+                        )
                     )
-                )
-            ).all()
+                ).all()
+            )
             if not point_rows:
                 raise self._not_found()
             library_id = int(point_rows[0][0].library_id)
-            path_prefix = []
+            module_rows = [point_rows[0][1]]
+            scope_filter = and_(
+                QuizQuestion.library_id == library_id,
+                QuizQuestion.knowledge_point_id == scope_id,
+            )
         else:
             raise BusinessException("不支持的练习范围")
         library = await self._require_accessible_library(db, user_id, library_id)
-        point_ids = [int(point.id) for point, _module in point_rows]
-        point_paths = [
-            {
-                "point_id": int(point.id),
-                "path": [
-                    {"id": int(library.id), "name": library.name, "kind": "library"},
-                    {"id": int(module.id), "name": module.name, "kind": "module"},
-                    {
-                        "id": int(point.id),
-                        "name": point.name,
-                        "kind": "knowledge_point",
-                    },
-                ],
-            }
+        point_paths = {
+            int(point.id): _path(library, module, point)
             for point, module in point_rows
-        ]
-        return library, point_ids, point_paths
+        }
+        module_paths = {
+            int(module.id): _path(library, module) for module in module_rows
+        }
+        return library, scope_filter, point_paths, module_paths
 
     @staticmethod
     async def _unfinished_session(
@@ -987,13 +1057,10 @@ class QuizV2Service:
             raise BusinessException("V2 练习模式必须为 full 或 wrong_only")
         async with get_db_ctx() as db:
             await self._require_user(db, user_id)
-            library, point_ids, _paths = await self._resolve_scope(
+            library, scope_filter, _point_paths, _module_paths = await self._resolve_scope(
                 db, user_id, scope_type, scope_id
             )
-            stmt = practice_pool(select(func.count())).where(
-                QuizQuestion.library_id == library.id,
-                QuizQuestion.knowledge_point_id.in_(point_ids),
-            )
+            stmt = practice_pool(select(func.count())).where(scope_filter)
             if mode == "wrong_only":
                 stmt = stmt.join(
                     QuizWrongItem, QuizWrongItem.question_id == QuizQuestion.id
@@ -1134,14 +1201,10 @@ class QuizV2Service:
                 existing.lock_version += 1
                 await db.flush()
 
-            library, point_ids, paths = await self._resolve_scope(
+            library, scope_filter, point_paths, module_paths = await self._resolve_scope(
                 db, user_id, scope_type, scope_id
             )
-            path_by_point = {item["point_id"]: item["path"] for item in paths}
-            stmt = practice_pool(select(QuizQuestion, QuizQuestionRevision)).where(
-                QuizQuestion.library_id == library.id,
-                QuizQuestion.knowledge_point_id.in_(point_ids),
-            )
+            stmt = practice_pool(select(QuizQuestion, QuizQuestionRevision)).where(scope_filter)
             if mode == "wrong_only":
                 stmt = stmt.join(
                     QuizWrongItem, QuizWrongItem.question_id == QuizQuestion.id
@@ -1179,6 +1242,11 @@ class QuizV2Service:
             db.add(session)
             await db.flush()
             for position, (question, revision) in enumerate(rows, start=1):
+                category_path = (
+                    point_paths[int(question.knowledge_point_id)]
+                    if question.knowledge_point_id is not None
+                    else module_paths[int(question.module_id)]
+                )
                 db.add(
                     QuizPracticeSessionQuestion(
                         session_id=session.id,
@@ -1186,7 +1254,7 @@ class QuizV2Service:
                         question_revision_id=revision.id,
                         position=position,
                         category_id=None,
-                        category_path=path_by_point[int(question.knowledge_point_id)],
+                        category_path=category_path,
                         question_type=revision.question_type,
                         question_text=revision.question_text,
                         options=dict(revision.options or {}),
@@ -1297,6 +1365,7 @@ class QuizV2Service:
                     knowledge_point_id=(
                         int(snapshot.category_path[-1]["id"])
                         if snapshot.category_path
+                        and snapshot.category_path[-1].get("kind") == "knowledge_point"
                         else None
                     ),
                     question_revision_id=snapshot.question_revision_id,

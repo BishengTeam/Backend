@@ -54,7 +54,7 @@ class QuizPublicationService:
                 raise NotFoundException("题库")
             rows = list((await session.execute(select(QuizQuestion, QuizKnowledgePoint, QuizModule)
                 .outerjoin(QuizKnowledgePoint, QuizKnowledgePoint.id == QuizQuestion.knowledge_point_id)
-                .outerjoin(QuizModule, QuizModule.id == QuizKnowledgePoint.module_id)
+                .join(QuizModule, QuizModule.id == QuizQuestion.module_id)
                 .where(QuizQuestion.library_id == library_id, QuizQuestion.status != "deleted")
                 .order_by(QuizQuestion.id))).all())
             counts = {key: 0 for key in ("published", "draft", "abnormal", "default_ownership", "unavailable_ownership", "system_ownership")}
@@ -66,8 +66,12 @@ class QuizPublicationService:
                 QuizQuestionRevision.id.in_([q.pending_revision_id for q, _, _ in rows if q.pending_revision_id])))).scalars()}
             candidates = []
             for q, point, module in rows:
-                usable = bool(point and module and point.library_id == library_id and module.library_id == library_id
-                    and point.status == module.status == "active" and point.system_kind == module.system_kind == "none")
+                # quiz023：模块直挂即可用；知识点存在时须可用且归属一致。
+                usable = bool(module and module.library_id == library_id
+                    and module.status == "active" and module.system_kind == "none"
+                    and (q.knowledge_point_id is None or (
+                        point and point.library_id == library_id
+                        and point.status == "active" and point.system_kind == "none")))
                 if q.pending_revision_id: counts["draft"] += 1
                 if q.import_default_ownership: counts["default_ownership"] += 1
                 if (point and point.system_kind != "none") or (module and module.system_kind != "none"):
@@ -105,11 +109,22 @@ class QuizPublicationService:
             # Library first: serialize moves/imports and protect the effective pool.
             library = await svc._locked(db, QuizLibrary, data.library_id)
             if not library: raise NotFoundException("题库")
-            target = await svc._locked(db, QuizKnowledgePoint, data.knowledge_point_id)
-            if not target: raise NotFoundException("知识点")
-            await svc._locked(db, QuizModule, target.module_id)
-            _, _, point = await svc._active_point(db, data.knowledge_point_id)
-            if point.library_id != library.id: raise BusinessException("只能调整到同一题库内的知识点")
+            # quiz023：目标可为知识点或模块（直挂），二选一。
+            if data.knowledge_point_id is not None:
+                target = await svc._locked(db, QuizKnowledgePoint, data.knowledge_point_id)
+                if not target: raise NotFoundException("知识点")
+                await svc._locked(db, QuizModule, target.module_id)
+                _, _, point = await svc._active_point(db, data.knowledge_point_id)
+                if point.library_id != library.id: raise BusinessException("只能调整到同一题库内的知识点")
+                target_point_id: int | None = point.id
+                target_module_id = int(point.module_id)
+            else:
+                module = await svc._locked(db, QuizModule, data.module_id)
+                if not module: raise NotFoundException("模块")
+                _, module = await svc._active_module(db, data.module_id)
+                if module.library_id != library.id: raise BusinessException("只能调整到同一题库内的模块")
+                target_point_id = None
+                target_module_id = int(module.id)
             questions = []
             for item in sorted(data.items, key=lambda x: x.question_id):
                 q = await svc._locked(db, QuizQuestion, item.question_id)
@@ -119,7 +134,8 @@ class QuizPublicationService:
                 questions.append(q)
             for q in questions:
                 before = svc._question_fields(q)
-                q.knowledge_point_id = point.id
+                q.knowledge_point_id = target_point_id
+                q.module_id = target_module_id
                 q.import_default_ownership = False
                 q.lock_version += 1
                 q.updated_by = admin_id
