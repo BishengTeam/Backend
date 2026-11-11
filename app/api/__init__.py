@@ -20,6 +20,7 @@ from app.api.offline_payment import router as offline_payment_router
 from app.api.orders import router as orders_router
 from app.api.nisp import router as nisp_router
 from app.api.plans import router as plans_router
+from app.api.exam_booking import router as exam_booking_router
 from app.api.payment import router as payment_router
 from app.api.points import router as points_router
 from app.api.points_mall import router as points_mall_router
@@ -49,6 +50,7 @@ router.include_router(classroom_router)
 router.include_router(h3c_router)
 router.include_router(h3c_order_router)
 router.include_router(plans_router)
+router.include_router(exam_booking_router, prefix="/api")
 router.include_router(offline_payment_router)
 router.include_router(orders_router)
 router.include_router(nisp_router)
