@@ -87,7 +87,7 @@ async def lifecycle_context(monkeypatch):
                 {"prefix_like": prefix_like},
             )
             await db.execute(
-                text("DELETE FROM plan WHERE id IN (SELECT pp.plan_id FROM plan_product pp JOIN cert_product cp ON cp.id=pp.product_id WHERE cp.code LIKE :prefix_like)"),
+                text("DELETE FROM plan WHERE product_type LIKE :prefix_like"),
                 {"prefix_like": prefix_like},
             )
             await db.execute(
@@ -140,31 +140,23 @@ async def _seed_lifecycle_orders(context):
         db.add(user)
         await db.flush()
 
-        from uuid import uuid4 as _u
-        from app.models.cert_product import CertProduct as _ICP
-        from app.domain.plan.src.index import PlanProduct as _IPP
-        _uniq = _u().hex[:8]
-        _c1 = _ICP(type="generic", code=paid_product, name=paid_product, chinese_name=paid_product, is_active=True)
-        _c2 = _ICP(type="generic", code=expired_product, name=expired_product, chinese_name=expired_product, is_active=True)
-        db.add_all([_c1, _c2]); await db.flush()
         paid_plan = Plan(
-            name=f"Paid Plan {_uniq}",
+            product_type=paid_product,
+            name="Paid Plan",
             apply_start=now - timedelta(days=1),
             apply_end=now + timedelta(days=1),
+            capacity=1,
             status="published",
         )
         expired_plan = Plan(
-            name=f"Expired Order Plan {_uniq}",
+            product_type=expired_product,
+            name="Expired Order Plan",
             apply_start=now - timedelta(days=1),
             apply_end=now + timedelta(days=1),
+            capacity=1,
             status="published",
         )
         db.add_all([paid_plan, expired_plan])
-        await db.flush()
-        db.add_all([
-            _IPP(plan_id=paid_plan.id, product_id=_c1.id, capacity=1),
-            _IPP(plan_id=expired_plan.id, product_id=_c2.id, capacity=1),
-        ])
         await db.flush()
 
         paid_inventory = Inventory(
@@ -286,7 +278,7 @@ async def test_payment_refund_and_expiration_restore_inventory(lifecycle_context
     assert duplicate_payment.processed is False
 
     paid_plan = await lifecycle_context.plan_service.get_plan(data.paid_plan_id)
-    assert paid_plan.total_enrolled == 1
+    assert paid_plan.enrolled == 1
 
     first_refund = await lifecycle_context.admin_service.refund_order(data.paid_order_id)
     duplicate_refund = await lifecycle_context.admin_service.refund_order(data.paid_order_id)
@@ -294,7 +286,7 @@ async def test_payment_refund_and_expiration_restore_inventory(lifecycle_context
     assert duplicate_refund.status == "refunded"
 
     paid_plan = await lifecycle_context.plan_service.get_plan(data.paid_plan_id)
-    assert paid_plan.total_enrolled == 0
+    assert paid_plan.enrolled == 0
 
     with pytest.raises(BusinessException, match="订单已过期"):
         await lifecycle_context.payment_service.create_prepay(
@@ -302,7 +294,7 @@ async def test_payment_refund_and_expiration_restore_inventory(lifecycle_context
             PaymentPrepayRequest(order_id=data.expired_order_id),
         )
     expired_plan = await lifecycle_context.plan_service.get_plan(data.expired_plan_id)
-    assert expired_plan.total_enrolled == 0
+    assert expired_plan.enrolled == 0
 
     async with lifecycle_context.factory() as db:
         paid_inventory = await db.get(Inventory, data.paid_inventory_id)
