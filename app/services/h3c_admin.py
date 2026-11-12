@@ -58,19 +58,42 @@ class H3cAdminBatchService:
         admin_id: int,
         data: H3cExamBatchCreate,
     ) -> H3cExamBatchResponse:
+        from app.domain.h3c.src.index import H3cBatchProduct
         async with get_db_ctx() as db:
             async with db.begin():
-                product = await db.scalar(
-                    select(CertProduct)
-                    .where(
-                        CertProduct.code == data.certification_code,
-                        CertProduct.type == "h3c",
-                        CertProduct.is_active.is_(True),
+                # v2 多产品：支持 product_ids 列表 或 certification_code（兼容旧调用）
+                if data.product_ids:
+                    # 多产品模式：校验所有产品可用且价格已配
+                    products = []
+                    for pid in data.product_ids:
+                        prod = await db.scalar(
+                            select(CertProduct)
+                            .where(CertProduct.id == pid, CertProduct.type == "h3c",
+                                   CertProduct.is_active.is_(True))
+                            .with_for_update()
+                        )
+                        if prod is None:
+                            raise BusinessException(f"H3C 产品 ID {pid} 不存在或未上架")
+                        if prod.coupon_price_cents is None or prod.student_price_cents is None or prod.full_price_cents is None:
+                            raise BusinessException(f"H3C 产品「{prod.name}」尚未配置三档价格，请先在产品设置中维护")
+                        products.append(prod)
+                    product = products[0]  # 兼容后续单产品逻辑
+                    product_type = None  # 多产品批次无 product_type
+                else:
+                    # 兼容旧调用：单产品模式
+                    product = await db.scalar(
+                        select(CertProduct)
+                        .where(
+                            CertProduct.code == data.certification_code,
+                            CertProduct.type == "h3c",
+                            CertProduct.is_active.is_(True),
+                        )
+                        .with_for_update()
                     )
-                    .with_for_update()
-                )
-                if product is None:
-                    raise BusinessException("认证产品不存在或未上架，请先在认证管理中上架")
+                    if product is None:
+                        raise BusinessException("认证产品不存在或未上架，请先在认证管理中上架")
+                    products = [product]
+                    product_type = product.code
                 duplicate = await db.scalar(
                     select(Plan.id).where(
                         Plan.product_type == product.code,
@@ -80,13 +103,13 @@ class H3cAdminBatchService:
                 if duplicate is not None:
                     raise ConflictException("同名 H3C 考试批次已存在")
                 plan = Plan(
-                    product_type=product.code,
+                    product_type=product_type,
                     name=data.name,
                     apply_start=data.apply_start,
                     apply_end=data.apply_end,
                     exam_date=data.exam_date,
                     capacity=data.capacity,
-                    price_cents=data.full_price_cents,
+                    price_cents=products[0].full_price_cents if products else 0,
                     exam_location=data.exam_location,
                     description=data.description,
                     sort_order=data.sort_order,
@@ -105,15 +128,23 @@ class H3cAdminBatchService:
                     training_address=data.training_address,
                     training_start=data.training_start,
                     training_end=data.training_end,
-                    coupon_price_cents=data.coupon_price_cents,
-                    student_price_cents=data.student_price_cents,
-                    full_price_cents=data.full_price_cents,
+                    coupon_price_cents=products[0].coupon_price_cents if data.product_ids else (data.coupon_price_cents or products[0].coupon_price_cents or 0),
+                    student_price_cents=products[0].student_price_cents if data.product_ids else (data.student_price_cents or products[0].student_price_cents or 0),
+                    full_price_cents=products[0].full_price_cents if products else 0,
                     payment_timeout_minutes=data.payment_timeout_minutes,
                     resubmission_window_hours=data.resubmission_window_hours,
                     max_resubmissions=data.max_resubmissions,
                     max_material_bytes=data.max_material_bytes,
                 )
                 db.add(batch)
+                await db.flush()
+
+                # v2 多产品：创建批次×产品关联
+                for prod in products:
+                    db.add(H3cBatchProduct(
+                        batch_id=batch.id,
+                        product_id=prod.id,
+                    ))
                 await db.flush()
                 inventory = Inventory(
                     inventory_type="h3c_batch",

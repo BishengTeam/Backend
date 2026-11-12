@@ -21,3 +21,8 @@ class CertProduct(Base, TimestampMixin):
     home_cover_url: Mapped[str | None] = mapped_column(String(512))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # H3C 多产品改造：产品级三档价（H3C 必填，其他产品可 NULL）
+    coupon_price_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    student_price_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    full_price_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+

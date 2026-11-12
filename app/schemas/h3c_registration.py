@@ -113,7 +113,14 @@ class H3cExamBatchBase(BaseModel):
 
 
 class H3cExamBatchCreate(H3cExamBatchBase):
-    pass
+    """v2 多产品：product_ids 替代 certification_code，价格从 cert_product 读。"""
+    # 多产品改造：可选传 product_ids 列表（跨产品批次）
+    # 兼容旧调用：仍可传 certification_code（单产品批次）
+    product_ids: list[int] | None = Field(None, description="多产品批次：cert_product ID 列表")
+    # 价格字段变为可选（多产品模式下不传，从产品读）
+    coupon_price_cents: int | None = Field(None, ge=0)
+    student_price_cents: int | None = Field(None, ge=0)
+    full_price_cents: int | None = Field(None, ge=0)
 
 
 class H3cExamBatchUpdate(BaseModel):

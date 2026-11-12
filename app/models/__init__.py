@@ -80,6 +80,7 @@ from app.domain.renshe.src.index import (
     RensheReviewCorrection,
 )
 from app.domain.h3c.src.index import (
+    H3cBatchProduct,
     H3cExamBatch,
     H3cExportItem,
     H3cExportJob,
@@ -216,6 +217,7 @@ __all__ = [
     "RensheReview",
     "RensheReviewCorrection",
     "H3cExamBatch",
+    "H3cBatchProduct",
     "H3cExportItem",
     "H3cExportJob",
     "H3cMaterial",

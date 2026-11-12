@@ -1,3 +1,4 @@
+from app.domain.h3c.src.model.h3c_batch_product import H3cBatchProduct
 from app.domain.h3c.src.model.h3c import (
     H3cExamBatch,
     H3cExportItem,
@@ -17,6 +18,7 @@ from app.domain.h3c.src.model.h3c import (
 
 __all__ = [
     "H3cExamBatch",
+    "H3cBatchProduct",
     "H3cExportItem",
     "H3cExportJob",
     "H3cMaterial",
