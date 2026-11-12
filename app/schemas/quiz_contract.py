@@ -115,8 +115,9 @@ class QuizLibraryCatalogItem(QuizContractModel):
     cover_url: str
     access_mode: Literal["free", "course_entitlement", "paid", "activation_code"]
     vendor_tag: Literal["h3c", "nisp", "sangfor", "none"]
-    question_count: int = Field(ge=1)
-    module_count: int = Field(ge=1)
+    # quiz023 起题库允许 0 模块/0 题（直挂模块可后补、新建未填充库照常出目录）。
+    question_count: int = Field(ge=0)
+    module_count: int = Field(ge=0)
 
 
 class QuizLibraryCatalogItemV2(QuizLibraryCatalogItem):
