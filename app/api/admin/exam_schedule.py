@@ -109,7 +109,8 @@ async def get_schedule(
     s = await db.get(ExamSchedule, schedule_id)
     if s is None:
         raise NotFoundException("考场计划")
-        subjects = (await db.execute(
+
+    subjects = (await db.execute(
         select(ExamScheduleSubject, CertProduct)
         .join(CertProduct, CertProduct.id == ExamScheduleSubject.product_id)
         .where(ExamScheduleSubject.schedule_id == schedule_id)
@@ -270,6 +271,8 @@ async def set_seat_quotas(
     s = await db.get(ExamSchedule, schedule_id)
     if s is None:
         raise NotFoundException("考场计划")
+    if s.status != "draft":
+        raise BusinessException("仅草稿可设置配额")
     for item in data.quotas:
         existing = await db.scalar(
             select(ExamSeatQuota).where(

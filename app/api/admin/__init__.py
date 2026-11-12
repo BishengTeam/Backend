@@ -89,5 +89,5 @@ router.include_router(training_router)
 router.include_router(upload_router)
 router.include_router(videoweb_router)
 
-router.include_router(exam_schedule_router, prefix="/admin")
-router.include_router(holiday_router, prefix="/admin")
+router.include_router(exam_schedule_router)
+router.include_router(holiday_router)
