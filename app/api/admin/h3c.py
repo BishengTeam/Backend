@@ -48,8 +48,6 @@ async def create_batch(
     body: H3cExamBatchCreate,
     admin=Depends(require_permission("h3c:batch_manage")),
 ) -> APIResponse[H3cExamBatchResponse]:
-    from fastapi import HTTPException
-    raise HTTPException(status_code=410, detail="此接口已废弃，请使用全局批次管理：POST /admin/certifications/batches")
     return success(
         data=await H3cAdminBatchService().create_batch(admin_id=admin.id, data=body)
     )

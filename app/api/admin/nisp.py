@@ -58,8 +58,6 @@ async def create_full_batch(
     body: NispExamBatchFullCreate,
     _admin=Depends(require_permission("nisp:batch_manage")),
 ) -> APIResponse[NispExamBatchResponse]:
-    from fastapi import HTTPException
-    raise HTTPException(status_code=410, detail="此接口已废弃，请使用全局批次管理：POST /admin/certifications/batches")
     """Create a NISP Plan and level-specific batch in one transaction."""
     return success(data=await _service.create_full_batch(body))
 
@@ -69,8 +67,6 @@ async def create_batch(
     body: NispExamBatchCreate,
     _admin=Depends(require_permission("nisp:batch_manage")),
 ) -> APIResponse[NispExamBatchResponse]:
-    from fastapi import HTTPException
-    raise HTTPException(status_code=410, detail="此接口已废弃，请使用全局批次管理：POST /admin/certifications/batches")
     return success(data=await _service.create_batch(body))
 
 
