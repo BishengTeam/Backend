@@ -12,7 +12,7 @@ from uuid import uuid4
 from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
-from app.domain.plan.src.index import Plan, PlanProduct
+from app.domain.plan.src.index import Plan
 from app.domain.order.src.index import Order
 from app.domain.renshe.src.index import (
     EDUCATION_LEVELS,
@@ -285,36 +285,24 @@ def name_review_notices(name: str, config: dict) -> list[str]:
 
 
 def batch_configuration(plan: Plan) -> dict:
-    # v2: 优先从 PlanProduct 读配置快照
-    _pp = None
-    products = getattr(plan, "products", None)
-    if products:
-        for _p in products:
-            if getattr(_p, "renshe_config", None):
-                _pp = _p
-                break
-    if _pp is not None:
-        # 用 PlanProduct 的字段做校验
-        plan = _pp
     config = getattr(plan, "renshe_config", None)
     if config:
         errors = configuration_errors(config)
         if errors:
             raise ConflictException("批次配置不可用：" + "；".join(errors))
-        _mismatch = []
-        if plan.exam_type not in config["exam_types"]:
-            _mismatch.append(f"exam_type: plan={plan.exam_type} config={config['exam_types']}")
-        if plan.application_type not in config["application_types"]:
-            _mismatch.append(f"application_type: plan={plan.application_type} config={config['application_types']}")
-        for key in ("occupation_name", "occupation_code", "skill_level"):
-            if getattr(plan, key) != config.get(key):
-                _mismatch.append(f"{key}: plan={getattr(plan, key)} config={config.get(key)}")
-        if _mismatch:
+        if (
+            plan.exam_type not in config["exam_types"]
+            or plan.application_type not in config["application_types"]
+            or any(
+                getattr(plan, key) != config[key]
+                for key in ("occupation_name", "occupation_code", "skill_level")
+            )
+        ):
             raise ConflictException("批次报考属性与固定配置不一致")
         return config
     # Only confirmed legacy combinations can use compatibility reads.
     if (
-        getattr(plan, "product_type", "") == "RS-ZY"
+        plan.product_type == "RS-ZY"
         and all(
             getattr(plan, key, None)
             for key in (
@@ -341,64 +329,19 @@ def batch_configuration(plan: Plan) -> dict:
 async def is_renshe_plan(db, plan: Plan | None) -> bool:
     if plan is None:
         return False
-    # v2: 单查询获取 PlanProduct（通过 join CertProduct 限定 renshe 类型）
-    plan_product = await db.scalar(
-        select(PlanProduct)
-        .join(CertProduct, PlanProduct.product_id == CertProduct.id)
-        .where(PlanProduct.plan_id == plan.id, CertProduct.type == "renshe")
-        .limit(1)
-    )
-    if plan_product is not None:
-        return True
-    # v2: 无关联时用 compat 属性（支持 mock 测试和历史数据）
-    _pt = getattr(plan, "product_type", "")
-    return bool(_pt) and _pt.startswith("RS-")
-
-
-async def get_renshe_plan_product(db, plan: Plan) -> PlanProduct | None:
-    """按 type=="renshe" 过滤获取 PlanProduct（跨厂商批次安全）。
-
-    替代 plan.renshe_config_id 等兼容属性——那些经 _first_pp 取首个产品，
-    跨厂商批次首位非人社时返回错误值。
-    """
-    try:
-        return await db.scalar(
-            select(PlanProduct)
-            .join(CertProduct, PlanProduct.product_id == CertProduct.id)
-            .where(PlanProduct.plan_id == plan.id, CertProduct.type == "renshe")
-            .limit(1)
-        )
-    except (AttributeError, TypeError):
-        # Mock DB（单测）不支持 scalar — 回退到兼容层
-        products = getattr(plan, "products", None) or []
-        for pp in products:
-            if getattr(pp, "renshe_config_id", None) is not None:
-                return pp
-        return products[0] if products else None
-
-
-async def _legacy_is_renshe_check(db, plan):
-    """Legacy two-query version kept for reference; not called in normal flow."""
     product = await db.scalar(
-        select(CertProduct)
-        .join(PlanProduct, PlanProduct.product_id == CertProduct.id)
-        .where(PlanProduct.plan_id == plan.id)
-        .limit(1)
+        select(CertProduct).where(CertProduct.code == plan.product_type)
     )
     if product is not None and product.type == "renshe":
-        plan_product = await db.scalar(
-            select(PlanProduct).where(PlanProduct.plan_id == plan.id).limit(1)
-        )
-        # 防御性类型检查（mock 测试中 db.scalar 可能返回错误类型）
-        config_id = getattr(plan_product, "renshe_config_id", None) if plan_product else None
+        config_id = getattr(plan, "renshe_config_id", None)
         if config_id is not None:
             version = await db.get(RensheProjectConfig, config_id)
             if (
                 version is None
                 or version.product_id != product.id
+                or version.config != plan.renshe_config
             ):
-                # v2: renshe_config JSON 从 RensheProjectConfig 关联获取，不再存 plan
-                pass
+                raise ConflictException("批次配置版本与项目关联不一致")
         return True
     return product is None and plan.product_type == "RS-ZY"
 
@@ -476,7 +419,7 @@ class RensheProjectService:
             batch_count=await db.scalar(
                 select(func.count())
                 .select_from(Plan)
-                .where(Plan.id.in_(select(PlanProduct.plan_id).where(PlanProduct.product_id.in_(select(CertProduct.id).where(CertProduct.code == product.code)))))
+                .where(Plan.product_type == product.code)
             )
             or 0,
             review_notices=name_review_notices(product.chinese_name, config),
@@ -617,7 +560,7 @@ class RensheProjectService:
                 for key in ("occupation_name", "occupation_code", "skill_level", "export_skill_level", "application_types")
             ):
                 used = await db.scalar(
-                    select(Plan.id).where(Plan.id.in_(select(PlanProduct.plan_id).where(PlanProduct.product_id.in_(select(CertProduct.id).where(CertProduct.code == product.code))))).limit(1)
+                    select(Plan.id).where(Plan.product_type == product.code).limit(1)
                 )
                 if used is not None:
                     raise BusinessException(
@@ -674,7 +617,7 @@ class RensheProjectService:
             if (
                 product.renshe_status != "draft"
                 or await db.scalar(
-                    select(Plan.id).where(Plan.id.in_(select(PlanProduct.plan_id).where(PlanProduct.product_id.in_(select(CertProduct.id).where(CertProduct.code == product.code))))).limit(1)
+                    select(Plan.id).where(Plan.product_type == product.code).limit(1)
                 )
                 or await db.scalar(
                     select(Order.id).where(Order.product_type == product.code).limit(1)

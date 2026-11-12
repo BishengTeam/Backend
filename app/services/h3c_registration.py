@@ -35,7 +35,7 @@ from app.domain.order.src.index import (
     lock_inventory,
     release_inventory_lock,
 )
-from app.domain.plan.src.index import Plan, PlanProduct
+from app.domain.plan.src.index import Plan
 from app.domain.user.src.index import User, UserRealname
 from app.integrations.wechat import WechatClient
 from app.port.config import settings
@@ -149,8 +149,8 @@ class H3cRegistrationService:
             rows = (
                 await db.execute(
                     select(H3cExamBatch, Plan, CertProduct)
-                    .join(PlanProduct, PlanProduct.id == H3cExamBatch.plan_product_id) .join(Plan, Plan.id == PlanProduct.plan_id)
-                    .join(CertProduct, CertProduct.id == PlanProduct.product_id)
+                    .join(Plan, Plan.id == H3cExamBatch.plan_id)
+                    .join(CertProduct, CertProduct.code == Plan.product_type)
                     .where(
                         Plan.status.in_(H3C_VISIBLE_PLAN_STATUSES),
                         CertProduct.type == "h3c",
@@ -174,7 +174,6 @@ class H3cRegistrationService:
                     H3cUserExamBatchResponse(
                         id=batch.id,
                         plan_id=plan.id,
-                        plan_product_id=batch.plan_product_id,
                         certification_code=product.code,
                         name=plan.name,
                         status=plan.status,
@@ -256,13 +255,10 @@ class H3cRegistrationService:
                     message="请先阅读并同意认证报名信息处理授权协议",
                 )
 
-                # v2: H3cExamBatch.plan_product_id → PlanProduct.plan_id
-                from app.domain.plan.src.index import PlanProduct as _HPP
                 batch_plan_id = await db.scalar(
-                    select(PlanProduct.plan_id)
-                    .join(H3cExamBatch, H3cExamBatch.plan_product_id == PlanProduct.id)
-                    .where(H3cExamBatch.id == data.batch_id)
-                    .limit(1)
+                    select(H3cExamBatch.plan_id).where(
+                        H3cExamBatch.id == data.batch_id
+                    )
                 )
                 if batch_plan_id is None:
                     raise NotFoundException("H3C 考试批次")
@@ -287,13 +283,7 @@ class H3cRegistrationService:
                     expected_vendor="H3C",
                 )
                 batch = await self._get_batch_for_update(db, data.batch_id)
-                # v2: 通过 PlanProduct 验证批次归属
-                _batch_pp_plan_id = await db.scalar(
-                    select(PlanProduct.plan_id).where(
-                        PlanProduct.id == batch.plan_product_id
-                    )
-                )
-                if _batch_pp_plan_id != plan.id:
+                if batch.plan_id != plan.id:
                     raise ConflictException("H3C 批次与报名计划关联不一致")
                 active_registration_id = await db.scalar(
                     select(H3cRegistration.id)
@@ -355,7 +345,7 @@ class H3cRegistrationService:
 
                 registration = H3cRegistration(
                     batch_id=batch.id,
-                    plan_product_id=batch.plan_product_id,
+                    plan_id=plan.id,
                     user_id=user_id,
                     order_id=order.id,
                     registration_no="PENDING",
@@ -1100,12 +1090,7 @@ class H3cRegistrationService:
             if registration is None or registration.status != "approved":
                 return
             user = await db.get(User, registration.user_id)
-            plan = await db.scalar(
-                select(Plan)
-                .join(PlanProduct, PlanProduct.plan_id == Plan.id)
-                .where(PlanProduct.id == registration.plan_product_id)
-                .limit(1)
-            )
+            plan = await db.get(Plan, registration.plan_id)
             if user is None:
                 return
             exam_date_str = plan.exam_date.strftime("%Y年%m月%d日 %H:%M") if plan and plan.exam_date else "待通知"
@@ -1242,12 +1227,7 @@ class H3cRegistrationService:
         if existing_id is not None:
             return await db.get(H3cRefundRequest, existing_id)
         order = await db.get(Order, registration.order_id)
-        plan = await db.scalar(
-                select(Plan)
-                .join(PlanProduct, PlanProduct.plan_id == Plan.id)
-                .where(PlanProduct.id == registration.plan_product_id)
-                .limit(1)
-            )
+        plan = await db.get(Plan, registration.plan_id)
         if order is None:
             raise ConflictException("H3C 报名缺少订单")
         refund = H3cRefundRequest(
@@ -1294,12 +1274,7 @@ class H3cRegistrationService:
         registration: H3cRegistration,
     ) -> H3cRegistrationResponse:
         order = await db.get(Order, registration.order_id)
-        plan = await db.scalar(
-                select(Plan)
-                .join(PlanProduct, PlanProduct.plan_id == Plan.id)
-                .where(PlanProduct.id == registration.plan_product_id)
-                .limit(1)
-            )
+        plan = await db.get(Plan, registration.plan_id)
         consultation_group = (
             await ConsultationGroupService.get_user_group(
                 db,
@@ -1427,7 +1402,7 @@ class H3cRegistrationService:
             id=registration.id,
             registration_no=registration.registration_no,
             batch_id=registration.batch_id,
-            plan_product_id=registration.plan_product_id,
+            plan_id=registration.plan_id,
             order_id=registration.order_id,
             registration_type=registration.registration_type,
             status=registration.status,

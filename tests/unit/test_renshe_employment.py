@@ -16,7 +16,6 @@ from app.schemas.renshe import RensheDraftUpsert, RensheReviewCreate
 from app.schemas.renshe_project import RensheProjectWrite
 from app.services.order_fulfillment import OrderFulfillmentService
 from app.services.plan import PlanService
-from tests.unit.plan_v2_adapter import PlanServiceAdapter
 from app.services.renshe_application import RensheApplicationService
 from app.services.renshe_catalog import ADAPTED_DEGREE_OCCUPATIONS
 from app.services.renshe_employment import (
@@ -36,29 +35,6 @@ from tests.unit.test_renshe_projects import isolated as _isolated
 isolated = _isolated
 
 
-
-
-def _batch_field(batch, field: str, default=""):
-    """Safely get a field from batch (BatchResponse or mock) — checks products[0] first."""
-    products = getattr(batch, "products", None)
-    if products:
-        return getattr(products[0], field, default)
-    return getattr(batch, field, default)
-
-
-def _batch_occ(batch) -> str:
-    return _batch_field(batch, "occupation_name", "信息安全管理员")
-
-
-def _batch_occ_code(batch) -> str:
-    return _batch_field(batch, "occupation_code", "")
-
-
-def _batch_skill(batch) -> str:
-    return _batch_field(batch, "skill_level", "中级工")
-
-
-
 def payload(batch, *, compound=False):
     today = china_today()
     start = anniversary(today, -6).isoformat()
@@ -66,9 +42,9 @@ def payload(batch, *, compound=False):
         plan_id=batch.id, contact_phone="13800138000", email="work@example.test", mailing_address="真实通讯地址",
         reporting_info={"occupation_status": "职工", "ethnicity": "汉族", "political_status": "群众", "has_work_experience": True,
                         "work_start_date": start, "occupation_years": 6, "work_unit": "样例单位", "social_insurance_unit": "样例单位"},
-        qualification_info={"cultural_education": "primary", "work_experiences": [{"work_unit": "样例单位", "position": "实际岗位", "occupation_name": _batch_occ(batch),
+        qualification_info={"cultural_education": "primary", "work_experiences": [{"work_unit": "样例单位", "position": "实际岗位", "occupation_name": batch.occupation_name,
                              "start_date": start, "end_date": None}],
-                            **({"skill_certificate": {"occupation_name": _batch_occ(batch), "grade": 5, "certificate_number": "TEST-L5", "issued_on": anniversary(today, -4).isoformat()}} if compound else {})},
+                            **({"skill_certificate": {"occupation_name": batch.occupation_name, "grade": 5, "certificate_number": "TEST-L5", "issued_on": anniversary(today, -4).isoformat()}} if compound else {})},
     )
 
 
@@ -79,18 +55,9 @@ async def employment_batch(env, monkeypatch, occupation="information_security", 
         commitment_template=original.config.commitment_template, status="available",
     ), admin_id=1)
     batch = await create_batch(project)
-    await PlanServiceAdapter().publish_plan(batch.id, project.code, admin_id=1)
+    await PlanService().publish_plan(batch.id, project.code, admin_id=1)
     service = RensheApplicationService(env.storage)
-    # v2: 从项目配置快照读取材料列表
-    from app.models.renshe_project import RensheProjectConfig
-    from sqlalchemy import select as _sel
-    async with env.db() as _db:
-        _cfg_row = await _db.get(RensheProjectConfig, project.config_id)
-        _materials = (_cfg_row.config or {}).get("materials", [])
-    if not _materials:
-        from app.services.renshe_project import default_configuration
-        _materials = default_configuration()["materials"]
-    for item in _materials:
+    for item in batch.renshe_config["materials"]:
         kind = item["kind"]
         if kind.startswith("id_card_"):
             continue
@@ -121,7 +88,7 @@ async def test_each_trade_submits_reviews_and_exports_work_path(isolated, monkey
     reviewer = RensheReviewService()
     with pytest.raises(BusinessException, match="逐项"):
         await reviewer.review(reviewer_id=1, application_id=draft.id, stage="initial", data=RensheReviewCreate(decision="approved", expected_version_id=submitted.version.id))
-    await reviewer.review(reviewer_id=1, application_id=draft.id, stage="initial", data=RensheReviewCreate(decision="approved", expected_version_id=submitted.version.id, checklist={key: True for key in review_checks((batch.products[0].renshe_config if batch.products else None))}))
+    await reviewer.review(reviewer_id=1, application_id=draft.id, stage="initial", data=RensheReviewCreate(decision="approved", expected_version_id=submitted.version.id, checklist={key: True for key in review_checks(batch.renshe_config)}))
     exporter = RensheExportService(isolated.storage)
     job = await exporter.create_job(plan_id=batch.id, admin_id=1)
     await exporter.process_next_job()
@@ -144,7 +111,7 @@ async def test_each_trade_submits_reviews_and_exports_work_path(isolated, monkey
         work.close()
         registration = load_workbook(io.BytesIO(archive.read("报名信息.xlsx")))
         assert registration["Sheet1"]["G2"].value == "小学"
-        assert registration["Sheet1"]["N2"].value == _batch_occ(batch)
+        assert registration["Sheet1"]["N2"].value == batch.occupation_name
         assert registration["Sheet1"]["V2"].value == application_type
         assert registration["Sheet1"]["S2"].value == 6
         registration.close()

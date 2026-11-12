@@ -2,12 +2,6 @@ from datetime import datetime
 from io import BytesIO
 
 import pytest
-import os
-
-requires_test_db = pytest.mark.skipif(
-    not os.environ.get("TEST_DATABASE_URL"),
-    reason="requires TEST_DATABASE_URL (CI only)"
-)
 from openpyxl import load_workbook
 from pydantic import ValidationError
 
@@ -155,34 +149,15 @@ async def test_refund_filters_fail_before_database_access(params):
 
 
 @pytest.mark.asyncio
-@requires_test_db
 async def test_admin_create_batch_returns_draft_id_for_publish_retry(monkeypatch):
-    pytest.skip("v2: 厂商专属创建 API 已废弃 (410)，统一到全局批次管理")
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
     from app.api.admin.sangfor import create_batch, service, PlanService
     from app.schemas.sangfor import SangforBatchCreate
-    from app.models.cert_product import CertProduct
 
     monkeypatch.setattr(service, "require_product", AsyncMock())
     create = AsyncMock(return_value=SimpleNamespace(id=17))
-    monkeypatch.setattr(PlanService, "create_batch", create)
-
-    product = SimpleNamespace(id=42, code="SCSA-T")
-
-    class MockDB:
-        async def scalar(self, stmt):
-            return product
-
-    from contextlib import asynccontextmanager
-
-    @asynccontextmanager
-    async def mock_db_ctx():
-        yield MockDB()
-
-    import app.adapter.database
-    monkeypatch.setattr(app.adapter.database, "get_db_ctx", mock_db_ctx)
-
+    monkeypatch.setattr(PlanService, "create_plan", create)
     result = await create_batch(SangforBatchCreate(product_code="SCSA-T", name="测试批次", price_cents=100), admin=SimpleNamespace(id=1))
     assert result.data == {"id": 17}
-    assert create.call_args.args[1].products[0].product_id == 42
+    assert create.call_args.kwargs["admin_id"] == 1

@@ -37,8 +37,7 @@ async def management_context(monkeypatch):
         async with factory() as session:
             yield session
 
-    # v2: plan_order_management 不再使用模块级 get_db_ctx
-    # 测试直接传 db 参数
+    monkeypatch.setattr(service_module, "get_db_ctx", test_db_ctx)
 
     try:
         yield SimpleNamespace(
@@ -68,7 +67,7 @@ async def management_context(monkeypatch):
                 {"prefix_like": prefix_like},
             )
             await db.execute(
-                text("DELETE FROM plan WHERE id IN (SELECT pp.plan_id FROM plan_product pp JOIN cert_product cp ON cp.id=pp.product_id WHERE cp.code LIKE :prefix_like)"),
+                text("DELETE FROM plan WHERE product_type LIKE :prefix_like"),
                 {"prefix_like": prefix_like},
             )
             await db.execute(
@@ -105,35 +104,29 @@ async def _seed_management_data(context):
         admin = AdminUser(
             username=f"{context.prefix}_admin",
             password_hash="test-hash",
-            role="quiz_admin",
+            role="super_admin",
             is_active=True,
         )
         db.add_all([paid_user, pending_user, admin])
         await db.flush()
 
-        from app.models.cert_product import CertProduct as _PCP
-        from app.domain.plan.src.index import PlanProduct as _PPP
-        _ca = _PCP(type="generic", code=product_a, name=product_a, chinese_name=product_a, is_active=True)
-        _cb = _PCP(type="generic", code=product_b, name=product_b, chinese_name=product_b, is_active=True)
-        db.add_all([_ca, _cb]); await db.flush()
         plan_a = Plan(
-            name=f"Batch A {context.prefix}",
+            product_type=product_a,
+            name="Batch A",
             apply_start=now - timedelta(days=1),
             apply_end=now + timedelta(days=1),
+            capacity=10,
             status="published",
         )
         plan_b = Plan(
-            name=f"Batch B {context.prefix}",
+            product_type=product_b,
+            name="Batch B",
             apply_start=now - timedelta(days=1),
             apply_end=now + timedelta(days=1),
+            capacity=10,
             status="published",
         )
         db.add_all([plan_a, plan_b])
-        await db.flush()
-        db.add_all([
-            _PPP(plan_id=plan_a.id, product_id=_ca.id, capacity=10),
-            _PPP(plan_id=plan_b.id, product_id=_cb.id, capacity=10),
-        ])
         await db.flush()
 
         paid_a = Order(
@@ -208,7 +201,6 @@ async def _seed_management_data(context):
 
 
 async def test_plan_management_queries_are_scoped_by_plan(management_context):
-    pytest.skip("v2: plan 查询已重构为全局批次")
     from app.port.exceptions import NotFoundException
 
     data = await _seed_management_data(management_context)

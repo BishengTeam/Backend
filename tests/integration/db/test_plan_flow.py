@@ -53,15 +53,7 @@ async def test_context(monkeypatch):
         yield factory, prefix
     finally:
         async with factory() as db:
-            # v2: product_type 存于 plan_product → cert_product，需联删
-            await db.execute(text("""
-                DELETE FROM plan WHERE id IN (
-                    SELECT pp.plan_id FROM plan_product pp
-                    JOIN cert_product cp ON cp.id = pp.product_id
-                    WHERE cp.code LIKE :pl
-                )
-            """), {"pl": f"{prefix}%"})
-            await db.execute(text("DELETE FROM cert_product WHERE code LIKE :pl"), {"pl": f"{prefix}%"})
+            await db.execute(text("DELETE FROM plan WHERE product_type LIKE :pl"), {"pl": f"{prefix}%"})
             await db.commit()
         await engine.dispose()
 
@@ -83,10 +75,10 @@ async def test_create_plan_returns_draft(test_context):
         PlanCreate(name="2026第一期", capacity=30),
     )
     assert result.id > 0
-    assert any(pp.product_code == product_type for pp in result.products)  # v2
+    assert result.product_type == product_type
     assert result.name == "2026第一期"
-    assert result.products[0].capacity == 30  # v2
-    assert result.total_enrolled == 0  # v2
+    assert result.capacity == 30
+    assert result.enrolled == 0
     assert result.status == "draft"
 
 
@@ -103,20 +95,20 @@ async def test_list_plans_returns_only_same_product_type(test_context):
     pt_a = f"{prefix}_a"
     pt_b = f"{prefix}_b"
 
-    await PlanService().create_plan(pt_a, PlanCreate(name=f"{pt_a} Batch A"))
-    await PlanService().create_plan(pt_b, PlanCreate(name=f"{pt_b} Batch B"))
+    await PlanService().create_plan(pt_a, PlanCreate(name="Batch A"))
+    await PlanService().create_plan(pt_b, PlanCreate(name="Batch B"))
 
     # List pt_a only
     plans_a = await PlanService().list_plans(pt_a)
     assert len(plans_a) >= 1
     for p in plans_a:
-        assert all(pp.product_code == pt_a for pp in p.products)  # v2
+        assert p.product_type == pt_a
 
     # List pt_b only
     plans_b = await PlanService().list_plans(pt_b)
     assert len(plans_b) >= 1
     for p in plans_b:
-        assert all(pp.product_code == pt_b for pp in p.products)  # v2
+        assert p.product_type == pt_b
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +148,7 @@ async def test_full_state_transition(test_context):
 async def test_cannot_edit_published_plan(test_context):
     from app.schemas.plan import PlanCreate, PlanUpdate
     from app.services.plan import PlanService
-    from app.port.exceptions import BusinessException, ConflictException
+    from app.port.exceptions import BusinessException
 
     factory, prefix = test_context
     product_type = f"{prefix}_lock"
@@ -168,7 +160,7 @@ async def test_cannot_edit_published_plan(test_context):
     )
     await PlanService().publish_plan(plan.id)
 
-    with pytest.raises(BusinessException, match="当前批次状态不可编辑|仅草稿状态的批次可以编辑"):
+    with pytest.raises(BusinessException, match="当前批次状态不可编辑"):
         await PlanService().update_plan(plan.id, PlanUpdate(name="New Name"))
 
 
@@ -180,7 +172,7 @@ async def test_cannot_edit_published_plan(test_context):
 async def test_cannot_delete_published_plan(test_context):
     from app.schemas.plan import PlanCreate
     from app.services.plan import PlanService
-    from app.port.exceptions import BusinessException, ConflictException
+    from app.port.exceptions import BusinessException
 
     factory, prefix = test_context
     product_type = f"{prefix}_del"
@@ -204,24 +196,15 @@ async def test_cannot_delete_published_plan(test_context):
 async def test_duplicate_name_rejected(test_context):
     from app.schemas.plan import PlanCreate
     from app.services.plan import PlanService
-    from app.port.exceptions import BusinessException, ConflictException
+    from app.port.exceptions import BusinessException
 
     factory, prefix = test_context
     pt = f"{prefix}_dup"
 
-    # 清理前次运行残留
-    from app.adapter.database import get_db_ctx
-    from app.domain.plan.src.index import Plan as _P
-    from sqlalchemy import delete as _del
-    async with get_db_ctx() as _db:
-        await _db.execute(_del(_P).where(_P.name == f"{pt} Same Name"))
-        await _db.commit()
+    await PlanService().create_plan(pt, PlanCreate(name="Same Name"))
 
-    await PlanService().create_plan(pt, PlanCreate(name=f"{pt} Same Name"))
-
-    # v2: 批次名全局唯一（v1 是 per-product 唯一）
-    with pytest.raises(ConflictException, match="已存在"):
-        await PlanService().create_plan(pt, PlanCreate(name=f"{pt} Same Name"))
+    with pytest.raises(BusinessException, match="已存在"):
+        await PlanService().create_plan(pt, PlanCreate(name="Same Name"))
 
 
 # ---------------------------------------------------------------------------
@@ -323,9 +306,9 @@ async def test_get_plan_detail(test_context):
     detail = await PlanService().get_plan(plan.id)
     assert detail.id == plan.id
     assert detail.name == "Detail Test"
-    assert detail.products[0].capacity == 100
+    assert detail.capacity == 100
     assert detail.status == "published"
-    assert detail.total_enrolled == 0
+    assert detail.enrolled == 0
 
 
 async def test_update_rejects_invalid_effective_window(test_context):
@@ -388,7 +371,6 @@ async def test_publish_requires_valid_window(test_context):
 
 
 async def test_product_code_mismatch_is_not_found(test_context):
-    pytest.skip("v2: 批次为全局资源，不再有 per-product mismatch 路径")
     from app.port.exceptions import NotFoundException
     from app.schemas.plan import PlanCreate, PlanUpdate
     from app.services.plan import PlanService

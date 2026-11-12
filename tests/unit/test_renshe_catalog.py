@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 """Document-backed choices, readiness gates and immutable historical policies."""
 
 import pytest
@@ -15,29 +14,6 @@ from tests.unit.test_renshe_projects import isolated as _isolated, create_batch
 from tests.unit.test_renshe_graduated import graduated_batch
 
 isolated = _isolated
-
-
-
-
-def _batch_field(batch, field: str, default=""):
-    """Safely get a field from batch (BatchResponse or mock) — checks products[0] first."""
-    products = getattr(batch, "products", None)
-    if products:
-        return getattr(products[0], field, default)
-    return getattr(batch, field, default)
-
-
-def _batch_occ(batch) -> str:
-    return _batch_field(batch, "occupation_name", "信息安全管理员")
-
-
-def _batch_occ_code(batch) -> str:
-    return _batch_field(batch, "occupation_code", "")
-
-
-def _batch_skill(batch) -> str:
-    return _batch_field(batch, "skill_level", "中级工")
-
 
 
 def test_catalog_uses_documented_grades_and_type_paths_only():
@@ -68,7 +44,7 @@ async def test_pending_choice_saves_empty_technical_rules_and_cannot_enable_or_b
     async with isolated.db() as db:
         version = await db.scalar(select(RensheProjectConfig).where(RensheProjectConfig.product_id == draft.id))
         with pytest.raises(ConflictException, match="尚未适配"):
-            batch_configuration(SimpleNamespace(renshe_config=version.config, products=[]))
+            batch_configuration(Plan(renshe_config=version.config))
 
 
 @pytest.mark.asyncio
@@ -76,15 +52,15 @@ async def test_adapted_six_materials_and_batch_type_cannot_be_reselected(isolate
     project, batch = await graduated_batch(isolated, monkeypatch)
     kinds = {item.kind for item in project.config.materials}
     assert kinds == {"id_card_front", "id_card_back", "registration_portrait", "graduation_certificate", "education_report", "commitment_letter"}
-    assert "report" in review_checks(_batch_field(batch, "renshe_config", {})) and "employment" not in review_checks(_batch_field(batch, "renshe_config", {}))
+    assert "report" in review_checks(batch.renshe_config) and "employment" not in review_checks(batch.renshe_config)
     assert not any("社保证明" in path for path in project.export_instructions["example_paths"])
-    frozen = _batch_field(batch, "renshe_config", {}).copy()
+    frozen = batch.renshe_config.copy()
     with pytest.raises(BusinessException, match="不能更换"):
         await RensheProjectService().save(RensheProjectWrite(
             chinese_name=project.chinese_name, expected_version=project.version,
             selection_id="information_security:4:工龄型", status="draft",
         ), product_id=project.id, admin_id=1)
-    assert _batch_field(batch, "renshe_config", {}) == frozen
+    assert batch.renshe_config == frozen
 
 
 @pytest.mark.asyncio

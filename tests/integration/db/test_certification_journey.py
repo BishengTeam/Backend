@@ -33,31 +33,22 @@ async def context(monkeypatch):
     prefix = "journey_" + uuid4().hex[:10]
     async with factory() as db:
         products, plans, batches = [], [], []
-        from app.domain.plan.src.index import PlanProduct
         for vendor in ("h3c", "nisp", "renshe"):
             product = CertProduct(type=vendor, code=f"{prefix}_{vendor}", name=vendor, chinese_name=f"测试{vendor}", is_active=True, renshe_status="available" if vendor == "renshe" else None)
             db.add(product); await db.flush(); products.append(product)
-            if vendor == "renshe":
-                # P0-1 审计修复后 renshe 价格走 PriceConfig，测试需显式配置
-                from app.domain.order.src.model.price_config import PriceConfig
-                db.add(PriceConfig(product_type=product.code, user_type="enterprise", price=5000, is_active=True))
-            plan = Plan(name=f"{prefix}_{vendor}", status="published",
+            plan = Plan(product_type=product.code, name=f"{prefix}_{vendor}", status="published", capacity=20, price_cents=5000,
                 apply_start=datetime.now(timezone.utc) - timedelta(days=1), apply_end=datetime.now(timezone.utc) + timedelta(days=1),
-                exam_date=datetime.now(timezone.utc) + timedelta(days=5))
+                exam_date=datetime.now(timezone.utc) + timedelta(days=5), renshe_config={"qualification_rule": "level_five_employment_v1", "reporting_policy": {"contract_version": 2}} if vendor == "renshe" else None)
             db.add(plan); await db.flush(); plans.append(plan)
-            _pp = PlanProduct(plan_id=plan.id, product_id=product.id, capacity=20,
-                renshe_config={"qualification_rule": "level_five_employment_v1", "reporting_policy": {"contract_version": 2}} if vendor == "renshe" else None)
-            db.add(_pp); await db.flush()
-            batch = H3cExamBatch(plan_product_id=_pp.id, exam_code="TEST", identity_tag="TEST", coupon_price_cents=1000, student_price_cents=2000, full_price_cents=3000) if vendor == "h3c" else NispExamBatch(plan_product_id=_pp.id, level="1", level1_price_cents=1000, level2_price_cents=2000) if vendor == "nisp" else None
+            batch = H3cExamBatch(plan_id=plan.id, exam_code="TEST", identity_tag="TEST", coupon_price_cents=1000, student_price_cents=2000, full_price_cents=3000) if vendor == "h3c" else NispExamBatch(plan_id=plan.id, level="1", level1_price_cents=1000, level2_price_cents=2000) if vendor == "nisp" else None
             if batch: db.add(batch); await db.flush()
             batches.append(batch)
         await db.commit()
     yield SimpleNamespace(db=factory, service=CertificationJourneyService(), products=products, plans=plans, batches=batches)
     async with factory() as db, db.begin():
         await db.execute(delete(CertificationJourneyContent).where(CertificationJourneyContent.plan_id.in_([plan.id for plan in plans])))
-        await db.execute(delete(H3cExamBatch).where(H3cExamBatch.plan_product_id.in_(select(PlanProduct.id).where(PlanProduct.plan_id.in_([plan.id for plan in plans])))))
-        await db.execute(delete(NispExamBatch).where(NispExamBatch.plan_product_id.in_(select(PlanProduct.id).where(PlanProduct.plan_id.in_([plan.id for plan in plans])))))
-        await db.execute(delete(PlanProduct).where(PlanProduct.plan_id.in_([plan.id for plan in plans])))
+        await db.execute(delete(H3cExamBatch).where(H3cExamBatch.plan_id.in_([plan.id for plan in plans])))
+        await db.execute(delete(NispExamBatch).where(NispExamBatch.plan_id.in_([plan.id for plan in plans])))
         await db.execute(delete(Plan).where(Plan.id.in_([plan.id for plan in plans])))
         await db.execute(delete(CertProduct).where(CertProduct.id.in_([product.id for product in products])))
     await engine.dispose()

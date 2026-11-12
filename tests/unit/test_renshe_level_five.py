@@ -18,8 +18,6 @@ from app.schemas.renshe import RensheDraftUpsert, RensheReviewCreate
 from app.schemas.renshe_project import RensheProjectWrite
 from app.services import renshe_catalog as catalog
 from app.services.plan import PlanService
-from app.services.renshe_project import default_configuration
-from tests.unit.plan_v2_adapter import PlanServiceAdapter
 from app.services.renshe_application import RensheApplicationService
 from app.services.renshe_employment import (
     LEVEL_FIVE_RULE,
@@ -40,29 +38,6 @@ from tests.unit.test_renshe_projects import create_batch
 from tests.unit.test_renshe_projects import isolated as _isolated
 
 isolated = _isolated
-
-
-
-
-def _batch_field(batch, field: str, default=""):
-    """Safely get a field from batch (BatchResponse or mock) — checks products[0] first."""
-    products = getattr(batch, "products", None)
-    if products:
-        return getattr(products[0], field, default)
-    return getattr(batch, field, default)
-
-
-def _batch_occ(batch) -> str:
-    return _batch_field(batch, "occupation_name", "信息安全管理员")
-
-
-def _batch_occ_code(batch) -> str:
-    return _batch_field(batch, "occupation_code", "")
-
-
-def _batch_skill(batch) -> str:
-    return _batch_field(batch, "skill_level", "中级工")
-
 
 
 def config():
@@ -168,19 +143,19 @@ async def test_five_path_material_review_and_export(isolated, monkeypatch, occup
     original, _ = await graduated_batch(isolated, monkeypatch)
     project = await RensheProjectService().save(RensheProjectWrite(chinese_name="五级联调", selection_id=f"{occupation}:5:工龄型", commitment_template=original.config.commitment_template, status="available"), admin_id=1)
     batch = await create_batch(project)
-    await PlanServiceAdapter().publish_plan(batch.id, project.code, admin_id=1)
+    await PlanService().publish_plan(batch.id, project.code, admin_id=1)
     service = RensheApplicationService(isolated.storage)
     async with isolated.db() as db:
         identity = await db.scalar(select(UserRealname))
         identity.birth_date = (anniversary(china_today(), -16) + timedelta(days=1)).isoformat()
         await db.commit()
     with pytest.raises(BusinessException, match="16周岁"):
-        await service.save_draft(1, form(batch.id, _batch_occ(batch)))
+        await service.save_draft(1, form(batch.id, batch.occupation_name))
     async with isolated.db() as db:
         identity = await db.scalar(select(UserRealname))
         identity.birth_date = anniversary(china_today(), -16).isoformat()
         await db.commit()
-    draft = await service.save_draft(1, form(batch.id, _batch_occ(batch)))
+    draft = await service.save_draft(1, form(batch.id, batch.occupation_name))
 
     async def upload(kind):
         pdf = kind != "registration_portrait"
@@ -203,7 +178,7 @@ async def test_five_path_material_review_and_export(isolated, monkeypatch, occup
     reviewer = RensheReviewService()
     with pytest.raises(BusinessException, match="逐项"):
         await reviewer.review(reviewer_id=1, application_id=draft.id, stage="initial", data=RensheReviewCreate(decision="approved", expected_version_id=submitted.version.id))
-    await reviewer.review(reviewer_id=1, application_id=draft.id, stage="initial", data=RensheReviewCreate(decision="approved", expected_version_id=submitted.version.id, checklist={key: True for key in review_checks((batch.products[0].renshe_config if batch.products else None))}))
+    await reviewer.review(reviewer_id=1, application_id=draft.id, stage="initial", data=RensheReviewCreate(decision="approved", expected_version_id=submitted.version.id, checklist={key: True for key in review_checks(batch.renshe_config)}))
     exporter = RensheExportService(isolated.storage)
     job = await exporter.create_job(plan_id=batch.id, admin_id=1)
     await exporter.process_next_job()
@@ -219,8 +194,8 @@ async def test_five_path_material_review_and_export(isolated, monkeypatch, occup
         assert not any("学历" in name or "职业资格证书" in name for name in files)
         workbook = load_workbook(io.BytesIO(archive.read("报名信息.xlsx")))
         assert workbook["Sheet1"]["O2"].value == "五级"
-        assert workbook["Sheet1"]["N2"].value == _batch_occ(batch)
-        assert workbook["Sheet1"]["T2"].value == _batch_occ_code(batch)
+        assert workbook["Sheet1"]["N2"].value == batch.occupation_name
+        assert workbook["Sheet1"]["T2"].value == batch.occupation_code
         assert workbook["Sheet1"]["S2"].value == 0
         assert workbook["Sheet1"]["U2"].value == "年满16周岁，从事本职业或相关职业工作。"
         assert workbook["Sheet1"]["V2"].value == "工龄型"
@@ -232,16 +207,10 @@ async def test_paid_five_correction_after_registration_closes_keeps_first_age_an
     original, _ = await graduated_batch(isolated, monkeypatch)
     project = await RensheProjectService().save(RensheProjectWrite(chinese_name="五级补正", selection_id="information_security:5:工龄型", commitment_template=original.config.commitment_template, status="available"), admin_id=1)
     batch = await create_batch(project)
-    await PlanServiceAdapter().publish_plan(batch.id, project.code, admin_id=1)
+    await PlanService().publish_plan(batch.id, project.code, admin_id=1)
     applicant = RensheApplicationService(isolated.storage)
     draft = await applicant.save_draft(1, form(batch.id))
-    # v2: 用项目实际配置的材料列表（五级工龄型材料与默认不同）
-    from app.models.renshe_project import RensheProjectConfig
-    from sqlalchemy import select as _sel5
-    async with isolated.db() as _db5:
-        _cfg5 = await _db5.get(RensheProjectConfig, project.config_id)
-        _materials5 = (_cfg5.config or {}).get("materials", default_configuration()["materials"])
-    for item in _materials5:
+    for item in batch.renshe_config["materials"]:
         if item["kind"].startswith("id_card_"):
             continue
         pdf = item["kind"] != "registration_portrait"
@@ -268,7 +237,7 @@ async def test_paid_five_correction_after_registration_closes_keeps_first_age_an
         assert current.form_data["eligibility_snapshot"]["required_years"] == 0
         proofs = (await db.execute(select(RensheMaterial).where(RensheMaterial.application_id == draft.id, RensheMaterial.kind == "work_proof"))).scalars().all()
         assert len(proofs) == 2 and proofs[0].sha256 != proofs[1].sha256
-    await reviewer.review(reviewer_id=1, application_id=draft.id, stage="initial", data=RensheReviewCreate(decision="approved", expected_version_id=corrected.version.id, checklist={key: True for key in review_checks((batch.products[0].renshe_config if batch.products else None))}))
+    await reviewer.review(reviewer_id=1, application_id=draft.id, stage="initial", data=RensheReviewCreate(decision="approved", expected_version_id=corrected.version.id, checklist={key: True for key in review_checks(batch.renshe_config)}))
     with pytest.raises(ConflictException, match="导出"):
         await reviewer.review(reviewer_id=1, application_id=draft.id, stage="external", data=RensheReviewCreate(decision="approved", expected_version_id=corrected.version.id))
     exporter = RensheExportService(isolated.storage)

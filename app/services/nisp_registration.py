@@ -22,7 +22,7 @@ from app.domain.nisp.src import (
     NispExportJob,
 )
 from app.integrations.nisp_storage import NispObjectStorage
-from app.domain.plan.src.index import Plan, PlanProduct
+from app.domain.plan.src.index import Plan
 from app.domain.user.src.index import User, UserRealname
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.nisp import (
@@ -127,7 +127,7 @@ class NispRegistrationService:
             # certification-wide order: Plan -> Batch -> Order -> Registration.
             resolved_plan_id = (
                 await db.scalar(
-                    select(NispExamBatch.plan_product_id).where(
+                    select(NispExamBatch.plan_id).where(
                         NispExamBatch.id == data.batch_id
                     )
                 )
@@ -146,9 +146,7 @@ class NispRegistrationService:
                     .with_for_update()
                 )
             ).scalar_one_or_none()
-            if batch is None:
-                raise BusinessException("NISP 考试批次不存在")
-            # v2: FK 结构保证 batch→plan_product→plan 一致性，无需运行时交叉校验
+            if batch is None or batch.plan_id != plan.id:
                 raise NotFoundException("NISP 考试批次")
             product = await validate_nisp_batch_product(
                 db, plan=plan, level=batch.level, require_active=True
@@ -228,7 +226,7 @@ class NispRegistrationService:
 
             registration = NispRegistration(
                 batch_id=batch.id,
-                plan_product_id=batch.plan_product_id,
+                plan_id=batch.plan_id,
                 user_id=user_id,
                 order_id=order.id,
                 registration_no=uuid4().hex,
@@ -899,7 +897,7 @@ class NispRegistrationService:
 
         order = await db.get(Order, registration.order_id)
         batch = await db.get(NispExamBatch, registration.batch_id)
-        plan = await db.get(Plan, (await db.scalar(select(PlanProduct.plan_id).where(PlanProduct.id == registration.plan_product_id))) or 0)
+        plan = await db.get(Plan, registration.plan_id)
         consultation_group = (
             await ConsultationGroupService.get_user_group(
                 db,
@@ -1007,8 +1005,7 @@ class NispRegistrationService:
             registration_no=registration.registration_no,
             batch_id=registration.batch_id,
             batch_name=plan.name if plan is not None else None,
-            plan_id=(await db.scalar(select(PlanProduct.plan_id).where(PlanProduct.id == registration.plan_product_id))),
-            plan_product_id=registration.plan_product_id,
+            plan_id=registration.plan_id,
             order_id=registration.order_id,
             level=registration.level,
             status=registration.status,

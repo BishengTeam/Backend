@@ -1,3 +1,4 @@
+from app.domain.exam.src.index import Holiday, ExamSchedule, ExamScheduleSubject, ExamTimeSlot, ExamSeatQuota, ExamBooking
 from app.models.offline_payment import (OfflinePaymentSettings, OfflinePayment, OfflinePaymentMaterial,
     OfflinePaymentSubmission, OfflineBankEntry, OfflinePaymentAudit)
 from app.domain.content.src.index import (
@@ -50,7 +51,7 @@ from app.domain.community.src.index import (
     QuizWrongItem,
     Share,
 )
-from app.domain.plan.src.index import Plan, PlanProduct, PlanTimeSegment
+from app.domain.plan.src.index import Plan
 from app.domain.order.src.index import (
     Coupon,
     Inventory,
@@ -163,8 +164,6 @@ __all__ = [
     "Popup",
     "SharePoster",
     "Plan",
-    "PlanProduct",
-    "PlanTimeSegment",
     "PointsHistory",
     "PointsBatch",
     "PriceConfig",

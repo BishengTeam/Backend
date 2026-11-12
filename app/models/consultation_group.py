@@ -7,16 +7,14 @@ from app.adapter.database import Base, TimestampMixin
 
 
 class CertConsultationGroup(Base, TimestampMixin):
-    """Consultation-group configuration for one batch-product combination."""
+    """Current consultation-group configuration for one certification batch."""
 
     __tablename__ = "cert_consultation_group"
-    __table_args__ = (
-        UniqueConstraint("plan_product_id", name="uq_cert_consultation_group_plan_product"),
-    )
+    __table_args__ = (UniqueConstraint("plan_id", name="uq_cert_consultation_group_plan"),)
 
-    plan_product_id: Mapped[int] = mapped_column(
+    plan_id: Mapped[int] = mapped_column(
         Integer,
-        ForeignKey("plan_product.id", ondelete="CASCADE"),
+        ForeignKey("plan.id", ondelete="CASCADE"),
         nullable=False,
     )
     qrcode_url: Mapped[str] = mapped_column(String(512), nullable=False)

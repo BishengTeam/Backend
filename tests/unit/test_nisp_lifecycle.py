@@ -43,7 +43,7 @@ def payload():
 
 
 def batch(**kwargs):
-    return NS(id=1, plan_product_id=1, level='1', level1_price_cents=100,
+    return NS(id=1, plan_id=2, level='1', level1_price_cents=100,
               level2_price_cents=200, payment_timeout_minutes=30,
               max_resubmissions=2, resubmission_window_hours=72, training_org=None, **kwargs)
 
@@ -206,7 +206,7 @@ async def test_cancel_batch_closes_pending_and_requests_paid_refund(monkeypatch)
     second = NS(id=2, status='approved', user_id=5)
     p = plan()
     db = session(monkeypatch, 'app.services.nisp_admin',
-                 scalars=[p, batch(), pending, first, paid, second, None],
+                 scalars=[2, p, batch(), pending, first, paid, second, None],
                  execute=[NS(all=lambda: [(1, 10), (2, 20)])])
     monkeypatch.setattr('app.services.nisp_admin.release_order_coupon', AsyncMock())
     service = NispAdminService()

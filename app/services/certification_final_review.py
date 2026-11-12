@@ -27,7 +27,7 @@ from app.domain.nisp.src.index import (
     NispRegistrationVersion,
 )
 from app.domain.order.src.index import Order
-from app.domain.plan.src.index import Plan, PlanProduct
+from app.domain.plan.src.index import Plan
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.h3c_registration import (
     H3cBatchFinalReviewRequest,
@@ -52,19 +52,13 @@ def _now() -> datetime:
 async def _lock_h3c_chain(db: AsyncSession, registration_id: int):
     refs = (
         await db.execute(
-        select(H3cRegistration.batch_id, H3cRegistration.plan_product_id, H3cRegistration.order_id)
+        select(H3cRegistration.batch_id, H3cRegistration.plan_id, H3cRegistration.order_id)
         .where(H3cRegistration.id == registration_id)
         )
     ).first()
     if refs is None:
         raise NotFoundException("H3C 报名")
-    # v2: plan_product_id → PlanProduct.plan_id
-    plan = await db.scalar(
-        select(Plan)
-        .join(PlanProduct, PlanProduct.plan_id == Plan.id)
-        .where(PlanProduct.id == refs.plan_product_id)
-        .with_for_update()
-    )
+    plan = await db.scalar(select(Plan).where(Plan.id == refs.plan_id).with_for_update())
     batch = await db.scalar(
         select(H3cExamBatch).where(H3cExamBatch.id == refs.batch_id).with_for_update()
     )
@@ -83,19 +77,13 @@ async def _lock_h3c_chain(db: AsyncSession, registration_id: int):
 async def _lock_nisp_chain(db: AsyncSession, registration_id: int):
     refs = (
         await db.execute(
-        select(NispRegistration.batch_id, NispRegistration.plan_product_id, NispRegistration.order_id)
+        select(NispRegistration.batch_id, NispRegistration.plan_id, NispRegistration.order_id)
         .where(NispRegistration.id == registration_id)
         )
     ).first()
     if refs is None:
         raise NotFoundException("NISP 报名")
-    # v2: plan_product_id → PlanProduct.plan_id
-    plan = await db.scalar(
-        select(Plan)
-        .join(PlanProduct, PlanProduct.plan_id == Plan.id)
-        .where(PlanProduct.id == refs.plan_product_id)
-        .with_for_update()
-    )
+    plan = await db.scalar(select(Plan).where(Plan.id == refs.plan_id).with_for_update())
     batch = await db.scalar(
         select(NispExamBatch).where(NispExamBatch.id == refs.batch_id).with_for_update()
     )

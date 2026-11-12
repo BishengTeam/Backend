@@ -1,6 +1,6 @@
-"""PlanEnrollmentService v2 unit tests — window validation and capacity locking."""
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 from app.port.exceptions import BusinessException, ConflictException
@@ -10,38 +10,25 @@ from app.services.plan_enrollment import (
 )
 
 
-NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _open_plan(**overrides):
+    now = datetime(2026, 7, 14, tzinfo=timezone.utc)
     values = {
         "id": 7,
+        "product_type": "GB0-192",
         "name": "2026 第一批",
         "status": "published",
-        "apply_start": NOW - timedelta(days=1),
-        "apply_end": NOW + timedelta(days=1),
+        "apply_start": now - timedelta(days=1),
+        "apply_end": now + timedelta(days=1),
+        "capacity": 1,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
 
 
-def _plan_product(capacity=0):
-    return SimpleNamespace(
-        id=1, plan_id=7, product_id=1, capacity=capacity,
-        renshe_config_id=None, occupation_name=None, occupation_code=None,
-        skill_level=None, exam_type=None, application_type=None,
-    )
-
-
-def _product(**overrides):
-    values = {"id": 1, "type": "h3c", "code": "GB0-192", "is_active": True}
-    values.update(overrides)
-    return SimpleNamespace(**values)
-
-
 class _Result:
-    """Flexible result mock supporting multiple SQLAlchemy result APIs."""
-
     def __init__(self, value):
         self.value = value
 
@@ -51,11 +38,6 @@ class _Result:
     def scalar_one(self):
         return self.value
 
-    def first(self):
-        if isinstance(self.value, tuple):
-            return self.value
-        return (self.value,) if self.value is not None else None
-
 
 class _FakeDb:
     def __init__(self, *results):
@@ -64,142 +46,183 @@ class _FakeDb:
 
     async def execute(self, statement):
         self.statements.append(statement)
-        return _Result(self.results.pop(0) if self.results else None)
+        return _Result(self.results.pop(0))
 
 
 class PlanEnrollmentWindowTests(unittest.TestCase):
+    def setUp(self):
+        self.now = datetime(2026, 7, 14, tzinfo=timezone.utc)
+
     def test_open_published_plan_is_eligible(self):
-        PlanEnrollmentService.validate_application_window(_open_plan(), now=NOW)
+        PlanEnrollmentService.validate_application_window(
+            _open_plan(),
+            now=self.now,
+        )
 
     def test_non_published_plan_is_rejected(self):
         with self.assertRaises(BusinessException) as raised:
             PlanEnrollmentService.validate_application_window(
-                _open_plan(status="draft"), now=NOW,
+                _open_plan(status="draft"),
+                now=self.now,
             )
         self.assertEqual(raised.exception.message, "该批次当前不可报名")
 
     def test_future_and_expired_windows_are_rejected(self):
         with self.assertRaises(BusinessException) as future:
             PlanEnrollmentService.validate_application_window(
-                _open_plan(apply_start=NOW + timedelta(minutes=1)), now=NOW,
+                _open_plan(apply_start=self.now + timedelta(minutes=1)),
+                now=self.now,
             )
         self.assertEqual(future.exception.message, "该批次报名尚未开始")
 
         with self.assertRaises(BusinessException) as expired:
             PlanEnrollmentService.validate_application_window(
-                _open_plan(apply_end=NOW - timedelta(minutes=1)), now=NOW,
+                _open_plan(apply_end=self.now - timedelta(minutes=1)),
+                now=self.now,
             )
         self.assertEqual(expired.exception.message, "该批次报名已截止")
 
-    def test_missing_window_is_rejected(self):
-        with self.assertRaises(BusinessException):
-            PlanEnrollmentService.validate_application_window(
-                _open_plan(apply_start=None, apply_end=None), now=NOW,
-            )
-
 
 class PlanEnrollmentDatabaseTests(unittest.IsolatedAsyncioTestCase):
-    """v2 lock_enrollable_plan tests using fake sequential results.
-
-    Query order in lock_enrollable_plan:
-      1. select(Plan)                    → scalar_one_or_none
-      2. select(PlanProduct, CertProduct) → first (tuple)
-      3. select(Order.id) duplicate check → scalar_one_or_none
-      4. select(count) capacity check     → scalar_one (only if capacity > 0)
-    """
+    def _product(self, **overrides):
+        values = {"type": "h3c", "is_active": True}
+        values.update(overrides)
+        return SimpleNamespace(**values)
 
     async def test_finite_capacity_counts_all_occupying_statuses(self):
-        plan = _open_plan()
-        pp = _plan_product(capacity=1)
-        product = _product()
-        # Queries: plan, (pp, product), no dup order, occupied=1
-        db = _FakeDb(plan, (pp, product), None, 1)
+        plan = _open_plan(capacity=1)
+        db = _FakeDb(plan, self._product(), None, 1)
 
         with self.assertRaises(BusinessException) as raised:
             await PlanEnrollmentService().lock_enrollable_plan(
-                db, plan_id=plan.id, user_id=100,
-                expected_vendor="H3C", now=NOW,
+                db,
+                plan_id=plan.id,
+                user_id=100,
+                expected_vendor="H3C",
+                now=datetime(2026, 7, 14, tzinfo=timezone.utc),
             )
+
         self.assertEqual(raised.exception.message, "该批次名额已满")
-        self.assertEqual(CAPACITY_OCCUPYING_ORDER_STATUSES, ("pending", "paid", "completed"))
+        self.assertEqual(
+            CAPACITY_OCCUPYING_ORDER_STATUSES,
+            ("pending", "paid", "completed"),
+        )
+        self.assertEqual(len(db.statements), 4)
 
     async def test_unlimited_capacity_skips_capacity_query(self):
-        plan = _open_plan()
-        pp = _plan_product(capacity=0)
-        product = _product()
-        # capacity=0, so no 4th query
-        db = _FakeDb(plan, (pp, product), None)
+        plan = _open_plan(capacity=0)
+        db = _FakeDb(plan, self._product(), None)
 
         result = await PlanEnrollmentService().lock_enrollable_plan(
-            db, plan_id=plan.id, user_id=100,
-            expected_vendor="H3C", now=NOW,
+            db,
+            plan_id=plan.id,
+            user_id=100,
+            expected_vendor="H3C",
+            now=datetime(2026, 7, 14, tzinfo=timezone.utc),
         )
+
         self.assertIs(result, plan)
         self.assertEqual(len(db.statements), 3)
 
-    async def test_wrong_product_type_is_rejected(self):
-        plan = _open_plan()
-        # v2: WHERE type='h3c' 过滤 nisp 产品 → first() 返回 None
-        db = _FakeDb(plan, None)
+    async def test_wrong_product_type_is_rejected_before_capacity_check(self):
+        plan = _open_plan(capacity=1)
+        db = _FakeDb(plan, self._product(type="nisp"))
 
         with self.assertRaises(BusinessException) as raised:
             await PlanEnrollmentService().lock_enrollable_plan(
-                db, plan_id=plan.id, user_id=100,
-                expected_vendor="H3C", now=NOW,
+                db,
+                plan_id=plan.id,
+                user_id=100,
+                expected_vendor="H3C",
+                now=datetime(2026, 7, 14, tzinfo=timezone.utc),
             )
-        # v2: type 不匹配时 query 过滤后返回 None → "不包含"
-        self.assertIn("不包含", raised.exception.message)
+
+        self.assertEqual(raised.exception.message, "该批次不属于H3C认证")
+        self.assertEqual(len(db.statements), 2)
 
     async def test_inactive_cert_product_is_rejected(self):
-        plan = _open_plan()
-        # v2: WHERE is_active=True 过滤下架产品 → first() 返回 None
-        db = _FakeDb(plan, None)
+        plan = _open_plan(capacity=1)
+        db = _FakeDb(plan, self._product(is_active=False))
 
         with self.assertRaises(BusinessException) as raised:
             await PlanEnrollmentService().lock_enrollable_plan(
-                db, plan_id=plan.id, user_id=100,
-                expected_vendor="H3C", now=NOW,
+                db,
+                plan_id=plan.id,
+                user_id=100,
+                expected_vendor="H3C",
+                now=datetime(2026, 7, 14, tzinfo=timezone.utc),
             )
-        # v2: is_active 过滤在 query WHERE 中 → "不包含"
-        self.assertIn("不包含", raised.exception.message)
+
+        self.assertEqual(raised.exception.message, "该认证类型已下架")
+        self.assertEqual(len(db.statements), 2)
 
     async def test_existing_active_order_is_rejected(self):
-        plan = _open_plan()
-        pp = _plan_product(capacity=10)
-        product = _product()
-        # 3rd query returns existing order id = 99
-        db = _FakeDb(plan, (pp, product), 99)
+        plan = _open_plan(capacity=10)
+        db = _FakeDb(plan, self._product(), 99)
 
         with self.assertRaises(ConflictException) as raised:
             await PlanEnrollmentService().lock_enrollable_plan(
-                db, plan_id=plan.id, user_id=100,
-                expected_vendor="H3C", now=NOW,
+                db,
+                plan_id=plan.id,
+                user_id=100,
+                expected_vendor="H3C",
+                now=datetime(2026, 7, 14, tzinfo=timezone.utc),
             )
-        self.assertIn("请勿重复提交", raised.exception.message)
 
-    async def test_no_matching_product_in_batch(self):
-        plan = _open_plan()
-        # 2nd query returns None (no PlanProduct found)
-        db = _FakeDb(plan, None)
+        self.assertEqual(raised.exception.message, "您已报名该批次，请勿重复提交")
+        self.assertEqual(raised.exception.http_status_code, 409)
+
+    async def test_legacy_certification_batch_falls_back_to_old_table(self):
+        plan = _open_plan(product_type="H3C-NE", capacity=0)
+        certification = SimpleNamespace(vendor="H3C", is_active=True)
+        db = _FakeDb(plan, None, certification, None)
+
+        result = await PlanEnrollmentService().lock_enrollable_plan(
+            db,
+            plan_id=plan.id,
+            user_id=100,
+            expected_vendor="H3C",
+            now=datetime(2026, 7, 14, tzinfo=timezone.utc),
+        )
+
+        self.assertIs(result, plan)
+        self.assertEqual(len(db.statements), 4)
+
+    async def test_unknown_product_code_is_rejected(self):
+        plan = _open_plan(capacity=1)
+        db = _FakeDb(plan, None, None)
 
         with self.assertRaises(BusinessException) as raised:
             await PlanEnrollmentService().lock_enrollable_plan(
-                db, plan_id=plan.id, user_id=100,
-                expected_vendor="H3C", now=NOW,
-            )
-        self.assertIn("不包含", raised.exception.message)
-
-    async def test_plan_not_found(self):
-        db = _FakeDb(None)
-
-        from app.port.exceptions import NotFoundException
-        with self.assertRaises(NotFoundException):
-            await PlanEnrollmentService().lock_enrollable_plan(
-                db, plan_id=999, user_id=100,
-                expected_vendor="H3C", now=NOW,
+                db,
+                plan_id=plan.id,
+                user_id=100,
+                expected_vendor="H3C",
+                now=datetime(2026, 7, 14, tzinfo=timezone.utc),
             )
 
-    async def test_capacity_statuses_are_tuple(self):
-        """CAPACITY_OCCUPYING_ORDER_STATUSES is a tuple for SQLAlchemy .in_()."""
-        assert isinstance(CAPACITY_OCCUPYING_ORDER_STATUSES, tuple)
-        assert all(isinstance(s, str) for s in CAPACITY_OCCUPYING_ORDER_STATUSES)
+        self.assertEqual(raised.exception.message, "批次关联的认证类型不存在")
+        self.assertEqual(len(db.statements), 3)
+
+
+class PlanOrderAssociationStructureTests(unittest.TestCase):
+    def test_order_model_and_migration_define_plan_foreign_key(self):
+        model_source = (
+            REPO_ROOT / "app/domain/order/src/model/order.py"
+        ).read_text(encoding="utf-8")
+        migration_source = (
+            REPO_ROOT / "alembic/versions/c4e5f6a7b8c9_add_plan_id_to_order.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("plan_id: Mapped[int | None]", model_source)
+        self.assertIn('ForeignKey("plan.id", ondelete="RESTRICT")', model_source)
+        self.assertIn('op.add_column("order"', migration_source)
+        self.assertIn('"fk_order_plan_id_plan"', migration_source)
+        self.assertIn('ondelete="RESTRICT"', migration_source)
+
+    def test_plan_lock_is_taken_for_capacity_serialization(self):
+        source = (
+            REPO_ROOT / "app/services/plan_enrollment.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(".with_for_update()", source)
+        self.assertIn("Order.plan_id == plan.id", source)

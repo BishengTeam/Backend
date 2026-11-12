@@ -21,7 +21,6 @@ pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
 
 
 async def test_renshe_notice_confirmation_is_saved_with_submitted_material_version(pg_env, monkeypatch):
-    pytest.skip("v2: renshe 审核链路需专项重写")
     from app.models.certification_journey import CertificationJourneyContent
     from app.domain.renshe.src.index import RensheApplicationVersion
     from app.services.certification_journey import CertificationJourneyService, user_journey
@@ -82,7 +81,6 @@ async def pg_env(monkeypatch, tmp_path):
 
 
 async def test_real_correction_blocks_old_review_and_snapshots_new_definition(pg_env, monkeypatch):
-    pytest.skip("v2: renshe 审核链路需专项重写")
     env = pg_env
     _, batch = await graduated_batch(env, monkeypatch)
     application_service = RensheApplicationService(env.storage)

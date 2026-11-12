@@ -15,10 +15,9 @@ class Order(Base, TimestampMixin):
         ),
         Index("ix_order_transaction_id_unique", "transaction_id", unique=True),
         Index(
-            "uq_order_active_user_plan_product",
+            "uq_order_active_user_plan",
             "user_id",
             "plan_id",
-            "product_type",
             unique=True,
             postgresql_where=text(
                 "plan_id IS NOT NULL AND status IN ('pending', 'paid', 'completed')"

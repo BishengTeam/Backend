@@ -151,7 +151,6 @@ class H3cPriceOption(BaseModel):
 class H3cExamBatchResponse(BaseModel):
     id: int
     plan_id: int
-    plan_product_id: int | None = None
     certification_code: str
     name: str
     status: str
@@ -190,7 +189,6 @@ class H3cExamBatchResponse(BaseModel):
 class H3cUserExamBatchResponse(BaseModel):
     id: int
     plan_id: int
-    plan_product_id: int | None = None
     certification_code: str
     name: str
     status: str
@@ -281,8 +279,7 @@ class H3cRegistrationResponse(BaseModel):
     id: int
     registration_no: str
     batch_id: int
-    plan_id: int | None = None
-    plan_product_id: int | None = None
+    plan_id: int
     order_id: int
     registration_type: H3cRegistrationType
     status: H3cRegistrationStatus

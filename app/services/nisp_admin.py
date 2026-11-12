@@ -7,7 +7,7 @@ from sqlalchemy import func, or_, select
 from app.adapter.database import get_db_ctx
 from app.domain.nisp.src import NispExamBatch, NispExportItem, NispExportJob, NispRegistration
 from app.domain.nisp.src.constants import NISP_MAX_MATERIAL_BYTES
-from app.domain.plan.src.index import Plan, PlanProduct
+from app.domain.plan.src.index import Plan
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.domain.order.src.index import Order, apply_order_status_transition
 from app.models.cert_product import CertProduct
@@ -61,7 +61,12 @@ class NispAdminService:
                         f"NISP {'一级' if data.level == '1' else '二级'}认证产品不存在或未上架"
                     )
 
-                duplicate = await db.scalar(select(Plan.id).where(Plan.name == data.name))
+                duplicate = await db.scalar(
+                    select(Plan.id).where(
+                        Plan.product_type == product.code,
+                        Plan.name == data.name,
+                    )
+                )
                 if duplicate is not None:
                     raise ConflictException("同名 NISP 考试批次已存在")
 
@@ -76,10 +81,13 @@ class NispAdminService:
                     other_price_field: 0,
                 }
                 plan = Plan(
+                    product_type=product.code,
                     name=data.name,
                     apply_start=_utc(data.apply_start),
                     apply_end=_utc(data.apply_end),
                     exam_date=_utc(data.exam_date),
+                    capacity=data.capacity,
+                    price_cents=data.price_cents,
                     exam_location=data.exam_location,
                     status="published" if data.publish else "draft",
                     published_at=_now() if data.publish else None,
@@ -88,17 +96,9 @@ class NispAdminService:
                     self._validate_schedule(plan, require_window=True, now=_now())
                 db.add(plan)
                 await db.flush()
-                # v2: 创建 plan_product 关联
-                plan_product = PlanProduct(
-                    plan_id=plan.id,
-                    product_id=product.id,
-                    capacity=data.capacity,
-                )
-                db.add(plan_product)
-                await db.flush()
 
                 batch = NispExamBatch(
-                    plan_product_id=plan_product.id,
+                    plan_id=plan.id,
                     level=data.level,
                     training_org=data.training_org,
                     consultation_group_qrcode_url=data.consultation_group_qrcode_url,
@@ -119,8 +119,7 @@ class NispAdminService:
     async def create_batch(self, data: NispExamBatchCreate) -> NispExamBatchResponse:
         async with get_db_ctx() as db:
             plan = await db.scalar(
-                select(Plan).join(PlanProduct, PlanProduct.plan_id == Plan.id)
-                    .where(PlanProduct.id == data.plan_product_id).with_for_update()
+                select(Plan).where(Plan.id == data.plan_id).with_for_update()
             )
             if plan is None:
                 raise NotFoundException("Plan")
@@ -133,7 +132,7 @@ class NispAdminService:
             await db.refresh(batch)
             await self._sync_legacy_qrcode(
                 db,
-                plan_id=plan.id if plan else None,
+                plan_id=batch.plan_id,
                 qrcode_url=data.consultation_group_qrcode_url,
             )
             await db.commit()
@@ -168,7 +167,7 @@ class NispAdminService:
                 if "name" in payload:
                     duplicate = await db.scalar(
                         select(Plan.id).where(
-                            Plan.id.in_(select(PlanProduct.plan_id).where(PlanProduct.product_id.in_(select(CertProduct.id).where(CertProduct.code == plan.product_type)))),
+                            Plan.product_type == plan.product_type,
                             Plan.name == payload["name"],
                             Plan.id != plan.id,
                         )
@@ -241,7 +240,7 @@ class NispAdminService:
         page_size: int = 20,
     ) -> tuple[list[NispExamBatchResponse], int]:
         async with get_db_ctx() as db:
-            stmt = select(NispExamBatch).join(PlanProduct, PlanProduct.id == NispExamBatch.plan_product_id) .join(Plan, Plan.id == PlanProduct.plan_id)
+            stmt = select(NispExamBatch).join(Plan, Plan.id == NispExamBatch.plan_id)
             if keyword:
                 stmt = stmt.where(Plan.name.ilike(f"%{keyword.strip()}%"))
             if level in {"1", "2"}:
@@ -275,7 +274,7 @@ class NispAdminService:
                 Plan.name,
                 NispExamBatch.level,
                 Plan.status,
-            ).join(PlanProduct, PlanProduct.id == NispExamBatch.plan_product_id) .join(Plan, Plan.id == PlanProduct.plan_id)
+            ).join(Plan, Plan.id == NispExamBatch.plan_id)
             cleaned_keyword = (keyword or "").strip()
             if cleaned_keyword:
                 conditions = [Plan.name.ilike(f"%{cleaned_keyword}%")]
@@ -301,7 +300,7 @@ class NispAdminService:
     async def publish_batch(self, batch_id: int) -> NispExamBatchResponse:
         async with get_db_ctx() as db:
             plan_id = await db.scalar(
-                select(NispExamBatch.plan_product_id).where(NispExamBatch.id == batch_id)
+                select(NispExamBatch.plan_id).where(NispExamBatch.id == batch_id)
             )
             if plan_id is None:
                 raise NotFoundException("NISP 考试批次")
@@ -331,7 +330,7 @@ class NispAdminService:
     async def close_registration(self, batch_id: int) -> NispExamBatchResponse:
         async with get_db_ctx() as db:
             plan_id = await db.scalar(
-                select(NispExamBatch.plan_product_id).where(NispExamBatch.id == batch_id)
+                select(NispExamBatch.plan_id).where(NispExamBatch.id == batch_id)
             )
             if plan_id is None:
                 raise NotFoundException("NISP 考试批次")
@@ -345,9 +344,7 @@ class NispAdminService:
                 .where(NispExamBatch.id == batch_id)
                 .with_for_update()
             )
-            if batch is None:
-                raise BusinessException("NISP 考试批次不存在")
-            # v2: FK 保证 batch→plan_product→plan 一致性
+            if batch is None or batch.plan_id != plan.id:
                 raise NotFoundException("NISP 考试批次")
             if plan.status not in {"published", "registration_closed"}:
                 raise ConflictException("当前批次不能关闭报名")
@@ -359,12 +356,13 @@ class NispAdminService:
 
     async def cancel_batch(self, batch_id: int) -> NispExamBatchResponse:
         async with get_db_ctx() as db:
+            plan_id = await db.scalar(
+                select(NispExamBatch.plan_id).where(NispExamBatch.id == batch_id)
+            )
+            if plan_id is None:
+                raise NotFoundException("NISP 考试批次")
             plan = await db.scalar(
-                select(Plan)
-                .join(PlanProduct, PlanProduct.plan_id == Plan.id)
-                .join(NispExamBatch, NispExamBatch.plan_product_id == PlanProduct.id)
-                .where(NispExamBatch.id == batch_id)
-                .with_for_update()
+                select(Plan).where(Plan.id == plan_id).with_for_update()
             )
             if plan is None:
                 raise NotFoundException("Plan")
@@ -373,9 +371,8 @@ class NispAdminService:
                 .where(NispExamBatch.id == batch_id)
                 .with_for_update()
             )
-            if batch is None:
-                raise BusinessException("NISP 考试批次不存在")
-            # v2: FK 保证 batch→plan_product→plan 一致性
+            if batch is None or batch.plan_id != plan.id:
+                raise NotFoundException("NISP 考试批次")
             if plan.status not in {"published", "registration_closed", "cancelled"}:
                 raise ConflictException("当前批次不能取消")
             # Re-running cancellation also repairs batches cancelled by the
@@ -505,7 +502,7 @@ class NispAdminService:
         if batch is None:
             raise NotFoundException("NISP 考试批次")
         plan = await db.scalar(
-            select(Plan).where(Plan.id == select(PlanProduct.plan_id).where(PlanProduct.id == batch.plan_product_id).scalar_subquery()).with_for_update()
+            select(Plan).where(Plan.id == batch.plan_id).with_for_update()
         )
         if plan is None:
             raise NotFoundException("Plan")
@@ -516,7 +513,7 @@ class NispAdminService:
         """Keep legacy NISP clients compatible with the shared configuration."""
         row = await db.scalar(
             select(CertConsultationGroup)
-            .where(CertConsultationGroup.plan_product_id == plan_id)
+            .where(CertConsultationGroup.plan_id == plan_id)
             .with_for_update()
         )
         cleaned = (qrcode_url or "").strip() or None
@@ -554,8 +551,8 @@ class NispAdminService:
             raise BusinessException("报名截止时间必须晚于当前时间")
 
     async def _response(self, db, batch: NispExamBatch) -> NispExamBatchResponse:
-        plan = await db.scalar(select(Plan).where(Plan.id == select(PlanProduct.plan_id).where(PlanProduct.id == batch.plan_product_id).scalar_subquery()))
-        occupied = await occupied_count(db, plan.id if plan else 0)
+        plan = await db.get(Plan, batch.plan_id)
+        occupied = await occupied_count(db, batch.plan_id)
         count_rows = (
             await db.execute(
                 select(NispRegistration.status, func.count())
@@ -565,13 +562,12 @@ class NispAdminService:
         ).all()
         consultation = await db.scalar(
             select(CertConsultationGroup).where(
-                CertConsultationGroup.plan_product_id == batch.plan_product_id
+                CertConsultationGroup.plan_id == batch.plan_id
             )
         )
         return NispExamBatchResponse(
             id=batch.id,
-            plan_id=plan.id if plan else None,
-            plan_product_id=batch.plan_product_id,
+            plan_id=batch.plan_id,
             level=batch.level,
             plan_name=plan.name if plan else "",
             plan_status=plan.status if plan else "",

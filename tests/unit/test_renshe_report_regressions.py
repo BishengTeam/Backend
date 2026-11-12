@@ -23,29 +23,6 @@ from tests.unit.test_renshe_projects import isolated as _isolated
 isolated = _isolated
 
 
-
-
-def _batch_field(batch, field: str, default=""):
-    """Safely get a field from batch (BatchResponse or mock) — checks products[0] first."""
-    products = getattr(batch, "products", None)
-    if products:
-        return getattr(products[0], field, default)
-    return getattr(batch, field, default)
-
-
-def _batch_occ(batch) -> str:
-    return _batch_field(batch, "occupation_name", "信息安全管理员")
-
-
-def _batch_occ_code(batch) -> str:
-    return _batch_field(batch, "occupation_code", "")
-
-
-def _batch_skill(batch) -> str:
-    return _batch_field(batch, "skill_level", "中级工")
-
-
-
 @pytest.mark.asyncio
 async def test_refund_search_matches_current_name_order_and_refund_number(isolated, monkeypatch):
     _, batch, submitted = await approved(isolated, monkeypatch)
@@ -141,7 +118,7 @@ async def test_external_approved_application_detail_exposes_group_without_changi
     async with isolated.db() as db:
         application = await db.get(RensheApplication, submitted.application.id)
         application.status = "external_approved"
-        db.add(CertConsultationGroup(plan_product_id=1, qrcode_url="/api/media/test-renshe-group.png",
+        db.add(CertConsultationGroup(plan_id=batch.id, qrcode_url="/api/media/test-renshe-group.png",
             join_instructions="报名前请先阅读群公告", version=1))
         await db.commit()
     detail = await RensheApplicationService(isolated.storage).get_application(1, submitted.application.id)

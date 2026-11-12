@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db_ctx
-from app.domain.plan.src.index import Plan, PlanProduct
+from app.domain.plan.src.index import Plan
 from app.models.cert_product import CertProduct
 from app.models.consultation_group import CertConsultationGroup
 from app.port.exceptions import ConflictException, NotFoundException
@@ -63,7 +63,7 @@ class ConsultationGroupService:
                 raise NotFoundException("认证批次")
             row = await db.scalar(
                 select(CertConsultationGroup).where(
-                    CertConsultationGroup.plan_product_id == plan_id
+                    CertConsultationGroup.plan_id == plan_id
                 )
             )
             if row is None:
@@ -89,7 +89,7 @@ class ConsultationGroupService:
                     raise NotFoundException("认证批次")
                 row = await db.scalar(
                     select(CertConsultationGroup)
-                    .where(CertConsultationGroup.plan_product_id == plan_id)
+                    .where(CertConsultationGroup.plan_id == plan_id)
                     .with_for_update()
                 )
                 current_version = row.version if row is not None else 0
@@ -102,23 +102,8 @@ class ConsultationGroupService:
                     return ConsultationGroupEmptyResponse(plan_id=plan_id)
 
                 if row is None:
-                    _pp_id = await db.scalar(
-                        select(PlanProduct.id).where(PlanProduct.plan_id == plan_id).limit(1)
-                    )
-                    if _pp_id is None:
-                        # v2: 无关联时创建占位 PlanProduct（测试/历史数据兼容）
-                        from app.models.cert_product import CertProduct as _CCP
-                        _cert = await db.scalar(select(_CCP).limit(1))
-                        if _cert is None:
-                            _cert = _CCP(type="generic", code=f"cg-{plan_id}", name="CG", chinese_name="CG", is_active=True)
-                            db.add(_cert)
-                            await db.flush()
-                        _pp_new = PlanProduct(plan_id=plan_id, product_id=_cert.id, capacity=0)
-                        db.add(_pp_new)
-                        await db.flush()
-                        _pp_id = _pp_new.id
                     row = CertConsultationGroup(
-                        plan_product_id=_pp_id,
+                        plan_id=plan_id,
                         qrcode_url=data.qrcode_url,
                         join_instructions=data.join_instructions,
                         expires_at=_utc(data.expires_at),
@@ -179,10 +164,9 @@ class ConsultationGroupService:
         if registration_status not in USER_VISIBLE_REGISTRATION_STATUSES:
             return None
         row = await db.scalar(
-            select(CertConsultationGroup)
-            .join(PlanProduct, PlanProduct.id == CertConsultationGroup.plan_product_id)
-            .where(PlanProduct.plan_id == plan.id)
-            .limit(1)
+            select(CertConsultationGroup).where(
+                CertConsultationGroup.plan_id == plan.id
+            )
         )
         if row is None or _is_expired(row):
             return None

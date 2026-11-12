@@ -10,7 +10,7 @@ from sqlalchemy import func, or_, select, update
 
 from app.adapter.database import get_db_ctx
 from app.domain.order.src.index import Order, apply_order_status_transition
-from app.domain.plan.src.index import Plan, PlanProduct
+from app.domain.plan.src.index import Plan
 from app.domain.renshe.src.index import (
     RensheApplicationVersion,
     RensheApplication,
@@ -127,18 +127,7 @@ class RensheRefundService:
             if order.price <= 0:
                 raise ConflictException("零元报名没有可退金额，请联系管理员处理报名关闭")
             plan = await db.get(Plan, application.plan_id)
-            # v2: 优先用 plan compat 属性，fallback 到 PlanProduct 查询
-            _refund_code = getattr(plan, "product_type", None)
-            if not _refund_code:
-                from app.domain.plan.src.index import PlanProduct as _RPP
-                from app.models.cert_product import CertProduct as _RCP
-                _refund_code = await db.scalar(
-                    select(_RCP.code)
-                    .join(_RPP, _RPP.product_id == _RCP.id)
-                    .where(_RPP.plan_id == plan.id)
-                    .limit(1)
-                )
-            if plan is None or order.plan_id != plan.id or order.product_type != _refund_code:
+            if plan is None or order.plan_id != plan.id or order.product_type != plan.product_type:
                 raise ConflictException("退款订单与报名项目或批次归属不一致")
             cleanup_run = await db.scalar(
                 select(RensheCleanupRun)
@@ -258,9 +247,7 @@ class RensheRefundService:
                 .join(RensheApplication, RensheApplication.id == RensheRefundRequest.application_id)
                 .join(Plan, Plan.id == RensheApplication.plan_id)
                 .join(Order, Order.id == RensheRefundRequest.order_id)
-                # v2: 通过 PlanProduct 关联
-                .outerjoin(PlanProduct, PlanProduct.plan_id == Plan.id)
-                .outerjoin(CertProduct, CertProduct.id == PlanProduct.product_id)
+                .outerjoin(CertProduct, CertProduct.code == Plan.product_type)
                 .outerjoin(
                     RensheApplicationVersion,
                     RensheApplicationVersion.id == RensheApplication.current_version_id,

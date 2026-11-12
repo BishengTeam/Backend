@@ -34,15 +34,14 @@ async def list_batches(
     """List published NISP exam batches."""
     from app.adapter.database import get_db_ctx
     from app.domain.nisp.src import NispExamBatch
-    from app.domain.plan.src.index import Plan, PlanProduct
+    from app.domain.plan.src.index import Plan
     from app.domain.order.src.index import Order
     from app.models.cert_product import CertProduct
 
     async with get_db_ctx() as db:
         stmt = (
             select(NispExamBatch, Plan)
-            .join(PlanProduct, PlanProduct.id == NispExamBatch.plan_product_id)
-            .join(Plan, Plan.id == PlanProduct.plan_id)
+            .join(Plan, Plan.id == NispExamBatch.plan_id)
             .join(
                 CertProduct,
                 CertProduct.code == func.concat("NISP-", NispExamBatch.level),
@@ -51,7 +50,12 @@ async def list_batches(
                 Plan.status == "published",
                 CertProduct.type == "nisp",
                 CertProduct.is_active.is_(True),
-                # v2: PlanProduct join 已保证 product 关联正确
+                # Plans created before NISP was split into NISP-1/NISP-2 use
+                # the legacy product_type "nisp". Their level is authoritative.
+                or_(
+                    Plan.product_type == CertProduct.code,
+                    func.lower(Plan.product_type) == "nisp",
+                ),
             )
             .order_by(Plan.sort_order.desc(), NispExamBatch.id.desc())
         )

@@ -1,15 +1,8 @@
-import os
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-
-# 以下测试需要 PostgreSQL 测试数据库（CI 环境）
-requires_test_db = pytest.mark.skipif(
-    not os.environ.get("TEST_DATABASE_URL"),
-    reason="requires TEST_DATABASE_URL (CI only)"
-)
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -36,15 +29,12 @@ def client(monkeypatch):
     from app.services.renshe_project import RensheProjectService
     from app.services.plan import PlanService
     monkeypatch.setattr(RensheProjectService, "list_projects", AsyncMock(return_value=[]))
-    monkeypatch.setattr(PlanService, "list_published_batches_for_product", AsyncMock(return_value=[]))
+    monkeypatch.setattr(PlanService, "list_renshe_plans", AsyncMock(return_value=[]))
     monkeypatch.setattr(certification.CertificationService, "list_certifications", AsyncMock(return_value=[]))
     return TestClient(app)
 
 
-# /api/renshe/batches 已移至集成测试：v2 路由直接查询 plan 表，
-# 单测阶段 CI 数据库尚未迁移（quality gate 先于 alembic upgrade）。
-@pytest.mark.parametrize("path", ["/api/h3c/exam-batches", "/api/renshe/projects", "/api/cert/certifications", "/api/quiz/libraries", "/api/points-mall/items", "/api/points/virtual-products"])
-@requires_test_db
+@pytest.mark.parametrize("path", ["/api/h3c/exam-batches", "/api/renshe/projects", "/api/renshe/batches", "/api/cert/certifications", "/api/quiz/libraries", "/api/points-mall/items", "/api/points/virtual-products"])
 def test_public_catalogs_accept_anonymous_clients(client, path):
     response = client.get(path)
     assert response.status_code == 200, response.text
@@ -67,17 +57,11 @@ def test_business_actions_stay_protected(client, path, body):
     assert client.post(path, json=body).status_code == 401
 
 
-@requires_test_db
 def test_renshe_public_projection_omits_admin_contacts_config_ids_and_template_storage():
-    from app.schemas.plan import PlanProductResponse
-    product = PlanProductResponse.model_construct(
-        id=1, plan_id=1, product_id=10, product_code="RNSH-01", product_name="人社认证",
-        product_type="renshe", capacity=30,
-        renshe_config={"qualification_rule": "related_major_graduated_degree_v1",
-        "reporting_policy": {"contract_version": 2, "commitment_template": {"filename": "private.pdf", "sha256": "secret"}},
-        "materials": [], "rule_profile": {"source_conditions": ["已毕业"], "internal_note": "private"}})
     plan = PlanResponse.model_construct(id=1, name="公开批次", status="published", contact_name="内部人员", contact_phone="private",
-        products=[product])
+        renshe_config_id=99, renshe_config={"qualification_rule":"related_major_graduated_degree_v1",
+        "reporting_policy":{"contract_version":2, "commitment_template":{"filename":"private.pdf", "sha256":"secret"}},
+        "materials":[], "rule_profile":{"source_conditions":["已毕业"], "internal_note":"private"}})
     result = public_plan(plan)
     assert result["can_apply"] is True
     assert not {"renshe_config_id", "contact_name", "contact_phone"} & result.keys()
