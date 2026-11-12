@@ -10,7 +10,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "quiz022"
-down_revision = "quiz021"
+down_revision = "exam001"  # 2026-11-12 合流 cert-v1：cbr002/exam001 已上生产，quiz 线重挂其后消双 head
 branch_labels = None
 depends_on = None
 
