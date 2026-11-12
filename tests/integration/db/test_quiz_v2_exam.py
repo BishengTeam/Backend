@@ -60,6 +60,7 @@ async def _seed_question(
     *,
     admin_id: int,
     library_id: int,
+    module_id: int,
     point_id: int,
     stem: str,
     now: datetime,
@@ -68,6 +69,7 @@ async def _seed_question(
     digest = question_text_digest(normalized_stem)
     question = QuizQuestion(
         library_id=library_id,
+        module_id=module_id,
         knowledge_point_id=point_id,
         category_id=None,
         question_type="judge",
@@ -237,6 +239,7 @@ async def quiz_v2_exam_env(monkeypatch):
                         db,
                         admin_id=admin.id,
                         library_id=free_library.id,
+                        module_id=free_module.id,
                         point_id=point.id,
                         stem=(
                             f"{prefix} 免费知识点 {point_index} "
@@ -251,6 +254,7 @@ async def quiz_v2_exam_env(monkeypatch):
                     db,
                     admin_id=admin.id,
                     library_id=paid_library.id,
+                    module_id=paid_module.id,
                     point_id=paid_point.id,
                     stem=f"{prefix} 课程判断题 {question_index}",
                     now=now,

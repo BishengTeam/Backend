@@ -80,10 +80,12 @@ async def test_bind_and_surface_quiz_library(context) -> None:
     async with context.factory() as db:
         library = QuizLibrary(
             name=f"{context.prefix}_lib",
+            normalized_name=f"{context.prefix}_lib",
             library_code=f"{context.prefix}_L",
             access_mode="free",
             vendor_tag="none",
             status="published",
+            published_at=now,
             v2_enabled=True,
         )
         db.add(library)

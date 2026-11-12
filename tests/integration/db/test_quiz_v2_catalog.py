@@ -370,7 +370,8 @@ async def test_catalog_hides_unentitled_course_library(quiz_v2_catalog_env) -> N
     assert [item.id for item in visible] == [env.library.id]
     assert all(item.vendor_tag in {"h3c", "nisp", "sangfor", "none"} for item in visible)
     detail = await env.user_service.get_library(env.user_id, env.library.id)
-    assert detail.modules[0].knowledge_points[0].id == env.point.id
+    # quiz023 单链塌缩：唯一模块+至多一知识点时目录不再重复三层（按库直选即可练习）。
+    assert detail.modules == []
 
     preview = await env.user_service.preview_practice_scope(
         env.user_id, "knowledge_point", env.point.id, "full"
@@ -1249,7 +1250,8 @@ async def test_anonymous_catalog_exposes_metadata_without_granting_practice(quiz
     public = await env.user_service.list_libraries(None)
     assert env.library.id in {item.id for item in public}
     detail = await env.user_service.get_library(None, env.library.id)
-    assert detail.modules[0].knowledge_points[0].id == env.point.id
+    # quiz023 单链塌缩：目录不吐三层树，匿名侧也只暴露元数据。
+    assert detail.modules == []
     assert "questions" not in detail.model_dump()
     assert "answers" not in str(detail.model_dump()).lower()
     with pytest.raises(QuizV2Exception):

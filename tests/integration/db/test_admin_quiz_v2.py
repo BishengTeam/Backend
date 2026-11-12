@@ -1094,7 +1094,7 @@ async def test_large_question_pages_prefetch_revisions_and_preserve_order(quiz_v
         rows = []
         for number in range(2001):
             content = f"{env.prefix}题目{number}"
-            rows.append(QuizQuestion(library_id=library.id, knowledge_point_id=point.id, question_type="judge", status="draft",
+            rows.append(QuizQuestion(library_id=library.id, module_id=module.id, knowledge_point_id=point.id, question_type="judge", status="draft",
                 question_text=content, normalized_question_text=content, question_text_hash=hashlib.sha256(content.encode()).hexdigest(),
                 correct_answer="A", created_by=env.admin_id, updated_by=env.admin_id))
         db.add_all(rows)

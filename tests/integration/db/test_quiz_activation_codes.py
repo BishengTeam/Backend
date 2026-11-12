@@ -327,8 +327,8 @@ async def test_redeem_entitlement_lastst_validity_days(activation_env):
         assert int(entitlement.user_id) == int(env.student_a)
         assert entitlement.source_type == "activation_code"
         assert entitlement.status == "active"
-        # 效期自兑换时起算：ends_at = 兑换时刻 + validity_days。
-        assert entitlement.ends_at - entitlement.redeemed_at == timedelta(days=30)
+        # 效期自兑换时起算：ends_at = 兑换时刻 + validity_days（redeemed_at 在激活码表上）。
+        assert entitlement.ends_at - code.redeemed_at == timedelta(days=30)
         assert entitlement.snapshot["activation_code"] == display
 
 
@@ -588,8 +588,13 @@ async def test_custom_code_generate_and_redeem(activation_env):
 async def test_versioned_api_shapes(activation_env):
     env = activation_env
     now = datetime(2026, 11, 5, 2, tzinfo=timezone.utc)
+    from app.middleware.error_handler import app_exception_handler
+    from app.port.exceptions import AppException
     app = FastAPI()
     app.include_router(admin_quiz_router)
+    # 生产 app 的统一异常处理把 ValidationException 转 422；裸 app 必须补挂，
+    # 否则 code_schema 门禁的拒绝会以异常形式漏出而非 422 响应。
+    app.add_exception_handler(AppException, app_exception_handler)
     app.dependency_overrides[require_normal_admin] = lambda: SimpleNamespace(id=env.admin_id, role="quiz_admin")
     path = f"/quiz/libraries/{env.library.id}/activation-codes"
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -720,7 +725,8 @@ async def test_get_library_schema_contract(activation_env):
 
     detail = await env.catalog.get_library(env.student_a, env.library.id, schema="2")
     assert detail.accessible is False
-    assert detail.modules, "目录公开库详情应包含模块树"
+    # quiz023 单链塌缩：唯一模块+至多一知识点时目录不再重复三层。
+    assert detail.modules == []
 
     anonymous = await env.catalog.get_library(None, env.library.id, schema="2")
     assert anonymous.accessible is False
