@@ -138,6 +138,9 @@ class H3cRegistration(Base, TimestampMixin):
     batch_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("h3c_exam_batch.id", ondelete="RESTRICT"), nullable=False
     )
+    batch_product_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("h3c_batch_product.id", ondelete="RESTRICT"), nullable=True
+    )
     plan_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("plan.id", ondelete="RESTRICT"), nullable=False
     )

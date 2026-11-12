@@ -289,6 +289,12 @@ class AdminCertProductService:
             async with db.begin():
                 product = await self._get_or_404(db, code)
                 update_data = data.model_dump(exclude_unset=True)
+                # v2 多产品：支持产品级三档价
+                for price_field in ("coupon_price_cents", "student_price_cents", "full_price_cents"):
+                    if hasattr(data, price_field):
+                        val = getattr(data, price_field)
+                        if val is not None:
+                            update_data[price_field] = val
                 if product.type == "sangfor":
                     from app.services.sangfor_catalog import require_direction
                     if update_data.get("is_active", product.is_active):

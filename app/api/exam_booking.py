@@ -77,8 +77,8 @@ async def get_slots(
     db: AsyncSession = Depends(get_db),
 ):
     """P0 #2: 自动从用户报名记录解析科目，无需前端传 subject_id。"""
-    # 从该用户最近的 H3C 报名解析科目
-    from app.domain.h3c.src.index import H3cExamBatch
+    # 从该用户最近的 H3C 报名解析科目（v2 优先 batch_product_id 两跳）
+    from app.domain.h3c.src.index import H3cExamBatch, H3cBatchProduct
     from app.domain.plan.src.index import Plan
     from app.models.cert_product import CertProduct
     from app.domain.exam.src.index import ExamScheduleSubject
@@ -95,11 +95,15 @@ async def get_slots(
     if registration is None:
         raise NotFoundException("报名记录")
 
-    batch = await db.get(H3cExamBatch, registration.batch_id)
-    plan = await db.get(Plan, batch.plan_id) if batch else None
-    product = await db.scalar(
-        select(CertProduct).where(CertProduct.code == plan.product_type)
-    ) if plan else None
+    if registration.batch_product_id:
+        _bp = await db.get(H3cBatchProduct, registration.batch_product_id)
+        product = await db.get(CertProduct, _bp.product_id) if _bp else None
+    else:
+        batch = await db.get(H3cExamBatch, registration.batch_id)
+        plan = await db.get(Plan, batch.plan_id) if batch else None
+        product = await db.scalar(
+            select(CertProduct).where(CertProduct.code == plan.product_type)
+        ) if plan else None
 
     subject_id = await db.scalar(
         select(ExamScheduleSubject.id).where(

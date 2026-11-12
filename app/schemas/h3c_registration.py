@@ -220,6 +220,7 @@ class H3cMaterialUploadResponse(BaseModel):
 class H3cOrderCreate(BaseModel):
     notice_hash: str | None = Field(None, min_length=64, max_length=64)
     batch_id: int = Field(..., gt=0)
+    batch_product_id: int | None = Field(None, gt=0, description="多产品批次：选中的科目关联 ID")
     registration_type: H3cRegistrationType
     candidate_name: str = Field(..., min_length=1, max_length=64)
     gender: str = Field(..., min_length=1, max_length=4)

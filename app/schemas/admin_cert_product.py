@@ -86,6 +86,9 @@ class CertProductUpdate(BaseModel):
         None,
         description="省略或 null 保持现有标准价格，空列表显式停用；H3C 产品参考价不决定批次报名实收",
     )
+    coupon_price_cents: int | None = Field(None, ge=0, description="H3C 考券价（产品级）")
+    student_price_cents: int | None = Field(None, ge=0, description="H3C 学生价（产品级）")
+    full_price_cents: int | None = Field(None, ge=0, description="H3C 全额价（产品级）")
 
 
 class CertProductStats(BaseModel):

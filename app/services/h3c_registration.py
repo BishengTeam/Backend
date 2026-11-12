@@ -276,6 +276,25 @@ class H3cRegistrationService:
                 )
                 if active_candidate_id is not None:
                     raise ConflictException("该身份证号已报名此考试批次")
+                # v2 多产品：解析选中的科目（batch_product_id → product）
+                from app.domain.h3c.src.index import H3cBatchProduct
+                _batch_product = None
+                _product = None
+                if data.batch_product_id:
+                    _batch_product = await db.scalar(
+                        select(H3cBatchProduct)
+                        .where(
+                            H3cBatchProduct.id == data.batch_product_id,
+                            H3cBatchProduct.batch_id == data.batch_id,
+                        )
+                        .with_for_update()
+                    )
+                    if _batch_product is None:
+                        raise BusinessException("所选科目不在此批次中")
+                    _product = await db.get(CertProduct, _batch_product.product_id)
+                    if _product is None:
+                        raise BusinessException("科目产品不存在")
+
                 plan = await PlanEnrollmentService().lock_enrollable_plan(
                     db,
                     plan_id=batch_plan_id,
@@ -316,7 +335,16 @@ class H3cRegistrationService:
                     user_id=user_id,
                     keys=requested_keys,
                 )
-                price_cents = _price(batch, data.registration_type)
+                # v2 多产品：价格从产品级读取
+                if _product is not None:
+                    _price_map = {
+                        "coupon": _product.coupon_price_cents,
+                        "student": _product.student_price_cents,
+                        "full": _product.full_price_cents,
+                    }
+                    price_cents = _price_map.get(data.registration_type, 0) or 0
+                else:
+                    price_cents = _price(batch, data.registration_type)
                 notice_snapshot = None
                 if data.notice_hash:
                     from app.services.certification_journey import confirmed_notice
@@ -325,7 +353,7 @@ class H3cRegistrationService:
                 order = Order(
                     user_id=user_id,
                     order_kind="certification",
-                    product_type=plan.product_type,
+                    product_type=_product.code if _product else plan.product_type,
                     plan_id=plan.id,
                     candidate_name=identity.real_name,
                     candidate_phone=data.phone,
@@ -346,6 +374,7 @@ class H3cRegistrationService:
                 registration = H3cRegistration(
                     batch_id=batch.id,
                     plan_id=plan.id,
+                    batch_product_id=_batch_product.id if _batch_product else None,
                     user_id=user_id,
                     order_id=order.id,
                     registration_no="PENDING",

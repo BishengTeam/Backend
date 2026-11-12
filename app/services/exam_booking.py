@@ -154,20 +154,30 @@ class ExamBookingService:
         if registration is None:
             raise NotFoundException("报名记录")
 
-        # P0 #1: 通过报名记录追溯考生的实际科目（registration → batch → plan → product_type → CertProduct）
+        # v2 多产品：通过 batch_product_id 两跳直达产品
         from app.models.cert_product import CertProduct
-        from app.domain.h3c.src.index import H3cExamBatch
+        from app.domain.h3c.src.index import H3cExamBatch, H3cBatchProduct
         from app.domain.plan.src.index import Plan
 
-        batch = await db.get(H3cExamBatch, registration.batch_id)
-        if batch is None:
-            raise BusinessException("报名记录缺少批次关联")
-        plan = await db.get(Plan, batch.plan_id)
-        if plan is None:
-            raise BusinessException("批次缺少关联计划")
-        product = await db.scalar(
-            select(CertProduct).where(CertProduct.code == plan.product_type)
-        )
+        if registration.batch_product_id:
+            # 两跳：registration → batch_product → cert_product
+            _bp = await db.get(H3cBatchProduct, registration.batch_product_id)
+            if _bp is None:
+                raise BusinessException("报名记录缺少科目关联")
+            product = await db.get(CertProduct, _bp.product_id)
+            if product is None:
+                raise BusinessException("未找到考生的认证产品")
+        else:
+            # 兼容旧链路：registration → batch → plan → product_type
+            batch = await db.get(H3cExamBatch, registration.batch_id)
+            if batch is None:
+                raise BusinessException("报名记录缺少批次关联")
+            plan = await db.get(Plan, batch.plan_id)
+            if plan is None:
+                raise BusinessException("批次缺少关联计划")
+            product = await db.scalar(
+                select(CertProduct).where(CertProduct.code == plan.product_type)
+            )
         if product is None:
             raise BusinessException("未找到考生的认证产品")
 
