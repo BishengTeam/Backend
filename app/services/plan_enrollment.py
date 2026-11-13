@@ -61,36 +61,52 @@ class PlanEnrollmentService:
 
         self.validate_application_window(plan, now=now)
 
-        # 认证产品体系：批次由认证管理（cert_product）创建，编码可能不存在于
-        # 旧 certification 表；优先校验新表，历史批次再回退旧表，与通用下单
-        # 链路（services/order.py）的兼容策略保持一致。
-        product = (
-            await db.execute(
-                select(CertProduct)
-                .where(CertProduct.code == plan.product_type)
-                .with_for_update()
-            )
-        ).scalar_one_or_none()
-        if product is not None:
-            # expected_vendor 为厂商标识（如 H3C），新体系以 type（h3c）区分
-            if product.type != expected_vendor.lower():
+        # v2 多产品：product_type=None 的 H3C 批次，经 h3c_batch_product 校验
+        if plan.product_type is None and expected_vendor.lower() == "h3c":
+            from app.domain.h3c.src.index import H3cExamBatch, H3cBatchProduct
+            _bp_products = (
+                await db.execute(
+                    select(CertProduct)
+                    .join(H3cBatchProduct, H3cBatchProduct.product_id == CertProduct.id)
+                    .join(H3cExamBatch, H3cExamBatch.id == H3cBatchProduct.batch_id)
+                    .where(H3cExamBatch.plan_id == plan.id)
+                )
+            ).scalars().all()
+            if not _bp_products:
+                raise BusinessException("批次关联的认证类型不存在")
+            if any(p.type != "h3c" for p in _bp_products):
                 raise BusinessException(f"该批次不属于{expected_vendor}认证")
-            if not product.is_active:
+            if any(not p.is_active for p in _bp_products):
                 raise BusinessException("该认证类型已下架")
         else:
-            certification = (
+            # 认证产品体系：批次由认证管理（cert_product）创建，编码可能不存在于
+            # 旧 certification 表；优先校验新表，历史批次再回退旧表
+            product = (
                 await db.execute(
-                    select(Certification)
-                    .where(Certification.code == plan.product_type)
+                    select(CertProduct)
+                    .where(CertProduct.code == plan.product_type)
                     .with_for_update()
                 )
             ).scalar_one_or_none()
-            if certification is None:
-                raise BusinessException("批次关联的认证类型不存在")
-            if certification.vendor != expected_vendor:
-                raise BusinessException(f"该批次不属于{expected_vendor}认证")
-            if not certification.is_active:
-                raise BusinessException("该认证类型已下架")
+            if product is not None:
+                if product.type != expected_vendor.lower():
+                    raise BusinessException(f"该批次不属于{expected_vendor}认证")
+                if not product.is_active:
+                    raise BusinessException("该认证类型已下架")
+            else:
+                certification = (
+                    await db.execute(
+                        select(Certification)
+                        .where(Certification.code == plan.product_type)
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if certification is None:
+                    raise BusinessException("批次关联的认证类型不存在")
+                if certification.vendor != expected_vendor:
+                    raise BusinessException(f"该批次不属于{expected_vendor}认证")
+                if not certification.is_active:
+                    raise BusinessException("该认证类型已下架")
 
         active_order_id = (
             await db.execute(
