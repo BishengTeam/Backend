@@ -304,17 +304,31 @@ class H3cRegistrationService:
                 batch = await self._get_batch_for_update(db, data.batch_id)
                 if batch.plan_id != plan.id:
                     raise ConflictException("H3C 批次与报名计划关联不一致")
-                active_registration_id = await db.scalar(
-                    select(H3cRegistration.id)
-                    .where(
-                        H3cRegistration.batch_id == batch.id,
-                        H3cRegistration.candidate_idcard == identity.id_card_number,
-                        H3cRegistration.status.in_(H3C_ACTIVE_STATUSES),
+                # v2 多产品：查重改为产品级（允许同批次报不同产品）
+                if _batch_product is not None:
+                    active_registration_id = await db.scalar(
+                        select(H3cRegistration.id)
+                        .where(
+                            H3cRegistration.batch_product_id == _batch_product.id,
+                            H3cRegistration.candidate_idcard == identity.id_card_number,
+                            H3cRegistration.status.in_(H3C_ACTIVE_STATUSES),
+                        )
+                        .limit(1)
                     )
-                    .limit(1)
-                )
-                if active_registration_id is not None:
-                    raise ConflictException("该身份证号已报名此考试批次")
+                    if active_registration_id is not None:
+                        raise ConflictException("该身份证号已报名此科目")
+                else:
+                    active_registration_id = await db.scalar(
+                        select(H3cRegistration.id)
+                        .where(
+                            H3cRegistration.batch_id == batch.id,
+                            H3cRegistration.candidate_idcard == identity.id_card_number,
+                            H3cRegistration.status.in_(H3C_ACTIVE_STATUSES),
+                        )
+                        .limit(1)
+                    )
+                    if active_registration_id is not None:
+                        raise ConflictException("该身份证号已报名此考试批次")
 
                 requested_keys = {
                     key: value
@@ -335,14 +349,18 @@ class H3cRegistrationService:
                     user_id=user_id,
                     keys=requested_keys,
                 )
-                # v2 多产品：价格从产品级读取
+                # v2 多产品：价格从产品级读取（fail-loud，不静默为 0）
                 if _product is not None:
                     _price_map = {
                         "coupon": _product.coupon_price_cents,
                         "student": _product.student_price_cents,
                         "full": _product.full_price_cents,
                     }
-                    price_cents = _price_map.get(data.registration_type, 0) or 0
+                    _selected_price = _price_map.get(data.registration_type)
+                    if _selected_price is None:
+                        _type_label = {"coupon": "考券", "student": "学生", "full": "全额"}.get(data.registration_type, data.registration_type)
+                        raise BusinessException(f"产品「{_product.name}」未配置{_type_label}价格，请联系管理员")
+                    price_cents = _selected_price
                 else:
                     price_cents = _price(batch, data.registration_type)
                 notice_snapshot = None
