@@ -92,6 +92,13 @@ class H3cAdminBatchService:
                     )
                     if product is None:
                         raise BusinessException("认证产品不存在或未上架，请先在认证管理中上架")
+                    # U4: 单产品分支也校验产品级价格（请求未传时从产品读）
+                    if (data.coupon_price_cents is None and product.coupon_price_cents is None):
+                        raise BusinessException(f"产品「{product.name}」尚未配置考券价格，请先在产品设置中维护")
+                    if (data.student_price_cents is None and product.student_price_cents is None):
+                        raise BusinessException(f"产品「{product.name}」尚未配置学生价格，请先在产品设置中维护")
+                    if (data.full_price_cents is None and product.full_price_cents is None):
+                        raise BusinessException(f"产品「{product.name}」尚未配置全额价格，请先在产品设置中维护")
                     products = [product]
                     product_type = product.code
                 duplicate = await db.scalar(

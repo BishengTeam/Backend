@@ -21,7 +21,7 @@ class Plan(Base, TimestampMixin):
         Index("ix_plan_status", "status"),
     )
 
-    product_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    product_type: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     renshe_config_id: Mapped[int | None] = mapped_column(ForeignKey("renshe_project_config.id", ondelete="RESTRICT"), nullable=True)
     renshe_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     project_name: Mapped[str | None] = mapped_column(String(128), nullable=True)

@@ -114,13 +114,21 @@ class H3cExamBatchBase(BaseModel):
 
 class H3cExamBatchCreate(H3cExamBatchBase):
     """v2 多产品：product_ids 替代 certification_code，价格从 cert_product 读。"""
-    # 多产品改造：可选传 product_ids 列表（跨产品批次）
-    # 兼容旧调用：仍可传 certification_code（单产品批次）
-    product_ids: list[int] | None = Field(None, description="多产品批次：cert_product ID 列表")
+    # 覆写为可选（与 product_ids 二选一）
+    certification_code: str | None = Field(None, min_length=1, max_length=32)
+    product_ids: list[int] | None = Field(None, min_length=1, description="多产品批次：cert_product ID 列表")
     # 价格字段变为可选（多产品模式下不传，从产品读）
     coupon_price_cents: int | None = Field(None, ge=0)
     student_price_cents: int | None = Field(None, ge=0)
     full_price_cents: int | None = Field(None, ge=0)
+
+    from pydantic import model_validator
+
+    @model_validator(mode="after")
+    def validate_mode(self):
+        if not self.certification_code and not self.product_ids:
+            raise ValueError("必须提供 certification_code 或 product_ids 之一")
+        return self
 
 
 class H3cExamBatchUpdate(BaseModel):

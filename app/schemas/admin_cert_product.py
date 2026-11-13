@@ -23,6 +23,10 @@ class CertProductResponse(BaseModel):
     home_cover_url: str | None
     is_active: bool
     sort_order: int
+    # v2 H3C 产品级三档价
+    coupon_price_cents: int | None = None
+    student_price_cents: int | None = None
+    full_price_cents: int | None = None
     prices: list[CertProductPrice] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
