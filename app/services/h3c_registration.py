@@ -145,22 +145,44 @@ class H3cRegistrationService:
         )
 
     async def list_user_batches(self) -> list[H3cUserExamBatchResponse]:
+        from app.domain.h3c.src.index import H3cBatchProduct
         async with get_db_ctx() as db:
-            rows = (
+            # ① 单产品批次（原逻辑）
+            single_rows = (
                 await db.execute(
                     select(H3cExamBatch, Plan, CertProduct)
                     .join(Plan, Plan.id == H3cExamBatch.plan_id)
                     .join(CertProduct, CertProduct.code == Plan.product_type)
                     .where(
                         Plan.status.in_(H3C_VISIBLE_PLAN_STATUSES),
+                        Plan.product_type.is_not(None),
                         CertProduct.type == "h3c",
                         CertProduct.is_active.is_(True),
                     )
                     .order_by(Plan.sort_order.desc(), Plan.id.desc())
                 )
             ).all()
+
+            # ② 多产品批次（经 h3c_batch_product 展开，每个科目一条）
+            multi_rows = (
+                await db.execute(
+                    select(H3cExamBatch, Plan, CertProduct, H3cBatchProduct)
+                    .join(Plan, Plan.id == H3cExamBatch.plan_id)
+                    .join(H3cBatchProduct, H3cBatchProduct.batch_id == H3cExamBatch.id)
+                    .join(CertProduct, CertProduct.id == H3cBatchProduct.product_id)
+                    .where(
+                        Plan.status.in_(H3C_VISIBLE_PLAN_STATUSES),
+                        Plan.product_type.is_(None),
+                        CertProduct.type == "h3c",
+                        CertProduct.is_active.is_(True),
+                    )
+                    .order_by(Plan.sort_order.desc(), Plan.id.desc(), H3cBatchProduct.id)
+                )
+            ).all()
+
+            # ③ 合并
             result: list[H3cUserExamBatchResponse] = []
-            for batch, plan, product in rows:
+            for batch, plan, product in single_rows:
                 occupied = await db.scalar(
                     select(func.count())
                     .select_from(Order)
@@ -191,6 +213,37 @@ class H3cRegistrationService:
                         max_material_bytes=batch.max_material_bytes,
                     )
                 )
+            # 多产品批次：每个科目独立一条
+            for batch, plan, product, bp in multi_rows:
+                occupied = await db.scalar(
+                    select(func.count())
+                    .select_from(Order)
+                    .where(
+                        Order.plan_id == plan.id,
+                        Order.status.in_(("pending", "paid", "completed")),
+                    )
+                ) or 0
+                remaining = max(0, plan.capacity - int(occupied))
+                result.append(
+                    H3cUserExamBatchResponse(
+                        id=batch.id,
+                        plan_id=plan.id,
+                        certification_code=product.code,
+                        name=plan.name,
+                        status=plan.status,
+                        apply_start=plan.apply_start,
+                        apply_end=plan.apply_end,
+                        exam_date=plan.exam_date,
+                        exam_location=plan.exam_location,
+                        remaining_count=remaining,
+                        prices=[
+                            {"registration_type": "coupon", "price_cents": product.coupon_price_cents or 0},
+                            {"registration_type": "student", "price_cents": product.student_price_cents or 0},
+                            {"registration_type": "full", "price_cents": product.full_price_cents or 0},
+                        ],
+                    )
+                )
+
             return result
 
     async def upload_material(

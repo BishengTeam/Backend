@@ -62,7 +62,16 @@ class CertificationJourneyService:
         if not admin:
             products = [item for item in products if item.is_active and (vendor != "renshe" or item.renshe_status == "available")]
         codes = [item.code for item in products]
-        plans = list((await db.scalars(select(Plan).where(Plan.product_type.in_(codes)).order_by(Plan.sort_order.desc(), Plan.id.desc()))).all()) if codes else []
+        from sqlalchemy import or_
+        _plan_conditions = [Plan.product_type.in_(codes)]
+        # v2 多产品：H3C 批次 product_type=None，经 h3c_exam_batch→h3c_batch_product 关联
+        if vendor == "h3c":
+            from app.domain.h3c.src.index import H3cExamBatch, H3cBatchProduct
+            _h3c_multi_plan_ids = select(H3cExamBatch.plan_id).where(
+                H3cExamBatch.id.in_(select(H3cBatchProduct.batch_id))
+            )
+            _plan_conditions.append(Plan.id.in_(_h3c_multi_plan_ids))
+        plans = list((await db.scalars(select(Plan).where(or_(*_plan_conditions)).order_by(Plan.sort_order.desc(), Plan.id.desc()))).all()) if codes else []
         if not admin:
             plans = [plan for plan in plans if plan.status in {"published", "registration_closed", "finalized"}]
         ids = [plan.id for plan in plans]
@@ -73,6 +82,30 @@ class CertificationJourneyService:
         for plan in plans:
             batch = h3c.get(plan.id) if vendor == "h3c" else nisp.get(plan.id) if vendor == "nisp" else None
             if vendor in {"h3c", "nisp"} and batch is None:
+                continue
+            # v2 多产品：H3C 批次按科目展开
+            if vendor == "h3c" and plan.product_type is None and batch is not None:
+                from app.domain.h3c.src.index import H3cBatchProduct
+                batch_products = (await db.execute(
+                    select(H3cBatchProduct, CertProduct)
+                    .join(CertProduct, CertProduct.id == H3cBatchProduct.product_id)
+                    .where(H3cBatchProduct.batch_id == batch.id)
+                    .order_by(H3cBatchProduct.id)
+                )).all()
+                now_ts, start_ts, end_ts = datetime.now(timezone.utc), utc(plan.apply_start), utc(plan.apply_end)
+                for bp, prod in batch_products:
+                    result.append({
+                        "id": batch.id, "plan_id": plan.id, "subject_id": prod.code, "name": plan.name,
+                        "status": plan.status, "apply_start": plan.apply_start, "apply_end": plan.apply_end,
+                        "exam_date": plan.exam_date, "exam_location": plan.exam_location,
+                        "remaining_count": remaining if plan.capacity else -1, "capacity": plan.capacity,
+                        "can_apply": bool(plan.status == "published" and start_ts and end_ts and start_ts <= now_ts < end_ts and (remaining != 0 if plan.capacity else True)),
+                        "prices": [
+                            {"value": "coupon", "label": "考券报名", "price_cents": prod.coupon_price_cents or 0},
+                            {"value": "student", "label": "学生报名", "price_cents": prod.student_price_cents or 0},
+                            {"value": "full", "label": "全额报名", "price_cents": prod.full_price_cents or 0},
+                        ],
+                    })
                 continue
             if vendor == "sangfor":
                 from app.services.sangfor_catalog import DIRECTIONS
