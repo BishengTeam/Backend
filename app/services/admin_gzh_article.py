@@ -1,19 +1,26 @@
+from urllib.parse import urlparse
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db_ctx
 from app.domain.content.src.index import GzhArticle
 from app.domain.content.src.model.gzh_article import SOURCE_MANUAL
-from app.port.exceptions import ConflictException, NotFoundException
+from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.admin_gzh_article import (
     GzhArticleBatchImportRequest,
     GzhArticleBatchImportResult,
     GzhArticleCreate,
+    GzhArticleFetchMetaResult,
     GzhArticleListItem,
     GzhArticleUpdate,
 )
 from app.schemas.common import PaginatedData
+from app.services.gzh_article import fetch_article_page_meta
 from app.services.recycle_bin import restore_row, soft_delete_row
+
+# 只抓微信文章页，防该接口被当通用网页代理用
+ALLOWED_FETCH_HOST = "mp.weixin.qq.com"
 
 
 class AdminGzhArticleService:
@@ -131,6 +138,24 @@ class AdminGzhArticleService:
                 created += 1
             await db.commit()
         return GzhArticleBatchImportResult(created=created, skipped=skipped, errors=[])
+
+    async def fetch_meta(self, url: str) -> GzhArticleFetchMetaResult:
+        """按链接拉取文章页元信息；链接已在库中时直接返回库内条目，不重复抓取。"""
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or parsed.netloc.lower() != ALLOWED_FETCH_HOST:
+            raise BusinessException("仅支持微信公众号文章链接（https://mp.weixin.qq.com/...）")
+        async with get_db_ctx() as db:
+            existing = await self._find_by_url(db, url)
+            if existing is not None:
+                return GzhArticleFetchMetaResult(
+                    title=existing.title,
+                    thumb_url=existing.thumb_url,
+                    publish_time=existing.publish_time,
+                    exists=True,
+                    source=existing.source,
+                )
+        meta = await fetch_article_page_meta(url)
+        return GzhArticleFetchMetaResult(exists=False, source=None, **meta)
 
     async def _find_by_url(self, db: AsyncSession, url: str) -> GzhArticle | None:
         """url 有唯一约束，按链接查行（含软删行）。"""

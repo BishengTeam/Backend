@@ -90,3 +90,20 @@ class GzhArticleBatchImportResult(BaseModel):
     created: int = Field(..., description="成功导入条数（含软删行复活）")
     skipped: int = Field(..., description="因链接已存在而跳过的条数")
     errors: list[GzhArticleImportError] = Field(default_factory=list, description="失败明细")
+
+
+class GzhArticleFetchMetaRequest(BaseModel):
+    url: str = Field(..., min_length=1, max_length=512, description="微信文章链接（https://mp.weixin.qq.com/...）")
+
+    @field_validator("url")
+    @classmethod
+    def validate_url_https(cls, v: str) -> str:
+        return _validate_https_url(v, "文章链接")
+
+
+class GzhArticleFetchMetaResult(BaseModel):
+    title: str = Field(..., description="文章标题")
+    thumb_url: str | None = Field(None, description="封面图 URL")
+    publish_time: datetime | None = Field(None, description="发布时间")
+    exists: bool = Field(..., description="链接是否已存在于资讯库（true 时其余字段为库内条目值，未抓取）")
+    source: str | None = Field(None, description="已存在条目的来源：sync/manual；不存在时为空")

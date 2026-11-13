@@ -232,3 +232,22 @@ async def test_batch_delete(test_context):
 
     result = await svc.list_articles(keyword=prefix, page=1, page_size=100)
     assert not {r.id for r in result.items} & set(ids)
+
+
+async def test_fetch_meta_existing_url_short_circuits(test_context):
+    """链接已在库中时 fetch-meta 直接返回库内条目（exists=true），不触发网络抓取"""
+    from app.schemas.admin_gzh_article import GzhArticleFetchMetaRequest
+    from app.services.admin_gzh_article import AdminGzhArticleService
+
+    _, prefix = test_context
+    url = _url(prefix, "meta")
+    svc = AdminGzhArticleService()
+    await svc.create(
+        GzhArticleCreate(title=f"{prefix} 库内标题", url=url, thumb_url="https://mmbiz.qpic.cn/x.jpg")
+    )
+
+    result = await svc.fetch_meta(GzhArticleFetchMetaRequest(url=url).url)
+    assert result.exists is True, "Expected exists=true for stored URL"
+    assert result.source == "manual"
+    assert result.title == f"{prefix} 库内标题"
+    assert result.thumb_url == "https://mmbiz.qpic.cn/x.jpg"

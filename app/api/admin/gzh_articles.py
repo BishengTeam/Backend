@@ -6,6 +6,8 @@ from app.schemas.admin_gzh_article import (
     GzhArticleBatchImportRequest,
     GzhArticleBatchImportResult,
     GzhArticleCreate,
+    GzhArticleFetchMetaRequest,
+    GzhArticleFetchMetaResult,
     GzhArticleListItem,
     GzhArticleUpdate,
 )
@@ -79,6 +81,29 @@ async def batch_import_gzh_articles(
         data=result,
         message=f"导入完成：新增 {result.created} 条，跳过 {result.skipped} 条",
     )
+
+
+@router.post("/fetch-meta",
+    response_model=APIResponse[GzhArticleFetchMetaResult],
+    summary="按链接拉取公众号文章信息",
+    description="""
+管理后台 **公众号资讯** 页面使用（批量导入纯链接行 / 新增弹窗「按链接自动填充」）。
+
+服务端带浏览器 UA 抓取 mp.weixin.qq.com 文章页，解析 og:title / og:image / 发布时间。
+- 链接已在库中（含回收站软删行）→ 直接返回库内条目（`exists=true`），不重复抓取
+- 反爬拦截 / 链接形态不支持 → 422：裸链接（公众号后台素材库「复制链接」形态）拉不到，
+  需微信内打开文章点「···→复制链接」的地址
+- 仅接受 `https://mp.weixin.qq.com/...` 链接
+
+**认证**: 需 `homepage:write` 权限
+    """,
+)
+async def fetch_gzh_article_meta(
+    body: GzhArticleFetchMetaRequest,
+    _admin=Depends(require_permission("homepage:write")),
+) -> APIResponse[GzhArticleFetchMetaResult]:
+    result = await AdminGzhArticleService().fetch_meta(body.url)
+    return success(data=result)
 
 
 @router.put("/{article_id}",

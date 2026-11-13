@@ -5,15 +5,19 @@
 """
 
 import asyncio
+import html
 import logging
+import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+import httpx
 from sqlalchemy import delete, select
 
 from app.adapter.database import get_db_ctx
 from app.domain.content.src.model.gzh_article import SOURCE_MANUAL, GzhArticle
 from app.integrations.gzh import GzhClient, is_configured
+from app.port.exceptions import BusinessException
 
 logger = logging.getLogger(__name__)
 
@@ -132,3 +136,81 @@ async def gzh_article_worker_loop() -> None:
         except Exception as exc:
             logger.error("公众号资讯同步失败(保留上次数据): exception_type=%s", type(exc).__name__)
         await asyncio.sleep(SYNC_INTERVAL_SECONDS)
+
+
+# ---- 文章页元信息抓取（Admin fetch-meta：批量导入/新增弹窗按链接自动填充）----
+# 坑（2026-10-22 回填与 2026-11-13 生产实测）：文章页公开可抓的前提是带浏览器 UA，
+# 且链接须为带 chksm 的完整分享链接或 /s/<hash> 短链；公众号后台「复制链接」的裸
+# 形态（?__biz=..&mid=..&sn=..）与无 UA 请求均被微信反爬页拦（约 18KB、无 og 标签）。
+ARTICLE_PAGE_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+# og meta 两种属性顺序都兜住（property 先 / content 先）
+_OG_META_RES = (
+    '<meta[^>]+property="{prop}"[^>]+content="([^"]*)"',
+    '<meta[^>]+content="([^"]*)"[^>]+property="{prop}"',
+)
+CT_TS_RE = re.compile(r'var\s+ct\s*=\s*"(\d{9,})"')
+CREATE_TIME_RE = re.compile(r"var\s+createTime\s*=\s*'(\d{4}-\d{2}-\d{2} \d{2}:\d{2})'")
+# 与 GzhArticleCreate/GzhArticleImportItem 的 title 上限保持一致
+ARTICLE_TITLE_MAX_LENGTH = 256
+BEIJING_TZ = timezone(timedelta(hours=8))
+FETCH_META_GUIDE = (
+    "微信页面拉取不到文章信息（反爬拦截或链接形态不支持）："
+    "请改用微信内打开文章点「···→复制链接」得到的地址，或手动填写标题导入"
+)
+
+
+def _meta_content(page: str, prop: str) -> str | None:
+    for pattern in _OG_META_RES:
+        m = re.search(pattern.format(prop=prop), page, re.I)
+        if m and m.group(1).strip():
+            return html.unescape(m.group(1)).strip()
+    return None
+
+
+def parse_article_page_meta(page_html: str) -> dict | None:
+    """文章页 HTML → {title, thumb_url, publish_time}；无 og:title 视为反爬页/非文章页，返回 None。"""
+    title = _meta_content(page_html, "og:title")
+    if not title:
+        return None
+    thumb = _meta_content(page_html, "og:image")
+    publish_time = None
+    m = CT_TS_RE.search(page_html)
+    if m:
+        # var ct = "<unix 秒>"：与 worker 落库约定一致，存 UTC
+        publish_time = datetime.fromtimestamp(int(m.group(1)), tz=timezone.utc)
+    else:
+        m = CREATE_TIME_RE.search(page_html)
+        if m:
+            # createTime 是北京时间字符串
+            publish_time = (
+                datetime.strptime(m.group(1), "%Y-%m-%d %H:%M")
+                .replace(tzinfo=BEIJING_TZ)
+                .astimezone(timezone.utc)
+            )
+    return {
+        "title": title[:ARTICLE_TITLE_MAX_LENGTH],
+        "thumb_url": thumb if thumb and thumb.startswith("https://") else None,
+        "publish_time": publish_time,
+    }
+
+
+async def fetch_article_page_meta(url: str) -> dict:
+    """抓文章页并解析元信息；请求失败或命中反爬页抛 BusinessException（含引导文案）。"""
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=20.0, write=10.0, pool=5.0),
+            headers={"User-Agent": ARTICLE_PAGE_UA, "Accept-Language": "zh-CN,zh;q=0.9"},
+            follow_redirects=True,
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            page = resp.text
+    except httpx.HTTPError as exc:
+        raise BusinessException(f"文章页面请求失败（{type(exc).__name__}），请确认链接可从浏览器打开") from exc
+    meta = parse_article_page_meta(page)
+    if meta is None:
+        raise BusinessException(FETCH_META_GUIDE)
+    return meta
