@@ -235,7 +235,10 @@ class H3cRegistrationService:
                         apply_end=plan.apply_end,
                         exam_date=plan.exam_date,
                         exam_location=plan.exam_location,
+                        description=plan.description,
                         remaining_count=remaining,
+                        payment_timeout_minutes=batch.payment_timeout_minutes,
+                        max_material_bytes=batch.max_material_bytes,
                         prices=[
                             {"registration_type": "coupon", "price_cents": product.coupon_price_cents or 0},
                             {"registration_type": "student", "price_cents": product.student_price_cents or 0},
