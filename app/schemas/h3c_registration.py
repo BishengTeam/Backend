@@ -166,7 +166,7 @@ class H3cPriceOption(BaseModel):
 class H3cExamBatchResponse(BaseModel):
     id: int
     plan_id: int
-    certification_code: str
+    certification_code: str | None = None
     name: str
     status: str
     apply_start: datetime
@@ -204,7 +204,7 @@ class H3cExamBatchResponse(BaseModel):
 class H3cUserExamBatchResponse(BaseModel):
     id: int
     plan_id: int
-    certification_code: str
+    certification_code: str | None = None
     name: str
     status: str
     apply_start: datetime
