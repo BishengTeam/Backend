@@ -86,6 +86,7 @@ class CertificationJourneyService:
             # v2 多产品：H3C 批次按科目展开
             if vendor == "h3c" and plan.product_type is None and batch is not None:
                 from app.domain.h3c.src.index import H3cBatchProduct
+                remaining = max(0, plan.capacity - occupied.get(plan.id, 0)) if plan.capacity else -1
                 batch_products = (await db.execute(
                     select(H3cBatchProduct, CertProduct)
                     .join(CertProduct, CertProduct.id == H3cBatchProduct.product_id)
