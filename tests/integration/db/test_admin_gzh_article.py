@@ -236,6 +236,7 @@ async def test_batch_delete(test_context):
 
 async def test_fetch_meta_existing_url_short_circuits(test_context):
     """链接已在库中时 fetch-meta 直接返回库内条目（exists=true），不触发网络抓取"""
+    from app.schemas.admin_gzh_article import GzhArticleCreate
     from app.schemas.admin_gzh_article import GzhArticleFetchMetaRequest
     from app.services.admin_gzh_article import AdminGzhArticleService
 
