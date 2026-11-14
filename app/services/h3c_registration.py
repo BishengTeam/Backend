@@ -116,19 +116,17 @@ def _birth_date_from_idcard(value: str) -> str:
     return f"{value[6:10]}/{value[10:12]}/{value[12:14]}"
 
 
+
+
+def _extract_identity_tag(product) -> str:
+    """从产品代码推导身份标签（v2 产品级，不再读批次级）。"""
+    code = getattr(product, 'code', '') or ''
+    return code.split('-')[0] if '-' in code else code
+
 def _price(batch: H3cExamBatch, registration_type: str) -> int:
-    """v2 统一从产品级读取（批次级三列已废弃）。"""
-    from app.models.cert_product import CertProduct
-    from app.domain.h3c.src.index import H3cBatchProduct
-    # 经 batch_product → cert_product 两跳取价
-    # 注意：此函数在 async 上下文外被调用，不能直接查 DB
-    # 改为保留批次级值作为 fallback（创建批次时已从产品级同步）
-    # 多产品模式下在 create_order 内直接读产品级
-    return {
-        "coupon": batch.coupon_price_cents or 0,
-        "student": batch.student_price_cents or 0,
-        "full": batch.full_price_cents or 0,
-    }[registration_type]
+    """v2 已废弃：单产品路径在 create_order 内直接从产品级读取。
+    此函数仅作为类型存根保留，不再应被调用。"""
+    raise NotImplementedError("Use product-level pricing in create_order")
 
 
 class H3cRegistrationService:
@@ -213,7 +211,11 @@ class H3cRegistrationService:
                         exam_location=plan.exam_location,
                         description=plan.description,
                         prices=[
-                            {"registration_type": kind, "price_cents": _price(batch, kind)}
+                            {"registration_type": kind, "price_cents": (
+                                product.coupon_price_cents if kind == "coupon"
+                                else product.student_price_cents if kind == "student"
+                                else product.full_price_cents
+                            ) or 0}
                             for kind in H3C_REGISTRATION_TYPES
                         ],
                         payment_timeout_minutes=batch.payment_timeout_minutes,
@@ -436,7 +438,23 @@ class H3cRegistrationService:
                         raise BusinessException(f"产品「{_product.name}」未配置{_type_label}价格，请联系管理员")
                     price_cents = _selected_price
                 else:
-                    price_cents = _price(batch, data.registration_type)
+                    # 单产品兼容：从产品级读取（不再读批次级三列）
+                    _compat_product = await db.scalar(
+                        select(CertProduct).where(CertProduct.code == plan.product_type)
+                    ) if plan.product_type else None
+                    if _compat_product is not None:
+                        _compat_map = {
+                            "coupon": _compat_product.coupon_price_cents,
+                            "student": _compat_product.student_price_cents,
+                            "full": _compat_product.full_price_cents,
+                        }
+                        _compat_price = _compat_map.get(data.registration_type)
+                        if _compat_price is not None:
+                            price_cents = _compat_price
+                        else:
+                            raise BusinessException(f"产品「{_compat_product.name}」未配置价格，请联系管理员")
+                    else:
+                        price_cents = 0
                 notice_snapshot = None
                 if data.notice_hash:
                     from app.services.certification_journey import confirmed_notice
@@ -477,6 +495,7 @@ class H3cRegistrationService:
                         batch=batch,
                         plan=plan,
                         identity=identity,
+                        product=_product,
                     ),
                     candidate_idcard=identity.id_card_number,
                 )
@@ -574,6 +593,7 @@ class H3cRegistrationService:
         batch: H3cExamBatch,
         plan: Plan,
         identity: UserRealname,
+        product=None,
     ) -> dict:
         return {
             "candidate_name": identity.real_name,
@@ -593,11 +613,11 @@ class H3cRegistrationService:
             "birth_date": _birth_date_from_idcard(identity.id_card_number),
             "identity_verification": verified_identity_snapshot(identity),
             "candidate_no": None,
-            "exam_code": batch.exam_code,
+            "exam_code": product.code if product is not None else batch.exam_code,
             "exam_datetime": plan.exam_date.isoformat() if plan.exam_date else None,
-            "country": batch.country,
-            "language": batch.language,
-            "identity_tag": batch.identity_tag,
+            "country": "CHN",
+            "language": "CHS",
+            "identity_tag": _extract_identity_tag(product) if product is not None else batch.identity_tag,
             "training_org": batch.training_org,
             "training_teacher": batch.training_teacher,
             "training_address": batch.training_address,

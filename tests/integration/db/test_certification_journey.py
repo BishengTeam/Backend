@@ -34,7 +34,8 @@ async def context(monkeypatch):
     async with factory() as db:
         products, plans, batches = [], [], []
         for vendor in ("h3c", "nisp", "renshe"):
-            product = CertProduct(type=vendor, code=f"{prefix}_{vendor}", name=vendor, chinese_name=f"测试{vendor}", is_active=True, renshe_status="available" if vendor == "renshe" else None)
+            product = CertProduct(type=vendor, code=f"{prefix}_{vendor}", name=vendor, chinese_name=f"测试{vendor}", is_active=True, renshe_status="available" if vendor == "renshe" else None,
+                **({"coupon_price_cents": 1000, "student_price_cents": 2000, "full_price_cents": 3000} if vendor == "h3c" else {}))
             db.add(product); await db.flush(); products.append(product)
             plan = Plan(product_type=product.code, name=f"{prefix}_{vendor}", status="published", capacity=20, price_cents=5000,
                 apply_start=datetime.now(timezone.utc) - timedelta(days=1), apply_end=datetime.now(timezone.utc) + timedelta(days=1),
@@ -82,7 +83,9 @@ async def test_notice_confirmation_binds_batch_type_price_and_preserves_snapshot
         with pytest.raises(ConflictException):
             await confirmed_notice(db, vendor="h3c", batch_id=batch_id, registration_type="full", notice_hash=first["notice_hash"])
     async with env.db() as db, db.begin():
-        batch = await db.get(H3cExamBatch, batch_id); batch.student_price_cents = 2500
+        # v2: 价格从产品级读取 — 修改产品价格触发 Conflict
+        _prod = await db.get(CertProduct, env.products[0].id)
+        _prod.student_price_cents = 2500
     async with env.db() as db:
         with pytest.raises(ConflictException):
             await confirmed_notice(db, vendor="h3c", batch_id=batch_id, registration_type="student", notice_hash=first["notice_hash"])

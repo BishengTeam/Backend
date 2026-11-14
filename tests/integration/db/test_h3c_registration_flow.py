@@ -184,6 +184,9 @@ async def _seed(context, *, product_source="certification"):
                     name=code,
                     chinese_name=code,
                     is_active=True,
+                    coupon_price_cents=0,
+                    student_price_cents=0,
+                    full_price_cents=0,
                 )
             )
         plan = Plan(
