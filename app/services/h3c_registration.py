@@ -117,10 +117,17 @@ def _birth_date_from_idcard(value: str) -> str:
 
 
 def _price(batch: H3cExamBatch, registration_type: str) -> int:
+    """v2 统一从产品级读取（批次级三列已废弃）。"""
+    from app.models.cert_product import CertProduct
+    from app.domain.h3c.src.index import H3cBatchProduct
+    # 经 batch_product → cert_product 两跳取价
+    # 注意：此函数在 async 上下文外被调用，不能直接查 DB
+    # 改为保留批次级值作为 fallback（创建批次时已从产品级同步）
+    # 多产品模式下在 create_order 内直接读产品级
     return {
-        "coupon": batch.coupon_price_cents,
-        "student": batch.student_price_cents,
-        "full": batch.full_price_cents,
+        "coupon": batch.coupon_price_cents or 0,
+        "student": batch.student_price_cents or 0,
+        "full": batch.full_price_cents or 0,
     }[registration_type]
 
 

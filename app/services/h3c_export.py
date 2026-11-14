@@ -766,6 +766,27 @@ class H3cExportService:
                 if frozen_item is not None and frozen_item.candidate_snapshot is not None
                 else row.registration.candidate_snapshot
             )
+            # P1 #6: 注入实际预约日期（覆盖快照中的固定 exam_datetime）
+            if "booked_exam_datetime" not in snapshot:
+                from app.domain.exam.src.index import ExamBooking, ExamTimeSlot
+                from app.adapter.database import get_db_ctx
+                async with get_db_ctx() as _db:
+                    _booking = await _db.scalar(
+                        select(ExamBooking)
+                        .outerjoin(ExamTimeSlot, ExamTimeSlot.id == ExamBooking.slot_id)
+                        .where(
+                            ExamBooking.registration_id == row.registration.id,
+                            ExamBooking.status == "booked",
+                        )
+                    )
+                    if _booking is not None:
+                        _slot = await _db.get(ExamTimeSlot, _booking.slot_id)
+                        snapshot["booked_exam_datetime"] = (
+                            f"{_booking.exam_date.isoformat()} {_slot.start_time.strftime('%H:%M') if _slot else ''}"
+                        ).strip()
+                    else:
+                        snapshot["booked_exam_datetime"] = None
+
             values = self._workbook_row(
                 batch=batch,
                 registration=row.registration,
@@ -954,7 +975,7 @@ class H3cExportService:
                 batch.identity_tag,
                 snapshot.get("first_name_en"),
                 snapshot.get("last_name_en"),
-                snapshot.get("exam_datetime"),
+                snapshot.get("booked_exam_datetime") or snapshot.get("exam_datetime") or "未预约",
                 batch.exam_code,
                 None,
                 batch.training_org,
@@ -970,7 +991,7 @@ class H3cExportService:
                 batch.identity_tag,
                 snapshot.get("first_name_en"),
                 snapshot.get("last_name_en"),
-                snapshot.get("exam_datetime"),
+                snapshot.get("booked_exam_datetime") or snapshot.get("exam_datetime") or "未预约",
                 None,
                 batch.training_org,
                 batch.training_teacher,
@@ -985,7 +1006,7 @@ class H3cExportService:
             snapshot.get("birth_date"),
             snapshot.get("first_name_en"),
             snapshot.get("last_name_en"),
-            snapshot.get("exam_datetime"),
+            snapshot.get("booked_exam_datetime") or snapshot.get("exam_datetime") or "未预约",
             None,
             batch.training_org,
             batch.training_teacher,
