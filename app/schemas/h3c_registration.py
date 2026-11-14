@@ -71,7 +71,7 @@ class H3cExamBatchBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     apply_start: datetime
     apply_end: datetime
-    exam_date: datetime
+    exam_date: datetime | None = None
     capacity: int = Field(..., ge=1)
     exam_location: str | None = Field(None, max_length=256)
     description: str | None = Field(None, max_length=5000)
@@ -105,7 +105,7 @@ class H3cExamBatchBase(BaseModel):
     def validate_windows(self):
         if self.apply_start >= self.apply_end:
             raise ValueError("报名开始时间必须早于截止时间")
-        if self.exam_date < self.apply_end:
+        if self.exam_date is not None and self.exam_date < self.apply_end:
             raise ValueError("考试时间不能早于报名截止时间")
         if self.training_start and self.training_end and self.training_start > self.training_end:
             raise ValueError("培训开始时间不能晚于结束时间")
