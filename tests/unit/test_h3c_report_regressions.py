@@ -131,6 +131,17 @@ async def test_publish_blocks_legacy_mismatch_and_accepts_synchronized_capacity(
     assert plan.status == "published" and stock.total_quota == plan.capacity == 20
 
 
+async def test_publish_allows_null_exam_date_for_booking_batches(batches):
+    service, factory = batches
+    async with factory() as db, db.begin():
+        (await db.get(Plan, 1)).exam_date = None
+
+    await service.publish_batch(admin_id=1, batch_id=1)
+
+    plan = (await snapshot(factory))[0]
+    assert plan.status == "published" and plan.exam_date is None
+
+
 ORDER = dict(batch_id=1, registration_type="full", candidate_name="测试", gender="男",
              candidate_idcard="110101199001011234", school="学校", address="地址",
              phone="13800138000", email="test@example.com", education="本科",

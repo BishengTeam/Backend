@@ -432,13 +432,12 @@ class H3cAdminBatchService:
                 if require_window and (
                     not plan.apply_start
                     or not plan.apply_end
-                    or not plan.exam_date
                 ):
-                    raise BusinessException("发布前必须配置报名时间、截止时间和考试时间")
+                    raise BusinessException("发布前必须配置报名时间和截止时间")
                 if require_window:
                     if plan.apply_start >= plan.apply_end:
                         raise BusinessException("报名开始时间必须早于截止时间")
-                    if plan.exam_date < plan.apply_end:
+                    if plan.exam_date is not None and plan.exam_date < plan.apply_end:
                         raise BusinessException("考试时间不能早于报名截止时间")
                     if plan.apply_end <= _now():
                         raise BusinessException("报名截止时间必须晚于当前时间")
