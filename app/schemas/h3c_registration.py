@@ -204,6 +204,8 @@ class H3cExamBatchResponse(BaseModel):
 class H3cUserExamBatchResponse(BaseModel):
     id: int
     plan_id: int
+    plan_product_id: int | None = None
+    batch_product_id: int | None = None
     certification_code: str | None = None
     name: str
     status: str

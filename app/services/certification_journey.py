@@ -96,7 +96,7 @@ class CertificationJourneyService:
                 now_ts, start_ts, end_ts = datetime.now(timezone.utc), utc(plan.apply_start), utc(plan.apply_end)
                 for bp, prod in batch_products:
                     result.append({
-                        "id": batch.id, "plan_id": plan.id, "subject_id": prod.code, "name": plan.name,
+                        "id": batch.id, "plan_id": plan.id, "batch_product_id": bp.id, "subject_id": prod.code, "name": plan.name,
                         "status": plan.status, "apply_start": plan.apply_start, "apply_end": plan.apply_end,
                         "exam_date": plan.exam_date, "exam_location": plan.exam_location,
                         "remaining_count": remaining if plan.capacity else -1, "capacity": plan.capacity,

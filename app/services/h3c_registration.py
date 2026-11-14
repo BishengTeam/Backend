@@ -228,6 +228,8 @@ class H3cRegistrationService:
                     H3cUserExamBatchResponse(
                         id=batch.id,
                         plan_id=plan.id,
+                        plan_product_id=bp.id,
+                        batch_product_id=bp.id,
                         certification_code=product.code,
                         name=plan.name,
                         status=plan.status,
@@ -336,6 +338,12 @@ class H3cRegistrationService:
                 from app.domain.h3c.src.index import H3cBatchProduct
                 _batch_product = None
                 _product = None
+                # U7: 多产品批次（product_type=None）必须带 batch_product_id
+                _plan_type_check = await db.scalar(
+                    select(Plan.product_type).where(Plan.id == batch_plan_id)
+                )
+                if _plan_type_check is None and not data.batch_product_id:
+                    raise BusinessException("该批次包含多个考试科目，请先选择考试科目后再提交")
                 if data.batch_product_id:
                     _batch_product = await db.scalar(
                         select(H3cBatchProduct)
