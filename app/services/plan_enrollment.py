@@ -108,19 +108,22 @@ class PlanEnrollmentService:
                 if not certification.is_active:
                     raise BusinessException("该认证类型已下架")
 
-        active_order_id = (
-            await db.execute(
-                select(Order.id)
-                .where(
-                    Order.plan_id == plan.id,
-                    Order.user_id == user_id,
-                    Order.status.in_(CAPACITY_OCCUPYING_ORDER_STATUSES),
+        # U9: 多产品批次跳过 plan 级查重（两科共用同一 plan_id）
+        # 由 h3c_registration 的科目级查重（batch_product_id 维度）兜底
+        if plan.product_type is not None:
+            active_order_id = (
+                await db.execute(
+                    select(Order.id)
+                    .where(
+                        Order.plan_id == plan.id,
+                        Order.user_id == user_id,
+                        Order.status.in_(CAPACITY_OCCUPYING_ORDER_STATUSES),
+                    )
+                    .limit(1)
                 )
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if active_order_id is not None:
-            raise ConflictException("您已报名该批次，请勿重复提交")
+            ).scalar_one_or_none()
+            if active_order_id is not None:
+                raise ConflictException("您已报名该批次，请勿重复提交")
 
         if plan.capacity > 0:
             occupied = (
