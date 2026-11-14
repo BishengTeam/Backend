@@ -1,9 +1,9 @@
 """管理端 — 考场开放计划 + 假期管理 API。"""
-from datetime import date
+from datetime import date, datetime, time as dt_time
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db
@@ -11,6 +11,7 @@ from app.middleware.auth import require_permission
 from app.schemas.common import APIResponse, success
 from app.domain.exam.src.index import (
     ExamSchedule, ExamScheduleSubject, ExamTimeSlot, ExamSeatQuota, Holiday,
+    ExamBooking,
 )
 from app.port.exceptions import BusinessException, NotFoundException
 from app.models.cert_product import CertProduct
@@ -18,16 +19,20 @@ from app.models.cert_product import CertProduct
 router = APIRouter(prefix="/h3c/exam-schedules", tags=["管理后台-H3C考场管理"])
 
 
+DEFAULT_SLOT_TIMES = ("09:30", "11:30", "14:30", "16:30")
+
+
+def _parse_time(value: str) -> dt_time:
+    try:
+        parsed = datetime.strptime(value, "%H:%M")
+    except ValueError as exc:
+        raise BusinessException("时段格式必须为 HH:MM") from exc
+    return parsed.time()
+
+
 # ============================================================
 # Schema
 # ============================================================
-
-class ScheduleCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=128)
-    open_date_start: date
-    open_date_end: date
-    allowed_weekdays: list[int] = Field(default=[4], description="Python weekday()，4=周五")
-    pre_exam_notice: str | None = Field(None, max_length=5000)
 
 
 class ScheduleUpdate(BaseModel):
@@ -39,8 +44,27 @@ class ScheduleUpdate(BaseModel):
 
 
 class TimeSlotCreate(BaseModel):
-    label: str = Field(..., min_length=1, max_length=32)
+    label: str | None = Field(None, min_length=1, max_length=32)
     start_time: str = Field(..., description="HH:MM 格式")
+
+
+class SeatQuotaCreate(BaseModel):
+    product_id: int
+    slot_start: str = Field(..., description="HH:MM 格式")
+    total_seats: int = Field(..., ge=0)
+
+
+class ScheduleCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    open_date_start: date
+    open_date_end: date
+    allowed_weekdays: list[int] = Field(default=[4], description="Python weekday()，4=周五")
+    pre_exam_notice: str | None = Field(None, max_length=5000)
+    product_ids: list[int] = Field(default_factory=list)
+    time_slots: list[TimeSlotCreate] | None = None
+    default_quota: int = Field(5, ge=0)
+    seat_quotas: list[SeatQuotaCreate] | None = None
+    publish: bool = False
 
 
 class SeatQuotaItem(BaseModel):
@@ -88,16 +112,117 @@ async def create_schedule(
 ):
     if data.open_date_start > data.open_date_end:
         raise BusinessException("开始日期不能晚于结束日期")
+
+    allowed_weekdays = sorted(set(data.allowed_weekdays))
+    if not allowed_weekdays or any(day not in range(0, 7) for day in allowed_weekdays):
+        raise BusinessException("可用星期必须为 0-6 中的至少一天")
+
+    # Keep the original minimal create request valid for rolling deployments.
+    # The new Admin always sends the complete composite payload.
+    legacy_basic_create = (
+        not data.product_ids
+        and data.time_slots is None
+        and data.seat_quotas is None
+        and not data.publish
+    )
+    product_ids = list(dict.fromkeys(data.product_ids))
+    if not product_ids and not legacy_basic_create:
+        raise BusinessException("请至少选择一个考试科目")
+    products_by_id: dict[int, CertProduct] = {}
+    if product_ids:
+        products = (await db.execute(
+            select(CertProduct).where(
+                CertProduct.id.in_(product_ids),
+                CertProduct.type == "h3c",
+                CertProduct.is_active.is_(True),
+            )
+        )).scalars().all()
+        products_by_id.update({product.id: product for product in products})
+        missing_products = [
+            product_id for product_id in product_ids if product_id not in products_by_id
+        ]
+        if missing_products:
+            raise BusinessException(
+                f"H3C 产品不存在或未上架：{', '.join(str(item) for item in missing_products)}"
+            )
+
+    slot_inputs = data.time_slots
+    if slot_inputs is None and not legacy_basic_create:
+        slot_inputs = [TimeSlotCreate(start_time=item) for item in DEFAULT_SLOT_TIMES]
+    if not slot_inputs and not legacy_basic_create:
+        raise BusinessException("请至少添加一个考试时段")
+
+    parsed_slots: list[tuple[dt_time, str]] = []
+    seen_slots: set[dt_time] = set()
+    for item in slot_inputs or []:
+        start_time = _parse_time(item.start_time)
+        if start_time in seen_slots:
+            raise BusinessException(f"考试时段重复：{item.start_time}")
+        seen_slots.add(start_time)
+        label = item.label or f"{start_time.strftime('%H:%M')} 场"
+        parsed_slots.append((start_time, label))
+
+    explicit_quotas: dict[tuple[int, dt_time], int] = {}
+    for item in data.seat_quotas or []:
+        if item.product_id not in products_by_id:
+            raise BusinessException(f"配额科目不属于该考场计划：{item.product_id}")
+        start_time = _parse_time(item.slot_start)
+        if start_time not in seen_slots:
+            raise BusinessException(f"配额时段不属于该考场计划：{item.slot_start}")
+        key = (item.product_id, start_time)
+        if key in explicit_quotas:
+            raise BusinessException(f"配额重复：{item.product_id} {item.slot_start}")
+        explicit_quotas[key] = item.total_seats
+
     schedule = ExamSchedule(
         name=data.name,
         open_date_start=data.open_date_start,
         open_date_end=data.open_date_end,
-        allowed_weekdays=data.allowed_weekdays,
+        allowed_weekdays=allowed_weekdays,
         pre_exam_notice=data.pre_exam_notice,
+        status="published" if data.publish else "draft",
+        published_at=date.today() if data.publish else None,
     )
     db.add(schedule)
+    await db.flush()
+
+    if not legacy_basic_create:
+        subjects_by_product: dict[int, ExamScheduleSubject] = {}
+        for product_id in product_ids:
+            subject = ExamScheduleSubject(schedule_id=schedule.id, product_id=product_id)
+            db.add(subject)
+            subjects_by_product[product_id] = subject
+        await db.flush()
+
+        slots_by_time: dict[dt_time, ExamTimeSlot] = {}
+        for sort_order, (start_time, label) in enumerate(parsed_slots):
+            slot = ExamTimeSlot(
+                schedule_id=schedule.id,
+                label=label,
+                start_time=start_time,
+                sort_order=sort_order,
+            )
+            db.add(slot)
+            slots_by_time[start_time] = slot
+        await db.flush()
+
+        for product_id in product_ids:
+            for start_time, _ in parsed_slots:
+                db.add(ExamSeatQuota(
+                    schedule_id=schedule.id,
+                    subject_id=subjects_by_product[product_id].id,
+                    slot_id=slots_by_time[start_time].id,
+                    total_seats=explicit_quotas.get(
+                        (product_id, start_time), data.default_quota
+                    ),
+                ))
+
     await db.commit()
-    return success(data={"id": schedule.id}, message="考场计划已创建")
+
+    return success(
+        data={"id": schedule.id, "status": schedule.status},
+        message="考场计划已创建并发布" if data.publish else "考场计划已创建",
+    )
 
 
 @router.get("/{schedule_id}", response_model=APIResponse[dict], summary="计划详情")
@@ -123,8 +248,6 @@ async def get_schedule(
         select(ExamSeatQuota).where(ExamSeatQuota.schedule_id == schedule_id)
     )).scalars().all()
     # P2 #8: 计算各配额的已约人数
-    from app.domain.exam.src.index import ExamBooking
-    from sqlalchemy import func
     booking_counts = dict((await db.execute(
         select(ExamBooking.subject_id, ExamBooking.slot_id, func.count())
         .where(
@@ -182,6 +305,18 @@ async def publish_schedule(
     s = await db.get(ExamSchedule, schedule_id, with_for_update=True)
     if s is None or s.status != "draft":
         raise BusinessException("仅草稿可发布")
+    subject_count = await db.scalar(
+        select(func.count()).select_from(ExamScheduleSubject).where(
+            ExamScheduleSubject.schedule_id == schedule_id
+        )
+    )
+    slot_count = await db.scalar(
+        select(func.count()).select_from(ExamTimeSlot).where(
+            ExamTimeSlot.schedule_id == schedule_id
+        )
+    )
+    if not subject_count or not slot_count:
+        raise BusinessException("发布前必须配置至少一个科目和时段")
     s.status = "published"
     s.published_at = date.today()
     await db.commit()
@@ -217,8 +352,8 @@ async def add_subject(
     if s is None or s.status != "draft":
         raise BusinessException("仅草稿可添加科目")
     product = await db.get(CertProduct, product_id)
-    if product is None or product.type != "h3c":
-        raise BusinessException("仅可添加 H3C 产品")
+    if product is None or product.type != "h3c" or not product.is_active:
+        raise BusinessException("仅可添加已上架的 H3C 产品")
     existing = await db.scalar(
         select(ExamScheduleSubject.id).where(
             ExamScheduleSubject.schedule_id == schedule_id,
@@ -242,9 +377,7 @@ async def add_time_slot(
     s = await db.get(ExamSchedule, schedule_id)
     if s is None or s.status != "draft":
         raise BusinessException("仅草稿可添加时段")
-    from datetime import time as dt_time
-    parts = data.start_time.split(":")
-    t = dt_time(int(parts[0]), int(parts[1]))
+    t = _parse_time(data.start_time)
     existing = await db.scalar(
         select(ExamTimeSlot.id).where(
             ExamTimeSlot.schedule_id == schedule_id,
@@ -256,7 +389,12 @@ async def add_time_slot(
     count = (await db.execute(
         select(ExamTimeSlot).where(ExamTimeSlot.schedule_id == schedule_id)
     )).scalars().all()
-    db.add(ExamTimeSlot(schedule_id=schedule_id, label=data.label, start_time=t, sort_order=len(count)))
+    db.add(ExamTimeSlot(
+        schedule_id=schedule_id,
+        label=data.label or f"{data.start_time} 场",
+        start_time=t,
+        sort_order=len(count),
+    ))
     await db.commit()
     return success(message="时段已添加")
 
@@ -268,12 +406,42 @@ async def set_seat_quotas(
     _admin=Depends(require_permission("h3c:batch_manage")),
     db: AsyncSession = Depends(get_db),
 ):
-    s = await db.get(ExamSchedule, schedule_id)
+    s = await db.get(ExamSchedule, schedule_id, with_for_update=True)
     if s is None:
         raise NotFoundException("考场计划")
-    if s.status != "draft":
-        raise BusinessException("仅草稿可设置配额")
+    if s.status == "closed":
+        raise BusinessException("已关闭计划不可设置配额")
+
+    subject_ids = set((await db.scalars(
+        select(ExamScheduleSubject.id).where(
+            ExamScheduleSubject.schedule_id == schedule_id
+        )
+    )).all())
+    slot_ids = set((await db.scalars(
+        select(ExamTimeSlot.id).where(ExamTimeSlot.schedule_id == schedule_id)
+    )).all())
+    booking_counts = dict((await db.execute(
+        select(ExamBooking.subject_id, ExamBooking.slot_id, func.count())
+        .where(
+            ExamBooking.schedule_id == schedule_id,
+            ExamBooking.status == "booked",
+        )
+        .group_by(ExamBooking.subject_id, ExamBooking.slot_id)
+    )).all())
+
+    seen: set[tuple[int, int]] = set()
     for item in data.quotas:
+        key = (item.subject_id, item.slot_id)
+        if item.subject_id not in subject_ids or item.slot_id not in slot_ids:
+            raise BusinessException("配额科目或时段不属于该考场计划")
+        if key in seen:
+            raise BusinessException("配额重复，同一科目和时段只能设置一个值")
+        seen.add(key)
+        booked = booking_counts.get(key, 0)
+        if s.status == "published" and item.total_seats != 0 and item.total_seats < booked:
+            raise BusinessException(
+                f"配额不能小于已预约人数（已约 {booked} 人）；如需不限量请设为 0"
+            )
         existing = await db.scalar(
             select(ExamSeatQuota).where(
                 ExamSeatQuota.schedule_id == schedule_id,
