@@ -171,7 +171,7 @@ class H3cExamBatchResponse(BaseModel):
     status: str
     apply_start: datetime
     apply_end: datetime
-    exam_date: datetime
+    exam_date: datetime | None = None
     capacity: int
     occupied_count: int
     remaining_count: int
@@ -211,7 +211,7 @@ class H3cUserExamBatchResponse(BaseModel):
     status: str
     apply_start: datetime
     apply_end: datetime
-    exam_date: datetime
+    exam_date: datetime | None = None
     remaining_count: int
     exam_location: str | None
     description: str | None
