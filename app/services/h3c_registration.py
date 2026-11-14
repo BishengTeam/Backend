@@ -327,20 +327,23 @@ class H3cRegistrationService:
                 )
                 if batch_plan_id is None:
                     raise NotFoundException("H3C 考试批次")
-                # Keep the domain-specific duplicate-candidate error ahead of the
-                # generic plan-enrollment guard. The authoritative check is repeated
-                # after Plan -> Batch locks below.
-                active_candidate_id = await db.scalar(
-                    select(H3cRegistration.id)
-                    .where(
-                        H3cRegistration.batch_id == data.batch_id,
-                        H3cRegistration.candidate_idcard == identity.id_card_number,
-                        H3cRegistration.status.in_(H3C_ACTIVE_STATUSES),
-                    )
-                    .limit(1)
+                # U8: 多产品批次跳过批次级查重（允许同批次报不同科目）
+                # 单产品批次保留原有批次级查重
+                _early_plan_type = await db.scalar(
+                    select(Plan.product_type).where(Plan.id == batch_plan_id)
                 )
-                if active_candidate_id is not None:
-                    raise ConflictException("该身份证号已报名此考试批次")
+                if _early_plan_type is not None:
+                    active_candidate_id = await db.scalar(
+                        select(H3cRegistration.id)
+                        .where(
+                            H3cRegistration.batch_id == data.batch_id,
+                            H3cRegistration.candidate_idcard == identity.id_card_number,
+                            H3cRegistration.status.in_(H3C_ACTIVE_STATUSES),
+                        )
+                        .limit(1)
+                    )
+                    if active_candidate_id is not None:
+                        raise ConflictException("该身份证号已报名此考试批次")
                 # v2 多产品：解析选中的科目（batch_product_id → product）
                 from app.domain.h3c.src.index import H3cBatchProduct
                 _batch_product = None
