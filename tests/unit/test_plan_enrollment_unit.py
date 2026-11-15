@@ -48,6 +48,9 @@ class _FakeDb:
         self.statements.append(statement)
         return _Result(self.results.pop(0))
 
+    async def scalar(self, statement):
+        return self.db_now
+
 
 class PlanEnrollmentWindowTests(unittest.TestCase):
     def setUp(self):
@@ -82,12 +85,32 @@ class PlanEnrollmentWindowTests(unittest.TestCase):
             )
         self.assertEqual(expired.exception.message, "该批次报名已截止")
 
-
 class PlanEnrollmentDatabaseTests(unittest.IsolatedAsyncioTestCase):
     def _product(self, **overrides):
         values = {"type": "h3c", "is_active": True}
         values.update(overrides)
         return SimpleNamespace(**values)
+
+    async def test_lock_uses_database_clock_when_now_is_not_supplied(self):
+        now = datetime(2026, 7, 14, tzinfo=timezone.utc)
+        plan = _open_plan(
+            apply_start=now + timedelta(minutes=1),
+            apply_end=now + timedelta(days=2),
+            capacity=0,
+        )
+        db = _FakeDb(plan)
+        db.db_now = now
+
+        with self.assertRaises(BusinessException) as raised:
+            await PlanEnrollmentService().lock_enrollable_plan(
+                db,
+                plan_id=plan.id,
+                user_id=100,
+                expected_vendor="H3C",
+            )
+
+        self.assertEqual(raised.exception.message, "该批次报名尚未开始")
+        self.assertEqual(len(db.statements), 1)
 
     async def test_finite_capacity_counts_all_occupying_statuses(self):
         plan = _open_plan(capacity=1)

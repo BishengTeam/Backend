@@ -1,6 +1,7 @@
 """H3C 考场预约 Service 单元测试。"""
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 
 from app.services.exam_booking import ExamBookingService
 
@@ -72,7 +73,7 @@ class SeatCalculationTests(unittest.TestCase):
         self.assertEqual(remaining, 0)
 
 
-class CancelPolicyTests(unittest.TestCase):
+class CancelPolicyTests(unittest.IsolatedAsyncioTestCase):
     """取消策略 — 考前 3 天可取消。"""
 
     def test_cancel_allowed_3_days_before(self):
@@ -88,3 +89,47 @@ class CancelPolicyTests(unittest.TestCase):
         today = date(2026, 11, 18)
         deadline = exam_date - timedelta(days=3)
         self.assertFalse(today <= deadline)
+
+    async def test_cancel_deadline_uses_database_clock(self):
+        class ScalarQueueDb:
+            def __init__(self, *values):
+                self.values = list(values)
+
+            async def scalar(self, statement):
+                return self.values.pop(0)
+
+            async def flush(self):
+                return None
+
+        allowed_booking = SimpleNamespace(
+            id=1,
+            registration_id=10,
+            status="booked",
+            exam_date=date(2026, 11, 20),
+        )
+        blocked_booking = SimpleNamespace(
+            id=2,
+            registration_id=10,
+            status="booked",
+            exam_date=date(2026, 11, 20),
+        )
+
+        allowed = await ExamBookingService.cancel(
+            ScalarQueueDb(
+                allowed_booking,
+                datetime(2026, 11, 17, 23, 59, 59),
+            ),
+            1,
+            10,
+        )
+        self.assertEqual(allowed.status, "cancelled")
+
+        with self.assertRaisesRegex(Exception, "考前 3 天内不可取消"):
+            await ExamBookingService.cancel(
+                ScalarQueueDb(
+                    blocked_booking,
+                    datetime(2026, 11, 18, tzinfo=None),
+                ),
+                2,
+                10,
+            )

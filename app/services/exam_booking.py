@@ -12,6 +12,7 @@ from app.domain.exam.src.index import (
     ExamTimeSlot,
     Holiday,
 )
+from app.services.clock import db_now_utc
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 
 
@@ -247,9 +248,8 @@ class ExamBookingService:
         if booking.status != "booked":
             raise BusinessException("该预约已取消或已完成")
 
-        # 校验取消截止（考前 3 天）
-        from datetime import datetime as dt
-        today = dt.now().date()
+        # 校验取消截止（考前 3 天）。日期边界以数据库时钟为准。
+        today = (await db_now_utc(db)).date()
         deadline = booking.exam_date - timedelta(days=cls.CANCEL_DEADLINE_DAYS)
         if today > deadline:
             raise BusinessException(f"考前 {cls.CANCEL_DEADLINE_DAYS} 天内不可取消，请联系管理员")

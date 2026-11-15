@@ -38,6 +38,7 @@ from app.schemas.renshe import (
     RensheVersionSummary,
 )
 from app.services.agreement_template import ensure_accepted
+from app.services.clock import db_now_utc
 from app.services.consultation_group import ConsultationGroupService
 from app.services.plan_enrollment import CAPACITY_OCCUPYING_ORDER_STATUSES, PlanEnrollmentService
 from app.services.renshe_project import batch_configuration, is_renshe_plan, default_configuration
@@ -90,7 +91,13 @@ class RensheApplicationService:
                 raise ConflictException("本期新报名仅开放已适配批次；历史报名请从我的报名继续办理")
             if application is None and not is_v2(batch_configuration(plan).get("reporting_policy", {})):
                 raise ConflictException("历史批次仅办理已有报名，新报名请选择当前批次")
-            self._validate_edit_window(plan, application, paid_order=await self._paid_correction_order(db, application))
+            now = await db_now_utc(db)
+            self._validate_edit_window(
+                plan,
+                application,
+                paid_order=await self._paid_correction_order(db, application),
+                now=now,
+            )
             if application is None:
                 application = RensheApplication(
                     user_id=user_id,
@@ -156,11 +163,14 @@ class RensheApplicationService:
                     message="请先阅读并同意认证报名信息处理授权协议",
                 )
 
-                self._validate_edit_window(plan, application, paid_order=paid_order)
+                db_now = await db_now_utc(db)
+                self._validate_edit_window(
+                    plan, application, paid_order=paid_order, now=db_now
+                )
                 realname, student = await self._verified_profiles(db, user_id, plan)
                 config = batch_configuration(plan)
                 graduated = is_self_reported(config)
-                now = self._now()
+                now = db_now
                 await validate_snapshot(db, plan, application.draft_data)
                 if graduated:
                     try:
@@ -362,19 +372,20 @@ class RensheApplicationService:
         return application, plan, paid_order
 
     @classmethod
-    def _validate_edit_window(cls, plan, application, *, paid_order=None):
+    def _validate_edit_window(cls, plan, application, *, paid_order=None, now=None):
         config = batch_configuration(plan)
         if (is_self_reported(config) and application is not None
                 and application.status in {"initial_rejected", "external_rejected"}):
             if plan.status not in {"published", "registration_closed"} or application.closed_at is not None:
                 raise ConflictException("批次或报名已关闭，不能补正")
             deadline = application.correction_due_at
-            if deadline is None or PlanEnrollmentService._as_utc(deadline) < cls._now():
+            current = now or cls._now()
+            if deadline is None or PlanEnrollmentService._as_utc(deadline) < current:
                 raise ConflictException("补正期限已过或尚未设置，请联系管理员")
             if paid_order is None:
                 raise ConflictException("补正缺少原已支付订单，请联系管理员")
             return
-        PlanEnrollmentService.validate_application_window(plan)
+        PlanEnrollmentService.validate_application_window(plan, now=now)
 
     @staticmethod
     async def _paid_correction_order(db, application):
@@ -404,7 +415,12 @@ class RensheApplicationService:
                 application = await db.scalar(select(RensheApplication).where(
                     RensheApplication.user_id == user_id, RensheApplication.plan_id == plan_id,
                     RensheApplication.status != "closed").with_for_update())
-                self._validate_edit_window(plan, application, paid_order=await self._paid_correction_order(db, application))
+                self._validate_edit_window(
+                    plan,
+                    application,
+                    paid_order=await self._paid_correction_order(db, application),
+                    now=await db_now_utc(db),
+                )
                 if application is None:
                     if not is_v2(config.get("reporting_policy", {})):
                         raise ConflictException("历史批次仅办理已有报名，新报名请选择当前批次")

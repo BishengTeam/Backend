@@ -30,6 +30,7 @@ from app.schemas.h3c_registration import (
     H3cExamBatchUpdate,
 )
 from app.services.admin_security_audit import AdminSecurityAuditService
+from app.services.clock import db_now_utc
 
 
 H3C_PRICE_FIELDS = {
@@ -313,6 +314,7 @@ class H3cAdminBatchService:
 
         async with get_db_ctx() as db:
             async with db.begin():
+                now = await db_now_utc(db)
                 batch, plan = await self._lock(db, batch_id)
                 if plan.status not in {"published", "registration_closed"}:
                     raise ConflictException("当前批次状态不能取消")
@@ -347,7 +349,7 @@ class H3cAdminBatchService:
                             order.expires_at = None
                             continue
                         apply_order_status_transition(order, "closed")
-                        order.closed_at = _now()
+                        order.closed_at = now
                         order.close_reason = "batch_cancelled"
                         await release_inventory_lock(db, order, reason="batch_cancelled")
                         registration.status = "cancelled"
@@ -365,7 +367,7 @@ class H3cAdminBatchService:
                             admin_id=admin_id,
                         )
                 plan.status = "cancelled"
-                plan.cancelled_at = _now()
+                plan.cancelled_at = now
                 AdminSecurityAuditService.append(
                     db,
                     action="h3c.batch.cancel",
@@ -426,6 +428,7 @@ class H3cAdminBatchService:
     ) -> H3cExamBatchResponse:
         async with get_db_ctx() as db:
             async with db.begin():
+                now = await db_now_utc(db)
                 batch, plan = await self._lock(db, batch_id)
                 if plan.status not in allowed:
                     raise ConflictException("当前批次状态不允许该操作")
@@ -435,11 +438,11 @@ class H3cAdminBatchService:
                 ):
                     raise BusinessException("发布前必须配置报名时间和截止时间")
                 if require_window:
-                    if plan.apply_start >= plan.apply_end:
+                    if _utc(plan.apply_start) >= _utc(plan.apply_end):
                         raise BusinessException("报名开始时间必须早于截止时间")
-                    if plan.exam_date is not None and plan.exam_date < plan.apply_end:
+                    if plan.exam_date is not None and _utc(plan.exam_date) < _utc(plan.apply_end):
                         raise BusinessException("考试时间不能早于报名截止时间")
-                    if plan.apply_end <= _now():
+                    if _utc(plan.apply_end) <= now:
                         raise BusinessException("报名截止时间必须晚于当前时间")
                 if target == "published":
                     # Prevent publishing legacy drafts whose capacity was changed
@@ -447,7 +450,6 @@ class H3cAdminBatchService:
                     await self._lock_consistent_inventory(
                         db, batch_id=batch.id, capacity=plan.capacity,
                     )
-                now = _now()
                 plan.status = target
                 if target == "published":
                     plan.published_at = now

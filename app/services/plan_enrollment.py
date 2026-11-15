@@ -8,6 +8,7 @@ from app.domain.order.src.index import Order
 from app.domain.plan.src.index import Plan
 from app.models.cert_product import CertProduct
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
+from app.services.clock import db_now_utc
 
 
 CAPACITY_OCCUPYING_ORDER_STATUSES = ("pending", "paid", "completed")
@@ -59,7 +60,10 @@ class PlanEnrollmentService:
         if plan is None:
             raise NotFoundException("批次")
 
-        self.validate_application_window(plan, now=now)
+        self.validate_application_window(
+            plan,
+            now=now if now is not None else await db_now_utc(db),
+        )
 
         # v2 多产品：product_type=None 的 H3C 批次，经 h3c_batch_product 校验
         if plan.product_type is None and expected_vendor.lower() == "h3c":

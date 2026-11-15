@@ -41,6 +41,7 @@ CERT_EXPECTED_ROUTES = (
 
 SYSTEM_EXPECTED_ROUTES = (
     ("GET", "/api/system/poster"),
+    ("GET", "/api/system/time"),
 )
 
 PRICES_EXPECTED_ROUTES = (

@@ -43,6 +43,7 @@ NISP_CORRECTABLE_FIELDS = {
 }
 from app.services.points_mall import release_order_coupon
 from app.services.consultation_group import ConsultationGroupService
+from app.services.clock import db_now_utc
 from app.services.certification_identity import (
     assert_submitted_identity,
     lock_verified_identity,
@@ -151,7 +152,9 @@ class NispRegistrationService:
             product = await validate_nisp_batch_product(
                 db, plan=plan, level=batch.level, require_active=True
             )
-            PlanEnrollmentService.validate_application_window(plan)
+            PlanEnrollmentService.validate_application_window(
+                plan, now=await db_now_utc(db)
+            )
             if plan.capacity > 0 and await occupied_count(db, plan.id) >= plan.capacity:
                 raise ConflictException("该考试批次名额已满")
             if await db.scalar(occupied_orders(plan.id).where(Order.user_id == user_id).limit(1)):

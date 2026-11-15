@@ -1,6 +1,7 @@
 x-backend-environment: &backend_environment
   APP_ENV: production
   APP_DEBUG: "false"
+  TZ: "UTC"
   RUN_MIGRATIONS: "false"
   WEMINI_RELEASE_TAG: ${WEMINI_RELEASE_TAG:-}
   WEMINI_BACKEND_COMMIT: ${WEMINI_BACKEND_COMMIT:-}
@@ -211,6 +212,7 @@ services:
     profiles: [internal]
     image: postgres:16-alpine
     environment:
+      TZ: "UTC"
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}

@@ -89,7 +89,7 @@ def cert_product(**kwargs):
 ])
 async def test_invalid_batch_never_creates_order(monkeypatch, changes, occupied):
     db = session(monkeypatch, 'app.services.nisp_registration',
-                 scalars=[identity(), 2, plan(**changes), cert_product(), occupied],
+                 scalars=[identity(), 2, plan(**changes), cert_product(), NOW, occupied],
                  execute=[result(batch())])
     db.get = AsyncMock(return_value=NS(is_active=True))
     monkeypatch.setattr('app.services.agreement_template.ensure_accepted', AsyncMock())
@@ -105,7 +105,7 @@ async def test_new_order_has_plan_and_database_id_registration_number(monkeypatc
     b = batch()
     b.level1_price_cents = price
     db = session(monkeypatch, 'app.services.nisp_registration',
-                 scalars=[identity(), 2, plan(), cert_product(), 0, None],
+                 scalars=[identity(), 2, plan(), cert_product(), NOW, 0, None],
                  execute=[result(b), result(None)])
     db.get = AsyncMock(return_value=NS(is_active=True))
     monkeypatch.setattr('app.services.agreement_template.ensure_accepted', AsyncMock())
