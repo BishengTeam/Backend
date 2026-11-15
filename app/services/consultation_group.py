@@ -183,11 +183,15 @@ class ConsultationGroupService:
         plan = await db.get(Plan, plan_id)
         if plan is None:
             raise NotFoundException("认证批次")
+        from app.domain.h3c.src.index import H3cExamBatch
+
+        if await db.scalar(select(H3cExamBatch.id).where(H3cExamBatch.plan_id == plan.id)):
+            return "h3c:batch_manage"
         product = await db.scalar(
             select(CertProduct).where(CertProduct.code == plan.product_type)
-        )
+        ) if plan.product_type is not None else None
         product_type = product.type if product is not None else ""
-        normalized = plan.product_type.strip().upper()
+        normalized = (plan.product_type or "").strip().upper()
         if product_type == "nisp" or normalized.startswith("NISP-"):
             return "nisp:batch_manage"
         if product_type == "h3c" or normalized.startswith("H3C"):

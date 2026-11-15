@@ -9,7 +9,11 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, or_, select
 
 from app.adapter.database import get_db_ctx
-from app.domain.h3c.src.index import H3cRefundRequest, H3cRegistration
+from app.domain.h3c.src.index import (
+    H3cBatchProduct,
+    H3cRefundRequest,
+    H3cRegistration,
+)
 from app.domain.plan.src.index import Plan
 from app.domain.order.src.index import (
     Order,
@@ -117,7 +121,14 @@ class H3cRefundService:
                 .join(H3cRegistration, H3cRegistration.id == H3cRefundRequest.registration_id)
                 .join(Plan, Plan.id == H3cRegistration.plan_id)
                 .join(Order, Order.id == H3cRefundRequest.order_id)
-                .outerjoin(CertProduct, CertProduct.code == Plan.product_type)
+                .outerjoin(
+                    H3cBatchProduct,
+                    H3cBatchProduct.id == H3cRegistration.batch_product_id,
+                )
+                .outerjoin(CertProduct, or_(
+                    CertProduct.id == H3cBatchProduct.product_id,
+                    CertProduct.code == Plan.product_type,
+                ))
             )
             if registration_id is not None:
                 stmt = stmt.where(H3cRegistration.id == registration_id)
@@ -189,7 +200,9 @@ class H3cRefundService:
                 response.registration_no = registration.registration_no
                 response.batch_id = registration.batch_id
                 response.batch_name = plan.name
-                response.product_label = product.chinese_name or plan.product_type
+                response.product_label = (
+                    product.chinese_name if product is not None else None
+                ) or plan.product_type or "未知科目"
                 items.append(response)
             return PaginatedDataWithCounts(
                 items=items,

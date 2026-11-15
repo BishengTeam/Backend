@@ -332,6 +332,8 @@ class AdminCertProductService:
     async def get_stats(self) -> list[CertProductStats]:
         """聚合统计，按 type 分组"""
         async with get_db_ctx() as db:
+            from app.domain.h3c.src.index import H3cBatchProduct, H3cExamBatch
+
             # 按 type 聚合产品统计
             product_agg = (
                 select(
@@ -343,16 +345,34 @@ class AdminCertProductService:
                 .subquery()
             )
 
-            # 活跃批次数（plan status='published'）按 product_type 分组
+            # 活跃批次数（plan status='published'）按产品类型分组。
+            # H3C 多产品批次的 Plan.product_type 为空，需要经关联表归入 H3C；
+            # UNION 去重保证一个多产品批次只计数一次。
+            single_batch_types = select(
+                CertProduct.type.label("type"), Plan.id.label("plan_id")
+            ).select_from(
+                Plan
+            ).join(CertProduct, CertProduct.code == Plan.product_type).where(
+                Plan.status == "published"
+            )
+            multi_h3c_batch_types = select(
+                CertProduct.type.label("type"), Plan.id.label("plan_id")
+            ).select_from(
+                Plan
+            ).join(
+                H3cExamBatch, H3cExamBatch.plan_id == Plan.id
+            ).join(
+                H3cBatchProduct, H3cBatchProduct.batch_id == H3cExamBatch.id
+            ).join(
+                CertProduct, CertProduct.id == H3cBatchProduct.product_id
+            ).where(Plan.status == "published")
+            batch_union = single_batch_types.union(multi_h3c_batch_types).subquery()
             batch_agg = (
                 select(
-                    CertProduct.type,
-                    func.count().label("active_batch_count"),
+                    batch_union.c.type,
+                    func.count(batch_union.c.plan_id).label("active_batch_count"),
                 )
-                .select_from(Plan)
-                .join(CertProduct, CertProduct.code == Plan.product_type)
-                .where(Plan.status == "published")
-                .group_by(CertProduct.type)
+                .group_by(batch_union.c.type)
                 .subquery()
             )
 

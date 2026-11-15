@@ -141,7 +141,27 @@ class CertificationJourneyService:
     async def _check_plan(db, vendor, plan_id):
         if plan_id is not None:
             plan = await db.get(Plan, plan_id)
-            product = await db.scalar(select(CertProduct).where(CertProduct.code == plan.product_type, CertProduct.type == vendor)) if plan else None
+            product = None
+            if plan is not None and plan.product_type is None and vendor == "h3c":
+                from app.domain.h3c.src.index import H3cBatchProduct
+
+                product = await db.scalar(
+                    select(CertProduct)
+                    .join(H3cBatchProduct, H3cBatchProduct.product_id == CertProduct.id)
+                    .join(H3cExamBatch, H3cExamBatch.id == H3cBatchProduct.batch_id)
+                    .where(
+                        H3cExamBatch.plan_id == plan.id,
+                        CertProduct.type == vendor,
+                    )
+                    .limit(1)
+                )
+            elif plan is not None:
+                product = await db.scalar(
+                    select(CertProduct).where(
+                        CertProduct.code == plan.product_type,
+                        CertProduct.type == vendor,
+                    )
+                )
             if product is None:
                 raise NotFoundException("该认证的批次")
 
@@ -301,7 +321,19 @@ async def user_journey(vendor, registration_id, user_id):
         plan = await db.get(Plan, order.plan_id)
         if plan is None:
             raise NotFoundException("认证批次")
-        product = await db.scalar(select(CertProduct).where(CertProduct.code == plan.product_type))
+        product = None
+        if vendor == "h3c" and getattr(record, "batch_product_id", None) is not None:
+            from app.domain.h3c.src.index import H3cBatchProduct
+
+            batch_product = await db.get(
+                H3cBatchProduct, getattr(record, "batch_product_id")
+            )
+            if batch_product is not None:
+                product = await db.get(CertProduct, batch_product.product_id)
+        if product is None:
+            product = await db.scalar(
+                select(CertProduct).where(CertProduct.code == plan.product_type)
+            )
         offline = await db.scalar(select(OfflinePayment).where(OfflinePayment.order_id == order.id))
         submission = await db.scalar(select(OfflinePaymentSubmission).where(OfflinePaymentSubmission.order_id == order.id).order_by(OfflinePaymentSubmission.version.desc()).limit(1))
         refund_approved = await db.scalar(select(OfflinePaymentAudit.id).where(OfflinePaymentAudit.order_id == order.id, OfflinePaymentAudit.action == "admin.generic_refund_approved").limit(1))

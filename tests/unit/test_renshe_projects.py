@@ -60,6 +60,8 @@ async def isolated(monkeypatch, tmp_path):
         "plan",
         "order",
         "h3c_refund_request",
+        "h3c_exam_batch",
+        "h3c_batch_product",
         "nisp_refund_request",
         "payment_refund_task",
         "cert_consultation_group",
