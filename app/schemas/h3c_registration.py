@@ -167,6 +167,7 @@ class H3cExamBatchResponse(BaseModel):
     id: int
     plan_id: int
     certification_code: str | None = None
+    product_codes: list[str] = []
     name: str
     status: str
     apply_start: datetime

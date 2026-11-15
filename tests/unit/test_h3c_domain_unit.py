@@ -60,6 +60,8 @@ def test_h3c_workbook_rows_match_official_template_columns():
             "verify_code": "XUEXIN-001",
             "birth_date": "2000/01/01",
             "exam_datetime": "2026/10/10 9:00",
+            "exam_code": "GB0-382",
+            "identity_tag": "H3CSE考生",
         }
     )
 
@@ -84,8 +86,18 @@ def test_h3c_workbook_rows_match_official_template_columns():
     assert len(student) == 22
     assert coupon[0] == "COUPON-001"
     assert coupon[11] is None  # embedded image placeholder
-    assert full[0] == "GB0-192"
+    assert full[0] == "GB0-382"
+    assert full[12] == "H3CSE考生"
     assert student[12] == "XUEXIN-001"
+
+    legacy_snapshot = dict(registration.candidate_snapshot, exam_code=None)
+    legacy_registration = SimpleNamespace(candidate_snapshot=legacy_snapshot)
+    legacy = service._workbook_row(
+        batch=batch,
+        registration=legacy_registration,
+        registration_type="full",
+    )
+    assert legacy[0] == "GB0-192"
 
 
 @_requires_migrated_db

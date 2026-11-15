@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db_ctx
 from app.models.cert_product import CertProduct
 from app.domain.h3c.src.index import (
+    H3cBatchProduct,
     H3C_REGISTRATION_TYPES,
     H3cExamBatch,
     H3cRegistration,
@@ -393,7 +394,15 @@ class H3cAdminBatchService:
             if status:
                 stmt = stmt.where(Plan.status == status)
             if certification_code:
-                stmt = stmt.where(Plan.product_type == certification_code)
+                matching_multi_batch_ids = (
+                    select(H3cBatchProduct.batch_id)
+                    .join(CertProduct, CertProduct.id == H3cBatchProduct.product_id)
+                    .where(CertProduct.code == certification_code)
+                )
+                stmt = stmt.where(or_(
+                    Plan.product_type == certification_code,
+                    H3cExamBatch.id.in_(matching_multi_batch_ids),
+                ))
             total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
             rows = (
                 await db.execute(
@@ -524,10 +533,17 @@ class H3cAdminBatchService:
                 .group_by(H3cRegistration.status)
             )
         ).all()
+        product_codes = list((await db.scalars(
+            select(CertProduct.code)
+            .join(H3cBatchProduct, H3cBatchProduct.product_id == CertProduct.id)
+            .where(H3cBatchProduct.batch_id == batch.id)
+            .order_by(H3cBatchProduct.id)
+        )) if plan.product_type is None else [])
         return H3cExamBatchResponse(
             id=batch.id,
             plan_id=plan.id,
-            certification_code=plan.product_type,
+            certification_code=plan.product_type or ", ".join(product_codes),
+            product_codes=product_codes,
             name=plan.name,
             status=plan.status,
             apply_start=plan.apply_start,

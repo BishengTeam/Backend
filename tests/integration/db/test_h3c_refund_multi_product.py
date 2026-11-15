@@ -1,6 +1,6 @@
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -21,6 +21,7 @@ from app.models.cert_product import CertProduct
 from app.services.admin_cert_product import AdminCertProductService
 from app.services.certification_journey import CertificationJourneyService, user_journey
 from app.services.consultation_group import ConsultationGroupService
+from app.services.h3c_admin import H3cAdminBatchService
 from app.services.h3c_refund import H3cRefundService
 
 
@@ -116,6 +117,8 @@ async def test_multi_product_refund_list_resolves_selected_subject(context):
             product_type=None,
             name=f"{prefix} multi batch",
             status="published",
+            apply_start=now - timedelta(days=1),
+            apply_end=now + timedelta(days=1),
             capacity=10,
             price_cents=0,
         )
@@ -156,6 +159,21 @@ async def test_multi_product_refund_list_resolves_selected_subject(context):
         )
         db.add(order)
         await db.flush()
+        second_order = Order(
+            user_id=user.id,
+            order_kind="certification",
+            product_type=second_product.code,
+            plan_id=plan.id,
+            candidate_name="多产品退款第二科目",
+            candidate_idcard="510101200001010199",
+            price=80000,
+            status="pending",
+            payment_channel="unknown",
+            out_trade_no=f"{prefix}_order_2",
+        )
+        db.add(second_order)
+        await db.flush()
+        assert second_order.id != order.id
         registration = H3cRegistration(
             batch_id=batch.id,
             batch_product_id=first_batch_product.id,
@@ -196,6 +214,18 @@ async def test_multi_product_refund_list_resolves_selected_subject(context):
         "h3c", seed.registration_id, seed.user_id
     )
     assert journey["subject"] == "H3CNE 认证网络工程师"
+
+    admin_batches = await H3cAdminBatchService().list_batches(
+        certification_code=second_product.code
+    )
+    assert [batch.id for batch in admin_batches.items] == [batch.id]
+    assert admin_batches.items[0].certification_code == (
+        f"{product.code}, {second_product.code}"
+    )
+    assert set(admin_batches.items[0].product_codes) == {
+        product.code,
+        second_product.code,
+    }
 
     result = await H3cRefundService().list_refunds(
         keyword=prefix,

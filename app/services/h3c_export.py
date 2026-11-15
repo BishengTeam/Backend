@@ -972,11 +972,11 @@ class H3cExportService:
                 None,  # image placeholder
                 None,
                 snapshot.get("birth_date"),
-                batch.identity_tag,
+                snapshot.get("identity_tag") or batch.identity_tag,
                 snapshot.get("first_name_en"),
                 snapshot.get("last_name_en"),
                 snapshot.get("booked_exam_datetime") or snapshot.get("exam_datetime") or "未预约",
-                batch.exam_code,
+                snapshot.get("exam_code") or batch.exam_code,
                 None,
                 batch.training_org,
                 batch.training_address,
@@ -985,10 +985,10 @@ class H3cExportService:
             ]
         if registration_type == "full":
             return [
-                batch.exam_code,
+                snapshot.get("exam_code") or batch.exam_code,
                 *common,
                 snapshot.get("birth_date"),
-                batch.identity_tag,
+                snapshot.get("identity_tag") or batch.identity_tag,
                 snapshot.get("first_name_en"),
                 snapshot.get("last_name_en"),
                 snapshot.get("booked_exam_datetime") or snapshot.get("exam_datetime") or "未预约",
@@ -999,7 +999,7 @@ class H3cExportService:
                 batch.training_end,
             ]
         return [
-            batch.exam_code,
+            snapshot.get("exam_code") or batch.exam_code,
             *common,
             None,  # image placeholder
             snapshot.get("verify_code"),
