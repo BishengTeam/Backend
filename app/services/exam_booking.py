@@ -143,11 +143,12 @@ class ExamBookingService:
             select(ExamBooking).where(
                 ExamBooking.registration_id == registration_id,
                 ExamBooking.schedule_id == schedule_id,
-                ExamBooking.status == "booked",
-            )
+            ).with_for_update()
         )
-        if existing is not None:
+        if existing is not None and existing.status == "booked":
             raise ConflictException("您已预约该考场计划，请先取消再重新预约")
+        if existing is not None and existing.status != "cancelled":
+            raise ConflictException("该预约已完成或已缺考，不能重新预约")
 
         # 获取考生的科目（通过 registration 关联）
         from app.domain.h3c.src.index import H3cRegistration
@@ -217,14 +218,21 @@ class ExamBookingService:
                 raise BusinessException("该时段机位已满")
 
         # 创建预约
-        booking = ExamBooking(
-            registration_id=registration_id,
-            schedule_id=schedule_id,
-            subject_id=subject.id,
-            slot_id=slot_id,
-            exam_date=exam_date,
-        )
-        db.add(booking)
+        if existing is None:
+            booking = ExamBooking(
+                registration_id=registration_id,
+                schedule_id=schedule_id,
+                subject_id=subject.id,
+                slot_id=slot_id,
+                exam_date=exam_date,
+            )
+            db.add(booking)
+        else:
+            booking = existing
+            booking.subject_id = subject.id
+            booking.slot_id = slot_id
+            booking.exam_date = exam_date
+            booking.status = "booked"
         await db.flush()
         return booking
 

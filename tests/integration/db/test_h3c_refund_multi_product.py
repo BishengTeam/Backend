@@ -14,6 +14,15 @@ from app.domain.h3c.src.index import (
     H3cRefundRequest,
     H3cRegistration,
 )
+from app.api.admin.exam_schedule import ScheduleCreate, create_schedule
+from app.api.exam_booking import get_slots
+from app.domain.exam.src.index import (
+    ExamBooking,
+    ExamSchedule,
+    ExamScheduleSubject,
+    ExamSeatQuota,
+    ExamTimeSlot,
+)
 from app.domain.order.src.index import Order
 from app.domain.plan.src.index import Plan
 from app.domain.user.src.index import User
@@ -23,6 +32,7 @@ from app.services.certification_journey import CertificationJourneyService, user
 from app.services.consultation_group import ConsultationGroupService
 from app.services.h3c_admin import H3cAdminBatchService
 from app.services.h3c_refund import H3cRefundService
+from app.services.exam_booking import ExamBookingService
 
 
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
@@ -64,6 +74,27 @@ async def context(monkeypatch):
             H3cExamBatch.plan_id.in_(plan_ids)
         )
         order_ids = select(Order.id).where(Order.out_trade_no.like(f"{prefix}%"))
+        registration_ids = select(H3cRegistration.id).where(
+            H3cRegistration.registration_no.like(f"{prefix}%")
+        )
+        schedule_ids = select(ExamSchedule.id).where(
+            ExamSchedule.name.like(f"{prefix}%")
+        )
+        await db.execute(delete(ExamBooking).where(
+            ExamBooking.registration_id.in_(registration_ids)
+        ))
+        await db.execute(delete(ExamSeatQuota).where(
+            ExamSeatQuota.schedule_id.in_(schedule_ids)
+        ))
+        await db.execute(delete(ExamScheduleSubject).where(
+            ExamScheduleSubject.schedule_id.in_(schedule_ids)
+        ))
+        await db.execute(delete(ExamTimeSlot).where(
+            ExamTimeSlot.schedule_id.in_(schedule_ids)
+        ))
+        await db.execute(delete(ExamSchedule).where(
+            ExamSchedule.id.in_(schedule_ids)
+        ))
         await db.execute(delete(H3cRefundRequest).where(
             H3cRefundRequest.out_refund_no.like(f"{prefix}%")
         ))
@@ -243,3 +274,72 @@ async def test_multi_product_refund_list_resolves_selected_subject(context):
     assert h3c_stats_after.active_batch_count == (
         h3c_stats_before.active_batch_count + 1
     )
+
+    async with context.factory() as db:
+        registration = await db.get(H3cRegistration, seed.registration_id)
+        assert registration is not None
+        registration.status = "approved"
+        await db.commit()
+
+        days_until_friday = (4 - now.weekday()) % 7 or 7
+        exam_day = now.date() + timedelta(days=days_until_friday + 7)
+        schedule_result = await create_schedule(
+            data=ScheduleCreate(
+                name=f"{prefix} booking schedule",
+                open_date_start=exam_day - timedelta(days=7),
+                open_date_end=exam_day + timedelta(days=7),
+                allowed_weekdays=[4],
+                product_ids=[product.id],
+                time_slots=[
+                    {"start_time": "09:30"},
+                    {"start_time": "14:30"},
+                ],
+                default_quota=5,
+                publish=True,
+            ),
+            _admin=None,
+            db=db,
+        )
+        schedule_id = schedule_result.data["id"]
+
+        slot_response = await get_slots(
+            schedule_id=schedule_id,
+            exam_date=exam_day,
+            registration_id=registration.id,
+            current_user=SimpleNamespace(id=seed.user_id),
+            db=db,
+        )
+        assert [slot["start_time"][-8:-3] for slot in slot_response.data["slots"]] == [
+            "09:30",
+            "14:30",
+        ]
+
+        first_slot_id = slot_response.data["slots"][0]["slot_id"]
+        second_slot_id = slot_response.data["slots"][1]["slot_id"]
+        first_booking = await ExamBookingService.book(
+            db,
+            registration_id=registration.id,
+            schedule_id=schedule_id,
+            slot_id=first_slot_id,
+            exam_date=exam_day,
+        )
+        await db.commit()
+
+        cancelled = await ExamBookingService.cancel(
+            db, first_booking.id, registration.id
+        )
+        assert cancelled.status == "cancelled"
+        await db.commit()
+
+        rebooked = await ExamBookingService.book(
+            db,
+            registration_id=registration.id,
+            schedule_id=schedule_id,
+            slot_id=second_slot_id,
+            exam_date=exam_day,
+        )
+        await db.commit()
+
+        assert rebooked.id == first_booking.id
+        assert rebooked.status == "booked"
+        assert rebooked.slot_id == second_slot_id

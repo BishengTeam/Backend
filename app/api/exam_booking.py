@@ -73,22 +73,31 @@ async def get_dates(
 async def get_slots(
     schedule_id: int = Path(..., ge=1),
     exam_date: date = Query(..., alias="date"),
+    registration_id: int | None = Query(None, ge=1),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """P0 #2: 自动从用户报名记录解析科目，无需前端传 subject_id。"""
-    # 从该用户最近的 H3C 报名解析科目（v2 优先 batch_product_id 两跳）
+    # 从指定或最近的 H3C 报名解析科目（v2 优先 batch_product_id 两跳）。
+    # 多产品允许同一用户有多条已通过报名，查看时段时必须锁定当前报名。
     from app.domain.h3c.src.index import H3cExamBatch, H3cBatchProduct
     from app.domain.plan.src.index import Plan
     from app.models.cert_product import CertProduct
     from app.domain.exam.src.index import ExamScheduleSubject
 
-    registration = (await db.execute(
+    registration_statement = (
         select(H3cRegistration)
         .where(
             H3cRegistration.user_id == current_user.id,
             H3cRegistration.status.in_(("approved", "final_approved")),
         )
+    )
+    if registration_id is not None:
+        registration_statement = registration_statement.where(
+            H3cRegistration.id == registration_id,
+        )
+    registration = (await db.execute(
+        registration_statement
         .order_by(H3cRegistration.id.desc())
         .limit(1)
     )).scalar_one_or_none()
@@ -163,6 +172,7 @@ async def my_bookings(
     )).all()
     return success(data=[{
         "id": b.id,
+        "registration_id": b.registration_id,
         "schedule_name": sname,
         "subject_name": pname or "",
         "slot_label": slot.label,
