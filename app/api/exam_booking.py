@@ -46,6 +46,7 @@ async def my_schedules(
         "id": s.id, "name": s.name,
         "open_date_start": s.open_date_start.isoformat(),
         "open_date_end": s.open_date_end.isoformat(),
+        "exam_location": s.exam_location,
     } for s in rows])
 
 
@@ -160,7 +161,13 @@ async def my_bookings(
     from app.domain.exam.src.index import ExamTimeSlot, ExamScheduleSubject
     from app.models.cert_product import CertProduct
     rows = (await db.execute(
-        select(ExamBooking, ExamTimeSlot, ExamSchedule.name, CertProduct.name)
+        select(
+            ExamBooking,
+            ExamTimeSlot,
+            ExamSchedule.name,
+            ExamSchedule.exam_location,
+            CertProduct.name,
+        )
         .join(ExamTimeSlot, ExamTimeSlot.id == ExamBooking.slot_id)
         .join(ExamSchedule, ExamSchedule.id == ExamBooking.schedule_id)
         .outerjoin(ExamScheduleSubject, ExamScheduleSubject.id == ExamBooking.subject_id)
@@ -175,12 +182,13 @@ async def my_bookings(
         "registration_id": b.registration_id,
         "schedule_id": b.schedule_id,
         "schedule_name": sname,
+        "exam_location": slocation,
         "subject_name": pname or "",
         "slot_label": slot.label,
         "slot_time": slot.start_time.isoformat(),
         "exam_date": b.exam_date.isoformat(),
         "status": b.status,
-    } for b, slot, sname, pname in rows])
+    } for b, slot, sname, slocation, pname in rows])
 
 
 @router.delete("/bookings/{booking_id}", response_model=APIResponse[dict], summary="取消预约")

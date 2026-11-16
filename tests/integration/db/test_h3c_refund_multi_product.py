@@ -289,6 +289,7 @@ async def test_multi_product_refund_list_resolves_selected_subject(context):
                 open_date_start=exam_day - timedelta(days=7),
                 open_date_end=exam_day + timedelta(days=7),
                 allowed_weekdays=[4],
+                exam_location="成都市高新区天府软件园B区3楼",
                 product_ids=[product.id],
                 time_slots=[
                     {"start_time": "09:30"},
@@ -301,6 +302,10 @@ async def test_multi_product_refund_list_resolves_selected_subject(context):
             db=db,
         )
         schedule_id = schedule_result.data["id"]
+        async with context.factory() as check_db:
+            schedule = await check_db.get(ExamSchedule, schedule_id)
+            assert schedule is not None
+            assert schedule.exam_location == "成都市高新区天府软件园B区3楼"
 
         slot_response = await get_slots(
             schedule_id=schedule_id,
@@ -353,3 +358,4 @@ async def test_multi_product_refund_list_resolves_selected_subject(context):
             if row["registration_id"] == registration.id and row["status"] == "booked"
         )
         assert active_row["schedule_id"] == schedule_id
+        assert active_row["exam_location"] == "成都市高新区天府软件园B区3楼"

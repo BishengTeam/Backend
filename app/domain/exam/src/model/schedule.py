@@ -43,6 +43,7 @@ class ExamSchedule(Base, TimestampMixin):
     allowed_weekdays: Mapped[list[int]] = mapped_column(
         JSON, nullable=False, default=[4], server_default='[4]'
     )  # Python weekday(): 4=周五；JSON 兼容 SQLite
+    exam_location: Mapped[str | None] = mapped_column(String(256))
     pre_exam_notice: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="draft", server_default="draft"

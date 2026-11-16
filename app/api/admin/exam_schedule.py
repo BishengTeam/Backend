@@ -40,6 +40,7 @@ class ScheduleUpdate(BaseModel):
     open_date_start: date | None = None
     open_date_end: date | None = None
     allowed_weekdays: list[int] | None = None
+    exam_location: str | None = Field(None, min_length=1, max_length=256)
     pre_exam_notice: str | None = None
 
 
@@ -59,6 +60,7 @@ class ScheduleCreate(BaseModel):
     open_date_start: date
     open_date_end: date
     allowed_weekdays: list[int] = Field(default=[4], description="Python weekday()，4=周五")
+    exam_location: str | None = Field(None, max_length=256)
     pre_exam_notice: str | None = Field(None, max_length=5000)
     product_ids: list[int] = Field(default_factory=list)
     time_slots: list[TimeSlotCreate] | None = None
@@ -100,6 +102,7 @@ async def list_schedules(
         "open_date_start": s.open_date_start.isoformat(),
         "open_date_end": s.open_date_end.isoformat(),
         "allowed_weekdays": s.allowed_weekdays,
+        "exam_location": s.exam_location,
         "status": s.status, "published_at": s.published_at,
     } for s in rows])
 
@@ -179,6 +182,7 @@ async def create_schedule(
         open_date_start=data.open_date_start,
         open_date_end=data.open_date_end,
         allowed_weekdays=allowed_weekdays,
+        exam_location=data.exam_location,
         pre_exam_notice=data.pre_exam_notice,
         status="published" if data.publish else "draft",
         published_at=date.today() if data.publish else None,
@@ -262,6 +266,7 @@ async def get_schedule(
         "open_date_start": s.open_date_start.isoformat(),
         "open_date_end": s.open_date_end.isoformat(),
         "allowed_weekdays": s.allowed_weekdays,
+        "exam_location": s.exam_location,
         "pre_exam_notice": s.pre_exam_notice,
         "status": s.status,
         "subjects": [{"id": ss.id, "product_id": ss.product_id, "product_name": p.name} for ss, p in subjects],
@@ -288,7 +293,7 @@ async def update_schedule(
         raise NotFoundException("考场计划")
     if s.status != "draft":
         raise BusinessException("仅草稿状态可编辑")
-    for field in ("name", "open_date_start", "open_date_end", "allowed_weekdays", "pre_exam_notice"):
+    for field in ("name", "open_date_start", "open_date_end", "allowed_weekdays", "exam_location", "pre_exam_notice"):
         val = getattr(data, field)
         if val is not None:
             setattr(s, field, val)
