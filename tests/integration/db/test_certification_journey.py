@@ -39,7 +39,8 @@ async def context(monkeypatch):
             db.add(product); await db.flush(); products.append(product)
             plan = Plan(product_type=product.code, name=f"{prefix}_{vendor}", status="published", capacity=20, price_cents=5000,
                 apply_start=datetime.now(timezone.utc) - timedelta(days=1), apply_end=datetime.now(timezone.utc) + timedelta(days=1),
-                exam_date=datetime.now(timezone.utc) + timedelta(days=5), renshe_config={"qualification_rule": "level_five_employment_v1", "reporting_policy": {"contract_version": 2}} if vendor == "renshe" else None)
+                exam_date=datetime.now(timezone.utc) + timedelta(days=5), exam_location="Legacy Location",
+                renshe_config={"qualification_rule": "level_five_employment_v1", "reporting_policy": {"contract_version": 2}} if vendor == "renshe" else None)
             db.add(plan); await db.flush(); plans.append(plan)
             batch = H3cExamBatch(plan_id=plan.id, exam_code="TEST", identity_tag="TEST", coupon_price_cents=1000, student_price_cents=2000, full_price_cents=3000) if vendor == "h3c" else NispExamBatch(plan_id=plan.id, level="1", level1_price_cents=1000, level2_price_cents=2000) if vendor == "nisp" else None
             if batch: db.add(batch); await db.flush()
@@ -62,6 +63,7 @@ async def test_catalog_uses_domain_batch_ids_filters_products_and_keeps_real_pri
         batch = next(item for item in catalog["batches"] if item["plan_id"] == env.plans[index].id)
         assert batch["id"] == (env.batches[index].id if index != 2 else env.plans[index].id)
         assert batch["can_apply"]
+        assert batch["exam_location"] == (None if vendor == "h3c" else "Legacy Location")
         assert batch["prices"][0]["price_cents"] == (1000 if index != 2 else 5000)
         assert not {"contact_phone", "candidate_snapshot", "renshe_config"} & batch.keys()
     with pytest.raises(BusinessException, match='报名方式'):

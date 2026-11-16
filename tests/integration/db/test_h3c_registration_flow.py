@@ -299,6 +299,7 @@ async def test_h3c_zero_price_review_and_resubmission_refund_flow(context):
     seed = await _seed(context)
     service = H3cRegistrationService()
     created = await service.create_order(seed.user_id, _request(context, seed))
+    assert all(row.exam_location is None for row in await service.list_user_batches())
 
     assert created.status == "pending_review"
     assert created.order_status == "completed"
@@ -713,7 +714,9 @@ async def test_inactive_product_cannot_return_through_legacy_or_public_batches(c
         await service.create_order(second_user.id, _request(context, seed).model_copy(update={
             "candidate_name":"另一人", "candidate_idcard":"510101200001010124",
         }))
-    assert (await service.get_registration(seed.user_id, created.id)).id == created.id
+    detail = await service.get_registration(seed.user_id, created.id)
+    assert detail.id == created.id
+    assert detail.exam_location is None
     # Managed vendors never fall back to enabled legacy-only products.
     async with context.factory() as db:
         fallback = Certification(name=seed.code+"old", chinese_name="旧产品", code=seed.code+"old", vendor="H3C", is_active=True)

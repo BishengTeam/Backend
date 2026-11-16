@@ -98,7 +98,8 @@ class CertificationJourneyService:
                     result.append({
                         "id": batch.id, "plan_id": plan.id, "batch_product_id": bp.id, "subject_id": prod.code, "name": plan.name,
                         "status": plan.status, "apply_start": plan.apply_start, "apply_end": plan.apply_end,
-                        "exam_date": plan.exam_date, "exam_location": plan.exam_location,
+                        "exam_date": plan.exam_date,
+                        "exam_location": None if vendor == "h3c" else plan.exam_location,
                         "remaining_count": remaining if plan.capacity else -1, "capacity": plan.capacity,
                         "can_apply": bool(plan.status == "published" and start_ts and end_ts and start_ts <= now_ts < end_ts and (remaining != 0 if plan.capacity else True)),
                         "prices": [
@@ -124,7 +125,8 @@ class CertificationJourneyService:
             prices = [{"value": "coupon", "label": "考券报名", "price_cents": (_prod.coupon_price_cents if _prod else 0) or 0}, {"value": "student", "label": "学生报名", "price_cents": (_prod.student_price_cents if _prod else 0) or 0}, {"value": "full", "label": "全额报名", "price_cents": (_prod.full_price_cents if _prod else 0) or 0}] if vendor == "h3c" else [{"value": batch.level if vendor == "nisp" else "default", "label": f"NISP{batch.level}级" if vendor == "nisp" else plan.application_type if vendor == "renshe" else "报名费", "price_cents": (batch.level1_price_cents if batch.level == "1" else batch.level2_price_cents) if vendor == "nisp" else plan.price_cents}]
             result.append({"id": batch.id if batch else plan.id, "plan_id": plan.id, "subject_id": plan.product_type, "name": plan.name,
                 "status": plan.status, "apply_start": plan.apply_start, "apply_end": plan.apply_end, "exam_date": plan.exam_date,
-                "exam_location": plan.exam_location, "remaining_count": remaining, "capacity": plan.capacity,
+                "exam_location": None if vendor == "h3c" else plan.exam_location,
+                "remaining_count": remaining, "capacity": plan.capacity,
                 "can_apply": bool(supported and plan.status == "published" and start and end and start <= now < end and remaining != 0),
                 "level": batch.level if vendor == "nisp" else None, "skill_level": plan.skill_level if vendor == "renshe" else None,
                 "application_type": plan.application_type if vendor == "renshe" else None, "prices": prices})

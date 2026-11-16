@@ -73,7 +73,6 @@ class H3cExamBatchBase(BaseModel):
     apply_end: datetime
     exam_date: datetime | None = None
     capacity: int = Field(..., ge=1)
-    exam_location: str | None = Field(None, max_length=256)
     description: str | None = Field(None, max_length=5000)
     sort_order: int = Field(0, ge=0)
     exam_code: str = Field(..., min_length=1, max_length=64)
@@ -137,7 +136,6 @@ class H3cExamBatchUpdate(BaseModel):
     apply_end: datetime | None = None
     exam_date: datetime | None = None
     capacity: int | None = Field(None, ge=1)
-    exam_location: str | None = Field(None, max_length=256)
     description: str | None = Field(None, max_length=5000)
     sort_order: int | None = Field(None, ge=0)
     exam_code: str | None = Field(None, min_length=1, max_length=64)

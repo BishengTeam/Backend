@@ -208,7 +208,8 @@ class H3cRegistrationService:
                         apply_end=plan.apply_end,
                         exam_date=plan.exam_date,
                         remaining_count=remaining,
-                        exam_location=plan.exam_location,
+                        # H3C locations belong to ExamSchedule, not the batch/plan.
+                        exam_location=None,
                         description=plan.description,
                         prices=[
                             {"registration_type": kind, "price_cents": (
@@ -245,7 +246,8 @@ class H3cRegistrationService:
                         apply_start=plan.apply_start,
                         apply_end=plan.apply_end,
                         exam_date=plan.exam_date,
-                        exam_location=plan.exam_location,
+                        # H3C locations belong to ExamSchedule, not the batch/plan.
+                        exam_location=None,
                         description=plan.description,
                         remaining_count=remaining,
                         payment_timeout_minutes=batch.payment_timeout_minutes,
@@ -1235,7 +1237,9 @@ class H3cRegistrationService:
             if user is None:
                 return
             exam_date_str = plan.exam_date.strftime("%Y年%m月%d日 %H:%M") if plan and plan.exam_date else "待通知"
-            exam_location = (plan.exam_location or "待通知") if plan else "待通知"
+            # The authoritative location is selected when the candidate books an
+            # ExamSchedule; do not leak the legacy plan-level location here.
+            exam_location = "以考试预约结果为准"
             data = {
                 "thing1": {"value": "H3C认证报名审核通过"},
                 "thing2": {"value": exam_location[:20]},
@@ -1564,7 +1568,8 @@ class H3cRegistrationService:
             last_reviewed_at=registration.last_reviewed_at,
             approved_at=registration.approved_at,
             exam_date=plan.exam_date if plan else None,
-            exam_location=plan.exam_location if plan else None,
+            # Keep the legacy response shape while directing users to booking.
+            exam_location=None,
             materials=material_responses,
             latest_review=(
                 H3cReviewResponse.model_validate(latest_review)
