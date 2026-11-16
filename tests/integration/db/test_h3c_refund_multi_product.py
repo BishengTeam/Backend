@@ -15,7 +15,7 @@ from app.domain.h3c.src.index import (
     H3cRegistration,
 )
 from app.api.admin.exam_schedule import ScheduleCreate, create_schedule
-from app.api.exam_booking import get_slots
+from app.api.exam_booking import get_slots, my_bookings
 from app.domain.exam.src.index import (
     ExamBooking,
     ExamSchedule,
@@ -343,3 +343,13 @@ async def test_multi_product_refund_list_resolves_selected_subject(context):
         assert rebooked.id == first_booking.id
         assert rebooked.status == "booked"
         assert rebooked.slot_id == second_slot_id
+
+        booking_rows = await my_bookings(
+            current_user=SimpleNamespace(id=seed.user_id),
+            db=db,
+        )
+        active_row = next(
+            row for row in booking_rows.data
+            if row["registration_id"] == registration.id and row["status"] == "booked"
+        )
+        assert active_row["schedule_id"] == schedule_id

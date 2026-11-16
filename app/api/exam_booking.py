@@ -173,6 +173,7 @@ async def my_bookings(
     return success(data=[{
         "id": b.id,
         "registration_id": b.registration_id,
+        "schedule_id": b.schedule_id,
         "schedule_name": sname,
         "subject_name": pname or "",
         "slot_label": slot.label,
