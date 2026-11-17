@@ -12,6 +12,7 @@ from sqlalchemy import (
     Time,
     UniqueConstraint,
 )
+from sqlalchemy import text
 from sqlalchemy import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -83,10 +84,30 @@ class ExamTimeSlot(Base, TimestampMixin):
 
 
 class ExamSeatQuota(Base, TimestampMixin):
-    """机位配额 — 科目 × 时段（不绑定具体日期）。"""
+    """时段级共享机位配额；subject_id=NULL 表示所有科目共用。
+
+    Legacy subject-specific rows remain in the table for rollback compatibility,
+    but runtime capacity is controlled by the shared row for each time slot.
+    """
     __tablename__ = "exam_seat_quota"
     __table_args__ = (
-        UniqueConstraint("schedule_id", "subject_id", "slot_id", name="uq_exam_seat_quota"),
+        Index(
+            "uq_exam_seat_quota_shared",
+            "schedule_id",
+            "slot_id",
+            unique=True,
+            postgresql_where=text("subject_id IS NULL"),
+            sqlite_where=text("subject_id IS NULL"),
+        ),
+        Index(
+            "uq_exam_seat_quota_subject",
+            "schedule_id",
+            "subject_id",
+            "slot_id",
+            unique=True,
+            postgresql_where=text("subject_id IS NOT NULL"),
+            sqlite_where=text("subject_id IS NOT NULL"),
+        ),
         CheckConstraint("total_seats >= 0", name="ck_exam_seat_quota_nonneg"),
     )
 
@@ -94,8 +115,8 @@ class ExamSeatQuota(Base, TimestampMixin):
     schedule_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("exam_schedule.id", ondelete="CASCADE"), nullable=False
     )
-    subject_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("exam_schedule_subject.id", ondelete="CASCADE"), nullable=False
+    subject_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("exam_schedule_subject.id", ondelete="CASCADE"), nullable=True
     )
     slot_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("exam_time_slot.id", ondelete="CASCADE"), nullable=False

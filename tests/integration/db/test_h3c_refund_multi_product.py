@@ -27,6 +27,7 @@ from app.domain.order.src.index import Order
 from app.domain.plan.src.index import Plan
 from app.domain.user.src.index import User
 from app.models.cert_product import CertProduct
+from app.port.exceptions import BusinessException
 from app.services.admin_cert_product import AdminCertProductService
 from app.services.certification_journey import CertificationJourneyService, user_journey
 from app.services.consultation_group import ConsultationGroupService
@@ -219,6 +220,20 @@ async def test_multi_product_refund_list_resolves_selected_subject(context):
         )
         db.add(registration)
         await db.flush()
+        second_registration = H3cRegistration(
+            batch_id=batch.id,
+            batch_product_id=second_batch_product.id,
+            plan_id=plan.id,
+            user_id=user.id,
+            order_id=second_order.id,
+            registration_no=f"{prefix}_reg_2",
+            registration_type="full",
+            status="pending_refund_confirmation",
+            candidate_snapshot={"candidate_name": "多产品退款第二科目"},
+            candidate_idcard="510101200001010198",
+        )
+        db.add(second_registration)
+        await db.flush()
         db.add(H3cRefundRequest(
             registration_id=registration.id,
             order_id=order.id,
@@ -232,6 +247,7 @@ async def test_multi_product_refund_list_resolves_selected_subject(context):
         ))
         seed.plan_id = plan.id
         seed.registration_id = registration.id
+        seed.second_registration_id = second_registration.id
         seed.user_id = user.id
 
     async with context.factory() as db:
@@ -277,8 +293,13 @@ async def test_multi_product_refund_list_resolves_selected_subject(context):
 
     async with context.factory() as db:
         registration = await db.get(H3cRegistration, seed.registration_id)
+        second_registration = await db.get(
+            H3cRegistration, seed.second_registration_id
+        )
         assert registration is not None
+        assert second_registration is not None
         registration.status = "approved"
+        second_registration.status = "approved"
         await db.commit()
 
         days_until_friday = (4 - now.weekday()) % 7 or 7
@@ -290,12 +311,16 @@ async def test_multi_product_refund_list_resolves_selected_subject(context):
                 open_date_end=exam_day + timedelta(days=7),
                 allowed_weekdays=[4],
                 exam_location="成都市高新区天府软件园B区3楼",
-                product_ids=[product.id],
+                product_ids=[product.id, second_product.id],
                 time_slots=[
                     {"start_time": "09:30"},
                     {"start_time": "14:30"},
                 ],
                 default_quota=5,
+                shared_quotas=[
+                    {"slot_start": "09:30", "total_seats": 1},
+                    {"slot_start": "14:30", "total_seats": 5},
+                ],
                 publish=True,
             ),
             _admin=None,
@@ -330,10 +355,37 @@ async def test_multi_product_refund_list_resolves_selected_subject(context):
         )
         await db.commit()
 
+        booked_slots = await get_slots(
+            schedule_id=schedule_id,
+            exam_date=exam_day,
+            registration_id=registration.id,
+            current_user=SimpleNamespace(id=seed.user_id),
+            db=db,
+        )
+        assert [slot["remaining"] for slot in booked_slots.data["slots"]] == [0, 5]
+
+        with pytest.raises(BusinessException, match="该时段机位已满"):
+            await ExamBookingService.book(
+                db,
+                registration_id=second_registration.id,
+                schedule_id=schedule_id,
+                slot_id=first_slot_id,
+                exam_date=exam_day,
+            )
+
         cancelled = await ExamBookingService.cancel(
             db, first_booking.id, registration.id
         )
         assert cancelled.status == "cancelled"
+        await db.commit()
+
+        second_subject_booking = await ExamBookingService.book(
+            db,
+            registration_id=second_registration.id,
+            schedule_id=schedule_id,
+            slot_id=first_slot_id,
+            exam_date=exam_day,
+        )
         await db.commit()
 
         rebooked = await ExamBookingService.book(
@@ -348,6 +400,7 @@ async def test_multi_product_refund_list_resolves_selected_subject(context):
         assert rebooked.id == first_booking.id
         assert rebooked.status == "booked"
         assert rebooked.slot_id == second_slot_id
+        assert second_subject_booking.subject_id != rebooked.subject_id
 
         booking_rows = await my_bookings(
             current_user=SimpleNamespace(id=seed.user_id),

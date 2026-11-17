@@ -19,6 +19,23 @@ from app.port.exceptions import BusinessException, ConflictException, NotFoundEx
 class ExamBookingService:
     """机位管控核心逻辑。"""
 
+    @staticmethod
+    async def _get_shared_quota(
+        db: AsyncSession,
+        schedule_id: int,
+        slot_id: int,
+        *,
+        for_update: bool = False,
+    ) -> ExamSeatQuota | None:
+        statement = select(ExamSeatQuota).where(
+            ExamSeatQuota.schedule_id == schedule_id,
+            ExamSeatQuota.slot_id == slot_id,
+            ExamSeatQuota.subject_id.is_(None),
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return await db.scalar(statement)
+
     # ------------------------------------------------------------------
     # 可预约日期
     # ------------------------------------------------------------------
@@ -58,7 +75,7 @@ class ExamBookingService:
         subject_id: int,
         exam_date: date,
     ) -> list[dict]:
-        """获取某日期某科目的所有时段及剩余机位。"""
+        """获取某日期的时段及共享池剩余机位。"""
         schedule = await db.get(ExamSchedule, schedule_id)
         if schedule is None or schedule.status != "published":
             raise BusinessException("该考场计划未开放")
@@ -73,14 +90,19 @@ class ExamBookingService:
             .order_by(ExamTimeSlot.sort_order, ExamTimeSlot.start_time)
         )).scalars().all()
 
+        subject_exists = await db.scalar(
+            select(ExamScheduleSubject.id).where(
+                ExamScheduleSubject.schedule_id == schedule_id,
+                ExamScheduleSubject.id == subject_id,
+            )
+        )
+        if subject_exists is None:
+            raise BusinessException("该科目不在此考场计划中")
+
         result = []
         for slot in slots:
-            quota = await db.scalar(
-                select(ExamSeatQuota).where(
-                    ExamSeatQuota.schedule_id == schedule_id,
-                    ExamSeatQuota.subject_id == subject_id,
-                    ExamSeatQuota.slot_id == slot.id,
-                )
+            quota = await ExamBookingService._get_shared_quota(
+                db, schedule_id, slot.id
             )
             if quota is None:
                 remaining = -1  # 无配额记录 = 不限
@@ -90,7 +112,6 @@ class ExamBookingService:
                 booked = (await db.execute(
                     select(func.count()).select_from(ExamBooking).where(
                         ExamBooking.schedule_id == schedule_id,
-                        ExamBooking.subject_id == subject_id,
                         ExamBooking.slot_id == slot.id,
                         ExamBooking.exam_date == exam_date,
                         ExamBooking.status == "booked",
@@ -194,13 +215,9 @@ class ExamBookingService:
         if subject is None:
             raise BusinessException(f"该考场计划不包含您的科目（{product.name}）")
 
-        # 锁配额行
-        quota = await db.scalar(
-            select(ExamSeatQuota).where(
-                ExamSeatQuota.schedule_id == schedule_id,
-                ExamSeatQuota.subject_id == subject.id,
-                ExamSeatQuota.slot_id == slot_id,
-            ).with_for_update()
+        # 锁定时段共享池。预约仍记录实际科目，但容量不按科目拆分。
+        quota = await cls._get_shared_quota(
+            db, schedule_id, slot_id, for_update=True
         )
 
         # 检查机位
@@ -208,7 +225,6 @@ class ExamBookingService:
             booked = (await db.execute(
                 select(func.count()).select_from(ExamBooking).where(
                     ExamBooking.schedule_id == schedule_id,
-                    ExamBooking.subject_id == subject.id,
                     ExamBooking.slot_id == slot_id,
                     ExamBooking.exam_date == exam_date,
                     ExamBooking.status == "booked",

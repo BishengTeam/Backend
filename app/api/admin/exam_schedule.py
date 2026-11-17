@@ -55,6 +55,11 @@ class SeatQuotaCreate(BaseModel):
     total_seats: int = Field(..., ge=0)
 
 
+class SharedQuotaCreate(BaseModel):
+    slot_start: str = Field(..., description="HH:MM 格式")
+    total_seats: int = Field(..., ge=0)
+
+
 class ScheduleCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     open_date_start: date
@@ -66,6 +71,7 @@ class ScheduleCreate(BaseModel):
     time_slots: list[TimeSlotCreate] | None = None
     default_quota: int = Field(5, ge=0)
     seat_quotas: list[SeatQuotaCreate] | None = None
+    shared_quotas: list[SharedQuotaCreate] | None = None
     publish: bool = False
 
 
@@ -75,8 +81,14 @@ class SeatQuotaItem(BaseModel):
     total_seats: int = Field(..., ge=0)
 
 
+class SharedSeatQuotaItem(BaseModel):
+    slot_id: int
+    total_seats: int = Field(..., ge=0)
+
+
 class SeatQuotaBatch(BaseModel):
-    quotas: list[SeatQuotaItem]
+    quotas: list[SeatQuotaItem] = Field(default_factory=list)
+    shared_quotas: list[SharedSeatQuotaItem] = Field(default_factory=list)
 
 
 class HolidayCreate(BaseModel):
@@ -126,6 +138,7 @@ async def create_schedule(
         not data.product_ids
         and data.time_slots is None
         and data.seat_quotas is None
+        and data.shared_quotas is None
         and not data.publish
     )
     product_ids = list(dict.fromkeys(data.product_ids))
@@ -177,6 +190,28 @@ async def create_schedule(
             raise BusinessException(f"配额重复：{item.product_id} {item.slot_start}")
         explicit_quotas[key] = item.total_seats
 
+    explicit_shared_quotas: dict[dt_time, int] = {}
+    for item in data.shared_quotas or []:
+        start_time = _parse_time(item.slot_start)
+        if start_time not in seen_slots:
+            raise BusinessException(f"共享配额时段不属于该考场计划：{item.slot_start}")
+        if start_time in explicit_shared_quotas:
+            raise BusinessException(f"共享配额重复：{item.slot_start}")
+        explicit_shared_quotas[start_time] = item.total_seats
+
+    # Old product-matrix payloads remain accepted, but their independent
+    # capacities are normalized to one conservative shared pool per time slot.
+    if data.shared_quotas is None and explicit_quotas:
+        for product_id in product_ids:
+            for start_time in seen_slots:
+                value = explicit_quotas.get(
+                    (product_id, start_time), data.default_quota
+                )
+                previous = explicit_shared_quotas.get(start_time)
+                explicit_shared_quotas[start_time] = (
+                    value if previous is None else max(previous, value)
+                )
+
     schedule = ExamSchedule(
         name=data.name,
         open_date_start=data.open_date_start,
@@ -210,16 +245,15 @@ async def create_schedule(
             slots_by_time[start_time] = slot
         await db.flush()
 
-        for product_id in product_ids:
-            for start_time, _ in parsed_slots:
-                db.add(ExamSeatQuota(
-                    schedule_id=schedule.id,
-                    subject_id=subjects_by_product[product_id].id,
-                    slot_id=slots_by_time[start_time].id,
-                    total_seats=explicit_quotas.get(
-                        (product_id, start_time), data.default_quota
-                    ),
-                ))
+        for start_time, _ in parsed_slots:
+            db.add(ExamSeatQuota(
+                schedule_id=schedule.id,
+                subject_id=None,
+                slot_id=slots_by_time[start_time].id,
+                total_seats=explicit_shared_quotas.get(
+                    start_time, data.default_quota
+                ),
+            ))
 
     await db.commit()
 
@@ -248,17 +282,21 @@ async def get_schedule(
         select(ExamTimeSlot).where(ExamTimeSlot.schedule_id == schedule_id)
         .order_by(ExamTimeSlot.sort_order)
     )).scalars().all()
+    slots_by_id = {slot.id: slot for slot in slots}
     quotas = (await db.execute(
-        select(ExamSeatQuota).where(ExamSeatQuota.schedule_id == schedule_id)
+        select(ExamSeatQuota).where(
+            ExamSeatQuota.schedule_id == schedule_id,
+            ExamSeatQuota.subject_id.is_(None),
+        ).order_by(ExamSeatQuota.slot_id)
     )).scalars().all()
     # P2 #8: 计算各配额的已约人数
     booking_counts = dict((await db.execute(
-        select(ExamBooking.subject_id, ExamBooking.slot_id, func.count())
+        select(ExamBooking.slot_id, func.count())
         .where(
             ExamBooking.schedule_id == schedule_id,
             ExamBooking.status == "booked",
         )
-        .group_by(ExamBooking.subject_id, ExamBooking.slot_id)
+        .group_by(ExamBooking.slot_id)
     )).all())
 
     return success(data={
@@ -272,11 +310,11 @@ async def get_schedule(
         "subjects": [{"id": ss.id, "product_id": ss.product_id, "product_name": p.name} for ss, p in subjects],
         "time_slots": [{"id": t.id, "label": t.label, "start_time": t.start_time.isoformat()} for t in slots],
         "seat_quotas": [{
-            "subject_id": q.subject_id,
             "slot_id": q.slot_id,
+            "slot_start": slots_by_id[q.slot_id].start_time.strftime("%H:%M"),
             "total_seats": q.total_seats,
-            "booked": booking_counts.get((q.subject_id, q.slot_id), 0),
-            "remaining": -1 if q.total_seats == 0 else max(0, q.total_seats - booking_counts.get((q.subject_id, q.slot_id), 0)),
+            "booked": booking_counts.get(q.slot_id, 0),
+            "remaining": -1 if q.total_seats == 0 else max(0, q.total_seats - booking_counts.get(q.slot_id, 0)),
         } for q in quotas],
     })
 
@@ -417,51 +455,61 @@ async def set_seat_quotas(
     if s.status == "closed":
         raise BusinessException("已关闭计划不可设置配额")
 
-    subject_ids = set((await db.scalars(
-        select(ExamScheduleSubject.id).where(
-            ExamScheduleSubject.schedule_id == schedule_id
-        )
-    )).all())
     slot_ids = set((await db.scalars(
         select(ExamTimeSlot.id).where(ExamTimeSlot.schedule_id == schedule_id)
     )).all())
     booking_counts = dict((await db.execute(
-        select(ExamBooking.subject_id, ExamBooking.slot_id, func.count())
+        select(ExamBooking.slot_id, func.count())
         .where(
             ExamBooking.schedule_id == schedule_id,
             ExamBooking.status == "booked",
         )
-        .group_by(ExamBooking.subject_id, ExamBooking.slot_id)
+        .group_by(ExamBooking.slot_id)
     )).all())
 
-    seen: set[tuple[int, int]] = set()
-    for item in data.quotas:
-        key = (item.subject_id, item.slot_id)
-        if item.subject_id not in subject_ids or item.slot_id not in slot_ids:
-            raise BusinessException("配额科目或时段不属于该考场计划")
-        if key in seen:
-            raise BusinessException("配额重复，同一科目和时段只能设置一个值")
-        seen.add(key)
-        booked = booking_counts.get(key, 0)
-        if s.status == "published" and item.total_seats != 0 and item.total_seats < booked:
+    if data.shared_quotas:
+        shared_values: dict[int, int] = {}
+        for item in data.shared_quotas:
+            if item.slot_id not in slot_ids:
+                raise BusinessException("配额时段不属于该考场计划")
+            if item.slot_id in shared_values:
+                raise BusinessException("配额重复，同一时段只能设置一个共享池")
+            shared_values[item.slot_id] = item.total_seats
+    elif data.quotas:
+        # Legacy clients still submit a subject matrix. Normalize it to the
+        # maximum requested capacity for each slot, matching creation behavior.
+        legacy_values: dict[int, list[int]] = {}
+        for item in data.quotas:
+            if item.slot_id not in slot_ids:
+                raise BusinessException("配额时段不属于该考场计划")
+            legacy_values.setdefault(item.slot_id, []).append(item.total_seats)
+        shared_values = {
+            slot_id: max(values) for slot_id, values in legacy_values.items()
+        }
+    else:
+        raise BusinessException("请至少设置一个时段的共享机位")
+
+    for slot_id, total_seats in shared_values.items():
+        booked = booking_counts.get(slot_id, 0)
+        if s.status == "published" and total_seats != 0 and total_seats < booked:
             raise BusinessException(
-                f"配额不能小于已预约人数（已约 {booked} 人）；如需不限量请设为 0"
+                f"配额不能小于该时段已预约人数（已约 {booked} 人）；如需不限量请设为 0"
             )
         existing = await db.scalar(
             select(ExamSeatQuota).where(
                 ExamSeatQuota.schedule_id == schedule_id,
-                ExamSeatQuota.subject_id == item.subject_id,
-                ExamSeatQuota.slot_id == item.slot_id,
+                ExamSeatQuota.slot_id == slot_id,
+                ExamSeatQuota.subject_id.is_(None),
             )
         )
         if existing:
-            existing.total_seats = item.total_seats
+            existing.total_seats = total_seats
         else:
             db.add(ExamSeatQuota(
                 schedule_id=schedule_id,
-                subject_id=item.subject_id,
-                slot_id=item.slot_id,
-                total_seats=item.total_seats,
+                subject_id=None,
+                slot_id=slot_id,
+                total_seats=total_seats,
             ))
     await db.commit()
     return success(message="机位配额已保存")
