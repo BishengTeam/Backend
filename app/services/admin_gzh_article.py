@@ -140,13 +140,18 @@ class AdminGzhArticleService:
         return GzhArticleBatchImportResult(created=created, skipped=skipped, errors=[])
 
     async def fetch_meta(self, url: str) -> GzhArticleFetchMetaResult:
-        """按链接拉取文章页元信息；链接已在库中时直接返回库内条目，不重复抓取。"""
+        """按链接拉取文章页元信息。
+
+        库内已有带封面的条目 → 直接返回库内条目（exists=true），不重复抓取；
+        库内条目缺封面（存量手动导入常只有标题+链接）→ 仍抓页面补全，抓到什么补什么、
+        抓不到的保留库内值；页面抓取失败且库内有行 → 退回库内值（不报错）。
+        """
         parsed = urlparse(url)
         if parsed.scheme != "https" or parsed.netloc.lower() != ALLOWED_FETCH_HOST:
             raise BusinessException("仅支持微信公众号文章链接（https://mp.weixin.qq.com/...）")
         async with get_db_ctx() as db:
             existing = await self._find_by_url(db, url)
-            if existing is not None:
+            if existing is not None and existing.thumb_url:
                 return GzhArticleFetchMetaResult(
                     title=existing.title,
                     thumb_url=existing.thumb_url,
@@ -154,8 +159,25 @@ class AdminGzhArticleService:
                     exists=True,
                     source=existing.source,
                 )
-        meta = await fetch_article_page_meta(url)
-        return GzhArticleFetchMetaResult(exists=False, source=None, **meta)
+        try:
+            meta = await fetch_article_page_meta(url)
+        except BusinessException:
+            if existing is None:
+                raise
+            meta = {
+                "title": existing.title,
+                "thumb_url": existing.thumb_url,
+                "publish_time": existing.publish_time,
+            }
+        if existing is None:
+            return GzhArticleFetchMetaResult(exists=False, source=None, **meta)
+        return GzhArticleFetchMetaResult(
+            exists=True,
+            source=existing.source,
+            title=meta["title"] or existing.title,
+            thumb_url=meta["thumb_url"] or existing.thumb_url,
+            publish_time=meta["publish_time"] or existing.publish_time,
+        )
 
     async def _find_by_url(self, db: AsyncSession, url: str) -> GzhArticle | None:
         """url 有唯一约束，按链接查行（含软删行）。"""

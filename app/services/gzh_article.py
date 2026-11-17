@@ -176,6 +176,9 @@ def parse_article_page_meta(page_html: str) -> dict | None:
     if not title:
         return None
     thumb = _meta_content(page_html, "og:image")
+    if thumb:
+        # og:image 偶见 http:// 形态，微信图床支持 https，升级后不再丢封面
+        thumb = re.sub(r"^http://(?=(?:mmbiz\.qpic\.cn|mmbiz\.qlogo\.cn)/)", "https://", thumb, flags=re.I)
     publish_time = None
     m = CT_TS_RE.search(page_html)
     if m:

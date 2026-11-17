@@ -79,8 +79,15 @@ def test_parse_attr_order_variant():
     assert meta["thumb_url"] == "https://mmbiz.qpic.cn/mmbiz_jpg/abc/0?wx_fmt=jpeg"
 
 
-def test_parse_http_thumb_dropped():
+def test_parse_http_thumb_upgraded_to_https():
+    # 微信图床支持 https：http 形态的 og:image 升级而不是丢弃
     meta = parse_article_page_meta(_page(image="http://mmbiz.qpic.cn/x.jpg"))
+    assert meta is not None
+    assert meta["thumb_url"] == "https://mmbiz.qpic.cn/x.jpg"
+
+
+def test_parse_http_thumb_non_wechat_host_dropped():
+    meta = parse_article_page_meta(_page(image="http://example.com/x.jpg"))
     assert meta is not None
     assert meta["thumb_url"] is None
 

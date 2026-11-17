@@ -252,3 +252,48 @@ async def test_fetch_meta_existing_url_short_circuits(test_context):
     assert result.source == "manual"
     assert result.title == f"{prefix} 库内标题"
     assert result.thumb_url == "https://mmbiz.qpic.cn/x.jpg"
+
+
+async def test_fetch_meta_refetches_when_stored_thumb_missing(test_context, monkeypatch):
+    """库内条目缺封面（存量手动导入常见）时不再短路：抓页面补封面，字段优先页面值"""
+    import app.services.admin_gzh_article as mod
+    from app.services.admin_gzh_article import AdminGzhArticleService
+
+    factory, prefix = test_context
+    url = _url(prefix, "meta-no-thumb")
+    await _insert_row(factory, title=f"{prefix} 旧标题", url=url)
+
+    async def _fake_fetch(page_url: str) -> dict:
+        assert page_url == url
+        return {
+            "title": f"{prefix} 页面标题",
+            "thumb_url": "https://mmbiz.qpic.cn/fresh.jpg",
+            "publish_time": None,
+        }
+
+    monkeypatch.setattr(mod, "fetch_article_page_meta", _fake_fetch)
+    result = await AdminGzhArticleService().fetch_meta(url)
+    assert result.exists is True, "库内已有行时仍应标记 exists=true"
+    assert result.thumb_url == "https://mmbiz.qpic.cn/fresh.jpg", "缺封面必须重抓补全"
+    assert result.title == f"{prefix} 页面标题"
+
+
+async def test_fetch_meta_falls_back_to_stored_when_fetch_fails(test_context, monkeypatch):
+    """库内有行但缺封面、页面又抓不到（反爬）→ 退回库内值，不报错"""
+    from app.port.exceptions import BusinessException
+
+    import app.services.admin_gzh_article as mod
+    from app.services.admin_gzh_article import AdminGzhArticleService
+
+    factory, prefix = test_context
+    url = _url(prefix, "meta-fetch-fail")
+    await _insert_row(factory, title=f"{prefix} 库内标题", url=url)
+
+    async def _boom(_url: str) -> dict:
+        raise BusinessException("反爬拦截")
+
+    monkeypatch.setattr(mod, "fetch_article_page_meta", _boom)
+    result = await AdminGzhArticleService().fetch_meta(url)
+    assert result.exists is True
+    assert result.title == f"{prefix} 库内标题"
+    assert result.thumb_url is None
