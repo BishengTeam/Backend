@@ -10,6 +10,18 @@ def _validate_https_url(v: str | None, field_name: str) -> str | None:
     return v
 
 
+def _validate_thumb_url(v: str | None) -> str | None:
+    """封面允许 https 外链（微信图床）或本地上传的站内相对地址 /api/media/<file>。
+
+    小程序端经 resolveMediaUrl 按-API-域名补全，Admin 端同源代理直接可渲染。
+    """
+    if v is not None and not (
+        v.startswith("https://") or v.startswith("/api/media/")
+    ):
+        raise ValueError("封面图须为 https:// 外链或 /api/media/ 站内上传地址")
+    return v
+
+
 class GzhArticleCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=256, description="文章标题")
     url: str = Field(..., min_length=1, max_length=512, description="文章链接（微信推文 https 链接）")
@@ -23,8 +35,8 @@ class GzhArticleCreate(BaseModel):
 
     @field_validator("thumb_url")
     @classmethod
-    def validate_thumb_https(cls, v: str | None) -> str | None:
-        return _validate_https_url(v, "封面图链接")
+    def validate_thumb_url(cls, v: str | None) -> str | None:
+        return _validate_thumb_url(v)
 
 
 class GzhArticleUpdate(BaseModel):
@@ -40,8 +52,8 @@ class GzhArticleUpdate(BaseModel):
 
     @field_validator("thumb_url")
     @classmethod
-    def validate_thumb_https(cls, v: str | None) -> str | None:
-        return _validate_https_url(v, "封面图链接")
+    def validate_thumb_url(cls, v: str | None) -> str | None:
+        return _validate_thumb_url(v)
 
 
 class GzhArticleListItem(BaseModel):
@@ -76,8 +88,8 @@ class GzhArticleImportItem(BaseModel):
 
     @field_validator("thumb_url")
     @classmethod
-    def validate_thumb_https(cls, v: str | None) -> str | None:
-        return _validate_https_url(v, "封面图链接")
+    def validate_thumb_url(cls, v: str | None) -> str | None:
+        return _validate_thumb_url(v)
 
 
 class GzhArticleBatchImportRequest(BaseModel):
