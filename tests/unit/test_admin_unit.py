@@ -219,6 +219,21 @@ class AdminUserFilterTests(unittest.TestCase):
         self.assertIn("created_at_start", fields)
         self.assertIn("created_at_end", fields)
 
+    def test_admin_user_filter_has_user_id(self):
+        """用户 ID 精确筛选：工单/行为查询页拿数字 ID 反查用户管理"""
+        schema = importlib.import_module("app.schemas.admin")
+        filter_model = schema.AdminUserFilter
+        fields = set(filter_model.model_fields)
+        self.assertIn("user_id", fields)
+
+    def test_admin_user_list_filters_by_user_id(self):
+        """list_users 与导出的 SQL 过滤都应用 user_id 条件"""
+        service_mod = importlib.import_module("app.services.admin_user")
+        source = inspect.getsource(service_mod.AdminUserService.list_users)
+        export_source = inspect.getsource(service_mod.AdminUserService.import_users_csv)
+        self.assertIn("filters.user_id", source)
+        self.assertIn("filters.user_id", export_source)
+
 
 class AdminOrderFilterTests(unittest.TestCase):
     """P2: #7.2 Order filter enhancement"""

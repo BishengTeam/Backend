@@ -129,6 +129,7 @@ class AdminMeResponse(BaseModel):
 
 
 class AdminUserFilter(BaseModel):
+    user_id: int | None = None
     openid: str | None = None
     phone: str | None = None
     created_at_start: datetime | None = None

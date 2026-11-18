@@ -42,6 +42,7 @@ router = APIRouter(prefix="/users", tags=["管理后台-用户管理"])
 **使用场景**: 页面加载时获取用户列表，支持按 openid/手机号/注册时间筛选
 
 **查询参数**:
+- `user_id`: 按用户 ID 精确筛选
 - `openid`: 按 openid 精确筛选
 - `phone`: 按手机号精确筛选
 - `created_at_start` / `created_at_end`: 注册时间范围
@@ -52,6 +53,7 @@ router = APIRouter(prefix="/users", tags=["管理后台-用户管理"])
     """,
 )
 async def list_users(
+    user_id: int | None = Query(None, ge=1, description="按用户 ID 精确筛选"),
     openid: str | None = Query(None, description="按 openid 精确筛选"),
     phone: str | None = Query(None, description="按手机号精确筛选"),
     created_at_start: datetime | None = Query(None, description="创建时间起，ISO 8601"),
@@ -66,8 +68,8 @@ async def list_users(
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     _admin=Depends(require_permission("user:list")),
 ) -> APIResponse[PaginatedData[AdminUserListItem]]:
-    has_filters = openid or phone or created_at_start or created_at_end or identity_status or student_status or review_status
-    filters = AdminUserFilter(openid=openid, phone=phone, created_at_start=created_at_start, created_at_end=created_at_end, identity_status=identity_status, student_status=student_status, review_status=review_status) if has_filters else None
+    has_filters = user_id or openid or phone or created_at_start or created_at_end or identity_status or student_status or review_status
+    filters = AdminUserFilter(user_id=user_id, openid=openid, phone=phone, created_at_start=created_at_start, created_at_end=created_at_end, identity_status=identity_status, student_status=student_status, review_status=review_status) if has_filters else None
     result = await AdminUserService().list_users(filters, page, page_size)
     return success(data=result)
 
@@ -103,6 +105,7 @@ async def get_user_review_summary(
     """,
 )
 async def export_users(
+    user_id: int | None = Query(None, ge=1, description="按用户 ID 精确筛选"),
     openid: str | None = Query(None, description="按 openid 精确筛选"),
     phone: str | None = Query(None, description="按手机号精确筛选"),
     created_at_start: datetime | None = Query(None, description="创建时间起，ISO 8601"),
@@ -112,8 +115,8 @@ async def export_users(
     review_status: str | None = Query(None, description="组合审核筛选"),
     _admin=Depends(require_permission("user:list")),
 ):
-    has_filters = openid or phone or created_at_start or created_at_end or identity_status or student_status or review_status
-    filters = AdminUserFilter(openid=openid, phone=phone, created_at_start=created_at_start, created_at_end=created_at_end, identity_status=identity_status, student_status=student_status, review_status=review_status) if has_filters else None
+    has_filters = user_id or openid or phone or created_at_start or created_at_end or identity_status or student_status or review_status
+    filters = AdminUserFilter(user_id=user_id, openid=openid, phone=phone, created_at_start=created_at_start, created_at_end=created_at_end, identity_status=identity_status, student_status=student_status, review_status=review_status) if has_filters else None
     csv_content = await AdminUserService().export_users(
         filters, actor_id=_admin.id
     )

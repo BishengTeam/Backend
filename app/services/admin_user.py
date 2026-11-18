@@ -65,6 +65,8 @@ class AdminUserService:
                 .where(User.is_active == True)  # noqa: E712
             )
             if filters:
+                if filters.user_id:
+                    base = base.where(User.id == filters.user_id)
                 if filters.openid:
                     base = base.where(User.openid == filters.openid)
                 if filters.phone:
@@ -214,6 +216,8 @@ class AdminUserService:
                 .where(User.is_active == True)  # noqa: E712
             )
             if filters:
+                if filters.user_id:
+                    base = base.where(User.id == filters.user_id)
                 if filters.openid:
                     base = base.where(User.openid == filters.openid)
                 if filters.phone:
