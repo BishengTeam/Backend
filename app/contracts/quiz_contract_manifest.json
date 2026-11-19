@@ -1,7 +1,7 @@
 {
-  "admin_operation_count": 66,
-  "fingerprint_sha256": "69cc21e1f340eb280601348d7c611e0ac17ed343528dc1043e0072af92a8ce45",
-  "operation_count": 100,
+  "admin_operation_count": 67,
+  "fingerprint_sha256": "2c1cb4e8e980b66b199816e23854b7848a7239ecc71ca19627ab43d29a59ded6",
+  "operation_count": 101,
   "operations": [
     {
       "auth": "admin",
@@ -441,6 +441,13 @@
       "auth": "admin",
       "method": "GET",
       "path": "/admin/quiz/stats/questions",
+      "permission": "quiz:list",
+      "rate_limit_per_minute": null
+    },
+    {
+      "auth": "admin",
+      "method": "GET",
+      "path": "/admin/quiz/stats/students",
       "permission": "quiz:list",
       "rate_limit_per_minute": null
     },
