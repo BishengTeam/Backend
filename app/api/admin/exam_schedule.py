@@ -1,5 +1,6 @@
 """管理端 — 考场开放计划 + 假期管理 API。"""
 from datetime import date, datetime, time as dt_time
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
@@ -15,6 +16,10 @@ from app.domain.exam.src.index import (
 )
 from app.port.exceptions import BusinessException, NotFoundException
 from app.models.cert_product import CertProduct
+from app.policy.vendor_scope import (
+    manageable_vendors,
+    require_vendor_permission,
+)
 
 router = APIRouter(prefix="/h3c/exam-schedules", tags=["管理后台-H3C考场管理"])
 
@@ -107,22 +112,39 @@ class HolidayCreate(BaseModel):
 
 @router.get("", response_model=APIResponse[list], summary="计划列表")
 async def list_schedules(
-    vendor: str | None = Query(None, pattern="^(h3c|sangfor)$"),
+    vendor: Annotated[str | None, Query(pattern="^(h3c|sangfor)$")] = None,
+    page: Annotated[int | None, Query(ge=1)] = None,
+    page_size: Annotated[int, Query(ge=1, le=200)] = 50,
     _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
+    allowed_vendors = manageable_vendors(_admin)
+    if vendor:
+        require_vendor_permission(_admin, vendor)
     stmt = select(ExamSchedule)
     if vendor:
         stmt = stmt.where(ExamSchedule.vendor == vendor)
-    rows = (await db.execute(stmt.order_by(ExamSchedule.id.desc()))).scalars().all()
-    return success(data=[{
+    else:
+        stmt = stmt.where(ExamSchedule.vendor.in_(allowed_vendors))
+    stmt = stmt.order_by(ExamSchedule.id.desc())
+    total = None
+    if page is not None:
+        total = await db.scalar(select(func.count()).select_from(stmt.subquery()))
+        stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+    rows = (await db.execute(stmt)).scalars().all()
+    items = [{
         "id": s.id, "name": s.name, "vendor": s.vendor,
         "open_date_start": s.open_date_start.isoformat(),
         "open_date_end": s.open_date_end.isoformat(),
         "allowed_weekdays": s.allowed_weekdays,
         "exam_location": s.exam_location,
         "status": s.status, "published_at": s.published_at,
-    } for s in rows])
+    } for s in rows]
+    if total is None:
+        return success(data=items)
+    return success(data={
+        "items": items, "total": total, "page": page, "page_size": page_size,
+    })
 
 
 @router.post("", response_model=APIResponse[dict], summary="创建计划")
@@ -133,6 +155,7 @@ async def create_schedule(
 ):
     if data.open_date_start > data.open_date_end:
         raise BusinessException("开始日期不能晚于结束日期")
+    require_vendor_permission(_admin, data.vendor)
 
     allowed_weekdays = sorted(set(data.allowed_weekdays))
     if not allowed_weekdays or any(day not in range(0, 7) for day in allowed_weekdays):
@@ -281,6 +304,7 @@ async def get_schedule(
     s = await db.get(ExamSchedule, schedule_id)
     if s is None:
         raise NotFoundException("考场计划")
+    require_vendor_permission(_admin, s.vendor)
 
     subjects = (await db.execute(
         select(ExamScheduleSubject, CertProduct)
@@ -338,6 +362,7 @@ async def update_schedule(
     s = await db.get(ExamSchedule, schedule_id, with_for_update=True)
     if s is None:
         raise NotFoundException("考场计划")
+    require_vendor_permission(_admin, s.vendor)
     if s.status != "draft":
         raise BusinessException("仅草稿状态可编辑")
     for field in ("name", "open_date_start", "open_date_end", "allowed_weekdays", "exam_location", "pre_exam_notice"):
@@ -355,7 +380,10 @@ async def publish_schedule(
     db: AsyncSession = Depends(get_db),
 ):
     s = await db.get(ExamSchedule, schedule_id, with_for_update=True)
-    if s is None or s.status != "draft":
+    if s is None:
+        raise NotFoundException("考场计划")
+    require_vendor_permission(_admin, s.vendor)
+    if s.status != "draft":
         raise BusinessException("仅草稿可发布")
     subject_count = await db.scalar(
         select(func.count()).select_from(ExamScheduleSubject).where(
@@ -382,7 +410,10 @@ async def close_schedule(
     db: AsyncSession = Depends(get_db),
 ):
     s = await db.get(ExamSchedule, schedule_id, with_for_update=True)
-    if s is None or s.status != "published":
+    if s is None:
+        raise NotFoundException("考场计划")
+    require_vendor_permission(_admin, s.vendor)
+    if s.status != "published":
         raise BusinessException("仅已发布可关闭")
     s.status = "closed"
     await db.commit()
@@ -401,7 +432,10 @@ async def add_subject(
     db: AsyncSession = Depends(get_db),
 ):
     s = await db.get(ExamSchedule, schedule_id)
-    if s is None or s.status != "draft":
+    if s is None:
+        raise NotFoundException("考场计划")
+    require_vendor_permission(_admin, s.vendor)
+    if s.status != "draft":
         raise BusinessException("仅草稿可添加科目")
     product = await db.get(CertProduct, product_id)
     if product is None or product.type != s.vendor or not product.is_active:
@@ -427,7 +461,10 @@ async def add_time_slot(
     db: AsyncSession = Depends(get_db),
 ):
     s = await db.get(ExamSchedule, schedule_id)
-    if s is None or s.status != "draft":
+    if s is None:
+        raise NotFoundException("考场计划")
+    require_vendor_permission(_admin, s.vendor)
+    if s.status != "draft":
         raise BusinessException("仅草稿可添加时段")
     t = _parse_time(data.start_time)
     existing = await db.scalar(
@@ -461,6 +498,7 @@ async def set_seat_quotas(
     s = await db.get(ExamSchedule, schedule_id, with_for_update=True)
     if s is None:
         raise NotFoundException("考场计划")
+    require_vendor_permission(_admin, s.vendor)
     if s.status == "closed":
         raise BusinessException("已关闭计划不可设置配额")
     if s.vendor == "sangfor":
@@ -538,6 +576,7 @@ async def list_holidays(
     _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
+    require_vendor_permission(_admin, "h3c")
     rows = (await db.execute(select(Holiday).order_by(Holiday.holiday_date))).scalars().all()
     return success(data=[{
         "id": h.id, "name": h.name,
@@ -552,6 +591,7 @@ async def create_holiday(
     _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
+    require_vendor_permission(_admin, "h3c")
     existing = await db.scalar(
         select(Holiday.id).where(Holiday.holiday_date == data.holiday_date)
     )
@@ -569,6 +609,7 @@ async def delete_holiday(
     _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
+    require_vendor_permission(_admin, "h3c")
     h = await db.get(Holiday, holiday_id)
     if h is None:
         raise NotFoundException("假期记录")
@@ -589,6 +630,10 @@ async def list_bookings(
     _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
+    schedule = await db.get(ExamSchedule, schedule_id)
+    if schedule is None:
+        raise NotFoundException("考场计划")
+    require_vendor_permission(_admin, schedule.vendor)
     from app.domain.exam.src.index import ExamBooking, ExamTimeSlot, ExamScheduleSubject
     from app.models.cert_product import CertProduct
     from app.domain.h3c.src.index import H3cRegistration
@@ -642,6 +687,10 @@ async def mark_no_show(
     db: AsyncSession = Depends(get_db),
 ):
     from app.domain.exam.src.index import ExamBooking
+    schedule = await db.get(ExamSchedule, schedule_id)
+    if schedule is None:
+        raise NotFoundException("考场计划")
+    require_vendor_permission(_admin, schedule.vendor)
     booking = await db.get(ExamBooking, booking_id)
     if booking is None or booking.schedule_id != schedule_id:
         raise NotFoundException("预约记录")

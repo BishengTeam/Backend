@@ -1,5 +1,6 @@
 import os
 from datetime import date, timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -13,6 +14,7 @@ from app.api.admin.exam_schedule import (
     SharedSeatQuotaItem,
     create_schedule,
     get_schedule,
+    list_schedules,
     publish_schedule,
     set_seat_quotas,
 )
@@ -23,10 +25,12 @@ from app.domain.exam.src.index import (
     ExamTimeSlot,
 )
 from app.models.cert_product import CertProduct
-from app.port.exceptions import BusinessException
+from app.port.exceptions import BusinessException, ForbiddenException
 
 
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
+
+SUPER_ADMIN = SimpleNamespace(role="super_admin", permissions=None)
 
 
 @pytest.fixture
@@ -58,13 +62,25 @@ async def context():
                 student_price_cents=40000,
                 full_price_cents=80000,
             ),
+            CertProduct(
+                type="sangfor",
+                code=f"{prefix}_sf",
+                name=f"{prefix} SCSA",
+                chinese_name=f"{prefix} SCSA",
+                is_active=True,
+                coupon_price_cents=0,
+                student_price_cents=0,
+                full_price_cents=100000,
+            ),
         ]
         db.add_all(products)
 
     async with factory() as db:
-        products = list(await db.scalars(select(CertProduct).where(
+        fetched = list(await db.scalars(select(CertProduct).where(
             CertProduct.code.like(f"{prefix}%")
         )))
+        # H3C 产品固定在前两个位置，深信服固定在最后。
+        products = sorted(fetched, key=lambda item: (item.type == "sangfor", item.code))
 
     yield type("Context", (), {"factory": factory, "prefix": prefix, "products": products})()
 
@@ -105,7 +121,7 @@ async def test_composite_create_publishes_full_schedule_and_overrides_quota(cont
     )
 
     async with factory() as db:
-        result = await create_schedule(data=payload, _admin=None, db=db)
+        result = await create_schedule(data=payload, _admin=SUPER_ADMIN, db=db)
 
     assert result.data["status"] == "published"
     schedule_id = result.data["id"]
@@ -140,7 +156,7 @@ async def test_composite_create_publishes_full_schedule_and_overrides_quota(cont
         assert quota_values[slot_by_time["09:30"]] == 3
         assert quota_values[slot_by_time["14:30"]] == 5
 
-        detail = await get_schedule(schedule_id=schedule_id, _admin=None, db=db)
+        detail = await get_schedule(schedule_id=schedule_id, _admin=SUPER_ADMIN, db=db)
         assert detail.data["seat_quotas"] == [
             {
                 "slot_id": slot_by_time["09:30"],
@@ -168,12 +184,12 @@ async def test_legacy_minimal_create_stays_draft_and_cannot_publish_empty(contex
     )
 
     async with factory() as db:
-        result = await create_schedule(data=payload, _admin=None, db=db)
+        result = await create_schedule(data=payload, _admin=SUPER_ADMIN, db=db)
         assert result.data["status"] == "draft"
 
         schedule_id = result.data["id"]
         with pytest.raises(BusinessException, match="至少一个科目和时段"):
-            await publish_schedule(schedule_id=schedule_id, _admin=None, db=db)
+            await publish_schedule(schedule_id=schedule_id, _admin=SUPER_ADMIN, db=db)
 
 
 async def test_legacy_product_quota_payload_normalizes_to_shared_pool(context):
@@ -194,7 +210,7 @@ async def test_legacy_product_quota_payload_normalizes_to_shared_pool(context):
     )
 
     async with factory() as db:
-        result = await create_schedule(data=payload, _admin=None, db=db)
+        result = await create_schedule(data=payload, _admin=SUPER_ADMIN, db=db)
         quotas = list(await db.scalars(select(ExamSeatQuota).where(
             ExamSeatQuota.schedule_id == result.data["id"]
         ).order_by(ExamSeatQuota.slot_id)))
@@ -219,7 +235,7 @@ async def test_published_schedule_quota_can_increase_and_closed_schedule_cannot_
     )
 
     async with factory() as db:
-        result = await create_schedule(data=payload, _admin=None, db=db)
+        result = await create_schedule(data=payload, _admin=SUPER_ADMIN, db=db)
         schedule_id = result.data["id"]
         subject_id = await db.scalar(select(ExamScheduleSubject.id).where(
             ExamScheduleSubject.schedule_id == schedule_id
@@ -233,7 +249,7 @@ async def test_published_schedule_quota_can_increase_and_closed_schedule_cannot_
             data=SeatQuotaBatch(shared_quotas=[
                 SharedSeatQuotaItem(slot_id=slot_id, total_seats=8)
             ]),
-            _admin=None,
+            _admin=SUPER_ADMIN,
             db=db,
         )
         quota = await db.scalar(select(ExamSeatQuota).where(
@@ -254,6 +270,56 @@ async def test_published_schedule_quota_can_increase_and_closed_schedule_cannot_
                 data=SeatQuotaBatch(quotas=[
                     SeatQuotaItem(subject_id=subject_id, slot_id=slot_id, total_seats=9)
                 ]),
-                _admin=None,
+                _admin=SUPER_ADMIN,
                 db=db,
             )
+
+
+async def test_vendor_permissions_are_scoped_per_vendor(context):
+    factory, prefix, products = context.factory, context.prefix, context.products
+    h3c_admin = SimpleNamespace(role="cert_admin", permissions=["h3c:batch_manage"])
+    content_admin = SimpleNamespace(role="cert_admin", permissions=["content:write"])
+    today = date.today()
+
+    def payload(vendor: str, product_id: int):
+        return ScheduleCreate(
+            vendor=vendor,
+            name=f"{prefix} {vendor} scoped",
+            open_date_start=today,
+            open_date_end=today + timedelta(days=30),
+            allowed_weekdays=[4],
+            product_ids=[product_id],
+            time_slots=[{"start_time": "09:30"}],
+            publish=True,
+        )
+
+    async with factory() as db:
+        with pytest.raises(ForbiddenException):
+            await create_schedule(
+                data=payload("h3c", products[0].id), _admin=content_admin, db=db
+            )
+        with pytest.raises(ForbiddenException):
+            await create_schedule(
+                data=payload("sangfor", products[2].id), _admin=h3c_admin, db=db
+            )
+
+        h3c_schedule = await create_schedule(
+            data=payload("h3c", products[0].id), _admin=SUPER_ADMIN, db=db
+        )
+        sangfor_schedule = await create_schedule(
+            data=payload("sangfor", products[2].id), _admin=SUPER_ADMIN, db=db
+        )
+
+        visible = await list_schedules(
+            vendor=None, _admin=content_admin, db=db
+        )
+        visible_ids = {row["id"] for row in visible.data}
+        assert sangfor_schedule.data["id"] in visible_ids
+        assert h3c_schedule.data["id"] not in visible_ids
+
+        h3c_visible = await list_schedules(
+            vendor=None, _admin=h3c_admin, db=db
+        )
+        h3c_ids = {row["id"] for row in h3c_visible.data}
+        assert h3c_schedule.data["id"] in h3c_ids
+        assert sangfor_schedule.data["id"] not in h3c_ids

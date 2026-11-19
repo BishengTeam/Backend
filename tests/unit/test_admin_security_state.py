@@ -516,6 +516,37 @@ async def test_reauth_wrong_password_is_not_reported_as_session_expiry(
 
 
 @pytest.mark.asyncio
+async def test_reauth_allows_permission_scoped_non_super_admin(monkeypatch):
+    """重新认证只校验身份，不限制角色；具体操作权限由端点依赖控制。"""
+    admin = _admin(
+        role="cert_admin",
+        password_hash="hash:cert",
+        must_change_password=False,
+    )
+    db = _FakeDB([_Result(admin)])
+    monkeypatch.setattr(admin_auth_module, "get_db_ctx", _db_context(db))
+    monkeypatch.setattr(
+        AdminAuthService,
+        "verify_password",
+        staticmethod(lambda password, password_hash: password == "current-value"),
+    )
+    create_grant = AsyncMock(return_value="reauth-token")
+    monkeypatch.setattr(admin_auth_module, "create_admin_reauth_token", create_grant)
+    service = AdminAuthService()
+    service.audit = SimpleNamespace(record=AsyncMock())
+
+    result = await service.reauthenticate(
+        admin_id=admin.id,
+        expected_auth_version=admin.auth_version,
+        jti="browser-session",
+        password="current-value",
+    )
+
+    assert result.reauth_token == "reauth-token"
+    create_grant.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_reauth_stale_auth_version_remains_an_authentication_error(
     monkeypatch,
 ):

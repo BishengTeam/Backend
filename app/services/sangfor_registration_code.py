@@ -11,7 +11,8 @@ GENERATED_AT_FIELD = "sangfor_registration_code_generated_at"
 
 
 def build_code(order_id: int) -> str:
-    return f"SF-{order_id:06d}-{secrets.token_hex(3).upper()}"
+    # 64 bit 随机后缀：仅用于展示/核验时避免可枚举。
+    return f"SF-{order_id:06d}-{secrets.token_hex(8).upper()}"
 
 
 def existing_code(order: Order) -> str | None:

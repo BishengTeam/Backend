@@ -1,5 +1,6 @@
 """深信服接入分时预约考场 — 预约/配额/报名码/附件。"""
 import os
+from io import BytesIO
 from datetime import date, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
@@ -7,13 +8,16 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from fastapi import UploadFile
 
 from app.api.admin.cert_attachment import (
     AttachmentCreate,
     create_attachment,
     delete_attachment,
     list_attachments,
+    upload_attachment,
 )
+from app.api.upload import get_file
 from app.api.admin.exam_schedule import (
     ScheduleCreate,
     SeatQuotaBatch,
@@ -25,6 +29,7 @@ from app.api.admin.exam_schedule import (
 from app.api.exam_booking import (
     cancel_booking,
     get_attachments,
+    get_notice,
     get_slots,
     my_bookings,
     my_schedules,
@@ -38,6 +43,7 @@ from app.domain.exam.src.index import (
     ExamTimeSlot,
 )
 from app.domain.order.src.index import Order
+from app.models.offline_payment import OfflinePaymentAudit
 from app.domain.plan.src.index import Plan
 from app.domain.user.src.index import User
 from app.models.cert_product import CertProduct
@@ -47,7 +53,10 @@ from app.services.sangfor_registration_code import (
     CODE_FIELD,
     ensure_registration_code,
 )
+from app.services.vendor_registration import resolve_registration
 
+
+SUPER_ADMIN = SimpleNamespace(role="super_admin", permissions=None)
 
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
 
@@ -84,7 +93,7 @@ async def context():
         plan = Plan(
             product_type=product.code,
             name=f"{prefix} sangfor batch",
-            status="published",
+            status="draft",
             price_cents=100000,
             capacity=100,
             apply_start=None,
@@ -154,6 +163,10 @@ async def context():
         await db.execute(delete(ExamSchedule).where(
             ExamSchedule.id.in_(schedule_ids)
         ))
+        order_ids = select(Order.id).where(Order.out_trade_no.like(f"{prefix}%"))
+        await db.execute(delete(OfflinePaymentAudit).where(
+            OfflinePaymentAudit.order_id.in_(order_ids)
+        ))
         await db.execute(delete(Order).where(
             Order.out_trade_no.like(f"{prefix}%")
         ))
@@ -181,7 +194,7 @@ async def _create_schedule(context, *, vendor: str, product_id: int, name: str):
                 time_slots=[{"start_time": "09:30"}],
                 publish=True,
             ),
-            _admin=None,
+            _admin=SUPER_ADMIN,
             db=db,
         )
     return result.data["id"], exam_day
@@ -206,7 +219,7 @@ async def test_sangfor_schedule_has_no_quota_rows(context):
                 data=SeatQuotaBatch(
                     shared_quotas=[SharedSeatQuotaItem(slot_id=1, total_seats=3)]
                 ),
-                _admin=None,
+                _admin=SUPER_ADMIN,
                 db=db,
             )
 
@@ -253,7 +266,7 @@ async def test_sangfor_booking_flow_without_seat_limit(context):
 
         admin_rows = await list_bookings(
             schedule_id=schedule_id, exam_date=None, slot_id=None,
-            _admin=None, db=db,
+            _admin=SUPER_ADMIN, db=db,
         )
         assert admin_rows.data[0]["vendor"] == "sangfor"
         assert admin_rows.data[0]["candidate_name"] == "深信服考生"
@@ -300,6 +313,7 @@ async def test_sangfor_registration_code_is_idempotent(context):
 
     assert first == second
     assert first.startswith(f"SF-{context.order_id:06d}-")
+    assert len(first.rsplit("-", 1)[-1]) == 16  # 64 bit 随机后缀
     assert (order.extra_data or {})[CODE_FIELD] == first
 
 
@@ -316,27 +330,204 @@ async def test_attachment_crud_for_schedule(context):
                 file_url="https://cdn.example.com/guide.pdf",
                 file_size=1024,
             ),
-            _admin=None,
+            _admin=SUPER_ADMIN,
             db=db,
         )
         attachment_id = created.data["id"]
 
     async with context.factory() as db:
         admin_rows = await list_attachments(
-            vendor="sangfor", schedule_id=schedule_id, _admin=None, db=db
+            vendor="sangfor", schedule_id=schedule_id, _admin=SUPER_ADMIN, db=db
         )
         assert [row["title"] for row in admin_rows.data] == ["考场指引"]
 
         user_rows = await get_attachments(
             schedule_id=schedule_id,
+            vendor="sangfor",
             current_user=SimpleNamespace(id=context.user_id),
             db=db,
         )
         assert user_rows.data[0]["file_url"].endswith("guide.pdf")
 
+        notice = await get_notice(
+            schedule_id=schedule_id,
+            vendor="sangfor",
+            current_user=SimpleNamespace(id=context.user_id),
+            db=db,
+        )
+        assert notice.data["notice"] == ""
+
     async with context.factory() as db:
-        await delete_attachment(attachment_id=attachment_id, _admin=None, db=db)
+        await delete_attachment(attachment_id=attachment_id, _admin=SUPER_ADMIN, db=db)
         remaining = await db.scalar(select(CertAttachment.id).where(
             CertAttachment.schedule_id == schedule_id
         ))
         assert remaining is None
+
+
+async def test_attachment_upload_is_downloadable(context, tmp_path, monkeypatch):
+    import app.services.upload as upload_module
+
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(tmp_path))
+    schedule_id, _ = await _create_schedule(
+        context, vendor="sangfor", product_id=context.product_id, name="upload"
+    )
+
+    async with context.factory() as db:
+        uploaded = await upload_attachment(
+            vendor="sangfor",
+            file=UploadFile(
+                filename="guide.pdf",
+                file=BytesIO(b"%PDF-1.7\n" + b"z" * 32),
+            ),
+            _admin=SUPER_ADMIN,
+        )
+        assert uploaded.data["url"].startswith("/api/media/cert-attachments/")
+        created = await create_attachment(
+            data=AttachmentCreate(
+                vendor="sangfor",
+                schedule_id=schedule_id,
+                title="考场指引",
+                file_url=uploaded.data["url"],
+            ),
+            _admin=SUPER_ADMIN,
+            db=db,
+        )
+        attachment_id = created.data["id"]
+
+    response = await get_file(
+        uploaded.data["url"].removeprefix("/api/media/")
+    )
+    assert response.path.startswith(str(tmp_path))
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+    async with context.factory() as db:
+        await delete_attachment(attachment_id=attachment_id, _admin=SUPER_ADMIN, db=db)
+
+
+async def test_unapproved_user_cannot_read_notice_or_attachments(context):
+    schedule_id, _ = await _create_schedule(
+        context, vendor="sangfor", product_id=context.product_id, name="private"
+    )
+    async with context.factory() as db:
+        outsider = User(openid=f"{context.prefix}_outsider")
+        db.add(outsider)
+        await db.commit()
+        outsider_id = outsider.id
+
+    async with context.factory() as db:
+        with pytest.raises(Exception):
+            await get_notice(
+                schedule_id=schedule_id,
+                vendor="sangfor",
+                current_user=SimpleNamespace(id=outsider_id),
+                db=db,
+            )
+        with pytest.raises(Exception):
+            await get_attachments(
+                schedule_id=schedule_id,
+                vendor="sangfor",
+                current_user=SimpleNamespace(id=outsider_id),
+                db=db,
+            )
+
+
+async def test_draft_schedule_is_hidden_from_candidates(context):
+    today = date.today()
+    exam_day = today + timedelta(days=((4 - today.weekday()) % 7 or 7) + 7)
+    async with context.factory() as db:
+        draft = await create_schedule(
+            data=ScheduleCreate(
+                vendor="sangfor",
+                name=f"{context.prefix} draft schedule",
+                open_date_start=exam_day,
+                open_date_end=exam_day,
+                allowed_weekdays=[4],
+                product_ids=[context.product_id],
+                time_slots=[{"start_time": "09:30"}],
+                publish=False,
+            ),
+            _admin=SUPER_ADMIN,
+            db=db,
+        )
+
+    async with context.factory() as db:
+        with pytest.raises(Exception):
+            await get_notice(
+                schedule_id=draft.data["id"],
+                vendor="sangfor",
+                current_user=SimpleNamespace(id=context.user_id),
+                db=db,
+            )
+
+
+async def test_refund_approval_blocks_booking_and_releases_active_booking(context):
+    schedule_id, exam_day = await _create_schedule(
+        context, vendor="sangfor", product_id=context.product_id, name="refund"
+    )
+    async with context.factory() as db:
+        slot_id = await db.scalar(select(ExamTimeSlot.id).where(
+            ExamTimeSlot.schedule_id == schedule_id
+        ))
+        booking = await ExamBookingService.book(
+            db,
+            vendor="sangfor",
+            registration_id=context.order_id,
+            schedule_id=schedule_id,
+            slot_id=slot_id,
+            exam_date=exam_day,
+        )
+        await db.commit()
+        booking_id = booking.id
+
+    async with context.factory() as db:
+        db.add(OfflinePaymentAudit(
+            order_id=context.order_id,
+            actor_id=1,
+            action="admin.generic_refund_approved",
+            request_key=f"{context.prefix}_refund",
+            payload_hash="0" * 64,
+            summary={},
+        ))
+        await db.commit()
+
+    async with context.factory() as db:
+        info = await resolve_registration(db, "sangfor", context.order_id)
+        assert info is not None
+        assert info.status == "refund_processing"
+        assert info.approved is False
+
+        schedules = await my_schedules(
+            vendor="sangfor",
+            registration_id=context.order_id,
+            current_user=SimpleNamespace(id=context.user_id),
+            db=db,
+        )
+        assert schedules.data == []
+
+        new_schedule_id, new_exam_day = await _create_schedule(
+            context, vendor="sangfor", product_id=context.product_id, name="refund-blocked"
+        )
+        new_slot_id = await db.scalar(select(ExamTimeSlot.id).where(
+            ExamTimeSlot.schedule_id == new_schedule_id
+        ))
+        with pytest.raises(BusinessException, match="尚未通过审核"):
+            await ExamBookingService.book(
+                db,
+                vendor="sangfor",
+                registration_id=context.order_id,
+                schedule_id=new_schedule_id,
+                slot_id=new_slot_id,
+                exam_date=new_exam_day,
+            )
+
+        # 退款审批钩子调用的释放逻辑：已有预约被取消，考位可再次分配。
+        cancelled = await ExamBookingService.cancel_active_for(
+            db, "sangfor", context.order_id
+        )
+        await db.commit()
+        assert cancelled == 1
+
+    async with context.factory() as db:
+        active = await db.get(ExamBooking, booking_id)
+        assert active is not None and active.status == "cancelled"

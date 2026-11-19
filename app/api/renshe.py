@@ -53,7 +53,9 @@ async def list_batches(project_id: int | None = Query(None, ge=1)):
 
 
 def _client_ip(request: Request) -> str | None:
-    return request.client.host if request.client else None
+    from app.middleware.client_ip import trusted_client_ip
+
+    return trusted_client_ip(request)
 
 
 @router.get("/batches/{plan_id}/reporting-options")

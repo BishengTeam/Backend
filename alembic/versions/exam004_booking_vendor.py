@@ -3,6 +3,8 @@
 Revision ID: exam004
 Revises: adm002
 """
+import os
+
 from alembic import op
 import sqlalchemy as sa
 
@@ -38,6 +40,17 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if not op.get_context().as_sql:
+        bind = op.get_bind()
+        non_h3c = bind.execute(
+            sa.text("SELECT count(*) FROM exam_booking WHERE vendor <> 'h3c'")
+        ).scalar_one()
+        if non_h3c and os.getenv("ALLOW_DESTRUCTIVE_EXAM_DOWNGRADE") != "1":
+            raise RuntimeError(
+                "exam004 downgrade would delete "
+                f"{non_h3c} non-H3C booking rows; export a backup and set "
+                "ALLOW_DESTRUCTIVE_EXAM_DOWNGRADE=1 to proceed"
+            )
     op.drop_index("ix_exam_booking_vendor_registration", table_name="exam_booking")
     op.drop_index("uq_exam_booking_once", table_name="exam_booking")
     # Non-H3C rows cannot satisfy the restored foreign key.

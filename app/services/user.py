@@ -610,7 +610,8 @@ class UserService:
                 existing.education = data.education
                 existing.school = data.school
                 existing.major = data.major
-                existing.enrollment_date = data.enrollment_date
+                # 前端历史版本未采集入学日期；缺省时保留已有值，避免重提清空。
+                existing.enrollment_date = data.enrollment_date or existing.enrollment_date
                 existing.student_card_oss = data.student_card_oss
                 existing.enrollment_pdf_oss = data.enrollment_pdf_oss
                 existing.degree_cert_oss = data.degree_cert_oss

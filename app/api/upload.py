@@ -93,7 +93,7 @@ async def upload(
     return success(data=UploadResponse(**result))
 
 
-@media_router.get("/{file_id}",
+@media_router.get("/{file_id:path}",
     response_class=FileResponse,
     summary="访问文件",
     description="""
@@ -117,7 +117,21 @@ async def get_file(file_id: str):
     file_path = UploadService.get_file_path(file_id)
     # 从扩展名推断 media_type
     _, ext = os.path.splitext(file_id)
-    return FileResponse(str(file_path), filename=file_id, media_type=_guess_media_type(ext))
+    media_type = _guess_media_type(ext)
+    headers = {
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        "Cache-Control": "public, max-age=86400",
+    }
+    if not (media_type or "").startswith("image/"):
+        headers["Content-Disposition"] = (
+            f'attachment; filename="{os.path.basename(file_id)}"'
+        )
+    return FileResponse(
+        str(file_path),
+        media_type=media_type or "application/octet-stream",
+        headers=headers,
+    )
 
 
 def _guess_media_type(ext: str) -> str | None:
@@ -128,11 +142,19 @@ def _guess_media_type(ext: str) -> str | None:
         ".png": "image/png",
         ".gif": "image/gif",
         ".webp": "image/webp",
-        ".svg": "image/svg+xml",
+        ".bmp": "image/bmp",
         ".pdf": "application/pdf",
+        ".doc": "application/msword",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xls": "application/vnd.ms-excel",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".ppt": "application/vnd.ms-powerpoint",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".txt": "text/plain; charset=utf-8",
         ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
         ".mp3": "audio/mpeg",
+        ".m4a": "audio/mp4",
         ".wav": "audio/wav",
-        ".zip": "application/zip",
     }
     return mapping.get(ext.lower())

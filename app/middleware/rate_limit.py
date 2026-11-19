@@ -14,10 +14,15 @@ from __future__ import annotations
 from fastapi import Request
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 from limits.storage import MemoryStorage
 
+from app.middleware.client_ip import trusted_client_ip
 from app.port.config import settings
+
+
+def get_remote_address(request: Request) -> str:
+    """可信客户端 IP（受信代理后读取转发头，否则用直连地址）。"""
+    return trusted_client_ip(request)
 
 
 def _authenticated_user_key(request: Request, namespace: str) -> str:

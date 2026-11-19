@@ -68,7 +68,7 @@ async def _resolve_sangfor(
     db: AsyncSession, registration_id: int
 ) -> VendorRegistrationInfo | None:
     from app.domain.order.src.index import Order
-    from app.services.sangfor import registration_status
+    from app.services.sangfor import effective_registration_status
 
     order = await db.get(Order, registration_id)
     if order is None or (order.extra_data or {}).get("business_type") != "sangfor":
@@ -84,7 +84,7 @@ async def _resolve_sangfor(
         vendor="sangfor",
         registration_id=order.id,
         user_id=order.user_id,
-        status=registration_status(order),
+        status=await effective_registration_status(db, order),
         product=product,
     )
 
@@ -135,22 +135,27 @@ async def approved_registration_ids(
         return list(rows.all())
 
     from app.domain.order.src.index import Order
+    from app.models.offline_payment import OfflinePaymentAudit
     from app.services.sangfor import registration_status
 
-    rows = await db.scalars(
-        select(Order.id).where(
+    refund_approved = select(OfflinePaymentAudit.id).where(
+        OfflinePaymentAudit.order_id == Order.id,
+        OfflinePaymentAudit.action == "admin.generic_refund_approved",
+    ).exists()
+
+    orders = await db.scalars(
+        select(Order).where(
             Order.user_id == user_id,
             Order.order_kind == "certification",
             Order.extra_data["business_type"].as_string() == "sangfor",
             Order.status.not_in(("closed", "refunded")),
+            ~refund_approved,
         )
     )
-    approved: list[int] = []
-    for order in rows.all():
-        order_row = await db.get(Order, order)
-        if order_row is not None and registration_status(order_row) in APPROVED_STATUSES:
-            approved.append(order_row.id)
-    return approved
+    return [
+        order.id for order in orders.all()
+        if registration_status(order) in APPROVED_STATUSES
+    ]
 
 
 async def user_registration_ids(
@@ -176,3 +181,77 @@ async def user_registration_ids(
         )
     )
     return list(rows.all())
+
+
+async def registration_matches_schedule(
+    db: AsyncSession, vendor: str | None, user_id: int, schedule_id: int
+) -> bool:
+    """一次存在性查询判断用户是否有「已通过且科目在该计划中」的报名。"""
+    from app.domain.exam.src.index import ExamScheduleSubject
+
+    vendor = normalize_vendor(vendor)
+    if vendor == "h3c":
+        from app.domain.h3c.src.index import H3cBatchProduct, H3cExamBatch, H3cRegistration
+        from app.domain.plan.src.index import Plan
+
+        matched = await db.scalar(
+            select(ExamScheduleSubject.id)
+            .join(
+                H3cBatchProduct,
+                H3cBatchProduct.product_id == ExamScheduleSubject.product_id,
+            )
+            .join(
+                H3cRegistration,
+                H3cRegistration.batch_product_id == H3cBatchProduct.id,
+            )
+            .where(
+                ExamScheduleSubject.schedule_id == schedule_id,
+                H3cRegistration.user_id == user_id,
+                H3cRegistration.status.in_(APPROVED_STATUSES),
+            )
+            .limit(1)
+        )
+        if matched is not None:
+            return True
+
+        # 旧数据：无 batch_product_id，经 batch → plan.product_type 解析。
+        legacy = await db.scalar(
+            select(ExamScheduleSubject.id)
+            .join(CertProduct, CertProduct.id == ExamScheduleSubject.product_id)
+            .join(Plan, Plan.product_type == CertProduct.code)
+            .join(H3cExamBatch, H3cExamBatch.plan_id == Plan.id)
+            .join(H3cRegistration, H3cRegistration.batch_id == H3cExamBatch.id)
+            .where(
+                ExamScheduleSubject.schedule_id == schedule_id,
+                H3cRegistration.user_id == user_id,
+                H3cRegistration.status.in_(APPROVED_STATUSES),
+                H3cRegistration.batch_product_id.is_(None),
+            )
+            .limit(1)
+        )
+        return legacy is not None
+
+    from app.domain.order.src.index import Order
+    from app.models.offline_payment import OfflinePaymentAudit
+
+    refund_approved = select(OfflinePaymentAudit.id).where(
+        OfflinePaymentAudit.order_id == Order.id,
+        OfflinePaymentAudit.action == "admin.generic_refund_approved",
+    ).exists()
+
+    matched = await db.scalar(
+        select(ExamScheduleSubject.id)
+        .join(CertProduct, CertProduct.id == ExamScheduleSubject.product_id)
+        .join(Order, Order.product_type == CertProduct.code)
+        .where(
+            ExamScheduleSubject.schedule_id == schedule_id,
+            Order.user_id == user_id,
+            Order.order_kind == "certification",
+            Order.extra_data["business_type"].as_string() == "sangfor",
+            Order.status.not_in(("closed", "refunded")),
+            Order.extra_data["registration_state"].as_string().in_(APPROVED_STATUSES),
+            ~refund_approved,
+        )
+        .limit(1)
+    )
+    return matched is not None

@@ -334,7 +334,6 @@ class AdminAuthService:
                 admin is None
                 or not admin.is_active
                 or admin.auth_version != expected_auth_version
-                or admin.role != "super_admin"
                 or admin.must_change_password
             ):
                 raise UnauthorizedException("登录状态已变化，请重新登录")
@@ -352,7 +351,7 @@ class AdminAuthService:
                     context=context,
                 )
                 await db.commit()
-                # The caller already has a valid, normal super-admin session.
+                # The caller already has a valid, normal admin session.
                 # Keep 40100 reserved for a stale/revoked session so clients
                 # can immediately clear authorization state; an incorrect
                 # current password is a business validation failure, matching

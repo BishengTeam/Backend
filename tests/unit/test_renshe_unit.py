@@ -222,7 +222,12 @@ def test_student_certification_fields_are_all_required():
         "degree_cert_oss": "renshe/source/1/education.jpg",
     }
     assert StudentSubmit.model_validate(complete).education == "bachelor"
+    # 历史小程序未采集入学日期；该字段仅用于人工审核，允许缺省。
+    without_date = {key: value for key, value in complete.items() if key != "enrollment_date"}
+    assert StudentSubmit.model_validate(without_date).enrollment_date is None
     for field in complete:
+        if field == "enrollment_date":
+            continue
         incomplete = complete.copy()
         incomplete.pop(field)
         with pytest.raises(ValidationError):

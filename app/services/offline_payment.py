@@ -367,6 +367,16 @@ class OfflinePaymentService:
                 if order.status not in {"paid", "completed"}:
                     raise ConflictException("订单不是可退款状态")
                 await self.command(db, order, admin_id, "admin.generic_refund_approved", data)
+                from app.services.sangfor import is_sangfor
+                if is_sangfor(order):
+                    # 退款审批即冻结报名：撤销报名码并取消有效预约，释放考位。
+                    extra = order.extra_data or {}
+                    order.extra_data = {
+                        **extra,
+                        "sangfor_registration_code_revoked_at": now().isoformat(),
+                    }
+                    from app.services.exam_booking import ExamBookingService
+                    await ExamBookingService.cancel_active_for(db, "sangfor", order.id)
                 return {"status": "approved"}
 
     async def resolve_exception(self, order_id, admin_id, data):
@@ -461,6 +471,17 @@ class OfflinePaymentService:
                             bank_reference=bank_reference(data.bank_reference), amount_cents=data.amount_cents,
                             bank_time=data.bank_time, admin_id=admin_id, submission_version=payment.current_version, material_ids=data.material_ids))
                         await db.flush()
+                        from app.services.sangfor import is_sangfor
+                        if is_sangfor(order):
+                            extra = order.extra_data or {}
+                            order.extra_data = {
+                                **extra,
+                                "sangfor_registration_code_revoked_at": extra.get(
+                                    "sangfor_registration_code_revoked_at"
+                                ) or now().isoformat(),
+                            }
+                            from app.services.exam_booking import ExamBookingService
+                            await ExamBookingService.cancel_active_for(db, "sangfor", order.id)
                         await refund_inventory_sale(db, order, reason="offline_refund_succeeded")
                         await OrderFulfillmentService().on_refunded(db, order)
                         apply_order_status_transition(order, "refunded")

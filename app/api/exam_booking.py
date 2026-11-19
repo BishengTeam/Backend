@@ -15,6 +15,7 @@ from app.services.exam_booking import ExamBookingService
 from app.services.vendor_registration import (
     approved_registration_ids,
     normalize_vendor,
+    registration_matches_schedule,
     resolve_registration,
     user_registration_ids,
 )
@@ -36,6 +37,35 @@ class BookRequest(BaseModel):
     exam_date: date
 
 
+async def _assert_schedule_access(
+    db: AsyncSession,
+    schedule_id: int,
+    user_id: int,
+    vendor: str | None,
+) -> ExamSchedule:
+    """须知/附件只对「有该厂商已通过报名且科目匹配」或「已预约」的考生开放。"""
+    schedule = await db.get(ExamSchedule, schedule_id)
+    vendor = normalize_vendor(vendor or (schedule.vendor if schedule else None))
+    if schedule is None or schedule.vendor != vendor or schedule.status != "published":
+        raise NotFoundException("考场计划")
+
+    if await registration_matches_schedule(db, vendor, user_id, schedule_id):
+        return schedule
+
+    registration_ids = await user_registration_ids(db, vendor, user_id)
+    if registration_ids:
+        booking_id = await db.scalar(
+            select(ExamBooking.id).where(
+                ExamBooking.vendor == vendor,
+                ExamBooking.registration_id.in_(registration_ids),
+                ExamBooking.schedule_id == schedule_id,
+            ).limit(1)
+        )
+        if booking_id is not None:
+            return schedule
+    raise NotFoundException("考场计划")
+
+
 @router.get("/schedules", response_model=APIResponse[list], summary="我的可预约计划")
 async def my_schedules(
     vendor: VendorQuery = "h3c",
@@ -52,11 +82,18 @@ async def my_schedules(
         raise NotFoundException("报名记录")
     if not registration.approved:
         return success(data=[])
+    if registration.product is None:
+        return success(data=[])
 
     rows = (await db.execute(
         select(ExamSchedule).where(
             ExamSchedule.status == "published",
             ExamSchedule.vendor == vendor,
+            ExamSchedule.id.in_(
+                select(ExamScheduleSubject.schedule_id).where(
+                    ExamScheduleSubject.product_id == registration.product.id
+                )
+            ),
         ).order_by(ExamSchedule.open_date_start)
     )).scalars().all()
     return success(data=[{
@@ -74,10 +111,7 @@ async def get_dates(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # 校验用户有该厂商已通过审核的报名
-    registration_ids = await approved_registration_ids(db, vendor, current_user.id)
-    if not registration_ids:
-        return success(data={"dates": []})
+    await _assert_schedule_access(db, schedule_id, current_user.id, vendor)
 
     dates = await ExamBookingService.get_bookable_dates(db, schedule_id)
     return success(data={"dates": [d.isoformat() for d in dates]})
@@ -217,7 +251,7 @@ async def cancel_booking(
     )
     if registration is None:
         raise NotFoundException("报名记录")
-    await ExamBookingService.cancel(db, booking_id, registration_id)
+    await ExamBookingService.cancel(db, booking_id, registration_id, vendor)
     await db.commit()
     return success(message="预约已取消")
 
@@ -225,24 +259,24 @@ async def cancel_booking(
 @router.get("/schedules/{schedule_id}/notice", response_model=APIResponse[dict], summary="考前注意事项")
 async def get_notice(
     schedule_id: int = Path(..., ge=1),
+    vendor: VendorQuery = "h3c",
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    schedule = await db.get(ExamSchedule, schedule_id)
-    if schedule is None:
-        raise NotFoundException("考场计划")
+    schedule = await _assert_schedule_access(
+        db, schedule_id, current_user.id, vendor
+    )
     return success(data={"notice": schedule.pre_exam_notice or ""})
 
 
 @router.get("/schedules/{schedule_id}/attachments", response_model=APIResponse[list], summary="考场配套附件")
 async def get_attachments(
     schedule_id: int = Path(..., ge=1),
+    vendor: VendorQuery = "h3c",
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    schedule = await db.get(ExamSchedule, schedule_id)
-    if schedule is None:
-        raise NotFoundException("考场计划")
+    await _assert_schedule_access(db, schedule_id, current_user.id, vendor)
     rows = (await db.execute(
         select(CertAttachment).where(
             CertAttachment.schedule_id == schedule_id,

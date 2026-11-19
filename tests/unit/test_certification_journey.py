@@ -2,7 +2,12 @@ import pytest
 from pydantic import ValidationError
 
 from app.schemas.certification_journey import JourneyContentUpdate, NoticeBlock
-from app.services.certification_journey import notice_digest, progress_state
+from app.services.certification_journey import (
+    SANGFOR_REVIEW_LABELS,
+    journey_stages,
+    notice_digest,
+    progress_state,
+)
 
 
 @pytest.mark.parametrize("status,order,offline,stage,label", [
@@ -28,6 +33,23 @@ def test_stage_projection_respects_payment_and_exception_priority(status, order,
     state = progress_state(status, order_status=order, offline_status=offline)
     assert (state["stage"], state["label"]) == (stage, label)
     assert "percent" not in state
+
+
+def test_vendor_specific_review_stage_names():
+    assert progress_state(
+        "approved", vendor="sangfor", order_status="paid", offline_status="confirmed"
+    )["label"] == "等待后续报送／外审"
+    assert progress_state(
+        "approved", vendor="h3c", order_status="paid", offline_status="confirmed"
+    )["label"] == "等待后续报送／终审"
+
+    assert journey_stages("sangfor")[3] == "外审"
+    assert journey_stages("renshe")[3] == "外审"
+    assert journey_stages("h3c")[3] == "终审"
+    assert journey_stages("nisp")[3] == "终审"
+
+    assert SANGFOR_REVIEW_LABELS["final_approve"] == "外审通过"
+    assert SANGFOR_REVIEW_LABELS["final_return"] == "外审退回补正"
 
 
 def test_frozen_registration_cannot_continue_normal_approval():

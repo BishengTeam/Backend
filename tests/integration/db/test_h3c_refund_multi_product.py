@@ -36,6 +36,8 @@ from app.services.h3c_refund import H3cRefundService
 from app.services.exam_booking import ExamBookingService
 
 
+SUPER_ADMIN = SimpleNamespace(role="super_admin", permissions=None)
+
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
 
 
@@ -323,7 +325,7 @@ async def test_multi_product_refund_list_resolves_selected_subject(context):
                 ],
                 publish=True,
             ),
-            _admin=None,
+            _admin=SUPER_ADMIN,
             db=db,
         )
         schedule_id = schedule_result.data["id"]

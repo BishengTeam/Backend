@@ -143,7 +143,7 @@ class StudentSubmit(BaseModel):
     ] = Field(..., description="学历枚举")
     school: str = Field(..., min_length=1, max_length=128, description="学校")
     major: str = Field(..., min_length=1, max_length=128, description="专业")
-    enrollment_date: date = Field(..., description="入学日期，仅供人工审核")
+    enrollment_date: date | None = Field(None, description="入学日期，仅供人工审核")
     student_card_oss: str = Field(..., min_length=1, max_length=512, description="学生证 OSS key")
     enrollment_pdf_oss: str = Field(..., min_length=1, max_length=512, description="学信网电子注册表 OSS key")
     degree_cert_oss: str = Field(..., min_length=1, max_length=512, description="学历证明 OSS key")

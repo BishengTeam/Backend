@@ -19,6 +19,10 @@ class ExamBooking(Base, TimestampMixin):
     __tablename__ = "exam_booking"
     __table_args__ = (
         CheckConstraint(
+            "vendor IN ('h3c','sangfor')",
+            name="ck_exam_booking_vendor",
+        ),
+        CheckConstraint(
             "status IN ('booked','cancelled','completed','no_show')",
             name="ck_exam_booking_status",
         ),

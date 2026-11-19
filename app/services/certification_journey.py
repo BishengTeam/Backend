@@ -263,7 +263,20 @@ async def confirmed_notice(db, *, vendor, batch_id, notice_hash, registration_ty
     return {**current["_snapshot"], "notice_hash": notice_hash, "confirmed_at": datetime.now(timezone.utc).isoformat()}
 
 
-def progress_state(status, *, order_status, offline_status=None, payment_channel="bank_transfer", refunded=False, frozen=False):
+STAGE_WORD_BY_VENDOR = {"h3c": "终审", "nisp": "终审", "sangfor": "外审", "renshe": "外审"}
+SANGFOR_REVIEW_LABELS = {
+    "approve": "初审通过",
+    "return": "初审退回补正",
+    "final_approve": "外审通过",
+    "final_return": "外审退回补正",
+}
+
+
+def journey_stages(vendor: str) -> list[str]:
+    return ["已提交", "核账", "初审", STAGE_WORD_BY_VENDOR.get(vendor, "终审"), "办理完成"]
+
+
+def progress_state(status, *, order_status, offline_status=None, payment_channel="bank_transfer", refunded=False, frozen=False, vendor="h3c"):
     """No percentages; exceptions take priority over normal stage completion."""
     if refunded or order_status == "refunded" or status == "refunded_closed":
         return {"stage": None, "exception": True, "label": "已退款", "description": "本次报名已退款，正常审核流程已停止。", "action": "contact"}
@@ -288,7 +301,8 @@ def progress_state(status, *, order_status, offline_status=None, payment_channel
     if status in {"external_approved", "final_approved"}:
         return {"stage": 4, "exception": False, "label": "报名审核通过", "description": "本次报名审核已通过，请留意批次后续安排。", "action": "none"}
     if status in {"approved", "pending_external_review"}:
-        return {"stage": 3, "exception": False, "label": "等待后续报送／终审", "description": "初审已通过，后续报送与审核由管理员办理。", "action": "none"}
+        stage_word = STAGE_WORD_BY_VENDOR.get(vendor, "终审")
+        return {"stage": 3, "exception": False, "label": f"等待后续报送／{stage_word}", "description": "初审已通过，后续报送与审核由管理员办理。", "action": "none"}
     return {"stage": 2, "exception": False, "label": "等待初审", "description": "付款已确认，请等待管理员审核报名资料。", "action": "none"}
 
 
@@ -339,7 +353,7 @@ async def user_journey(vendor, registration_id, user_id):
         offline = await db.scalar(select(OfflinePayment).where(OfflinePayment.order_id == order.id))
         submission = await db.scalar(select(OfflinePaymentSubmission).where(OfflinePaymentSubmission.order_id == order.id).order_by(OfflinePaymentSubmission.version.desc()).limit(1))
         refund_approved = await db.scalar(select(OfflinePaymentAudit.id).where(OfflinePaymentAudit.order_id == order.id, OfflinePaymentAudit.action == "admin.generic_refund_approved").limit(1))
-        state = progress_state(status, order_status=order.status, offline_status=order.offline_status, payment_channel=order.payment_channel, frozen=bool(getattr(record, "frozen_at", None) or (refund_approved and order.status in {"paid", "completed"})))
+        state = progress_state(status, vendor=vendor, order_status=order.status, offline_status=order.offline_status, payment_channel=order.payment_channel, frozen=bool(getattr(record, "frozen_at", None) or (refund_approved and order.status in {"paid", "completed"})))
         general, supplement = await content_record(db, vendor), await content_record(db, vendor, plan.id)
         contacts = {}
         account = offline.account_snapshot if offline else {}
@@ -366,7 +380,7 @@ async def user_journey(vendor, registration_id, user_id):
             extra = order.extra_data or {}
             correction_due = extra.get("correction_due_at")
             for review in extra.get("reviews", []):
-                label = {"approve": "初审通过", "return": "初审退回补正", "final_approve": "终审通过", "final_return": "终审退回补正"}.get(review["action"])
+                label = SANGFOR_REVIEW_LABELS.get(review["action"])
                 if label:
                     events.append({"at": review["created_at"], "label": label, "reason": review.get("reason")})
             if status == "returned" and extra.get("reviews"):
@@ -391,10 +405,16 @@ async def user_journey(vendor, registration_id, user_id):
         if vendor == "renshe" and state["stage"] == 3 and not state["exception"]:
             state["label"] = "等待后续报送／外审"
         events = sorted(jsonable_encoder(events), key=lambda item: item["at"])
-        registration_code = (order.extra_data or {}).get("sangfor_registration_code") if vendor == "sangfor" else None
+        extra_data = order.extra_data or {}
+        registration_code = (
+            extra_data.get("sangfor_registration_code")
+            if vendor == "sangfor"
+            and not extra_data.get("sangfor_registration_code_revoked_at")
+            else None
+        )
         return jsonable_encoder({"vendor": vendor, "registration_id": registration_id, "registration_no": getattr(record, "registration_no", None) or order.out_trade_no,
             "registration_code": registration_code,
             "order_id": order.id, "subject": product.chinese_name if product else plan.project_name or plan.product_type, "batch_name": plan.name,
-            "stages": ["已提交", "核账", "初审", "外审" if vendor == "renshe" else "终审", "办理完成"], "progress": state,
+            "stages": journey_stages(vendor), "progress": state,
             "reason": reason, "apply_end": plan.apply_end, "proof_due_at": due, "correction_due_at": correction_due,
             "events": events, "contact": contacts, "consultation_group": group, "group_message": "咨询群按核账及批次有效期开放；暂不可查看时可联系管理员。"})

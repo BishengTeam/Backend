@@ -145,7 +145,9 @@ async def list_renshe_batches(_admin=Depends(require_permission("user:list"))):
 
 
 def _client_ip(request: Request) -> str | None:
-    return request.client.host if request.client else None
+    from app.middleware.client_ip import trusted_client_ip
+
+    return trusted_client_ip(request)
 
 
 @router.get(

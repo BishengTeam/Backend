@@ -7,4 +7,8 @@ if [ "${RUN_MIGRATIONS:-true}" = "true" ]; then
 fi
 
 echo "==> Starting application..."
-exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+exec uvicorn app.main:app \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --proxy-headers \
+  --forwarded-allow-ips="${FORWARDED_ALLOW_IPS:-127.0.0.1,::1}"

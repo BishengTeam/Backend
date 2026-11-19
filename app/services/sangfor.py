@@ -50,6 +50,23 @@ def registration_status(order):
     return (order.extra_data or {}).get("registration_state", "pending_review")
 
 
+def effective_registration_status_from(order, refund_approved: bool):
+    """含退款审批的唯一有效状态：退款审批后立即失效，不能再预约。"""
+    if order.status == "refunded":
+        return "refunded_closed"
+    if order.status == "closed":
+        return "cancelled"
+    if order.status in {"paid", "completed"} and refund_approved:
+        return "refund_processing"
+    return registration_status(order)
+
+
+async def effective_registration_status(db, order):
+    return effective_registration_status_from(
+        order, await SangforService.refund_approved(db, order.id)
+    )
+
+
 def registration_status_expression():
     refund = select(OfflinePaymentAudit.id).where(OfflinePaymentAudit.order_id == Order.id,
         OfflinePaymentAudit.action == "admin.generic_refund_approved").exists()
@@ -159,17 +176,19 @@ class SangforService:
         return bool(await db.scalar(select(OfflinePaymentAudit.id).where(OfflinePaymentAudit.order_id == order_id,
                               OfflinePaymentAudit.action == "admin.generic_refund_approved").limit(1)))
 
-    async def response(self, db, order, *, brief=False):
+    async def response(self, db, order, *, brief=False, refund_approved: bool | None = None):
         extra = order.extra_data
         payment = await payment_summary(db, order)
-        status = registration_status(order)
-        if order.status in {"paid", "completed"} and await self.refund_approved(db, order.id):
-            status = "refund_processing"
+        if refund_approved is None:
+            refund_approved = await self.refund_approved(db, order.id)
+        status = effective_registration_status_from(order, refund_approved)
+        if status == "refund_processing":
             payment.review_payment_allowed = False
             payment.review_block_reason = "退款已审批，等待登记实际退款，报名已冻结"
+        code = None if extra.get("sangfor_registration_code_revoked_at") else extra.get("sangfor_registration_code")
         return {"id": order.id, "order_id": order.id, "batch_id": order.plan_id, "registration_no": order.out_trade_no,
                 "status": status, "order_status": order.status, "price_cents": order.price,
-                "registration_code": extra.get("sangfor_registration_code"),
+                "registration_code": code,
                 "revision": extra["revision"], "current_version": extra["current_version"],
                 "candidate_snapshot": extra["candidate_snapshot"], "batch_snapshot": extra["batch_snapshot"],
                 "versions": [] if brief else extra["versions"], "reviews": extra["reviews"][-1:] if brief else extra["reviews"], "exports": extra["exports"],
@@ -239,7 +258,25 @@ class SangforService:
                 query = query.where(registration_status_expression().in_(("refund_processing", "refunded_closed")))
             total = await db.scalar(select(func.count()).select_from(query.subquery()))
             rows = list((await db.scalars(query.order_by(Order.id.desc()).offset((page - 1) * page_size).limit(page_size))).all())
-            return {"items": [await self.response(db, row, brief=True) for row in rows], "total": total, "page": page, "page_size": page_size}
+            approved_ids: set[int] = set()
+            if rows:
+                approved_ids = set((await db.scalars(
+                    select(OfflinePaymentAudit.order_id).where(
+                        OfflinePaymentAudit.order_id.in_([row.id for row in rows]),
+                        OfflinePaymentAudit.action == "admin.generic_refund_approved",
+                    )
+                )).all())
+            return {
+                "items": [
+                    await self.response(
+                        db, row, brief=True, refund_approved=row.id in approved_ids
+                    )
+                    for row in rows
+                ],
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
 
     async def refunds(self, *, batch_id=None, registration_id=None, keyword=None, request_kind=None,
                       requested_at_start=None, requested_at_end=None, group=None, status=None, page=1, page_size=20):

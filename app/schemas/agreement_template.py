@@ -3,7 +3,9 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.utils.html_sanitize import sanitize_html
 
 AgreementTypeLiteral = Literal[
     "user_terms", "privacy", "identity_auth", "cert_registration"
@@ -19,6 +21,11 @@ class AgreementTemplatePublic(BaseModel):
     version: int
 
     model_config = {"from_attributes": True}
+
+    @field_validator("content")
+    @classmethod
+    def _sanitize(cls, value: str) -> str:
+        return sanitize_html(value)
 
 
 class AgreementAcceptItem(BaseModel):

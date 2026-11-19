@@ -2,6 +2,7 @@
 from datetime import date, timedelta
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.exam.src.index import (
@@ -36,6 +37,24 @@ class ExamBookingService:
         if for_update:
             statement = statement.with_for_update()
         return await db.scalar(statement)
+
+    @staticmethod
+    async def cancel_active_for(
+        db: AsyncSession, vendor: str, registration_id: int
+    ) -> int:
+        """退款审批/完成时释放该报名的有效预约（同事务内调用）。"""
+        rows = (await db.scalars(
+            select(ExamBooking)
+            .where(
+                ExamBooking.vendor == vendor,
+                ExamBooking.registration_id == registration_id,
+                ExamBooking.status == "booked",
+            )
+            .with_for_update()
+        )).all()
+        for booking in rows:
+            booking.status = "cancelled"
+        return len(rows)
 
     # ------------------------------------------------------------------
     # 可预约日期
@@ -105,6 +124,18 @@ class ExamBookingService:
         if subject_exists is None:
             raise BusinessException("该科目不在此考场计划中")
 
+        booked_by_slot: dict[int, int] = {}
+        if vendor != "sangfor":
+            # 共享池按「计划 + 时段」计算，不区分考试日期（与管理端配额语义一致）。
+            booked_by_slot = dict((await db.execute(
+                select(ExamBooking.slot_id, func.count())
+                .where(
+                    ExamBooking.schedule_id == schedule_id,
+                    ExamBooking.status == "booked",
+                )
+                .group_by(ExamBooking.slot_id)
+            )).all())
+
         result = []
         for slot in slots:
             if vendor == "sangfor":
@@ -124,14 +155,7 @@ class ExamBookingService:
             elif quota.total_seats == 0:
                 remaining = -1  # 0 = 不限
             else:
-                booked = (await db.execute(
-                    select(func.count()).select_from(ExamBooking).where(
-                        ExamBooking.schedule_id == schedule_id,
-                        ExamBooking.slot_id == slot.id,
-                        ExamBooking.exam_date == exam_date,
-                        ExamBooking.status == "booked",
-                    )
-                )).scalar_one()
+                booked = booked_by_slot.get(slot.id, 0)
                 remaining = max(0, quota.total_seats - booked)
 
             result.append({
@@ -159,7 +183,10 @@ class ExamBookingService:
     ) -> ExamBooking:
         """预约机位（FOR UPDATE 防超卖）。"""
         vendor = normalize_vendor(vendor)
-        schedule = await db.get(ExamSchedule, schedule_id, with_for_update=True)
+        # 共享锁读取计划：允许多个预约并发，但阻塞管理员的关闭/改配额（FOR UPDATE）。
+        schedule = await db.get(
+            ExamSchedule, schedule_id, with_for_update={"read": True}
+        )
         if schedule is None:
             raise NotFoundException("考场计划")
         if schedule.status != "published":
@@ -228,7 +255,6 @@ class ExamBookingService:
                     select(func.count()).select_from(ExamBooking).where(
                         ExamBooking.schedule_id == schedule_id,
                         ExamBooking.slot_id == slot_id,
-                        ExamBooking.exam_date == exam_date,
                         ExamBooking.status == "booked",
                     )
                 )).scalar_one()
@@ -253,7 +279,10 @@ class ExamBookingService:
             booking.slot_id = slot_id
             booking.exam_date = exam_date
             booking.status = "booked"
-        await db.flush()
+        try:
+            await db.flush()
+        except IntegrityError as exc:
+            raise ConflictException("您已预约该考场计划，请刷新后重试") from exc
         return booking
 
     # ------------------------------------------------------------------
@@ -263,11 +292,19 @@ class ExamBookingService:
     CANCEL_DEADLINE_DAYS = 3  # 考前 3 天可取消
 
     @classmethod
-    async def cancel(cls, db: AsyncSession, booking_id: int, registration_id: int) -> ExamBooking:
+    async def cancel(
+        cls,
+        db: AsyncSession,
+        booking_id: int,
+        registration_id: int,
+        vendor: str = "h3c",
+    ) -> ExamBooking:
         """取消预约（考前 N 天可取消）。"""
+        vendor = normalize_vendor(vendor)
         booking = await db.scalar(
             select(ExamBooking).where(
                 ExamBooking.id == booking_id,
+                ExamBooking.vendor == vendor,
                 ExamBooking.registration_id == registration_id,
             ).with_for_update()
         )

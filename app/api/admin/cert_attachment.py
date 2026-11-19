@@ -1,4 +1,6 @@
 """管理端 — 认证配套附件（考场须知、指引等）。"""
+import logging
+
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -9,12 +11,15 @@ from app.middleware.auth import require_any_permission
 from app.schemas.common import APIResponse, success
 from app.domain.exam.src.index import CertAttachment, ExamSchedule
 from app.port.exceptions import BusinessException, NotFoundException
+from app.policy.vendor_scope import manageable_vendors, require_vendor_permission
 from app.services.upload import UploadService
 
 router = APIRouter(prefix="/cert-attachments", tags=["管理后台-认证附件"])
 
 guard = require_any_permission("h3c:batch_manage", "content:write")
 VENDOR_PATTERN = "^(h3c|nisp|renshe|sangfor)$"
+
+logger = logging.getLogger(__name__)
 
 
 class AttachmentCreate(BaseModel):
@@ -28,9 +33,11 @@ class AttachmentCreate(BaseModel):
 
 @router.post("/upload", response_model=APIResponse[dict], summary="上传附件文件")
 async def upload_attachment(
+    vendor: str = Query(..., pattern=VENDOR_PATTERN),
     file: UploadFile = File(...),
     _admin=Depends(guard),
 ):
+    require_vendor_permission(_admin, vendor)
     result = await UploadService.save_file(file, sub_dir="cert-attachments")
     return success(data=result)
 
@@ -42,9 +49,13 @@ async def list_attachments(
     _admin=Depends(guard),
     db: AsyncSession = Depends(get_db),
 ):
+    if vendor:
+        require_vendor_permission(_admin, vendor)
     stmt = select(CertAttachment)
     if vendor:
         stmt = stmt.where(CertAttachment.vendor == vendor)
+    else:
+        stmt = stmt.where(CertAttachment.vendor.in_(manageable_vendors(_admin)))
     if schedule_id:
         stmt = stmt.where(CertAttachment.schedule_id == schedule_id)
     rows = (await db.execute(
@@ -68,6 +79,7 @@ async def create_attachment(
     _admin=Depends(guard),
     db: AsyncSession = Depends(get_db),
 ):
+    require_vendor_permission(_admin, data.vendor)
     if data.schedule_id is not None:
         schedule = await db.get(ExamSchedule, data.schedule_id)
         if schedule is None:
@@ -96,6 +108,27 @@ async def delete_attachment(
     item = await db.get(CertAttachment, attachment_id)
     if item is None:
         raise NotFoundException("附件")
+    if item.schedule_id is not None:
+        schedule = await db.get(ExamSchedule, item.schedule_id)
+        require_vendor_permission(_admin, schedule.vendor if schedule else item.vendor)
+    else:
+        require_vendor_permission(_admin, item.vendor)
+    file_url = item.file_url
+    shared_reference = await db.scalar(
+        select(CertAttachment.id).where(
+            CertAttachment.file_url == file_url,
+            CertAttachment.id != item.id,
+        ).limit(1)
+    )
     await db.delete(item)
     await db.commit()
+    # 多附件可能引用同一文件；仅在无其他引用时清理物理文件。
+    # 删除失败不阻断请求，孤儿文件由存储清理任务兜底。
+    if shared_reference is None:
+        try:
+            UploadService.delete_file_by_url(file_url)
+        except OSError:
+            logger.warning(
+                "cert attachment file delete failed: url=%s", file_url, exc_info=True
+            )
     return success(message="附件已删除")
