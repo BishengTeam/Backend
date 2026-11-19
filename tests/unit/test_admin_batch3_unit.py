@@ -197,7 +197,8 @@ class AdminBatch3SystemTests(unittest.TestCase):
         schema = importlib.import_module("app.schemas.admin_settings")
         model = getattr(schema, "AdminSettingsUserCreate", None)
         fields = _field_names(model)
-        self.assertEqual(fields, {"username", "display_name", "role"})
+        # adm002 覆盖式按人授权：permissions 可选（缺省跟随角色预设）
+        self.assertEqual(fields, {"username", "display_name", "role", "permissions"})
         instance = model(
             username="testuser",
             display_name="测试管理员",

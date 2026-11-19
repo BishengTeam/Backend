@@ -10,6 +10,9 @@ import sys
 
 import pytest
 
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.dialects.postgresql import JSONB
+
 
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("APP_DEBUG", "false")
@@ -32,6 +35,14 @@ os.environ.setdefault(
     ),
 )
 
+# adm002 起 admin_user.permissions 等 JSONB 列进入 SQLite 单测建表路径
+# （isolated 等 fixture 会 to_metadata 复制 admin_user）。SQLite 方言将
+# JSONB 渲染为等价 JSON；PostgreSQL（integration_db/CI）不受影响。
+@compiles(JSONB, "sqlite")
+def _render_jsonb_as_json_on_sqlite(type_, compiler, **kw):
+    return "JSON"
+
+
 # bootstrap/部署验收测试依赖 fcntl 等 POSIX 专属能力，仅在 Linux（部署目标环境）收集。
 if sys.platform == "win32":
     collect_ignore = [
@@ -39,6 +50,7 @@ if sys.platform == "win32":
         "unit/test_bootstrap_state.py",
         "unit/test_bootstrap_web.py",
         "unit/test_deployment_acceptance.py",
+        "integration/db/test_deployment_acceptance_migration.py",
     ]
 
 
