@@ -18,6 +18,7 @@ router = APIRouter(prefix="/auth", tags=["登录认证"])
 
 **请求体**:
 - `code`: 微信登录凭证
+- `phone_code`: 微信 getPhoneNumber 授权返回的 code（可选，登录时顺带绑定手机号）
 
 **响应**: access_token 和 refresh_token
 
@@ -27,7 +28,7 @@ router = APIRouter(prefix="/auth", tags=["登录认证"])
 @limiter.limit("5/minute")
 async def login(request: Request, body: LoginRequest) -> APIResponse[LoginResponse]:
     """微信 code 登录，返回 JWT token"""
-    result = await AuthService().login(body.code)
+    result = await AuthService().login(body.code, body.phone_code)
     return success(data=result)
 
 

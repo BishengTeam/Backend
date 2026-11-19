@@ -8,6 +8,10 @@ from pydantic import BaseModel, Field
 
 class LoginRequest(BaseModel):
     code: str = Field(..., min_length=1, description="微信登录 code")
+    phone_code: str | None = Field(
+        None,
+        description="微信 getPhoneNumber 授权返回的 code（可选，登录时顺带绑定手机号）",
+    )
 
 
 class UserProfile(BaseModel):

@@ -1,3 +1,5 @@
+import logging
+
 from sqlalchemy import select
 
 from app.port.config import settings
@@ -16,14 +18,16 @@ REFRESH_TOKEN_TTL = 30 * 24 * 3600
 SESSION_KEY_PREFIX = "session_key:"
 SESSION_KEY_TTL = 7 * 24 * 3600
 
+logger = logging.getLogger(__name__)
+
 
 class AuthService:
     def __init__(self):
         self.wechat = WechatClient()
 
-    async def login(self, code: str) -> LoginResponse:
+    async def login(self, code: str, phone_code: str | None = None) -> LoginResponse:
         try:
-            return await self._login(code)
+            return await self._login(code, phone_code)
         except Exception as exc:
             # Failed exchanges are useful for abuse diagnostics, but the
             # failed code/openid/error text is never persisted.
@@ -38,7 +42,7 @@ class AuthService:
             )
             raise
 
-    async def _login(self, code: str) -> LoginResponse:
+    async def _login(self, code: str, phone_code: str | None = None) -> LoginResponse:
         wx_data = await self.wechat.code2session(code)
         openid = wx_data["openid"]
         session_key = wx_data.get("session_key", "")
@@ -66,6 +70,9 @@ class AuthService:
                 ).scalar_one_or_none()
                 if existing is None:
                     db.add(DomainUserProfile(user_id=user.id))
+            # 登录按钮顺带微信手机号授权：仅在用户尚无手机号且不冲突时绑定
+            if phone_code and not user.phone:
+                await self._bind_phone_best_effort(db, user, phone_code)
             await db.commit()
             access_token = create_access_token(user.id, user.openid)
             refresh_token = create_refresh_token()
@@ -92,6 +99,32 @@ class AuthService:
             summary={"provider": "wechat"},
         )
         return response
+
+    async def _bind_phone_best_effort(self, db, user, phone_code: str) -> None:
+        """登录时顺带用微信手机号授权 code 绑定手机号。
+
+        绑定失败（微信接口异常、号码冲突等）只记日志，绝不阻断登录。
+        """
+        try:
+            phone = await self.wechat.get_phone_number(phone_code)
+        except Exception as exc:  # noqa: BLE001 — 尽力而为，不影响登录
+            logger.warning("登录时获取微信手机号失败: %s", exc)
+            return
+        if not phone:
+            return
+        conflict = (
+            await db.execute(
+                select(User).where(
+                    User.phone == phone,
+                    User.id != user.id,
+                    User.is_active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if conflict is not None:
+            logger.warning("登录时手机号已被其他账号绑定，跳过: user_id=%s", user.id)
+            return
+        user.phone = phone
 
     async def refresh(self, refresh_token: str) -> RefreshResponse:
         key = f"{REFRESH_TOKEN_PREFIX}{refresh_token}"

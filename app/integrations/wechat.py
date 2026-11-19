@@ -80,6 +80,31 @@ class WechatClient:
             except Exception:
                 pass
 
+    async def get_phone_number(self, code: str) -> str:
+        """用 getPhoneNumber 按钮返回的 code 换取手机号（新版接口）。
+
+        优点是只依赖 access_token，不再依赖登录时的 session_key，
+        因此不会受 session_key 7 天过期影响。
+        """
+        token = await self.get_access_token()
+        url = "https://api.weixin.qq.com/wxa/business/getuserphonenumber"
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=15.0, write=10.0, pool=5.0),
+        ) as client:
+            resp = await client.post(url, params={"access_token": token}, json={"code": code})
+            resp.raise_for_status()
+            data = resp.json()
+        errcode = data.get("errcode", 0)
+        if errcode != 0:
+            raise ThirdPartyException(
+                f"微信获取手机号失败: errcode={errcode}, errmsg={data.get('errmsg', 'unknown')}"
+            )
+        info = data.get("phone_info") or {}
+        phone = info.get("purePhoneNumber") or info.get("phoneNumber")
+        if not phone:
+            raise ThirdPartyException("微信未返回手机号")
+        return phone
+
     @staticmethod
     def decrypt_phone(encrypted_data: str, iv: str, session_key: str) -> str:
         session_key = base64.b64decode(session_key)
