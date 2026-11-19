@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db
-from app.middleware.auth import require_permission
+from app.middleware.auth import require_any_permission
 from app.schemas.common import APIResponse, success
 from app.domain.exam.src.index import (
     ExamSchedule, ExamScheduleSubject, ExamTimeSlot, ExamSeatQuota, Holiday,
@@ -17,6 +17,9 @@ from app.port.exceptions import BusinessException, NotFoundException
 from app.models.cert_product import CertProduct
 
 router = APIRouter(prefix="/h3c/exam-schedules", tags=["管理后台-H3C考场管理"])
+
+# H3C 与深信服共用考场管理，任一权限即可维护。
+schedule_guard = require_any_permission("h3c:batch_manage", "content:write")
 
 
 DEFAULT_SLOT_TIMES = ("09:30", "11:30", "14:30", "16:30")
@@ -61,6 +64,7 @@ class SharedQuotaCreate(BaseModel):
 
 
 class ScheduleCreate(BaseModel):
+    vendor: str = Field("h3c", pattern="^(h3c|sangfor)$", description="认证厂商")
     name: str = Field(..., min_length=1, max_length=128)
     open_date_start: date
     open_date_end: date
@@ -103,12 +107,14 @@ class HolidayCreate(BaseModel):
 
 @router.get("", response_model=APIResponse[list], summary="计划列表")
 async def list_schedules(
-    _admin=Depends(require_permission("h3c:batch_manage")),
+    vendor: str | None = Query(None, pattern="^(h3c|sangfor)$"),
+    _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
-    rows = (await db.execute(
-        select(ExamSchedule).order_by(ExamSchedule.id.desc())
-    )).scalars().all()
+    stmt = select(ExamSchedule)
+    if vendor:
+        stmt = stmt.where(ExamSchedule.vendor == vendor)
+    rows = (await db.execute(stmt.order_by(ExamSchedule.id.desc()))).scalars().all()
     return success(data=[{
         "id": s.id, "name": s.name, "vendor": s.vendor,
         "open_date_start": s.open_date_start.isoformat(),
@@ -122,7 +128,7 @@ async def list_schedules(
 @router.post("", response_model=APIResponse[dict], summary="创建计划")
 async def create_schedule(
     data: ScheduleCreate,
-    _admin=Depends(require_permission("h3c:batch_manage")),
+    _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
     if data.open_date_start > data.open_date_end:
@@ -149,7 +155,7 @@ async def create_schedule(
         products = (await db.execute(
             select(CertProduct).where(
                 CertProduct.id.in_(product_ids),
-                CertProduct.type == "h3c",
+                CertProduct.type == data.vendor,
                 CertProduct.is_active.is_(True),
             )
         )).scalars().all()
@@ -159,7 +165,7 @@ async def create_schedule(
         ]
         if missing_products:
             raise BusinessException(
-                f"H3C 产品不存在或未上架：{', '.join(str(item) for item in missing_products)}"
+                f"认证产品不存在或未上架：{', '.join(str(item) for item in missing_products)}"
             )
 
     slot_inputs = data.time_slots
@@ -213,6 +219,7 @@ async def create_schedule(
                 )
 
     schedule = ExamSchedule(
+        vendor=data.vendor,
         name=data.name,
         open_date_start=data.open_date_start,
         open_date_end=data.open_date_end,
@@ -245,15 +252,17 @@ async def create_schedule(
             slots_by_time[start_time] = slot
         await db.flush()
 
-        for start_time, _ in parsed_slots:
-            db.add(ExamSeatQuota(
-                schedule_id=schedule.id,
-                subject_id=None,
-                slot_id=slots_by_time[start_time].id,
-                total_seats=explicit_shared_quotas.get(
-                    start_time, data.default_quota
-                ),
-            ))
+        # 深信服不设机位配额：考生可自由选择时段。
+        if data.vendor != "sangfor":
+            for start_time, _ in parsed_slots:
+                db.add(ExamSeatQuota(
+                    schedule_id=schedule.id,
+                    subject_id=None,
+                    slot_id=slots_by_time[start_time].id,
+                    total_seats=explicit_shared_quotas.get(
+                        start_time, data.default_quota
+                    ),
+                ))
 
     await db.commit()
 
@@ -266,7 +275,7 @@ async def create_schedule(
 @router.get("/{schedule_id}", response_model=APIResponse[dict], summary="计划详情")
 async def get_schedule(
     schedule_id: int,
-    _admin=Depends(require_permission("h3c:batch_manage")),
+    _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
     s = await db.get(ExamSchedule, schedule_id)
@@ -323,7 +332,7 @@ async def get_schedule(
 async def update_schedule(
     schedule_id: int,
     data: ScheduleUpdate,
-    _admin=Depends(require_permission("h3c:batch_manage")),
+    _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
     s = await db.get(ExamSchedule, schedule_id, with_for_update=True)
@@ -342,7 +351,7 @@ async def update_schedule(
 @router.post("/{schedule_id}/publish", response_model=APIResponse[dict], summary="发布计划")
 async def publish_schedule(
     schedule_id: int,
-    _admin=Depends(require_permission("h3c:batch_manage")),
+    _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
     s = await db.get(ExamSchedule, schedule_id, with_for_update=True)
@@ -369,7 +378,7 @@ async def publish_schedule(
 @router.post("/{schedule_id}/close", response_model=APIResponse[dict], summary="关闭计划")
 async def close_schedule(
     schedule_id: int,
-    _admin=Depends(require_permission("h3c:batch_manage")),
+    _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
     s = await db.get(ExamSchedule, schedule_id, with_for_update=True)
@@ -388,15 +397,15 @@ async def close_schedule(
 async def add_subject(
     schedule_id: int,
     product_id: int = Query(..., ge=1),
-    _admin=Depends(require_permission("h3c:batch_manage")),
+    _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
     s = await db.get(ExamSchedule, schedule_id)
     if s is None or s.status != "draft":
         raise BusinessException("仅草稿可添加科目")
     product = await db.get(CertProduct, product_id)
-    if product is None or product.type != "h3c" or not product.is_active:
-        raise BusinessException("仅可添加已上架的 H3C 产品")
+    if product is None or product.type != s.vendor or not product.is_active:
+        raise BusinessException(f"仅可添加已上架的 {s.vendor} 认证产品")
     existing = await db.scalar(
         select(ExamScheduleSubject.id).where(
             ExamScheduleSubject.schedule_id == schedule_id,
@@ -414,7 +423,7 @@ async def add_subject(
 async def add_time_slot(
     schedule_id: int,
     data: TimeSlotCreate,
-    _admin=Depends(require_permission("h3c:batch_manage")),
+    _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
     s = await db.get(ExamSchedule, schedule_id)
@@ -446,7 +455,7 @@ async def add_time_slot(
 async def set_seat_quotas(
     schedule_id: int,
     data: SeatQuotaBatch,
-    _admin=Depends(require_permission("h3c:batch_manage")),
+    _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
     s = await db.get(ExamSchedule, schedule_id, with_for_update=True)
@@ -454,6 +463,8 @@ async def set_seat_quotas(
         raise NotFoundException("考场计划")
     if s.status == "closed":
         raise BusinessException("已关闭计划不可设置配额")
+    if s.vendor == "sangfor":
+        raise BusinessException("深信服考场不设机位配额，考生可自由选择时段")
 
     slot_ids = set((await db.scalars(
         select(ExamTimeSlot.id).where(ExamTimeSlot.schedule_id == schedule_id)
@@ -524,7 +535,7 @@ holiday_router = APIRouter(prefix="/holidays", tags=["管理后台-假期管理"
 
 @holiday_router.get("", response_model=APIResponse[list], summary="假期列表")
 async def list_holidays(
-    _admin=Depends(require_permission("h3c:batch_manage")),
+    _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
     rows = (await db.execute(select(Holiday).order_by(Holiday.holiday_date))).scalars().all()
@@ -538,7 +549,7 @@ async def list_holidays(
 @holiday_router.post("", response_model=APIResponse[dict], summary="新增假期")
 async def create_holiday(
     data: HolidayCreate,
-    _admin=Depends(require_permission("h3c:batch_manage")),
+    _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
     existing = await db.scalar(
@@ -555,7 +566,7 @@ async def create_holiday(
 @holiday_router.delete("/{holiday_id}", response_model=APIResponse[dict], summary="删除假期")
 async def delete_holiday(
     holiday_id: int,
-    _admin=Depends(require_permission("h3c:batch_manage")),
+    _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
     h = await db.get(Holiday, holiday_id)
@@ -575,19 +586,28 @@ async def list_bookings(
     schedule_id: int,
     exam_date: date | None = Query(None, alias="date"),
     slot_id: int | None = Query(None, ge=1),
-    _admin=Depends(require_permission("h3c:batch_manage")),
+    _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
     from app.domain.exam.src.index import ExamBooking, ExamTimeSlot, ExamScheduleSubject
     from app.models.cert_product import CertProduct
     from app.domain.h3c.src.index import H3cRegistration
+    from app.domain.order.src.index import Order
+    from sqlalchemy import and_
 
     stmt = (
-        select(ExamBooking, ExamTimeSlot, CertProduct, H3cRegistration)
+        select(ExamBooking, ExamTimeSlot, CertProduct, H3cRegistration, Order)
         .join(ExamTimeSlot, ExamTimeSlot.id == ExamBooking.slot_id)
         .outerjoin(ExamScheduleSubject, ExamScheduleSubject.id == ExamBooking.subject_id)
         .outerjoin(CertProduct, CertProduct.id == ExamScheduleSubject.product_id)
-        .join(H3cRegistration, H3cRegistration.id == ExamBooking.registration_id)
+        .outerjoin(H3cRegistration, and_(
+            ExamBooking.vendor == "h3c",
+            H3cRegistration.id == ExamBooking.registration_id,
+        ))
+        .outerjoin(Order, and_(
+            ExamBooking.vendor == "sangfor",
+            Order.id == ExamBooking.registration_id,
+        ))
         .where(ExamBooking.schedule_id == schedule_id)
         .order_by(ExamBooking.exam_date, ExamTimeSlot.start_time)
     )
@@ -600,20 +620,25 @@ async def list_bookings(
     return success(data=[{
         "id": b.id,
         "registration_id": b.registration_id,
-        "candidate_name": reg.candidate_snapshot.get("name", "") if reg.candidate_snapshot else "",
+        "vendor": b.vendor,
+        "candidate_name": (
+            (reg.candidate_snapshot or {}).get("name", "")
+            if reg is not None
+            else (order.candidate_name or "")
+        ),
         "subject": p.name if p else "",
         "slot_label": slot.label,
         "slot_time": slot.start_time.isoformat(),
         "exam_date": b.exam_date.isoformat(),
         "status": b.status,
-    } for b, slot, p, reg in rows])
+    } for b, slot, p, reg, order in rows])
 
 
 @router.post("/{schedule_id}/bookings/{booking_id}/no-show", response_model=APIResponse[dict], summary="标记缺考")
 async def mark_no_show(
     schedule_id: int,
     booking_id: int,
-    _admin=Depends(require_permission("h3c:batch_manage")),
+    _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):
     from app.domain.exam.src.index import ExamBooking

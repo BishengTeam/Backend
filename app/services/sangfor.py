@@ -169,6 +169,7 @@ class SangforService:
             payment.review_block_reason = "退款已审批，等待登记实际退款，报名已冻结"
         return {"id": order.id, "order_id": order.id, "batch_id": order.plan_id, "registration_no": order.out_trade_no,
                 "status": status, "order_status": order.status, "price_cents": order.price,
+                "registration_code": extra.get("sangfor_registration_code"),
                 "revision": extra["revision"], "current_version": extra["current_version"],
                 "candidate_snapshot": extra["candidate_snapshot"], "batch_snapshot": extra["batch_snapshot"],
                 "versions": [] if brief else extra["versions"], "reviews": extra["reviews"][-1:] if brief else extra["reviews"], "exports": extra["exports"],

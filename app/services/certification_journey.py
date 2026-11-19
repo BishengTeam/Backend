@@ -391,7 +391,9 @@ async def user_journey(vendor, registration_id, user_id):
         if vendor == "renshe" and state["stage"] == 3 and not state["exception"]:
             state["label"] = "等待后续报送／外审"
         events = sorted(jsonable_encoder(events), key=lambda item: item["at"])
+        registration_code = (order.extra_data or {}).get("sangfor_registration_code") if vendor == "sangfor" else None
         return jsonable_encoder({"vendor": vendor, "registration_id": registration_id, "registration_no": getattr(record, "registration_no", None) or order.out_trade_no,
+            "registration_code": registration_code,
             "order_id": order.id, "subject": product.chinese_name if product else plan.project_name or plan.product_type, "batch_name": plan.name,
             "stages": ["已提交", "核账", "初审", "外审" if vendor == "renshe" else "终审", "办理完成"], "progress": state,
             "reason": reason, "apply_end": plan.apply_end, "proof_due_at": due, "correction_due_at": correction_due,

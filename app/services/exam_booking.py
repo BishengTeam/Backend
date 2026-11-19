@@ -13,6 +13,7 @@ from app.domain.exam.src.index import (
     Holiday,
 )
 from app.services.clock import db_now_utc
+from app.services.vendor_registration import normalize_vendor, resolve_registration
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 
 
@@ -74,11 +75,16 @@ class ExamBookingService:
         schedule_id: int,
         subject_id: int,
         exam_date: date,
+        *,
+        vendor: str | None = None,
     ) -> list[dict]:
         """获取某日期的时段及共享池剩余机位。"""
+        vendor = normalize_vendor(vendor)
         schedule = await db.get(ExamSchedule, schedule_id)
         if schedule is None or schedule.status != "published":
             raise BusinessException("该考场计划未开放")
+        if schedule.vendor != vendor:
+            raise BusinessException("该考场计划不属于当前认证厂商")
 
         # 校验日期合法性
         if exam_date.weekday() not in schedule.allowed_weekdays:
@@ -101,6 +107,15 @@ class ExamBookingService:
 
         result = []
         for slot in slots:
+            if vendor == "sangfor":
+                # Sangfor 不限机位，时段余量对外始终显示"不限"。
+                result.append({
+                    "slot_id": slot.id,
+                    "label": slot.label,
+                    "start_time": slot.start_time.isoformat(),
+                    "remaining": -1,
+                })
+                continue
             quota = await ExamBookingService._get_shared_quota(
                 db, schedule_id, slot.id
             )
@@ -140,13 +155,17 @@ class ExamBookingService:
         schedule_id: int,
         slot_id: int,
         exam_date: date,
+        vendor: str = "h3c",
     ) -> ExamBooking:
         """预约机位（FOR UPDATE 防超卖）。"""
+        vendor = normalize_vendor(vendor)
         schedule = await db.get(ExamSchedule, schedule_id, with_for_update=True)
         if schedule is None:
             raise NotFoundException("考场计划")
         if schedule.status != "published":
             raise BusinessException("该考场计划未开放")
+        if schedule.vendor != vendor:
+            raise BusinessException("该考场计划不属于当前认证厂商")
 
         # 校验日期
         if exam_date.weekday() not in schedule.allowed_weekdays:
@@ -159,9 +178,10 @@ class ExamBookingService:
         if exam_date < schedule.open_date_start or exam_date > schedule.open_date_end:
             raise BusinessException("该日期超出开放范围")
 
-        # 检查重复预约
+        # 检查重复预约（按厂商 + 报名维度）
         existing = await db.scalar(
             select(ExamBooking).where(
+                ExamBooking.vendor == vendor,
                 ExamBooking.registration_id == registration_id,
                 ExamBooking.schedule_id == schedule_id,
             ).with_for_update()
@@ -171,36 +191,13 @@ class ExamBookingService:
         if existing is not None and existing.status != "cancelled":
             raise ConflictException("该预约已完成或已缺考，不能重新预约")
 
-        # 获取考生的科目（通过 registration 关联）
-        from app.domain.h3c.src.index import H3cRegistration
-        registration = await db.get(H3cRegistration, registration_id)
-        if registration is None:
+        # 获取考生的科目（厂商无关解析）
+        info = await resolve_registration(db, vendor, registration_id)
+        if info is None:
             raise NotFoundException("报名记录")
-
-        # v2 多产品：通过 batch_product_id 两跳直达产品
-        from app.models.cert_product import CertProduct
-        from app.domain.h3c.src.index import H3cExamBatch, H3cBatchProduct
-        from app.domain.plan.src.index import Plan
-
-        if registration.batch_product_id:
-            # 两跳：registration → batch_product → cert_product
-            _bp = await db.get(H3cBatchProduct, registration.batch_product_id)
-            if _bp is None:
-                raise BusinessException("报名记录缺少科目关联")
-            product = await db.get(CertProduct, _bp.product_id)
-            if product is None:
-                raise BusinessException("未找到考生的认证产品")
-        else:
-            # 兼容旧链路：registration → batch → plan → product_type
-            batch = await db.get(H3cExamBatch, registration.batch_id)
-            if batch is None:
-                raise BusinessException("报名记录缺少批次关联")
-            plan = await db.get(Plan, batch.plan_id)
-            if plan is None:
-                raise BusinessException("批次缺少关联计划")
-            product = await db.scalar(
-                select(CertProduct).where(CertProduct.code == plan.product_type)
-            )
+        if not info.approved:
+            raise BusinessException("报名尚未通过审核，暂不可预约")
+        product = info.product
         if product is None:
             raise BusinessException("未找到考生的认证产品")
 
@@ -215,27 +212,33 @@ class ExamBookingService:
         if subject is None:
             raise BusinessException(f"该考场计划不包含您的科目（{product.name}）")
 
-        # 锁定时段共享池。预约仍记录实际科目，但容量不按科目拆分。
-        quota = await cls._get_shared_quota(
-            db, schedule_id, slot_id, for_update=True
-        )
+        slot = await db.get(ExamTimeSlot, slot_id)
+        if slot is None or slot.schedule_id != schedule_id:
+            raise BusinessException("该时段不属于当前考场计划")
 
-        # 检查机位
-        if quota is not None and quota.total_seats > 0:
-            booked = (await db.execute(
-                select(func.count()).select_from(ExamBooking).where(
-                    ExamBooking.schedule_id == schedule_id,
-                    ExamBooking.slot_id == slot_id,
-                    ExamBooking.exam_date == exam_date,
-                    ExamBooking.status == "booked",
-                )
-            )).scalar_one()
-            if booked >= quota.total_seats:
-                raise BusinessException("该时段机位已满")
+        if vendor != "sangfor":
+            # 锁定时段共享池。预约仍记录实际科目，但容量不按科目拆分。
+            quota = await cls._get_shared_quota(
+                db, schedule_id, slot_id, for_update=True
+            )
+
+            # 检查机位
+            if quota is not None and quota.total_seats > 0:
+                booked = (await db.execute(
+                    select(func.count()).select_from(ExamBooking).where(
+                        ExamBooking.schedule_id == schedule_id,
+                        ExamBooking.slot_id == slot_id,
+                        ExamBooking.exam_date == exam_date,
+                        ExamBooking.status == "booked",
+                    )
+                )).scalar_one()
+                if booked >= quota.total_seats:
+                    raise BusinessException("该时段机位已满")
 
         # 创建预约
         if existing is None:
             booking = ExamBooking(
+                vendor=vendor,
                 registration_id=registration_id,
                 schedule_id=schedule_id,
                 subject_id=subject.id,
@@ -245,6 +248,7 @@ class ExamBookingService:
             db.add(booking)
         else:
             booking = existing
+            booking.vendor = vendor
             booking.subject_id = subject.id
             booking.slot_id = slot_id
             booking.exam_date = exam_date

@@ -22,7 +22,15 @@ class ExamBooking(Base, TimestampMixin):
             "status IN ('booked','cancelled','completed','no_show')",
             name="ck_exam_booking_status",
         ),
-        UniqueConstraint("registration_id", "schedule_id", name="uq_exam_booking_once"),
+        # One active reservation per vendor registration and schedule. H3C uses
+        # H3cRegistration.id and Sangfor uses Order.id, so the vendor column is
+        # part of the key and registration_id intentionally has no foreign key.
+        UniqueConstraint(
+            "vendor", "registration_id", "schedule_id", name="uq_exam_booking_once"
+        ),
+        Index(
+            "ix_exam_booking_vendor_registration", "vendor", "registration_id"
+        ),
         Index(
             "ix_exam_booking_lookup",
             "schedule_id", "exam_date", "slot_id", "subject_id", "status",
@@ -30,8 +38,11 @@ class ExamBooking(Base, TimestampMixin):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    vendor: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="h3c", server_default="h3c"
+    )
     registration_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("h3c_registration.id", ondelete="RESTRICT"), nullable=False
+        Integer, nullable=False
     )
     schedule_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("exam_schedule.id", ondelete="RESTRICT"), nullable=False

@@ -11,7 +11,6 @@ from httpx import ASGITransport, AsyncClient
 from app.adapter.database import get_db
 from app.api.admin import nisp as nisp_api
 from app.middleware import auth
-from app.policy import permissions as policy_permissions
 from app.middleware.error_handler import (
     app_exception_handler,
     validation_exception_handler,
@@ -25,12 +24,12 @@ pytestmark = pytest.mark.asyncio
 @pytest.fixture
 async def review_client(monkeypatch):
     # Exercise the real login and permission dependencies without opening a DB
-    # connection. A reviewer-only role must not inherit batch management.
-    # ROLE_PERMISSIONS 自 adm002 起迁至 app.policy.permissions（resolve 统一消费）。
-    monkeypatch.setitem(policy_permissions.ROLE_PERMISSIONS, "nisp_reviewer_only", ["nisp:review"])
+    # connection. Per-admin overrides are the single source of truth now, so a
+    # reviewer-only principal must not inherit batch management.
     principal = SimpleNamespace(
         id=7,
         role="nisp_reviewer_only",
+        permissions=["nisp:review"],
         is_active=True,
         auth_version=1,
         must_change_password=False,
@@ -120,6 +119,7 @@ async def test_options_reject_unauthenticated_request(review_client):
 
 async def test_options_require_review_permission(review_client):
     review_client.principal.role = "course_admin"
+    review_client.principal.permissions = None
 
     response = await review_client.client.get("/admin/nisp/review-batch-options")
 

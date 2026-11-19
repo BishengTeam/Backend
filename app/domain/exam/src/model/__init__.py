@@ -6,6 +6,7 @@ from app.domain.exam.src.model.schedule import (
     ExamSeatQuota,
 )
 from app.domain.exam.src.model.booking import ExamBooking
+from app.domain.exam.src.model.attachment import CertAttachment
 
 __all__ = [
     "Holiday",
@@ -14,4 +15,5 @@ __all__ = [
     "ExamTimeSlot",
     "ExamSeatQuota",
     "ExamBooking",
+    "CertAttachment",
 ]

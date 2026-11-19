@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Index,
     Integer,
+    JSON,
     String,
     func,
     text,
@@ -74,7 +75,9 @@ class AdminUser(Base, TimestampMixin):
         server_default=QUIZ_ADMIN_ROLE,
     )
     # 覆盖式按人授权：NULL = 跟随角色预设；非 NULL = 该管理员的最终权限集。
-    permissions: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    permissions: Mapped[list[str] | None] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )

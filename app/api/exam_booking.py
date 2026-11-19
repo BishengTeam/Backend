@@ -1,5 +1,6 @@
-"""用户端 — H3C 考场预约 API。"""
+"""用户端 — 多厂商考场预约 API（H3C / 深信服）。"""
 from datetime import date
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel
@@ -11,11 +12,23 @@ from app.middleware.auth import get_current_user
 from app.domain.user.src.index import User
 from app.schemas.common import APIResponse, success
 from app.services.exam_booking import ExamBookingService
-from app.domain.exam.src.index import ExamBooking, ExamSchedule
-from app.domain.h3c.src.index import H3cRegistration
+from app.services.vendor_registration import (
+    approved_registration_ids,
+    normalize_vendor,
+    resolve_registration,
+    user_registration_ids,
+)
+from app.domain.exam.src.index import (
+    CertAttachment,
+    ExamBooking,
+    ExamSchedule,
+    ExamScheduleSubject,
+)
 from app.port.exceptions import NotFoundException
 
-router = APIRouter(prefix="/h3c/exam", tags=["H3C考场预约"])
+router = APIRouter(tags=["考场预约"])
+
+VendorQuery = Annotated[str, Query(description="认证厂商：h3c / sangfor")]
 
 
 class BookRequest(BaseModel):
@@ -25,25 +38,29 @@ class BookRequest(BaseModel):
 
 @router.get("/schedules", response_model=APIResponse[list], summary="我的可预约计划")
 async def my_schedules(
+    vendor: VendorQuery = "h3c",
     registration_id: int = Query(..., ge=1),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """只返回 published 且我已审核通过的。"""
-    registration = await db.get(H3cRegistration, registration_id)
-    if registration is None or registration.user_id != current_user.id:
+    vendor = normalize_vendor(vendor)
+    registration = await resolve_registration(
+        db, vendor, registration_id, current_user.id
+    )
+    if registration is None:
         raise NotFoundException("报名记录")
-    if registration.status not in ("approved", "final_approved"):
+    if not registration.approved:
         return success(data=[])
 
     rows = (await db.execute(
         select(ExamSchedule).where(
             ExamSchedule.status == "published",
-            ExamSchedule.vendor == "h3c",
+            ExamSchedule.vendor == vendor,
         ).order_by(ExamSchedule.open_date_start)
     )).scalars().all()
     return success(data=[{
-        "id": s.id, "name": s.name,
+        "id": s.id, "name": s.name, "vendor": s.vendor,
         "open_date_start": s.open_date_start.isoformat(),
         "open_date_end": s.open_date_end.isoformat(),
         "exam_location": s.exam_location,
@@ -53,17 +70,13 @@ async def my_schedules(
 @router.get("/schedules/{schedule_id}/dates", response_model=APIResponse[dict], summary="可预约日期列表")
 async def get_dates(
     schedule_id: int = Path(..., ge=1),
+    vendor: VendorQuery = "h3c",
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # P1 #5: 校验用户有 approved 的 H3C 报名
-    has_approved = await db.scalar(
-        select(H3cRegistration.id).where(
-            H3cRegistration.user_id == current_user.id,
-            H3cRegistration.status.in_(("approved", "final_approved")),
-        ).limit(1)
-    )
-    if has_approved is None:
+    # 校验用户有该厂商已通过审核的报名
+    registration_ids = await approved_registration_ids(db, vendor, current_user.id)
+    if not registration_ids:
         return success(data={"dates": []})
 
     dates = await ExamBookingService.get_bookable_dates(db, schedule_id)
@@ -74,46 +87,30 @@ async def get_dates(
 async def get_slots(
     schedule_id: int = Path(..., ge=1),
     exam_date: date = Query(..., alias="date"),
+    vendor: VendorQuery = "h3c",
     registration_id: int | None = Query(None, ge=1),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """P0 #2: 自动从用户报名记录解析科目，无需前端传 subject_id。"""
-    # 从指定或最近的 H3C 报名解析科目（v2 优先 batch_product_id 两跳）。
-    # 多产品允许同一用户有多条已通过报名，查看时段时必须锁定当前报名。
-    from app.domain.h3c.src.index import H3cExamBatch, H3cBatchProduct
-    from app.domain.plan.src.index import Plan
-    from app.models.cert_product import CertProduct
-    from app.domain.exam.src.index import ExamScheduleSubject
-
-    registration_statement = (
-        select(H3cRegistration)
-        .where(
-            H3cRegistration.user_id == current_user.id,
-            H3cRegistration.status.in_(("approved", "final_approved")),
-        )
-    )
+    """自动从用户报名记录解析科目，无需前端传 subject_id。"""
+    vendor = normalize_vendor(vendor)
     if registration_id is not None:
-        registration_statement = registration_statement.where(
-            H3cRegistration.id == registration_id,
+        registration = await resolve_registration(
+            db, vendor, registration_id, current_user.id
         )
-    registration = (await db.execute(
-        registration_statement
-        .order_by(H3cRegistration.id.desc())
-        .limit(1)
-    )).scalar_one_or_none()
-    if registration is None:
-        raise NotFoundException("报名记录")
-
-    if registration.batch_product_id:
-        _bp = await db.get(H3cBatchProduct, registration.batch_product_id)
-        product = await db.get(CertProduct, _bp.product_id) if _bp else None
+        if registration is None or not registration.approved:
+            raise NotFoundException("报名记录")
+        product = registration.product
     else:
-        batch = await db.get(H3cExamBatch, registration.batch_id)
-        plan = await db.get(Plan, batch.plan_id) if batch else None
-        product = await db.scalar(
-            select(CertProduct).where(CertProduct.code == plan.product_type)
-        ) if plan else None
+        ids = await approved_registration_ids(db, vendor, current_user.id)
+        if not ids:
+            raise NotFoundException("报名记录")
+        product = None
+        for current_id in sorted(ids, reverse=True):
+            info = await resolve_registration(db, vendor, current_id)
+            if info is not None and info.product is not None:
+                product = info.product
+                break
 
     subject_id = await db.scalar(
         select(ExamScheduleSubject.id).where(
@@ -124,7 +121,9 @@ async def get_slots(
     if subject_id is None:
         return success(data={"slots": []})
 
-    slots = await ExamBookingService.get_slots_with_remaining(db, schedule_id, subject_id, exam_date)
+    slots = await ExamBookingService.get_slots_with_remaining(
+        db, schedule_id, subject_id, exam_date, vendor=vendor
+    )
     return success(data={"slots": slots})
 
 
@@ -132,15 +131,20 @@ async def get_slots(
 async def book_seat(
     schedule_id: int = Path(..., ge=1),
     data: BookRequest = ...,
+    vendor: VendorQuery = "h3c",
     registration_id: int = Query(..., ge=1),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    registration = await db.get(H3cRegistration, registration_id)
-    if registration is None or registration.user_id != current_user.id:
+    vendor = normalize_vendor(vendor)
+    registration = await resolve_registration(
+        db, vendor, registration_id, current_user.id
+    )
+    if registration is None or not registration.approved:
         raise NotFoundException("报名记录")
     booking = await ExamBookingService.book(
         db,
+        vendor=vendor,
         registration_id=registration_id,
         schedule_id=schedule_id,
         slot_id=data.slot_id,
@@ -155,11 +159,18 @@ async def book_seat(
 
 @router.get("/bookings", response_model=APIResponse[list], summary="我的预约列表")
 async def my_bookings(
+    vendor: VendorQuery = "h3c",
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.domain.exam.src.index import ExamTimeSlot, ExamScheduleSubject
+    from app.domain.exam.src.index import ExamTimeSlot
     from app.models.cert_product import CertProduct
+
+    vendor = normalize_vendor(vendor)
+    registration_ids = await user_registration_ids(db, vendor, current_user.id)
+    if not registration_ids:
+        return success(data=[])
+
     rows = (await db.execute(
         select(
             ExamBooking,
@@ -172,9 +183,10 @@ async def my_bookings(
         .join(ExamSchedule, ExamSchedule.id == ExamBooking.schedule_id)
         .outerjoin(ExamScheduleSubject, ExamScheduleSubject.id == ExamBooking.subject_id)
         .outerjoin(CertProduct, CertProduct.id == ExamScheduleSubject.product_id)
-        .where(ExamBooking.registration_id.in_(
-            select(H3cRegistration.id).where(H3cRegistration.user_id == current_user.id)
-        ))
+        .where(
+            ExamBooking.vendor == vendor,
+            ExamBooking.registration_id.in_(registration_ids),
+        )
         .order_by(ExamBooking.exam_date.desc())
     )).all()
     return success(data=[{
@@ -194,14 +206,18 @@ async def my_bookings(
 @router.delete("/bookings/{booking_id}", response_model=APIResponse[dict], summary="取消预约")
 async def cancel_booking(
     booking_id: int = Path(..., ge=1),
+    vendor: VendorQuery = "h3c",
     registration_id: int = Query(..., ge=1),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    registration = await db.get(H3cRegistration, registration_id)
-    if registration is None or registration.user_id != current_user.id:
+    vendor = normalize_vendor(vendor)
+    registration = await resolve_registration(
+        db, vendor, registration_id, current_user.id
+    )
+    if registration is None:
         raise NotFoundException("报名记录")
-    booking = await ExamBookingService.cancel(db, booking_id, registration_id)
+    await ExamBookingService.cancel(db, booking_id, registration_id)
     await db.commit()
     return success(message="预约已取消")
 
@@ -216,3 +232,26 @@ async def get_notice(
     if schedule is None:
         raise NotFoundException("考场计划")
     return success(data={"notice": schedule.pre_exam_notice or ""})
+
+
+@router.get("/schedules/{schedule_id}/attachments", response_model=APIResponse[list], summary="考场配套附件")
+async def get_attachments(
+    schedule_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    schedule = await db.get(ExamSchedule, schedule_id)
+    if schedule is None:
+        raise NotFoundException("考场计划")
+    rows = (await db.execute(
+        select(CertAttachment).where(
+            CertAttachment.schedule_id == schedule_id,
+            CertAttachment.is_active.is_(True),
+        ).order_by(CertAttachment.sort_order, CertAttachment.id)
+    )).scalars().all()
+    return success(data=[{
+        "id": item.id,
+        "title": item.title,
+        "file_url": item.file_url,
+        "file_size": item.file_size,
+    } for item in rows])

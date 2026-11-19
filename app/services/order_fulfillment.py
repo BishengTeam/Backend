@@ -215,6 +215,12 @@ class OrderFulfillmentService:
         processed = await self._on_paid_impl(db, order)
         if order.order_kind in {"course", "quiz_order"}:
             VideoWebService.schedule_issue_for_order(order.id)
+        if order.order_kind == "certification" and (order.extra_data or {}).get(
+            "business_type"
+        ) == "sangfor":
+            from app.services.sangfor_registration_code import ensure_registration_code
+
+            await ensure_registration_code(db, order)
         await self._grant_payment_points(db, order)
         return processed
 

@@ -165,6 +165,22 @@ def require_permission(permission: str):
     return _check
 
 
+def require_any_permission(*permissions: str):
+    """Dependency factory: passes when the admin holds any listed permission."""
+
+    async def _check(
+        admin=Depends(require_normal_admin),
+    ):
+        if admin.role == "super_admin":
+            return admin
+        allowed = resolve_admin_permissions(admin)
+        if "*" in allowed or any(item in allowed for item in permissions):
+            return admin
+        raise ForbiddenException(f"缺少权限: {' / '.join(permissions)}")
+
+    return _check
+
+
 async def require_super_admin(admin=Depends(require_normal_admin)):
     if admin.role != "super_admin":
         raise ForbiddenException("仅超级管理员可执行此操作")

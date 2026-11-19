@@ -44,6 +44,7 @@ from app.api.videoweb import admin_router as videoweb_router
 from app.api.admin.zones import router as zones_router
 from app.api.admin.exam_schedule import router as exam_schedule_router
 from app.api.admin.exam_schedule import holiday_router
+from app.api.admin.cert_attachment import router as cert_attachment_router
 
 router = APIRouter(prefix="/admin")
 router.include_router(certification_journey_router)
@@ -91,3 +92,4 @@ router.include_router(videoweb_router)
 
 router.include_router(exam_schedule_router)
 router.include_router(holiday_router)
+router.include_router(cert_attachment_router)

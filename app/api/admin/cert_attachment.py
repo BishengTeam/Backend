@@ -1,0 +1,101 @@
+"""管理端 — 认证配套附件（考场须知、指引等）。"""
+from fastapi import APIRouter, Depends, File, Query, UploadFile
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.adapter.database import get_db
+from app.middleware.auth import require_any_permission
+from app.schemas.common import APIResponse, success
+from app.domain.exam.src.index import CertAttachment, ExamSchedule
+from app.port.exceptions import BusinessException, NotFoundException
+from app.services.upload import UploadService
+
+router = APIRouter(prefix="/cert-attachments", tags=["管理后台-认证附件"])
+
+guard = require_any_permission("h3c:batch_manage", "content:write")
+VENDOR_PATTERN = "^(h3c|nisp|renshe|sangfor)$"
+
+
+class AttachmentCreate(BaseModel):
+    vendor: str = Field(..., pattern=VENDOR_PATTERN)
+    schedule_id: int | None = Field(None, ge=1)
+    title: str = Field(..., min_length=1, max_length=128)
+    file_url: str = Field(..., min_length=1, max_length=512)
+    file_size: int | None = Field(None, ge=0)
+    sort_order: int = Field(0, ge=0)
+
+
+@router.post("/upload", response_model=APIResponse[dict], summary="上传附件文件")
+async def upload_attachment(
+    file: UploadFile = File(...),
+    _admin=Depends(guard),
+):
+    result = await UploadService.save_file(file, sub_dir="cert-attachments")
+    return success(data=result)
+
+
+@router.get("", response_model=APIResponse[list], summary="附件列表")
+async def list_attachments(
+    vendor: str | None = Query(None, pattern=VENDOR_PATTERN),
+    schedule_id: int | None = Query(None, ge=1),
+    _admin=Depends(guard),
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(CertAttachment)
+    if vendor:
+        stmt = stmt.where(CertAttachment.vendor == vendor)
+    if schedule_id:
+        stmt = stmt.where(CertAttachment.schedule_id == schedule_id)
+    rows = (await db.execute(
+        stmt.order_by(CertAttachment.sort_order, CertAttachment.id)
+    )).scalars().all()
+    return success(data=[{
+        "id": item.id,
+        "vendor": item.vendor,
+        "schedule_id": item.schedule_id,
+        "title": item.title,
+        "file_url": item.file_url,
+        "file_size": item.file_size,
+        "sort_order": item.sort_order,
+        "is_active": item.is_active,
+    } for item in rows])
+
+
+@router.post("", response_model=APIResponse[dict], summary="新增附件")
+async def create_attachment(
+    data: AttachmentCreate,
+    _admin=Depends(guard),
+    db: AsyncSession = Depends(get_db),
+):
+    if data.schedule_id is not None:
+        schedule = await db.get(ExamSchedule, data.schedule_id)
+        if schedule is None:
+            raise NotFoundException("考场计划")
+        if schedule.vendor != data.vendor:
+            raise BusinessException("附件的厂商与考场计划不一致")
+    item = CertAttachment(
+        vendor=data.vendor,
+        schedule_id=data.schedule_id,
+        title=data.title,
+        file_url=data.file_url,
+        file_size=data.file_size,
+        sort_order=data.sort_order,
+    )
+    db.add(item)
+    await db.commit()
+    return success(data={"id": item.id}, message="附件已添加")
+
+
+@router.delete("/{attachment_id}", response_model=APIResponse[dict], summary="删除附件")
+async def delete_attachment(
+    attachment_id: int,
+    _admin=Depends(guard),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(CertAttachment, attachment_id)
+    if item is None:
+        raise NotFoundException("附件")
+    await db.delete(item)
+    await db.commit()
+    return success(message="附件已删除")

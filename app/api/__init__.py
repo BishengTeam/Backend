@@ -50,7 +50,11 @@ router.include_router(classroom_router)
 router.include_router(h3c_router)
 router.include_router(h3c_order_router)
 router.include_router(plans_router)
-router.include_router(exam_booking_router)
+# 多厂商考场预约（H3C / 深信服）。旧的小程序路径保留为兼容别名。
+router.include_router(exam_booking_router, prefix="/exam")
+router.include_router(
+    exam_booking_router, prefix="/h3c/exam", include_in_schema=False
+)
 router.include_router(offline_payment_router)
 router.include_router(orders_router)
 router.include_router(nisp_router)
