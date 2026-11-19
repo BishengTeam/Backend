@@ -16,7 +16,7 @@ from app.domain.community.src.model.quiz import (
     QuizModule, QuizKnowledgePoint, QuizMigrationIssue, QuizImportJob,
 )
 from app.domain.user.src.index import AdminUser
-from app.policy.permissions import ROLE_PERMISSIONS
+from app.policy.permissions import resolve_admin_permissions
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException, ForbiddenException, ValidationException
 from app.schemas.admin_quiz_contract import (
     AdminQuizPublicationRequest, AdminQuizBatchRequest, AdminQuizLibraryStatusUpdate,
@@ -37,7 +37,7 @@ class QuizPublicationService:
     @staticmethod
     async def permission(db, admin_id, permission):
         admin = await db.get(AdminUser, admin_id)
-        allowed = ROLE_PERMISSIONS.get(admin.role, []) if admin else []
+        allowed = resolve_admin_permissions(admin) if admin else []
         if not admin or not admin.is_active or admin.must_change_password or ("*" not in allowed and permission not in allowed):
             raise ForbiddenException(f"缺少权限或账号不可用：{permission}")
 

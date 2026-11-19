@@ -13,7 +13,7 @@ from app.middleware.auth import (
     require_normal_admin,
     require_reauthenticated_super_admin,
 )
-from app.policy.permissions import ROLE_PERMISSIONS
+from app.policy.permissions import resolve_admin_permissions
 from app.port.exceptions import ForbiddenException, NotFoundException
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.schemas.recycle_bin import (
@@ -42,7 +42,7 @@ _MODULE_SPECS[USER_MODULE_KEY] = TrashModuleSpec(
 
 def _visible_module_keys(admin) -> list[str]:
     """按各模块的写权限过滤可见页签（super_admin 全量可见）。"""
-    allowed = ROLE_PERMISSIONS.get(admin.role, [])
+    allowed = resolve_admin_permissions(admin)
     if "*" in allowed:
         return [USER_MODULE_KEY, *TRASH_MODULES.keys()]
     keys = [USER_MODULE_KEY] if "user:write" in allowed else []

@@ -6,7 +6,7 @@ from app.adapter.security import revoke_token
 from app.api.admin.error_contracts import admin_error_contract
 from app.middleware.auth import get_current_admin, require_normal_admin
 from app.middleware.rate_limit import limiter
-from app.policy.permissions import ROLE_PERMISSIONS
+from app.policy.permissions import resolve_admin_permissions
 from app.port.exceptions import BusinessException
 from app.schemas.admin import (
     AdminChangePasswordRequest,
@@ -45,7 +45,7 @@ async def me(request: Request, admin=Depends(get_current_admin)):
     return success(
         data=AdminMeResponse(
             admin=AdminInfo.model_validate(admin),
-            permissions=ROLE_PERMISSIONS.get(admin.role, []),
+            permissions=resolve_admin_permissions(admin),
             session_mode=session_mode,
             must_change_password=admin.must_change_password,
         )

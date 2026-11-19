@@ -12,6 +12,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from app.adapter.database import Base, TimestampMixin
@@ -72,6 +73,8 @@ class AdminUser(Base, TimestampMixin):
         default=QUIZ_ADMIN_ROLE,
         server_default=QUIZ_ADMIN_ROLE,
     )
+    # 覆盖式按人授权：NULL = 跟随角色预设；非 NULL = 该管理员的最终权限集。
+    permissions: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("true")
     )

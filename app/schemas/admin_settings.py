@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 ADMIN_USERNAME_PATTERN = r"^[a-z][a-z0-9._-]{3,31}$"
@@ -24,6 +24,9 @@ class AdminSettingsUserCreate(BaseModel):
     # The creation API deliberately omits ``super_admin`` from this literal.
     # Super admin remains non-creatable; fixed staff roles are code-owned.
     role: Literal["quiz_admin", "cert_admin", "course_admin", "teacher"] = "quiz_admin"
+    # 覆盖式按人授权：提供则存库为该管理员的最终权限集（可为空表），
+    # 缺省则存 NULL、跟随角色预设。合法性（白名单）由服务层校验。
+    permissions: list[str] | None = None
 
     model_config = {"extra": "forbid"}
 
@@ -39,7 +42,14 @@ class AdminSettingsUserCreate(BaseModel):
 
 
 class AdminSettingsUserUpdate(BaseModel):
-    display_name: str = Field(..., min_length=1, max_length=64)
+    """编辑普通管理员：display_name 与 permissions 至少提供其一。
+
+    permissions 语义（以 model_fields_set 区分「未提供」与显式值）：
+    缺省 = 不修改；显式 null = 清除按人覆盖、回退角色预设；列表 = 覆盖。
+    """
+
+    display_name: str | None = Field(None, min_length=1, max_length=64)
+    permissions: list[str] | None = None
 
     model_config = {"extra": "forbid"}
 
@@ -47,6 +57,12 @@ class AdminSettingsUserUpdate(BaseModel):
     @classmethod
     def normalize_display_name(cls, value: object) -> object:
         return _normalize_display_name(value) if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def require_something_to_update(self) -> "AdminSettingsUserUpdate":
+        if self.display_name is None and "permissions" not in self.model_fields_set:
+            raise ValueError("display_name 与 permissions 至少提供一项")
+        return self
 
 
 class AdminSettingsLegacyUserUpdate(BaseModel):
@@ -74,6 +90,8 @@ class AdminSettingsUserListItem(BaseModel):
     username: str
     display_name: str
     role: Literal["super_admin", "quiz_admin", "cert_admin", "course_admin", "teacher"]
+    permissions: list[str] = Field(default_factory=list)
+    permissions_source: Literal["wildcard", "preset", "override"] = "preset"
     is_active: bool
     must_change_password: bool
     locked_until: datetime | None = None
@@ -82,6 +100,56 @@ class AdminSettingsUserListItem(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_permissions(cls, value: object) -> object:
+        # ORM 对象传入时先展开为 dict 并计算生效权限集；显式 dict（测试
+        # 构造）原样放行。
+        from app.policy.permissions import resolve_admin_permissions
+
+        if not hasattr(value, "role"):
+            return value
+        data = {
+            field: getattr(value, field)
+            for field in (
+                "id",
+                "username",
+                "display_name",
+                "role",
+                "is_active",
+                "must_change_password",
+                "locked_until",
+                "last_login_at",
+                "created_at",
+                "updated_at",
+            )
+        }
+        data["permissions"] = resolve_admin_permissions(value)
+        data["permissions_source"] = (
+            "wildcard"
+            if value.role == "super_admin"
+            else "override"
+            if getattr(value, "permissions", None) is not None
+            else "preset"
+        )
+        return data
+
+
+class AdminPermissionCatalogItem(BaseModel):
+    permission: str
+    label: str
+
+
+class AdminPermissionCatalogGroup(BaseModel):
+    key: str
+    label: str
+    permissions: list[AdminPermissionCatalogItem]
+
+
+class AdminPermissionCatalogResponse(BaseModel):
+    groups: list[AdminPermissionCatalogGroup]
+    role_presets: dict[str, list[str]]
 
 
 class AdminSettingsTemporaryPasswordResponse(BaseModel):

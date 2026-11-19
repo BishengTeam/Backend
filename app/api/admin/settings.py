@@ -11,7 +11,11 @@ from app.middleware.auth import (
     require_super_admin,
 )
 from app.port.exceptions import BusinessException
+from app.policy.permissions import PERMISSION_CATALOG, ROLE_PERMISSIONS
 from app.schemas.admin_settings import (
+    AdminPermissionCatalogGroup,
+    AdminPermissionCatalogItem,
+    AdminPermissionCatalogResponse,
     AdminSecurityAuditListItem,
     AdminSettingsLegacyUserUpdate,
     AdminSettingsTemporaryPasswordResponse,
@@ -81,6 +85,33 @@ async def list_admins(
     return success(data=result)
 
 
+@router.get(
+    "/permission-catalog",
+    response_model=APIResponse[AdminPermissionCatalogResponse],
+    summary="权限勾选目录与角色预设",
+    **admin_error_contract("40100", "40101"),
+)
+async def get_permission_catalog(
+    _admin=Depends(require_super_admin),
+) -> APIResponse[AdminPermissionCatalogResponse]:
+    return success(
+        data=AdminPermissionCatalogResponse(
+            groups=[
+                AdminPermissionCatalogGroup(
+                    key=group["key"],
+                    label=group["label"],
+                    permissions=[
+                        AdminPermissionCatalogItem(permission=permission, label=label)
+                        for permission, label in group["permissions"]
+                    ],
+                )
+                for group in PERMISSION_CATALOG
+            ],
+            role_presets=ROLE_PERMISSIONS,
+        )
+    )
+
+
 @router.post(
     "/admins",
     response_model=APIResponse[AdminSettingsTemporaryPasswordResponse],
@@ -107,7 +138,7 @@ async def create_admin(
 @router.patch(
     "/admins/{admin_id}",
     response_model=APIResponse[AdminSettingsUserListItem],
-    summary="编辑普通管理员显示名",
+    summary="编辑普通管理员显示名与权限",
     **admin_error_contract(
         "40001", "40100", "40101", "40200", "40300", "50000"
     ),

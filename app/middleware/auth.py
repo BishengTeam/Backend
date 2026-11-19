@@ -17,7 +17,7 @@ from app.adapter.security import (
     validate_admin_reauth_token,
 )
 from app.domain.user.src.index import AdminUser, User, UserRealname
-from app.policy.permissions import ROLE_PERMISSIONS
+from app.policy.permissions import resolve_admin_permissions
 
 
 logger = logging.getLogger(__name__)
@@ -143,7 +143,7 @@ def require_permission(permission: str):
     ):
         if admin.role == "super_admin":
             return admin
-        allowed = ROLE_PERMISSIONS.get(admin.role, [])
+        allowed = resolve_admin_permissions(admin)
         if permission not in allowed and "*" not in allowed:
             if permission.startswith("quiz:"):
                 try:

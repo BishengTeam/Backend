@@ -139,7 +139,10 @@ async def test_create_generates_the_temporary_password_and_audits_in_one_commit(
     assert audits[0].action == "admin_account.create"
     assert audits[0].result == "succeeded"
     assert audits[0].reason_code == "quiz_admin_created"
-    assert audits[0].summary == {"role": "quiz_admin"}
+    assert audits[0].summary == {
+        "role": "quiz_admin",
+        "permissions_source": "preset",
+    }
     assert audits[0].idempotency_key_hash is not None
     assert audits[0].idempotency_key_hash != "create-request-0001"
 

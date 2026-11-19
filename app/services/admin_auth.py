@@ -14,7 +14,7 @@ from app.adapter.security import (
     create_admin_reauth_token,
 )
 from app.domain.user.src.index import AdminPasswordHistory, AdminUser
-from app.policy.permissions import ROLE_PERMISSIONS
+from app.policy.permissions import resolve_admin_permissions
 from app.port.exceptions import BusinessException, UnauthorizedException
 from app.schemas.admin import AdminInfo, AdminLoginResponse, AdminReauthResponse
 from app.services.admin_security_audit import AdminAuditContext, AdminSecurityAuditService
@@ -231,7 +231,7 @@ class AdminAuthService:
                 access_token=access_token,
                 expires_in=ADMIN_SESSION_EXPIRE_MINUTES * 60,
                 admin=AdminInfo.model_validate(admin),
-                permissions=ROLE_PERMISSIONS.get(admin.role, []),
+                permissions=resolve_admin_permissions(admin),
                 session_mode=session_mode,
                 must_change_password=admin.must_change_password,
             )

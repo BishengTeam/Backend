@@ -12,6 +12,7 @@ from app.domain.user.src.index import (
     AdminSecurityAudit,
     AdminUser,
 )
+from app.policy.permissions import ALL_PERMISSIONS, ROLE_PERMISSIONS
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.admin_settings import (
     AdminSettingsTemporaryPasswordResponse,
@@ -173,6 +174,7 @@ class AdminSettingsService:
                 display_name=data.display_name,
                 password_hash=password_hash,
                 role=data.role,
+                permissions=self._validated_permissions(data.permissions),
                 is_active=True,
                 must_change_password=True,
                 auth_version=1,
@@ -196,7 +198,12 @@ class AdminSettingsService:
                 target_admin_id=admin.id,
                 username=admin.username,
                 context=context,
-                summary={"role": data.role},
+                summary={
+                    "role": data.role,
+                    "permissions_source": (
+                        "override" if data.permissions is not None else "preset"
+                    ),
+                },
                 idempotency_key=idempotency_key,
             )
             await db.commit()
@@ -217,17 +224,51 @@ class AdminSettingsService:
         try:
             async with get_db_ctx() as db:
                 admin = await self._get_manageable_admin(db, admin_id)
-                admin.display_name = data.display_name
+                changed_fields: list[str] = []
+                permissions_added: list[str] = []
+                permissions_removed: list[str] = []
+                if data.display_name is not None:
+                    admin.display_name = data.display_name
+                    changed_fields.append("display_name")
+                if "permissions" in data.model_fields_set:
+                    new_permissions = self._validated_permissions(
+                        None if data.permissions is None else list(data.permissions)
+                    )
+                    target = new_permissions if new_permissions is not None else []
+                    effective = (
+                        list(admin.permissions)
+                        if admin.permissions is not None
+                        else list(ROLE_PERMISSIONS.get(admin.role, []))
+                    )
+                    permissions_added = [
+                        item for item in target if item not in effective
+                    ]
+                    permissions_removed = [
+                        item for item in effective if item not in target
+                    ]
+                    admin.permissions = new_permissions
+                    changed_fields.append("permissions")
                 self.audit.append(
                     db,
                     action="admin_account.update",
                     result="succeeded",
-                    reason_code="display_name_changed",
+                    reason_code=(
+                        "permissions_updated"
+                        if "permissions" in changed_fields
+                        and "display_name" not in changed_fields
+                        else "account_updated"
+                        if len(changed_fields) > 1
+                        else "display_name_changed"
+                    ),
                     actor_admin_id=actor_id,
                     target_admin_id=admin.id,
                     username=admin.username,
                     context=context,
-                    summary={"changed_fields": ["display_name"]},
+                    summary={
+                        "changed_fields": changed_fields,
+                        "permissions_added": permissions_added,
+                        "permissions_removed": permissions_removed,
+                    },
                 )
                 await db.commit()
                 await db.refresh(admin)
@@ -485,6 +526,17 @@ class AdminSettingsService:
             raise
 
     @staticmethod
+    def _validated_permissions(values: list[str] | None) -> list[str] | None:
+        """覆盖式权限白名单校验；None 表示清除覆盖、回退角色预设。"""
+
+        if values is None:
+            return None
+        unknown = sorted(set(values) - ALL_PERMISSIONS)
+        if unknown:
+            raise BusinessException(f"包含未知权限项: {', '.join(unknown)}")
+        return list(dict.fromkeys(values))
+
+    @staticmethod
     async def _get_manageable_admin(db, admin_id: int) -> AdminUser:
         admin = (
             await db.execute(
@@ -497,8 +549,6 @@ class AdminSettingsService:
             raise NotFoundException("管理员")
         if admin.role == "super_admin":
             raise BusinessException("不能通过管理员列表操作唯一超级管理员")
-        if admin.role != "quiz_admin":
-            raise BusinessException("管理员角色状态异常")
         return admin
 
     @staticmethod
