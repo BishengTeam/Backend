@@ -105,3 +105,11 @@ async def test_unmanaged_vendor_retains_legacy_compatibility(catalog):
         await db.commit()
     assert [row.id for row in await service.list_certifications()] == [1000]
     assert (await service.get_detail(1000)).code == "legacy-only"
+
+
+async def test_unknown_product_type_is_not_public(catalog):
+    service, factory = catalog
+    async with factory() as db:
+        db.add(product("generic"))
+        await db.commit()
+    assert await service.list_certifications() == []

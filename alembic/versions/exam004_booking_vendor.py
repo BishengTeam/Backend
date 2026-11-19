@@ -1,7 +1,7 @@
 """Make exam bookings vendor-aware (H3C registration or Sangfor order).
 
 Revision ID: exam004
-Revises: adm002
+Revises: u11
 """
 import os
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 revision = "exam004"
-down_revision = "adm002"
+down_revision = "u11"
 branch_labels = None
 depends_on = None
 

@@ -29,6 +29,8 @@ def is_public_cert_product(product: CertProduct) -> bool:
     """Use the same product eligibility as the dedicated registration catalogs."""
     if not product.is_active:
         return False
+    if product.type not in CERT_PRODUCT_VENDOR_MAP:
+        return False
     if product.type == "renshe":
         return product.renshe_status == "available"
     if product.type == "sangfor":
