@@ -52,6 +52,8 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizUserStatsListItem,
     AdminQuizUserPracticeQuery,
     AdminQuizUserPracticeStats,
+    AdminQuizStudentStatsQuery,
+    AdminQuizStudentStatsItem,
     AdminQuizImageUploadCreate,
     AdminQuizImageUploadResponse,
     AdminQuizQuestionUpdate,
@@ -1337,6 +1339,94 @@ async def get_user_practice_stats(
         },
     )
     return success(data=await AdminQuizService().get_user_practice_stats(query))
+
+
+@router.get(
+    "/stats/students",
+    response_model=APIResponse[PaginatedData[AdminQuizStudentStatsItem]],
+    summary="学生练习与考试汇总",
+    description="""
+管理后台 **题库管理-题库数据-学生数据** 页面使用。
+
+**使用场景**: 按题库汇总每个学生的练习与考试情况，一行一人，可导出。
+
+**查询参数**:
+- `library_id`: 题库 ID（必填）
+- `date_from` / `date_to`: 时间段（可选，必须同时提供；跨度最多 366 天）
+- `page` / `page_size`: 分页
+
+**口径**:
+- 练习：含重做；首答指标与用户行为排行榜一致；活跃天数按应用时区切日
+- 考试：仅 `completed` / `timed_out` 且已出分（待人工阅卷的场次不计入）
+- 及格线：60 分（考试分已归一化为 100 分制，即总分的 60%）
+- 姓名：自填姓名优先，其次已审核通过的实名姓名
+
+**认证**: 需 `quiz:list` 权限
+    """,
+)
+async def list_student_stats(
+    library_id: int = Query(..., ge=1),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    _admin=Depends(require_permission("quiz:list")),
+) -> APIResponse[PaginatedData[AdminQuizStudentStatsItem]]:
+    query = _validated_query(
+        AdminQuizStudentStatsQuery,
+        {
+            "library_id": library_id,
+            "date_from": date_from,
+            "date_to": date_to,
+            "page": page,
+            "page_size": page_size,
+        },
+    )
+    return success(data=await AdminQuizService().list_student_stats(query))
+
+
+@router.get(
+    "/stats/students/export",
+    response_class=PlainTextResponse,
+    summary="导出学生练习与考试汇总（CSV）",
+    description="""
+管理后台 **题库管理-题库数据-学生数据** 页面使用。
+
+**使用场景**: 按题库导出全部学生的练习 + 考试汇总（UTF-8 BOM，Excel 可直接打开）。
+
+**查询参数**: 与 `/stats/students` 一致（不含分页）。
+
+**口径**: 与 `/stats/students` 一致；手机号为明文，供线下核对人员。
+
+**认证**: 需 `quiz:list` 权限
+    """,
+)
+async def export_student_stats(
+    library_id: int = Query(..., ge=1),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    _admin=Depends(require_permission("quiz:list")),
+) -> Response:
+    query = _validated_query(
+        AdminQuizStudentStatsQuery,
+        {
+            "library_id": library_id,
+            "date_from": date_from,
+            "date_to": date_to,
+            "page": 1,
+            "page_size": 100,
+        },
+    )
+    content = await AdminQuizService().export_student_stats_csv(query)
+    return PlainTextResponse(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=quiz_student_stats_{library_id}.csv"
+            )
+        },
+    )
 
 
 @router.post(

@@ -422,6 +422,9 @@ class AdminQuizUserStatsQuery(QuizContractModel):
 class AdminQuizUserStatsListItem(QuizContractModel):
     user_id: int
     nickname: str | None = None
+    # 姓名：自填姓名优先，其次已审核通过的实名姓名（与「学生数据」口径一致）
+    name: str | None = None
+    name_source: Literal["declared", "realname", "none"] = "none"
     phone_masked: str | None = None
     practice_total_attempts: int = Field(ge=0)
     practice_first_attempts: int = Field(ge=0)
@@ -482,6 +485,57 @@ class AdminQuizUserPracticeStats(QuizContractModel):
     exam_average_score: Decimal | None = Field(default=None, ge=0, le=100)
     exam_highest_score: Decimal | None = Field(default=None, ge=0, le=100)
     exam_latest_score: Decimal | None = Field(default=None, ge=0, le=100)
+
+
+class AdminQuizStudentStatsQuery(QuizContractModel):
+    """按题库汇总学生练习 + 考试情况（管理后台「学生数据」）。
+
+    library_id 必填：练习统计需按题库 join 题目过滤；不提供全库混算。
+    date_from/date_to 必须同时提供或同时省略。
+    """
+
+    library_id: int = Field(ge=1)
+    date_from: date | None = None
+    date_to: date | None = None
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "AdminQuizStudentStatsQuery":
+        if (self.date_from is None) != (self.date_to is None):
+            raise ValueError("date_from and date_to must be provided together")
+        if self.date_from is not None and self.date_to is not None:
+            if self.date_from > self.date_to:
+                raise ValueError("date_from cannot be after date_to")
+            if (self.date_to - self.date_from).days > 366:
+                raise ValueError("student stats range cannot exceed 366 days")
+        return self
+
+
+class AdminQuizStudentStatsItem(QuizContractModel):
+    """一行 = 一个学生；练习口径含重做，考试口径仅已结算且已出分。"""
+
+    user_id: int
+    # 姓名优先级：自填 declared_name > 实名 real_name > 未填写
+    name: str | None = None
+    name_source: Literal["declared", "realname", "none"] = "none"
+    phone_masked: str | None = None
+    # 练习
+    practice_total_attempts: int = Field(ge=0)
+    practice_first_attempts: int = Field(ge=0)
+    practice_first_correct: int = Field(ge=0)
+    practice_first_accuracy: Decimal = Field(ge=0, le=100)
+    practice_answered_questions: int = Field(ge=0)
+    practice_active_days: int = Field(ge=0)
+    practice_last_at: datetime | None = None
+    # 考试（已交卷/超时结算且已出分）
+    exam_count: int = Field(ge=0)
+    exam_average_score: Decimal | None = Field(default=None, ge=0, le=100)
+    exam_high_score: Decimal | None = Field(default=None, ge=0, le=100)
+    exam_low_score: Decimal | None = Field(default=None, ge=0, le=100)
+    exam_pass_count: int = Field(ge=0)
+    exam_pass_rate: Decimal | None = Field(default=None, ge=0, le=100)
+    exam_last_at: datetime | None = None
 
 
 class AdminQuizImageUploadCreate(QuizContractModel):

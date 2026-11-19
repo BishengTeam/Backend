@@ -272,7 +272,7 @@ def test_submitted_answers_are_canonical_and_exact_match_only() -> None:
 
 
 def test_contract_registry_is_complete_strict_and_machine_readable() -> None:
-    assert len(QUIZ_API_CONTRACTS) == 100  # quiz018 +redeem；2026-11 回收站 +batch-delete 恢复 +batch-delete-by-scope
+    assert len(QUIZ_API_CONTRACTS) == 101  # quiz018 +redeem；2026-11 回收站 +2；2026-11 学生数据 +stats/students
     keys = {(entry.method, entry.path) for entry in QUIZ_API_CONTRACTS}
     assert len(keys) == len(QUIZ_API_CONTRACTS)
     assert {

@@ -1,7 +1,8 @@
+import re
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ── 登录 ──
@@ -63,6 +64,26 @@ class UserProfileUpdate(BaseModel):
     province: str | None = Field(None, max_length=32, description="省份")
     city: str | None = Field(None, max_length=32, description="城市")
     address: str | None = Field(None, max_length=256, description="详细地址")
+    # 自填姓名：成绩统计归属用，不等于实名认证姓名
+    declared_name: str | None = Field(
+        None, max_length=32, description="用户自填姓名（题库练习/考试成绩统计用）"
+    )
+
+    @field_validator("declared_name")
+    @classmethod
+    def validate_declared_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        name = value.strip()
+        if not name:
+            raise ValueError("姓名不能为空")
+        if not 2 <= len(name) <= 32:
+            raise ValueError("姓名需为 2-32 个字符")
+        if name.isdigit():
+            raise ValueError("姓名不能是纯数字")
+        if not re.search(r"[\u4e00-\u9fffA-Za-z]", name):
+            raise ValueError("姓名需包含中文或字母")
+        return name
 
 
 # ── Level 2: 实名信息（需审核） ──
@@ -173,6 +194,8 @@ class UserProfileDetail(BaseModel):
     province: str | None = None
     city: str | None = None
     address: str | None = None
+    # 用户自填姓名（成绩统计归属用，与实名 real_name 无关）
+    declared_name: str | None = None
     # Level 2 — 实名
     user_type: str | None = None
     last_name_zh: str | None = None

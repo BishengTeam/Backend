@@ -44,6 +44,8 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizUserStatsListItem,
     AdminQuizUserPracticeQuery,
     AdminQuizUserPracticeStats,
+    AdminQuizStudentStatsQuery,
+    AdminQuizStudentStatsItem,
     AdminQuizImageUploadCreate,
     AdminQuizImageUploadResponse,
     AdminQuizVersionRequest,
@@ -812,6 +814,14 @@ QUIZ_API_CONTRACTS: tuple[QuizEndpointContract, ...] = (
         "admin",
         APIResponse[AdminQuizUserPracticeStats],
         query_model=AdminQuizUserPracticeQuery,
+        permission="quiz:list",
+    ),
+    QuizEndpointContract(
+        "GET",
+        "/admin/quiz/stats/students",
+        "admin",
+        APIResponse[PaginatedData[AdminQuizStudentStatsItem]],
+        query_model=AdminQuizStudentStatsQuery,
         permission="quiz:list",
     ),
     QuizEndpointContract(

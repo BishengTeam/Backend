@@ -18,9 +18,10 @@ def test_canonical_manifest_has_frozen_counts_and_stable_fingerprint() -> None:
     assert manifest["quiz_contract_version"] == "2026-09-01"
     # 2026-11 回收站改造：+batch-delete 恢复 +batch-delete-by-scope（98→100，64→66）；
     # batch-delete 移出废弃清单（12→11）
-    assert manifest["operation_count"] == 100
+    # 2026-11 学生数据：+/admin/quiz/stats/students（100→101，66→67）
+    assert manifest["operation_count"] == 101
     assert manifest["user_operation_count"] == 34  # quiz018: +redeem
-    assert manifest["admin_operation_count"] == 66
+    assert manifest["admin_operation_count"] == 67
     assert manifest["removed_operation_count"] == 11
     assert len(manifest["fingerprint_sha256"]) == 64
 

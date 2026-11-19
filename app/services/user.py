@@ -250,6 +250,7 @@ class UserService:
                 province=profile.province if profile else None,
                 city=profile.city if profile else None,
                 address=profile.address if profile else None,
+                declared_name=getattr(profile, "declared_name", None),
                 user_type=realname.user_type if realname else None,
                 last_name_zh=realname.last_name_zh if realname else None,
                 first_name_zh=realname.first_name_zh if realname else None,

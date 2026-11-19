@@ -49,7 +49,7 @@ from app.domain.community.src.index import (
     QuizQuestionStats,
     QuizUserStats,
 )
-from app.domain.user.src.index import User, UserProfile
+from app.domain.user.src.index import User, UserProfile, UserRealname
 from app.domain.community.src.rule.quiz import (
     QUESTION_TYPE_IMPORT_ALIASES,
     QuizCategoryStatus,
@@ -104,6 +104,8 @@ from app.schemas.admin_quiz_contract import (
     AdminQuizUserPracticeDay,
     AdminQuizUserPracticeStats,
     AdminQuizUserExamRound,
+    AdminQuizStudentStatsQuery,
+    AdminQuizStudentStatsItem,
     AdminQuizVersionRequest,
     AdminQuizAuditLogResponse,
     AdminQuizAuditQuery,
@@ -122,6 +124,7 @@ from app.schemas.admin_quiz_contract import (
 )
 from app.port.config import settings
 from app.utils.audit import redact_sensitive_text, sanitize_audit_value
+from app.utils.excel import export_csv
 
 
 @dataclass(frozen=True, slots=True)
@@ -1890,10 +1893,13 @@ class AdminQuizService:
 
         async with get_db_ctx() as db:
             base = (
-                select(QuizUserStats, User, UserProfile)
+                select(QuizUserStats, User, UserProfile, UserRealname)
                 .select_from(QuizUserStats)
                 .join(User, User.id == QuizUserStats.user_id)
                 .outerjoin(UserProfile, UserProfile.user_id == QuizUserStats.user_id)
+                .outerjoin(
+                    UserRealname, UserRealname.user_id == QuizUserStats.user_id
+                )
             )
             total = int(
                 await db.scalar(select(func.count()).select_from(base.subquery()))
@@ -1909,23 +1915,44 @@ class AdminQuizService:
                     .limit(query.page_size)
                 )
             ).all()
-        items = [
-            AdminQuizUserStatsListItem(
-                user_id=int(stats.user_id),
-                nickname=getattr(profile, "nickname", None),
-                phone_masked=self._mask_phone(
-                    getattr(user, "phone", None)
-                    or getattr(profile, "phone", None)
-                ),
-                practice_total_attempts=int(stats.practice_total_attempts),
-                practice_first_attempts=int(stats.practice_first_attempts),
-                practice_first_correct=int(stats.practice_first_correct),
-                practice_answered_questions=int(stats.practice_answered_questions),
-                checkin_days=int(stats.checkin_days),
-                consecutive_days=int(stats.consecutive_days),
+        items = []
+        for stats, user, profile, identity in rows:
+            declared = (
+                (getattr(profile, "declared_name", None) or "").strip()
+                if profile is not None
+                else ""
             )
-            for stats, user, profile in rows
-        ]
+            verified_name = (
+                (getattr(identity, "real_name", None) or "").strip()
+                if identity is not None and identity.status == "verified"
+                else ""
+            )
+            if declared:
+                name, name_source = declared, "declared"
+            elif verified_name:
+                name, name_source = verified_name, "realname"
+            else:
+                name, name_source = None, "none"
+            items.append(
+                AdminQuizUserStatsListItem(
+                    user_id=int(stats.user_id),
+                    nickname=getattr(profile, "nickname", None),
+                    name=name,
+                    name_source=name_source,
+                    phone_masked=self._mask_phone(
+                        getattr(user, "phone", None)
+                        or getattr(profile, "phone", None)
+                    ),
+                    practice_total_attempts=int(stats.practice_total_attempts),
+                    practice_first_attempts=int(stats.practice_first_attempts),
+                    practice_first_correct=int(stats.practice_first_correct),
+                    practice_answered_questions=int(
+                        stats.practice_answered_questions
+                    ),
+                    checkin_days=int(stats.checkin_days),
+                    consecutive_days=int(stats.consecutive_days),
+                )
+            )
         return PaginatedData[AdminQuizUserStatsListItem](
             items=items,
             total=total,
@@ -2113,6 +2140,295 @@ class AdminQuizService:
             ),
             exam_latest_score=(max(settled_scores)[1] if settled_scores else None),
         )
+
+    # 及格线：考试分已归一化为 100 分制，总分的 60% 即 60 分（甲方 2026-11-19 口径）
+    _EXAM_PASS_SCORE = Decimal("60")
+
+    async def list_student_stats(
+        self, query: AdminQuizStudentStatsQuery
+    ) -> PaginatedData[AdminQuizStudentStatsItem]:
+        """按题库汇总每个学生的练习与考试情况（一行一人）。
+
+        练习口径含重做，首答指标与排行榜一致；考试只统计已完成/超时结算
+        且已出分的场次（待人工阅卷的分数为 NULL，整场不计入）。
+        """
+
+        rows = await self._collect_student_stats(query)
+        rows.sort(key=lambda row: (-row[0].practice_total_attempts, row[0].user_id))
+        total = len(rows)
+        start = (query.page - 1) * query.page_size
+        return PaginatedData[AdminQuizStudentStatsItem](
+            items=[item for item, _phone in rows[start : start + query.page_size]],
+            total=total,
+            page=query.page,
+            page_size=query.page_size,
+        )
+
+    async def export_student_stats_csv(
+        self, query: AdminQuizStudentStatsQuery
+    ) -> str:
+        """导出学生练习 + 考试汇总 CSV（UTF-8 BOM，Excel 可直开）。"""
+
+        rows = await self._collect_student_stats(query)
+        rows.sort(key=lambda row: (-row[0].practice_total_attempts, row[0].user_id))
+        zone = ZoneInfo(settings.APP_TIMEZONE)
+        name_sources = {"declared": "自填", "realname": "实名", "none": "未填写"}
+        headers = [
+            "序号",
+            "姓名",
+            "姓名来源",
+            "用户ID",
+            "手机号",
+            "累计作答",
+            "首答次数",
+            "首答正确",
+            "首答正确率",
+            "做题题目数",
+            "练习活跃天数",
+            "最近练习时间",
+            "考试次数",
+            "平均分",
+            "最高分",
+            "最低分",
+            "及格次数",
+            "及格比",
+            "最近考试时间",
+        ]
+
+        def _format_time(value: datetime | None) -> str:
+            if value is None:
+                return ""
+            return value.astimezone(zone).strftime("%Y-%m-%d %H:%M:%S")
+
+        def _format_score(value: Decimal | None) -> str:
+            return "" if value is None else f"{value:.1f}"
+
+        table: list[list[Any]] = []
+        for index, (item, phone) in enumerate(rows, start=1):
+            table.append(
+                [
+                    index,
+                    item.name or "",
+                    name_sources[item.name_source],
+                    item.user_id,
+                    phone or "",
+                    item.practice_total_attempts,
+                    item.practice_first_attempts,
+                    item.practice_first_correct,
+                    f"{item.practice_first_accuracy:.1f}",
+                    item.practice_answered_questions,
+                    item.practice_active_days,
+                    _format_time(item.practice_last_at),
+                    item.exam_count,
+                    _format_score(item.exam_average_score),
+                    _format_score(item.exam_high_score),
+                    _format_score(item.exam_low_score),
+                    item.exam_pass_count,
+                    _format_score(item.exam_pass_rate),
+                    _format_time(item.exam_last_at),
+                ]
+            )
+        return export_csv(headers, table).getvalue()
+
+    async def _collect_student_stats(
+        self, query: AdminQuizStudentStatsQuery
+    ) -> list[tuple[AdminQuizStudentStatsItem, str | None]]:
+        tz_name = settings.APP_TIMEZONE
+        start_at: datetime | None = None
+        end_at: datetime | None = None
+        if query.date_from is not None and query.date_to is not None:
+            zone = ZoneInfo(tz_name)
+            start_at = datetime.combine(query.date_from, time.min, tzinfo=zone)
+            end_at = datetime.combine(
+                query.date_to + timedelta(days=1), time.min, tzinfo=zone
+            )
+
+        practice_conditions = [QuizQuestion.library_id == query.library_id]
+        if start_at is not None and end_at is not None:
+            practice_conditions += [
+                QuizPracticeAttempt.submitted_at >= start_at,
+                QuizPracticeAttempt.submitted_at < end_at,
+            ]
+        practice_day = func.date(
+            func.timezone(tz_name, QuizPracticeAttempt.submitted_at)
+        )
+        practice_stmt = (
+            select(
+                QuizPracticeAttempt.user_id,
+                func.count(QuizPracticeAttempt.id),
+                func.count(func.distinct(QuizPracticeSessionQuestion.question_id)),
+                func.count(QuizPracticeAttempt.id).filter(
+                    QuizPracticeAttempt.is_first_attempt.is_(True)
+                ),
+                func.count(QuizPracticeAttempt.id).filter(
+                    QuizPracticeAttempt.is_first_attempt.is_(True),
+                    QuizPracticeAttempt.is_correct.is_(True),
+                ),
+                func.count(func.distinct(practice_day)),
+                func.max(QuizPracticeAttempt.submitted_at),
+            )
+            .select_from(QuizPracticeAttempt)
+            .join(
+                QuizPracticeSessionQuestion,
+                QuizPracticeSessionQuestion.id
+                == QuizPracticeAttempt.session_question_id,
+            )
+            .join(
+                QuizQuestion,
+                QuizQuestion.id == QuizPracticeSessionQuestion.question_id,
+            )
+            .where(*practice_conditions)
+            .group_by(QuizPracticeAttempt.user_id)
+        )
+
+        exam_conditions = [
+            QuizExam.library_id == query.library_id,
+            QuizExam.status.in_(("completed", "timed_out")),
+            QuizExam.score.is_not(None),
+        ]
+        if start_at is not None and end_at is not None:
+            exam_conditions += [
+                QuizExam.started_at >= start_at,
+                QuizExam.started_at < end_at,
+            ]
+        exam_stmt = (
+            select(
+                QuizExam.user_id,
+                func.count(QuizExam.id),
+                func.avg(QuizExam.score),
+                func.max(QuizExam.score),
+                func.min(QuizExam.score),
+                func.count(QuizExam.id).filter(
+                    QuizExam.score >= self._EXAM_PASS_SCORE
+                ),
+                func.max(QuizExam.started_at),
+            )
+            .where(*exam_conditions)
+            .group_by(QuizExam.user_id)
+        )
+
+        async with get_db_ctx() as db:
+            practice_rows = (await db.execute(practice_stmt)).all()
+            exam_rows = (await db.execute(exam_stmt)).all()
+            user_ids = sorted(
+                {int(row[0]) for row in practice_rows}
+                | {int(row[0]) for row in exam_rows}
+            )
+            users: dict[int, User] = {}
+            profiles: dict[int, UserProfile] = {}
+            identities: dict[int, UserRealname] = {}
+            if user_ids:
+                users = {
+                    int(user.id): user
+                    for user in (
+                        await db.execute(select(User).where(User.id.in_(user_ids)))
+                    ).scalars()
+                }
+                profiles = {
+                    int(profile.user_id): profile
+                    for profile in (
+                        await db.execute(
+                            select(UserProfile).where(
+                                UserProfile.user_id.in_(user_ids)
+                            )
+                        )
+                    ).scalars()
+                }
+                identities = {
+                    int(identity.user_id): identity
+                    for identity in (
+                        await db.execute(
+                            select(UserRealname).where(
+                                UserRealname.user_id.in_(user_ids)
+                            )
+                        )
+                    ).scalars()
+                }
+
+        practice_by_user = {int(row[0]): row for row in practice_rows}
+        exam_by_user = {int(row[0]): row for row in exam_rows}
+
+        def _decimal(value: Any) -> Decimal | None:
+            if value is None:
+                return None
+            return Decimal(str(value)).quantize(Decimal("0.1"))
+
+        results: list[tuple[AdminQuizStudentStatsItem, str | None]] = []
+        for user_id in user_ids:
+            user = users.get(user_id)
+            if user is None:
+                continue
+            profile = profiles.get(user_id)
+            identity = identities.get(user_id)
+            declared = (profile.declared_name or "").strip() if profile else ""
+            verified_name = (
+                (identity.real_name or "").strip()
+                if identity is not None and identity.status == "verified"
+                else ""
+            )
+            if declared:
+                name, name_source = declared, "declared"
+            elif verified_name:
+                name, name_source = verified_name, "realname"
+            else:
+                name, name_source = None, "none"
+
+            practice = practice_by_user.get(user_id)
+            total_attempts = int(practice[1] or 0) if practice else 0
+            first_attempts = int(practice[3] or 0) if practice else 0
+            first_correct = int(practice[4] or 0) if practice else 0
+            first_accuracy = (
+                (
+                    Decimal(first_correct) * Decimal(100) / Decimal(first_attempts)
+                ).quantize(Decimal("0.1"))
+                if first_attempts
+                else Decimal("0.0")
+            )
+
+            exam = exam_by_user.get(user_id)
+            exam_count = int(exam[1] or 0) if exam else 0
+            pass_count = int(exam[5] or 0) if exam else 0
+            pass_rate = (
+                (
+                    Decimal(pass_count) * Decimal(100) / Decimal(exam_count)
+                ).quantize(Decimal("0.1"))
+                if exam_count
+                else None
+            )
+
+            phone = getattr(user, "phone", None) or (
+                profile.phone if profile else None
+            )
+            results.append(
+                (
+                    AdminQuizStudentStatsItem(
+                        user_id=user_id,
+                        name=name,
+                        name_source=name_source,
+                        phone_masked=self._mask_phone(phone),
+                        practice_total_attempts=total_attempts,
+                        practice_first_attempts=first_attempts,
+                        practice_first_correct=first_correct,
+                        practice_first_accuracy=first_accuracy,
+                        practice_answered_questions=(
+                            int(practice[2] or 0) if practice else 0
+                        ),
+                        practice_active_days=(
+                            int(practice[5] or 0) if practice else 0
+                        ),
+                        practice_last_at=practice[6] if practice else None,
+                        exam_count=exam_count,
+                        exam_average_score=_decimal(exam[2] if exam else None),
+                        exam_high_score=_decimal(exam[3] if exam else None),
+                        exam_low_score=_decimal(exam[4] if exam else None),
+                        exam_pass_count=pass_count,
+                        exam_pass_rate=pass_rate,
+                        exam_last_at=exam[6] if exam else None,
+                    ),
+                    phone,
+                )
+            )
+        return results
 
     @staticmethod
     def _mask_phone(phone: str | None) -> str | None:

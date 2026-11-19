@@ -10,6 +10,9 @@ class UserProfile(Base, TimestampMixin):
 
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("user.id"), unique=True, nullable=False, index=True)
     nickname: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 用户自填姓名（无需审核）：仅用于题库练习/考试成绩归属统计，
+    # 与 user_identity.real_name（实名认证，需审核）严格区分。
+    declared_name: Mapped[str | None] = mapped_column(String(32), nullable=True)
     email: Mapped[str | None] = mapped_column(String(128), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
     province: Mapped[str | None] = mapped_column(String(32), nullable=True)
