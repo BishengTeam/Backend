@@ -362,3 +362,51 @@ async def test_paginated_schedule_list_uses_simple_count(context):
         assert all(
             item["vendor"] == "sangfor" for item in sangfor_page.data["items"]
         )
+
+
+async def test_paginated_schedule_list_http_contract(context):
+    """Paged list must pass FastAPI response validation (list envelope vs paged dict).
+
+    Regression: calling list_schedules() directly bypasses response_model, so the
+    500 caused by returning a paged dict for APIResponse[list] was not caught.
+    """
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from app.adapter.database import get_db
+    from app.api.admin.exam_schedule import router, schedule_guard
+
+    factory = context.factory
+
+    async def _override_db():
+        async with factory() as session:
+            yield session
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_db] = _override_db
+    app.dependency_overrides[schedule_guard] = lambda: SUPER_ADMIN
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        paged = await client.get(
+            "/h3c/exam-schedules", params={"page": 1, "page_size": 20}
+        )
+        assert paged.status_code == 200, paged.text
+        body = paged.json()["data"]
+        assert body["page"] == 1
+        assert body["page_size"] == 20
+        assert isinstance(body["items"], list)
+
+        filtered = await client.get(
+            "/h3c/exam-schedules",
+            params={"vendor": "sangfor", "page": 2, "page_size": 1},
+        )
+        assert filtered.status_code == 200, filtered.text
+        assert filtered.json()["data"]["page"] == 2
+
+        unpaged = await client.get(
+            "/h3c/exam-schedules", params={"vendor": "sangfor"}
+        )
+        assert unpaged.status_code == 200, unpaged.text
+        assert isinstance(unpaged.json()["data"], list)

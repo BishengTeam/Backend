@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db
 from app.middleware.auth import require_any_permission
-from app.schemas.common import APIResponse, success
+from app.schemas.common import APIResponse, PaginatedData, success
 from app.domain.exam.src.index import (
     ExamSchedule, ExamScheduleSubject, ExamTimeSlot, ExamSeatQuota, Holiday,
     ExamBooking,
@@ -110,7 +110,7 @@ class HolidayCreate(BaseModel):
 # 考场计划 CRUD
 # ============================================================
 
-@router.get("", response_model=APIResponse[list], summary="计划列表")
+@router.get("", response_model=APIResponse[PaginatedData[dict] | list[dict]], summary="计划列表")
 async def list_schedules(
     vendor: Annotated[str | None, Query(pattern="^(h3c|sangfor)$")] = None,
     page: Annotated[int | None, Query(ge=1)] = None,
