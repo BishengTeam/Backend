@@ -22,4 +22,15 @@ def upgrade():
 
 
 def downgrade():
-    op.drop_column("user_profile", "declared_name")
+    # 历史库可能在迁移图线性化前就已越过 exam004，导致本迁移从未执行。
+    # 降级时若列不存在必须保持幂等，否则整个降级链会被卡死。
+    if op.get_context().as_sql:
+        return
+    exists = op.get_bind().execute(
+        sa.text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'user_profile' AND column_name = 'declared_name'"
+        )
+    ).scalar()
+    if exists:
+        op.drop_column("user_profile", "declared_name")

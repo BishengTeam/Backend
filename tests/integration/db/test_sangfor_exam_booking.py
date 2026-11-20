@@ -83,7 +83,8 @@ async def context():
         product = CertProduct(
             type="sangfor",
             code=f"{prefix}_SCSA",
-            name=f"{prefix} SCSA",
+            # 内部名称与展示名称不同，用于覆盖预约详情显示内部代码的回归。
+            name=f"{prefix}_scsa_s",
             chinese_name=f"{prefix} SCSA",
             is_active=True,
             coupon_price_cents=0,

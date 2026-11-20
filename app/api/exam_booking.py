@@ -211,6 +211,7 @@ async def my_bookings(
             ExamTimeSlot,
             ExamSchedule.name,
             ExamSchedule.exam_location,
+            CertProduct.chinese_name,
             CertProduct.name,
         )
         .join(ExamTimeSlot, ExamTimeSlot.id == ExamBooking.slot_id)
@@ -229,12 +230,12 @@ async def my_bookings(
         "schedule_id": b.schedule_id,
         "schedule_name": sname,
         "exam_location": slocation,
-        "subject_name": pname or "",
+        "subject_name": pchinese or pname or "",
         "slot_label": slot.label,
         "slot_time": slot.start_time.isoformat(),
         "exam_date": b.exam_date.isoformat(),
         "status": b.status,
-    } for b, slot, sname, slocation, pname in rows])
+    } for b, slot, sname, slocation, pchinese, pname in rows])
 
 
 @router.delete("/bookings/{booking_id}", response_model=APIResponse[dict], summary="取消预约")

@@ -121,15 +121,17 @@ async def list_schedules(
     allowed_vendors = manageable_vendors(_admin)
     if vendor:
         require_vendor_permission(_admin, vendor)
-    stmt = select(ExamSchedule)
-    if vendor:
-        stmt = stmt.where(ExamSchedule.vendor == vendor)
-    else:
-        stmt = stmt.where(ExamSchedule.vendor.in_(allowed_vendors))
+    conditions = [ExamSchedule.vendor == vendor] if vendor else [
+        ExamSchedule.vendor.in_(allowed_vendors)
+    ]
+    stmt = select(ExamSchedule).where(*conditions)
     stmt = stmt.order_by(ExamSchedule.id.desc())
     total = None
     if page is not None:
-        total = await db.scalar(select(func.count()).select_from(stmt.subquery()))
+        # 直接对 id 计数，避免对带 ORDER BY / JSON 列的子查询再聚合。
+        total = await db.scalar(
+            select(func.count(ExamSchedule.id)).where(*conditions)
+        )
         stmt = stmt.offset((page - 1) * page_size).limit(page_size)
     rows = (await db.execute(stmt)).scalars().all()
     items = [{
@@ -340,7 +342,7 @@ async def get_schedule(
         "exam_location": s.exam_location,
         "pre_exam_notice": s.pre_exam_notice,
         "status": s.status,
-        "subjects": [{"id": ss.id, "product_id": ss.product_id, "product_name": p.name} for ss, p in subjects],
+        "subjects": [{"id": ss.id, "product_id": ss.product_id, "product_name": p.chinese_name or p.name} for ss, p in subjects],
         "time_slots": [{"id": t.id, "label": t.label, "start_time": t.start_time.isoformat()} for t in slots],
         "seat_quotas": [{
             "slot_id": q.slot_id,
@@ -671,7 +673,7 @@ async def list_bookings(
             if reg is not None
             else (order.candidate_name or "")
         ),
-        "subject": p.name if p else "",
+        "subject": (p.chinese_name or p.name) if p else "",
         "slot_label": slot.label,
         "slot_time": slot.start_time.isoformat(),
         "exam_date": b.exam_date.isoformat(),

@@ -323,3 +323,42 @@ async def test_vendor_permissions_are_scoped_per_vendor(context):
         h3c_ids = {row["id"] for row in h3c_visible.data}
         assert h3c_schedule.data["id"] in h3c_ids
         assert sangfor_schedule.data["id"] not in h3c_ids
+
+
+async def test_paginated_schedule_list_uses_simple_count(context):
+    factory, prefix, products = context.factory, context.prefix, context.products
+    today = date.today()
+    async with factory() as db:
+        for index, (vendor, product) in enumerate(
+            [("h3c", products[0]), ("sangfor", products[2])]
+        ):
+            await create_schedule(
+                data=ScheduleCreate(
+                    vendor=vendor,
+                    name=f"{prefix} paged {index}",
+                    open_date_start=today,
+                    open_date_end=today + timedelta(days=10),
+                    allowed_weekdays=[4],
+                    product_ids=[product.id],
+                    time_slots=[{"start_time": "09:30"}],
+                    publish=True,
+                ),
+                _admin=SUPER_ADMIN,
+                db=db,
+            )
+
+        first_page = await list_schedules(
+            vendor=None, page=1, page_size=1, _admin=SUPER_ADMIN, db=db
+        )
+        assert first_page.data["page"] == 1
+        assert first_page.data["page_size"] == 1
+        assert len(first_page.data["items"]) == 1
+        assert first_page.data["total"] >= 2
+
+        sangfor_page = await list_schedules(
+            vendor="sangfor", page=1, page_size=20, _admin=SUPER_ADMIN, db=db
+        )
+        assert sangfor_page.data["total"] >= 1
+        assert all(
+            item["vendor"] == "sangfor" for item in sangfor_page.data["items"]
+        )

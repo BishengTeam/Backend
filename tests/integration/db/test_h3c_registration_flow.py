@@ -719,7 +719,14 @@ async def test_inactive_product_cannot_return_through_legacy_or_public_batches(c
     assert detail.exam_location is None
     # Managed vendors never fall back to enabled legacy-only products.
     async with context.factory() as db:
-        fallback = Certification(name=seed.code+"old", chinese_name="旧产品", code=seed.code+"old", vendor="H3C", is_active=True)
+        fallback = Certification(
+            id=product_id + 200000,
+            name=seed.code + "old",
+            chinese_name="旧产品",
+            code=seed.code + "old",
+            vendor="H3C",
+            is_active=True,
+        )
         db.add(fallback); await db.commit()
         fallback_id = fallback.id
     assert seed.code+"old" not in {row.code for row in await catalog.list_certifications()}
