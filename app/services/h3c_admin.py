@@ -121,6 +121,7 @@ class H3cAdminBatchService:
                     price_cents=0,
                     exam_location=None,
                     description=data.description,
+                    registration_notice=data.registration_notice,
                     sort_order=data.sort_order,
                     status="draft",
                 )
@@ -554,6 +555,7 @@ class H3cAdminBatchService:
             remaining_count=max(0, plan.capacity - int(occupied)),
             exam_location=None,
             description=plan.description,
+            registration_notice=plan.registration_notice,
             sort_order=plan.sort_order,
             exam_code=batch.exam_code,
             identity_tag=batch.identity_tag,

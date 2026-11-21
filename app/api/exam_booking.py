@@ -278,15 +278,6 @@ async def get_attachments(
     db: AsyncSession = Depends(get_db),
 ):
     await _assert_schedule_access(db, schedule_id, current_user.id, vendor)
-    rows = (await db.execute(
-        select(CertAttachment).where(
-            CertAttachment.schedule_id == schedule_id,
-            CertAttachment.is_active.is_(True),
-        ).order_by(CertAttachment.sort_order, CertAttachment.id)
-    )).scalars().all()
-    return success(data=[{
-        "id": item.id,
-        "title": item.title,
-        "file_url": item.file_url,
-        "file_size": item.file_size,
-    } for item in rows])
+    from app.services.cert_attachment import list_schedule_attachments
+
+    return success(data=await list_schedule_attachments(db, vendor, schedule_id))

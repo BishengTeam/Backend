@@ -1,5 +1,6 @@
 """深信服接入分时预约考场 — 预约/配额/报名码/附件。"""
 import os
+from contextlib import asynccontextmanager
 from io import BytesIO
 from datetime import date, timedelta
 from types import SimpleNamespace
@@ -53,6 +54,7 @@ from app.services.sangfor_registration_code import (
     CODE_FIELD,
     ensure_registration_code,
 )
+from app.services.certification_journey import user_journey
 from app.services.vendor_registration import resolve_registration
 
 
@@ -62,11 +64,20 @@ pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
 
 
 @pytest.fixture
-async def context():
+async def context(monkeypatch):
     url = os.environ["TEST_DATABASE_URL"]
     engine = create_async_engine(url)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     prefix = f"sangfor_exam_{uuid4().hex[:8]}"
+
+    @asynccontextmanager
+    async def db_ctx():
+        async with factory() as session:
+            yield session
+
+    monkeypatch.setattr(
+        "app.services.certification_journey.get_db_ctx", db_ctx
+    )
 
     async with factory() as db, db.begin():
         user = User(openid=f"{prefix}_user")
@@ -317,8 +328,35 @@ async def test_sangfor_registration_code_is_idempotent(context):
     assert len(first.rsplit("-", 1)[-1]) == 16  # 64 bit 随机后缀
     assert (order.extra_data or {})[CODE_FIELD] == first
 
+    journey = await user_journey("sangfor", context.order_id, context.user_id)
+    info = journey["registration_code_info"]
+    assert info["code"] == first
+    assert info["revoked"] is False
+    assert info["generated_at"]
+    assert info["activation_url"] is None
+    assert info["instructions"][0] == "复制报名码"
 
-async def test_attachment_crud_for_schedule(context):
+    async with context.factory() as db:
+        order = await db.get(Order, context.order_id)
+        order.extra_data = {
+            **(order.extra_data or {}),
+            "sangfor_registration_code_revoked_at": "2026-11-20T00:00:00+00:00",
+        }
+        await db.commit()
+
+    revoked = await user_journey("sangfor", context.order_id, context.user_id)
+    assert revoked["registration_code"] is None
+    assert revoked["registration_code_info"]["revoked"] is True
+    assert revoked["registration_code_info"]["code"] is None
+
+
+async def test_attachment_crud_for_schedule(context, tmp_path, monkeypatch):
+    import app.services.upload as upload_module
+
+    upload_dir = tmp_path / "uploads"
+    (upload_dir / "cert-attachments").mkdir(parents=True)
+    (upload_dir / "cert-attachments" / "guide.pdf").write_bytes(b"%PDF-1.7\nfixture")
+    monkeypatch.setattr(upload_module, "UPLOAD_DIR", str(upload_dir))
     schedule_id, _ = await _create_schedule(
         context, vendor="sangfor", product_id=context.product_id, name="attachments"
     )
@@ -328,7 +366,7 @@ async def test_attachment_crud_for_schedule(context):
                 vendor="sangfor",
                 schedule_id=schedule_id,
                 title="考场指引",
-                file_url="https://cdn.example.com/guide.pdf",
+                file_url="/api/media/cert-attachments/guide.pdf",
                 file_size=1024,
             ),
             _admin=SUPER_ADMIN,
@@ -348,7 +386,8 @@ async def test_attachment_crud_for_schedule(context):
             current_user=SimpleNamespace(id=context.user_id),
             db=db,
         )
-        assert user_rows.data[0]["file_url"].endswith("guide.pdf")
+        guide = next(row for row in user_rows.data if row["title"] == "考场指引")
+        assert guide["file_url"].endswith("guide.pdf")
 
         notice = await get_notice(
             schedule_id=schedule_id,

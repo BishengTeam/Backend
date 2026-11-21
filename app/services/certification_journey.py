@@ -239,7 +239,9 @@ class CertificationJourneyService:
         snapshot = {"vendor": vendor, "subject": subject, "batch": fixed_batch, "price": price,
             "notice": general.content if general else default_content(vendor),
             "supplement": supplement.content if supplement else default_content(vendor, batch=True),
-            "batch_description": plan.description or "", "requirements": requirements_config if vendor == "renshe" else material_limits}
+            "batch_description": plan.description or "",
+            "registration_notice": plan.registration_notice or "",
+            "requirements": requirements_config if vendor == "renshe" else material_limits}
         # Internal Renshe export/storage rules are hashed, never exposed to anonymous readers.
         digest = notice_digest(snapshot)
         public = {key: value for key, value in snapshot.items() if key != "requirements"}
@@ -406,14 +408,28 @@ async def user_journey(vendor, registration_id, user_id):
             state["label"] = "等待后续报送／外审"
         events = sorted(jsonable_encoder(events), key=lambda item: item["at"])
         extra_data = order.extra_data or {}
+        code_revoked = bool(extra_data.get("sangfor_registration_code_revoked_at"))
+        code_value = None if code_revoked else extra_data.get("sangfor_registration_code")
         registration_code = (
-            extra_data.get("sangfor_registration_code")
-            if vendor == "sangfor"
-            and not extra_data.get("sangfor_registration_code_revoked_at")
-            else None
+            code_value if vendor == "sangfor" else None
         )
+        from app.port.config import settings
+        registration_code_info = None
+        if vendor == "sangfor":
+            registration_code_info = {
+                "code": code_value,
+                "generated_at": extra_data.get("sangfor_registration_code_generated_at"),
+                "revoked": code_revoked,
+                "activation_url": (settings.SANGFOR_ACTIVATION_URL or None),
+                "instructions": [
+                    "复制报名码",
+                    "前往深信服官网激活页面",
+                    "按官网提示完成激活",
+                ],
+            }
         return jsonable_encoder({"vendor": vendor, "registration_id": registration_id, "registration_no": getattr(record, "registration_no", None) or order.out_trade_no,
             "registration_code": registration_code,
+            "registration_code_info": registration_code_info,
             "order_id": order.id, "subject": product.chinese_name if product else plan.project_name or plan.product_type, "batch_name": plan.name,
             "stages": journey_stages(vendor), "progress": state,
             "reason": reason, "apply_end": plan.apply_end, "proof_due_at": due, "correction_due_at": correction_due,

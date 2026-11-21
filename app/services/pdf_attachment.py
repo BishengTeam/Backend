@@ -8,8 +8,6 @@
 import io
 from pathlib import Path
 
-import pypdfium2 as pdfium
-
 from app.integrations.competition_storage import CompetitionAttachmentStorage
 from app.port.exceptions import BusinessException
 from app.services.upload import UploadService
@@ -23,7 +21,7 @@ TARGET_PAGE_WIDTH = 1080
 MAX_TITLE_LENGTH = 64
 
 
-def _render_jpeg(page: pdfium.PdfPage) -> bytes:
+def _render_jpeg(page) -> bytes:
     scale = max(TARGET_PAGE_WIDTH / page.get_width(), 1.0)
     image = page.render(scale=scale).to_pil().convert("RGB")
     buf = io.BytesIO()
@@ -40,6 +38,9 @@ async def render_pdf_attachment(content: bytes, filename: str) -> dict:
         raise BusinessException("附件 PDF 不能超过 20MB")
     if not content.startswith(b"%PDF"):
         raise BusinessException("仅支持上传 PDF 文件")
+
+    # 延迟导入：未安装渲染依赖时不影响其它模块/测试收集。
+    import pypdfium2 as pdfium
 
     try:
         doc = pdfium.PdfDocument(content)

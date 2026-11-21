@@ -48,6 +48,63 @@ async def catalog(vendor: CertificationVendor):
     return success(data=await service.catalog(vendor))
 
 
+async def _plan_attachments_response(vendor: str, plan_id: int):
+    from app.domain.plan.src.index import Plan
+    from app.services.cert_attachment import (
+        list_plan_attachments,
+        plan_belongs_to_vendor,
+    )
+
+    async with get_db_ctx() as db:
+        plan = await db.get(Plan, plan_id)
+        if plan is None or plan.status not in {"published", "registration_closed"}:
+            raise NotFoundException("批次")
+        if not await plan_belongs_to_vendor(db, plan, vendor):
+            raise NotFoundException("批次")
+        return success(data=await list_plan_attachments(db, vendor, plan_id))
+
+
+async def _resolve_plan_id(db, vendor: str, batch_id: int) -> int | None:
+    """旧客户端传厂商批次 ID；H3C/NISP 需映射为 Plan ID，Sangfor 本身就是 Plan ID。"""
+    if vendor == "h3c":
+        from app.domain.h3c.src.index import H3cExamBatch
+
+        batch = await db.get(H3cExamBatch, batch_id)
+        if batch is not None:
+            return batch.plan_id
+        return None
+    elif vendor == "nisp":
+        from app.domain.nisp.src.index import NispExamBatch
+
+        batch = await db.get(NispExamBatch, batch_id)
+        if batch is not None:
+            return batch.plan_id
+        return None
+    return batch_id
+
+
+@router.get("/{vendor}/batches/{batch_id}/attachments")
+async def batch_attachments(
+    vendor: CertificationVendor,
+    batch_id: int = Path(ge=1),
+):
+    """兼容旧路径：厂商批次 ID → Plan ID 后返回批次级 + 厂商级附件。"""
+    async with get_db_ctx() as db:
+        plan_id = await _resolve_plan_id(db, vendor, batch_id)
+    if plan_id is None:
+        raise NotFoundException("批次")
+    return await _plan_attachments_response(vendor, plan_id)
+
+
+@router.get("/{vendor}/plans/{plan_id}/attachments")
+async def plan_attachments(
+    vendor: CertificationVendor,
+    plan_id: int = Path(ge=1),
+):
+    """推荐路径：直接使用批次（Plan）ID。"""
+    return await _plan_attachments_response(vendor, plan_id)
+
+
 @router.get("/{vendor}/notice/{batch_id}")
 async def notice(vendor: CertificationVendor, batch_id: int = Path(ge=1), registration_type: str | None = Query(None, max_length=20)):
     value = await service.notice(vendor, batch_id, registration_type)

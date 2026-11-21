@@ -377,6 +377,8 @@ class Settings(BaseSettings):
     VIDEOWEB_LOGIN_CODE_TTL_SECONDS: int = 300
     VIDEOWEB_LOGIN_CODE_COOLDOWN_SECONDS: int = 60
     VIDEOWEB_LOGIN_CODE_MAX_ATTEMPTS: int = 5
+    # 深信服报名码激活页；未配置时小程序只展示复制报名码。
+    SANGFOR_ACTIVATION_URL: str = ""
 
     @model_validator(mode="after")
     def validate_renshe_storage(self) -> "Settings":
@@ -567,6 +569,8 @@ class Settings(BaseSettings):
             raise ValueError(
                 "WECHAT_PAY_NOTIFICATION_TOLERANCE_SECONDS must be between 60 and 600"
             )
+        if self.SANGFOR_ACTIVATION_URL and not self.SANGFOR_ACTIVATION_URL.startswith("https://"):
+            raise ValueError("SANGFOR_ACTIVATION_URL must use https://")
         if not 5 <= self.WECHAT_PAY_RECONCILE_POLL_SECONDS <= 300:
             raise ValueError(
                 "WECHAT_PAY_RECONCILE_POLL_SECONDS must be between 5 and 300"

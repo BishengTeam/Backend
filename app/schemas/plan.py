@@ -24,6 +24,9 @@ class PlanCreate(BaseModel):
     price_cents: int = Field(50000, ge=1, description="报名价格，单位分")
     exam_location: str | None = Field(None, max_length=256, description="考试地点")
     description: str | None = Field(None, max_length=5000, description="报名说明")
+    registration_notice: str | None = Field(
+        None, max_length=5000, description="报名注意事项（退改规则等）"
+    )
     contact_name: str | None = Field(None, max_length=64, description="联系人")
     contact_phone: str | None = Field(None, max_length=20, description="联系电话")
     sort_order: int = Field(0, ge=0, description="排序值")
@@ -56,6 +59,7 @@ class PlanUpdate(BaseModel):
     price_cents: int | None = Field(None, ge=1)
     exam_location: str | None = Field(None, max_length=256)
     description: str | None = Field(None, max_length=5000)
+    registration_notice: str | None = Field(None, max_length=5000)
     contact_name: str | None = Field(None, max_length=64)
     contact_phone: str | None = Field(None, max_length=20)
     sort_order: int | None = Field(None, ge=0)
@@ -96,6 +100,7 @@ class PlanResponse(BaseModel):
     price_cents: int = 50000
     exam_location: str | None = None
     description: str | None = None
+    registration_notice: str | None = None
     contact_name: str | None = None
     contact_phone: str | None = None
     sort_order: int = 0

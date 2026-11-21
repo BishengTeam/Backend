@@ -4,16 +4,20 @@ from app.policy.permissions import resolve_admin_permissions
 
 VENDOR_MANAGE_PERMISSIONS: dict[str, str] = {
     "h3c": "h3c:batch_manage",
+    "nisp": "nisp:batch_manage",
+    "renshe": "user:write",
     "sangfor": "content:write",
 }
 
 
 def admin_can_manage_vendor(admin, vendor: str) -> bool:
+    allowed = resolve_admin_permissions(admin)
+    if "*" in allowed:
+        return True
     permission = VENDOR_MANAGE_PERMISSIONS.get(vendor)
     if permission is None:
         return False
-    allowed = resolve_admin_permissions(admin)
-    return "*" in allowed or permission in allowed
+    return permission in allowed
 
 
 def require_vendor_permission(admin, vendor: str) -> None:

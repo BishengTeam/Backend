@@ -53,6 +53,8 @@ class Plan(Base, TimestampMixin):
     )
     exam_location: Mapped[str | None] = mapped_column(String(256))
     description: Mapped[str | None] = mapped_column(Text)
+    # 报名阶段注意事项（退改规则等），与考场须知分开维护。
+    registration_notice: Mapped[str | None] = mapped_column(Text)
     contact_name: Mapped[str | None] = mapped_column(String(64))
     contact_phone: Mapped[str | None] = mapped_column(String(20))
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")

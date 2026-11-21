@@ -74,6 +74,7 @@ class H3cExamBatchBase(BaseModel):
     exam_date: datetime | None = None
     capacity: int = Field(..., ge=1)
     description: str | None = Field(None, max_length=5000)
+    registration_notice: str | None = Field(None, max_length=5000)
     sort_order: int = Field(0, ge=0)
     exam_code: str = Field(..., min_length=1, max_length=64)
     identity_tag: str = Field(..., min_length=1, max_length=64)
@@ -176,6 +177,7 @@ class H3cExamBatchResponse(BaseModel):
     remaining_count: int
     exam_location: str | None
     description: str | None
+    registration_notice: str | None = None
     sort_order: int
     exam_code: str
     identity_tag: str

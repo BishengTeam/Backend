@@ -24,7 +24,9 @@ from app.policy.vendor_scope import (
 router = APIRouter(prefix="/h3c/exam-schedules", tags=["管理后台-H3C考场管理"])
 
 # H3C 与深信服共用考场管理，任一权限即可维护。
-schedule_guard = require_any_permission("h3c:batch_manage", "content:write")
+schedule_guard = require_any_permission(
+    "h3c:batch_manage", "nisp:batch_manage", "user:write", "content:write"
+)
 
 
 DEFAULT_SLOT_TIMES = ("09:30", "11:30", "14:30", "16:30")

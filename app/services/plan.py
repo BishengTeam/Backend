@@ -192,6 +192,7 @@ class PlanService:
                 price_cents=data.price_cents,
                 exam_location=data.exam_location,
                 description=data.description,
+                registration_notice=data.registration_notice,
                 contact_name=data.contact_name,
                 contact_phone=data.contact_phone,
                 sort_order=data.sort_order,

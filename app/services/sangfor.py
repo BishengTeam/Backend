@@ -139,6 +139,7 @@ class SangforService:
     def batch_response(plan, product, *, enrolled=0, counts=None):
         result = {"id": plan.id, "product_code": product.code, "product_name": product.chinese_name,
                 "description": plan.description or product.description, "name": plan.name, "status": plan.status,
+                "registration_notice": plan.registration_notice or "",
                 "exam_direction": DIRECTIONS.get(product.code, product.code), "apply_start": plan.apply_start,
                 "apply_end": plan.apply_end, "exam_date": plan.exam_date, "exam_location": plan.exam_location,
                 "price_cents": plan.price_cents, "capacity": plan.capacity, "enrolled": enrolled,
@@ -225,7 +226,8 @@ class SangforService:
                         extra_data={"business_type": "sangfor", "revision": 1, "current_version": 1,
                             "registration_state": "pending_review", "candidate_snapshot": snapshot,
                             "batch_snapshot": {"name": plan.name, "product_code": plan.product_type,
-                                "exam_direction": direction, "exam_date": plan.exam_date.isoformat(), "exam_location": plan.exam_location},
+                                "exam_direction": direction, "exam_date": plan.exam_date.isoformat(), "exam_location": plan.exam_location,
+                                "registration_notice": plan.registration_notice or ""},
                             "versions": [{"version": 1, "submitted_at": now().isoformat(), "snapshot": snapshot}], "reviews": [], "exports": []})
                     db.add(order)
                     await db.flush()
