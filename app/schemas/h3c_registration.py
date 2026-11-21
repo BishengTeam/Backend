@@ -138,6 +138,7 @@ class H3cExamBatchUpdate(BaseModel):
     exam_date: datetime | None = None
     capacity: int | None = Field(None, ge=1)
     description: str | None = Field(None, max_length=5000)
+    registration_notice: str | None = Field(None, max_length=5000)
     sort_order: int | None = Field(None, ge=0)
     exam_code: str | None = Field(None, min_length=1, max_length=64)
     identity_tag: str | None = Field(None, min_length=1, max_length=64)

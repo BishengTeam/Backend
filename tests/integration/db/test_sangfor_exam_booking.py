@@ -111,6 +111,7 @@ async def context(monkeypatch):
             apply_start=None,
             apply_end=None,
             exam_date=None,
+            registration_notice="报名完成后不可退款，请确认后提交。",
         )
         db.add_all((user, h3c_product, product, plan))
         await db.flush()
@@ -329,6 +330,7 @@ async def test_sangfor_registration_code_is_idempotent(context):
     assert (order.extra_data or {})[CODE_FIELD] == first
 
     journey = await user_journey("sangfor", context.order_id, context.user_id)
+    assert journey["registration_notice"] == "报名完成后不可退款，请确认后提交。"
     info = journey["registration_code_info"]
     assert info["code"] == first
     assert info["revoked"] is False

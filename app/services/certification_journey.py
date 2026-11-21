@@ -430,6 +430,7 @@ async def user_journey(vendor, registration_id, user_id):
         return jsonable_encoder({"vendor": vendor, "registration_id": registration_id, "registration_no": getattr(record, "registration_no", None) or order.out_trade_no,
             "registration_code": registration_code,
             "registration_code_info": registration_code_info,
+            "registration_notice": plan.registration_notice or "",
             "order_id": order.id, "subject": product.chinese_name if product else plan.project_name or plan.product_type, "batch_name": plan.name,
             "stages": journey_stages(vendor), "progress": state,
             "reason": reason, "apply_end": plan.apply_end, "proof_due_at": due, "correction_due_at": correction_due,

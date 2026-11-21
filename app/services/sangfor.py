@@ -177,8 +177,19 @@ class SangforService:
         return bool(await db.scalar(select(OfflinePaymentAudit.id).where(OfflinePaymentAudit.order_id == order_id,
                               OfflinePaymentAudit.action == "admin.generic_refund_approved").limit(1)))
 
-    async def response(self, db, order, *, brief=False, refund_approved: bool | None = None):
+    async def response(
+        self,
+        db,
+        order,
+        *,
+        brief=False,
+        refund_approved: bool | None = None,
+        registration_notice: str | None = None,
+    ):
         extra = order.extra_data
+        if registration_notice is None:
+            plan = await db.get(Plan, order.plan_id) if order.plan_id else None
+            registration_notice = (plan.registration_notice if plan else "") or ""
         payment = await payment_summary(db, order)
         if refund_approved is None:
             refund_approved = await self.refund_approved(db, order.id)
@@ -190,6 +201,7 @@ class SangforService:
         return {"id": order.id, "order_id": order.id, "batch_id": order.plan_id, "registration_no": order.out_trade_no,
                 "status": status, "order_status": order.status, "price_cents": order.price,
                 "registration_code": code,
+                "registration_notice": registration_notice,
                 "revision": extra["revision"], "current_version": extra["current_version"],
                 "candidate_snapshot": extra["candidate_snapshot"], "batch_snapshot": extra["batch_snapshot"],
                 "versions": [] if brief else extra["versions"], "reviews": extra["reviews"][-1:] if brief else extra["reviews"], "exports": extra["exports"],
@@ -261,6 +273,7 @@ class SangforService:
             total = await db.scalar(select(func.count()).select_from(query.subquery()))
             rows = list((await db.scalars(query.order_by(Order.id.desc()).offset((page - 1) * page_size).limit(page_size))).all())
             approved_ids: set[int] = set()
+            plan_notices: dict[int, str] = {}
             if rows:
                 approved_ids = set((await db.scalars(
                     select(OfflinePaymentAudit.order_id).where(
@@ -268,10 +281,21 @@ class SangforService:
                         OfflinePaymentAudit.action == "admin.generic_refund_approved",
                     )
                 )).all())
+                plan_ids = {row.plan_id for row in rows if row.plan_id}
+                if plan_ids:
+                    plan_notices = dict((await db.execute(
+                        select(Plan.id, Plan.registration_notice).where(
+                            Plan.id.in_(plan_ids)
+                        )
+                    )).all())
             return {
                 "items": [
                     await self.response(
-                        db, row, brief=True, refund_approved=row.id in approved_ids
+                        db,
+                        row,
+                        brief=True,
+                        refund_approved=row.id in approved_ids,
+                        registration_notice=(plan_notices.get(row.plan_id) or ""),
                     )
                     for row in rows
                 ],
