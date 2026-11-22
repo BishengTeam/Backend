@@ -33,12 +33,21 @@ PUBLISHED_RENSHE_EDITABLE_FIELDS = {
     "capacity",
     "price_cents",
     "exam_location",
+    "exam_org_name",
+    "exam_org_code",
+    "exam_date_note",
+    "registration_notice",
     "description",
     "contact_name",
     "contact_phone",
     "sort_order",
 }
 class PlanService:
+    @staticmethod
+    def plan_update_data(data: PlanUpdate) -> dict:
+        """流程控制字段不参与 Plan 持久化，显式 null 必须保留。"""
+        return data.model_dump(exclude_unset=True, exclude={"confirm_holiday"})
+
     @staticmethod
     def _normalize_datetime(value: datetime | None) -> datetime | None:
         if value is None:
@@ -174,6 +183,8 @@ class PlanService:
                 raise ValidationException("仅人社批次可以指定报考组合")
             if data.program_code is not None:
                 raise ValidationException("请通过报考项目选择配置版本")
+            if renshe and data.exam_date and not data.confirm_holiday:
+                await self._assert_not_holiday(db, data.exam_date)
             existing = await db.scalar(
                 select(Plan).where(
                     Plan.product_type == product_type,
@@ -191,6 +202,9 @@ class PlanService:
                 capacity=data.capacity,
                 price_cents=data.price_cents,
                 exam_location=data.exam_location,
+                exam_org_name=data.exam_org_name,
+                exam_org_code=data.exam_org_code,
+                exam_date_note=data.exam_date_note,
                 description=data.description,
                 registration_notice=data.registration_notice,
                 contact_name=data.contact_name,
@@ -223,7 +237,7 @@ class PlanService:
     ) -> PlanResponse:
         async with get_db_ctx() as db:
             plan = await self._get_plan(db, plan_id, product_type, for_update=True)
-            update_data = data.model_dump(exclude_unset=True)
+            update_data = self.plan_update_data(data)
             renshe = await is_renshe_plan(db, plan)
             if renshe and plan.status in {"finalized", "cancelled", "archived"}:
                 raise BusinessException("已终结、取消或归档的人社批次不可编辑")
@@ -271,6 +285,14 @@ class PlanService:
                 exam_date=update_data.get("exam_date", plan.exam_date),
                 require_window=(plan.status == "published"),
             )
+            if (
+                renshe
+                and not (data.confirm_holiday or False)
+                and "exam_date" in update_data
+                and update_data["exam_date"] is not None
+                and self._normalize_datetime(update_data["exam_date"]) != plan.exam_date
+            ):
+                await self._assert_not_holiday(db, update_data["exam_date"])
             changed_fields: list[str] = []
             for field in ("apply_start", "apply_end", "exam_date"):
                 normalized = self._normalize_datetime(update_data.get(field))
@@ -280,7 +302,7 @@ class PlanService:
             for field, value in update_data.items():
                 if field in {"apply_start", "apply_end", "exam_date"}:
                     continue
-                if value is not None and getattr(plan, field) != value:
+                if getattr(plan, field) != value:
                     setattr(plan, field, value)
                     changed_fields.append(field)
             if plan.status == "published" and renshe:
@@ -567,6 +589,35 @@ class PlanService:
             .group_by(Order.plan_id)
         )
         return {row[0]: row[1] for row in result.all()}
+
+    @staticmethod
+    async def _assert_not_holiday(db, exam_date) -> None:
+        from zoneinfo import ZoneInfo
+
+        from app.port.config import settings
+        from app.services.holiday import holiday_for_date
+        from sqlalchemy.exc import OperationalError, ProgrammingError
+
+        local_date = (
+            exam_date.astimezone(ZoneInfo(settings.APP_TIMEZONE)).date()
+            if exam_date.tzinfo is not None
+            else exam_date.date()
+        )
+        try:
+            holiday = await holiday_for_date(db, local_date)
+        except (OperationalError, ProgrammingError) as exc:
+            message = str(exc)
+            # 局部 SQLite 单元测试或尚未迁移的库没有 holiday 表时，不阻断批次保存。
+            if "holiday" in message and (
+                "no such table" in message or "does not exist" in message
+            ):
+                return
+            raise
+        if holiday is not None:
+            raise BusinessException(
+                f"考试日期 {local_date.isoformat()} 为假期（{holiday.name}）；"
+                "如确认按此日期考试，请勾选“确认为假期考试”后重试"
+            )
 
     @staticmethod
     def _response(plan: Plan, enrolled: int) -> PlanResponse:

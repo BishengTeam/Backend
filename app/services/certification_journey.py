@@ -241,6 +241,9 @@ class CertificationJourneyService:
             "supplement": supplement.content if supplement else default_content(vendor, batch=True),
             "batch_description": plan.description or "",
             "registration_notice": plan.registration_notice or "",
+            "exam_org_name": plan.exam_org_name or "",
+            "exam_org_code": plan.exam_org_code or "",
+            "exam_date_note": plan.exam_date_note or "",
             "requirements": requirements_config if vendor == "renshe" else material_limits}
         # Internal Renshe export/storage rules are hashed, never exposed to anonymous readers.
         digest = notice_digest(snapshot)
@@ -408,6 +411,23 @@ async def user_journey(vendor, registration_id, user_id):
             state["label"] = "等待后续报送／外审"
         events = sorted(jsonable_encoder(events), key=lambda item: item["at"])
         extra_data = order.extra_data or {}
+        batch_snapshot: dict = {}
+        if vendor == "renshe" and getattr(record, "current_version_id", None):
+            from app.domain.renshe.src.index import RensheApplicationVersion
+
+            version = await db.get(
+                RensheApplicationVersion, record.current_version_id
+            )
+            batch_snapshot = (version.batch_snapshot if version else {}) or {}
+        def snapshot_value(key: str, fallback):
+            if key in batch_snapshot:
+                value = batch_snapshot[key]
+                return "" if value is None else value
+            return fallback or ""
+
+        exam_org_name = snapshot_value("exam_org_name", plan.exam_org_name)
+        exam_org_code = snapshot_value("exam_org_code", plan.exam_org_code)
+        exam_date_note = snapshot_value("exam_date_note", plan.exam_date_note)
         code_revoked = bool(extra_data.get("sangfor_registration_code_revoked_at"))
         code_value = None if code_revoked else extra_data.get("sangfor_registration_code")
         registration_code = (
@@ -431,6 +451,9 @@ async def user_journey(vendor, registration_id, user_id):
             "registration_code": registration_code,
             "registration_code_info": registration_code_info,
             "registration_notice": plan.registration_notice or "",
+            "exam_org_name": exam_org_name,
+            "exam_org_code": exam_org_code,
+            "exam_date_note": exam_date_note,
             "order_id": order.id, "subject": product.chinese_name if product else plan.project_name or plan.product_type, "batch_name": plan.name,
             "stages": journey_stages(vendor), "progress": state,
             "reason": reason, "apply_end": plan.apply_end, "proof_due_at": due, "correction_due_at": correction_due,

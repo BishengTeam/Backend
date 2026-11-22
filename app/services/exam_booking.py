@@ -14,6 +14,7 @@ from app.domain.exam.src.index import (
     Holiday,
 )
 from app.services.clock import db_now_utc
+from app.services.holiday import holiday_matches
 from app.services.vendor_registration import normalize_vendor, resolve_registration
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 
@@ -71,15 +72,15 @@ class ExamBookingService:
         if schedule.status != "published":
             raise BusinessException("该考场计划未开放")
 
-        holidays = set(
-            (await db.execute(select(Holiday.holiday_date))).scalars().all()
-        )
+        holidays = list((await db.execute(select(Holiday))).scalars().all())
 
         dates: list[date] = []
         current = schedule.open_date_start
         end = schedule.open_date_end
         while current <= end:
-            if current.weekday() in schedule.allowed_weekdays and current not in holidays:
+            if current.weekday() in schedule.allowed_weekdays and not any(
+                holiday_matches(item, current) for item in holidays
+            ):
                 dates.append(current)
             current += timedelta(days=1)
         return dates
@@ -197,10 +198,8 @@ class ExamBookingService:
         # 校验日期
         if exam_date.weekday() not in schedule.allowed_weekdays:
             raise BusinessException("该日期不可预约")
-        holidays = set(
-            (await db.execute(select(Holiday.holiday_date))).scalars().all()
-        )
-        if exam_date in holidays:
+        holidays = list((await db.execute(select(Holiday))).scalars().all())
+        if any(holiday_matches(item, exam_date) for item in holidays):
             raise BusinessException("该日期为假期，不可预约")
         if exam_date < schedule.open_date_start or exam_date > schedule.open_date_end:
             raise BusinessException("该日期超出开放范围")

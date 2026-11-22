@@ -89,6 +89,9 @@ async def context(monkeypatch, tmp_path):
             capacity=100,
             price_cents=100,
             registration_notice="报名完成后不可退款，请确认后提交。",
+            exam_org_name=f"{prefix} 鉴定中心",
+            exam_org_code=f"{prefix}-ORG",
+            exam_date_note="暂定",
         )
         db.add(plan)
         await db.flush()
@@ -204,6 +207,9 @@ async def test_notice_payload_carries_registration_notice_without_description_fa
         )
 
     assert notice["registration_notice"] == "报名完成后不可退款，请确认后提交。"
+    assert notice["exam_org_name"] == f"{context.prefix} 鉴定中心"
+    assert notice["exam_org_code"] == f"{context.prefix}-ORG"
+    assert notice["exam_date_note"] == "暂定"
 
     async with context.factory() as db, db.begin():
         plan = await db.get(Plan, context.plan_id)

@@ -44,18 +44,41 @@ class RensheApplication(Base, TimestampMixin):
         ),
         Index("ix_renshe_application_plan_status", "plan_id", "status"),
         Index("ix_renshe_application_user_status", "user_id", "status"),
+        Index("ix_renshe_application_batch_project", "batch_project_id"),
         Index(
-            "uq_renshe_application_active_user_plan",
+            "uq_renshe_application_active_legacy",
             "user_id",
             "plan_id",
             unique=True,
-            postgresql_where=text("status <> 'closed'"),
-            sqlite_where=text("status <> 'closed'"),
+            postgresql_where=text(
+                "status <> 'closed' AND batch_project_id IS NULL"
+            ),
+            sqlite_where=text(
+                "status <> 'closed' AND batch_project_id IS NULL"
+            ),
+        ),
+        Index(
+            "uq_renshe_application_active_project",
+            "user_id",
+            "plan_id",
+            "batch_project_id",
+            unique=True,
+            postgresql_where=text(
+                "status <> 'closed' AND batch_project_id IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "status <> 'closed' AND batch_project_id IS NOT NULL"
+            ),
         ),
     )
 
     plan_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("plan.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    batch_project_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("renshe_batch_project.id", ondelete="RESTRICT"),
+        nullable=True,
     )
     user_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("user.id", ondelete="RESTRICT"), nullable=False, index=True
@@ -85,6 +108,38 @@ class RensheApplication(Base, TimestampMixin):
     sensitive_cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class RensheBatchProject(Base, TimestampMixin):
+    """人社多项目批次：一个批次下允许多个报考项目及批次级价格。"""
+
+    __tablename__ = "renshe_batch_project"
+    __table_args__ = (
+        UniqueConstraint("plan_id", "product_id", name="uq_renshe_batch_project"),
+        Index("ix_renshe_batch_project_plan", "plan_id", "is_active"),
+        CheckConstraint("price_cents >= 0", name="ck_renshe_batch_project_price"),
+        CheckConstraint("sort_order >= 0", name="ck_renshe_batch_project_sort"),
+    )
+
+    plan_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("plan.id", ondelete="CASCADE"), nullable=False
+    )
+    product_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("cert_product.id", ondelete="RESTRICT"), nullable=False
+    )
+    config_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("renshe_project_config.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    price_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    occupation_name: Mapped[str | None] = mapped_column(String(64))
+    occupation_code: Mapped[str | None] = mapped_column(String(160))
+    skill_level: Mapped[str | None] = mapped_column(String(32))
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+
+
 class RensheApplicationVersion(Base, TimestampMixin):
     __tablename__ = "renshe_application_version"
     __table_args__ = (
@@ -108,6 +163,7 @@ class RensheApplicationVersion(Base, TimestampMixin):
     realname_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
     student_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
     form_data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    batch_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     sensitive_cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

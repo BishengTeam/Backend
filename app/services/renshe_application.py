@@ -42,6 +42,11 @@ from app.services.clock import db_now_utc
 from app.services.consultation_group import ConsultationGroupService
 from app.services.plan_enrollment import CAPACITY_OCCUPYING_ORDER_STATUSES, PlanEnrollmentService
 from app.services.renshe_project import batch_configuration, is_renshe_plan, default_configuration
+from app.services.renshe_batch_project import (
+    resolve_project,
+    resolve_enrollable_project,
+    select_write_application,
+)
 from app.services.renshe_graduated import is_self_reported, validate_admission
 from app.services.renshe_reporting import resolve_contract, validate_reporting, validate_snapshot, is_v2
 from app.utils.payment import generate_out_trade_no
@@ -75,8 +80,7 @@ class RensheApplicationService:
             if not await is_renshe_plan(db, plan):
                 raise NotFoundException("人社报名批次")
             self._assert_supported_program(plan)
-
-            application = await db.scalar(
+            active_applications = list((await db.scalars(
                 select(RensheApplication)
                 .where(
                     RensheApplication.user_id == user_id,
@@ -84,7 +88,37 @@ class RensheApplicationService:
                     RensheApplication.status != "closed",
                 )
                 .with_for_update()
+            )).all())
+            if len(active_applications) > 1:
+                raise ConflictException("存在多条活跃报名，请联系管理员整理后再报名")
+            existing_application = active_applications[0] if active_applications else None
+            if (
+                existing_application is not None
+                and existing_application.batch_project_id is not None
+            ):
+                if (
+                    data.batch_project_id is not None
+                    and data.batch_project_id != existing_application.batch_project_id
+                ):
+                    raise ConflictException("该批次已有其他项目的报名，不能重复报名")
+                # 历史补正：允许已停用项目继续保存。
+                resolved_project = await resolve_project(
+                    db,
+                    plan,
+                    batch_project_id=existing_application.batch_project_id,
+                )
+            else:
+                # 无报名或 legacy NULL：按新报名规则选择/校验项目。
+                resolved_project = await resolve_enrollable_project(
+                    db, plan, data.batch_project_id
+                )
+            application, adopt_legacy = select_write_application(
+                active_applications,
+                explicit_project_id=data.batch_project_id,
+                resolved_project_id=resolved_project.batch_project_id,
             )
+            if adopt_legacy:
+                application.batch_project_id = resolved_project.batch_project_id
             if plan.renshe_config_id is None:
                 raise ConflictException("批次尚未确认项目配置，请联系管理员核实历史归属")
             if application is None and not is_self_reported(batch_configuration(plan)):
@@ -102,6 +136,7 @@ class RensheApplicationService:
                 application = RensheApplication(
                     user_id=user_id,
                     plan_id=data.plan_id,
+                    batch_project_id=resolved_project.batch_project_id,
                     status="draft",
                 )
                 db.add(application)
@@ -206,6 +241,13 @@ class RensheApplicationService:
                     realname_snapshot=self._realname_snapshot(realname),
                     student_snapshot={} if graduated else self._student_snapshot(student),
                     form_data=dict(application.draft_data),
+                    batch_snapshot={
+                        "exam_date": plan.exam_date.isoformat() if plan.exam_date else None,
+                        "exam_location": plan.exam_location,
+                        "exam_org_name": plan.exam_org_name,
+                        "exam_org_code": plan.exam_org_code,
+                        "exam_date_note": plan.exam_date_note,
+                    },
                     submitted_at=now,
                 )
                 db.add(version)
@@ -395,7 +437,17 @@ class RensheApplicationService:
             Order.application_id == application.id, Order.plan_id == application.plan_id,
             Order.user_id == application.user_id, Order.status.in_(("paid", "completed"))).limit(1))
 
-    async def upload_application_material(self, user_id: int, plan_id: int, kind: str, *, filename: str, content_type: str | None, content: bytes) -> dict:
+    async def upload_application_material(
+        self,
+        user_id: int,
+        plan_id: int,
+        kind: str,
+        *,
+        filename: str,
+        content_type: str | None,
+        content: bytes,
+        batch_project_id: int | None = None,
+    ) -> dict:
         from app.services.renshe_source import delete_unreferenced_source_keys
         stored = None
         old_key = None
@@ -412,9 +464,47 @@ class RensheApplicationService:
                 }
                 if not is_self_reported(config) or kind not in upload_kinds:
                     raise BusinessException("当前批次不支持该报名材料上传")
-                application = await db.scalar(select(RensheApplication).where(
-                    RensheApplication.user_id == user_id, RensheApplication.plan_id == plan_id,
-                    RensheApplication.status != "closed").with_for_update())
+                applications = list((await db.scalars(
+                    select(RensheApplication).where(
+                        RensheApplication.user_id == user_id,
+                        RensheApplication.plan_id == plan_id,
+                        RensheApplication.status != "closed",
+                    ).with_for_update()
+                )).all())
+                if len(applications) > 1:
+                    raise ConflictException(
+                        "存在多条活跃报名，请联系管理员整理后再上传材料"
+                    )
+                application = applications[0] if applications else None
+                if application is not None and application.batch_project_id is not None:
+                    if (
+                        batch_project_id is not None
+                        and batch_project_id != application.batch_project_id
+                    ):
+                        raise ConflictException("上传材料与报名项目不一致")
+                    resolved_project = await resolve_project(
+                        db,
+                        plan,
+                        batch_project_id=application.batch_project_id,
+                    )
+                elif application is not None:
+                    if batch_project_id is not None:
+                        raise ConflictException(
+                            "该批次存在未关联项目的历史报名，请联系管理员处理"
+                        )
+                    resolved_project = await resolve_enrollable_project(
+                        db, plan, None
+                    )
+                else:
+                    resolved_project = await resolve_enrollable_project(
+                        db, plan, batch_project_id
+                    )
+                if (
+                    application is not None
+                    and application.batch_project_id is None
+                    and resolved_project.batch_project_id is not None
+                ):
+                    application.batch_project_id = resolved_project.batch_project_id
                 self._validate_edit_window(
                     plan,
                     application,
@@ -424,7 +514,13 @@ class RensheApplicationService:
                 if application is None:
                     if not is_v2(config.get("reporting_policy", {})):
                         raise ConflictException("历史批次仅办理已有报名，新报名请选择当前批次")
-                    application = RensheApplication(user_id=user_id, plan_id=plan_id, status="draft", draft_data={})
+                    application = RensheApplication(
+                        user_id=user_id,
+                        plan_id=plan_id,
+                        batch_project_id=resolved_project.batch_project_id,
+                        status="draft",
+                        draft_data={},
+                    )
                     db.add(application)
                     await db.flush()
                 if application.status not in EDITABLE_APPLICATION_STATUSES or application.frozen_at is not None:

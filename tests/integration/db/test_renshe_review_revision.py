@@ -14,7 +14,12 @@ from app.port.exceptions import ConflictException
 from app.services.order_fulfillment import OrderFulfillmentService
 from app.services.renshe_application import RensheApplicationService
 from app.services.renshe_review import RensheReviewService
+from app.services.plan import PlanService
+from app.schemas.plan import PlanUpdate
+from app.domain.plan.src.index import Plan
+from app.port.exceptions import AppException
 from tests.unit import test_renshe_projects as projects
+from tests.unit.test_renshe_projects import create_batch
 from tests.unit.test_renshe_graduated import graduated_batch, uploads, draft_payload
 
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
@@ -43,6 +48,82 @@ async def test_renshe_notice_confirmation_is_saved_with_submitted_material_versi
         assert version.form_data['enrollment_notice']['requirements']['reporting_policy']['commitment_template']
     journey = await user_journey('renshe', draft.id, 1)
     assert journey['stages'][3] == '外审' and journey['progress']['stage'] == 0
+    assert journey['exam_org_name'] == ""
+
+    # 提交后修改 Plan：历史报名仍显示提交时冻结的空机构。
+    async with env.db() as db:
+        plan = await db.get(Plan, batch.id)
+        plan.exam_org_name = "提交后新增的机构"
+        await db.commit()
+    frozen = await user_journey('renshe', draft.id, 1)
+    assert frozen['exam_org_name'] == ""
+
+    # 旧版本完全没有该 key 时才回退当前 Plan。
+    async with env.db() as db:
+        version = await db.get(RensheApplicationVersion, submitted.version.id)
+        version.batch_snapshot = {}
+        await db.commit()
+    legacy = await user_journey('renshe', draft.id, 1)
+    assert legacy['exam_org_name'] == "提交后新增的机构"
+
+
+async def test_renshe_update_plan_can_clear_exam_date_without_server_error(pg_env, monkeypatch):
+    env = pg_env
+    project, published = await graduated_batch(env, monkeypatch)
+    draft = await create_batch(project, name="草稿清空考试日期")
+
+    cleared = await PlanService().update_plan(
+        draft.id,
+        PlanUpdate(confirm_holiday=False, exam_date=None),
+        project.code,
+        admin_id=1,
+    )
+    assert cleared.exam_date is None
+
+    with pytest.raises(AppException):
+        await PlanService().update_plan(
+            published.id,
+            PlanUpdate(confirm_holiday=False, exam_date=None),
+            project.code,
+            admin_id=1,
+        )
+
+
+async def test_disabled_project_still_allows_historical_correction_draft(pg_env, monkeypatch):
+    env = pg_env
+    _, batch = await graduated_batch(env, monkeypatch)
+    service = RensheApplicationService(env.storage)
+    await uploads(service, batch)
+    draft = await service.save_draft(1, draft_payload(batch))
+
+    from app.domain.renshe.src.index import RensheBatchProject
+    from app.models.cert_product import CertProduct
+
+    async with env.db() as db, db.begin():
+        product = await db.scalar(
+            select(CertProduct).where(CertProduct.code == batch.product_type)
+        )
+        project = RensheBatchProject(
+            plan_id=batch.id,
+            product_id=product.id,
+            config_id=batch.renshe_config_id,
+            price_cents=100,
+            is_active=False,
+        )
+        db.add(project)
+        await db.flush()
+        project_id = project.id
+        application = await db.get(RensheApplication, draft.id)
+        application.batch_project_id = project.id
+
+    updated = await service.save_draft(
+        1, draft_payload(batch, contact_phone="13900139000")
+    )
+    assert updated.id == draft.id
+    async with env.db() as db:
+        application = await db.get(RensheApplication, draft.id)
+        assert application.batch_project_id == project_id
+        assert application.draft_data["contact_phone"] == "13900139000"
 
 
 @pytest.fixture
@@ -57,7 +138,7 @@ async def pg_env(monkeypatch, tmp_path):
     monkeypatch.setattr(projects, "create_async_engine", lambda _: create_async_engine(url,
         poolclass=NullPool, connect_args={"server_settings": {"search_path": schema}}))
     from app.adapter.database import Base
-    names = {"cert_product_catalog", "cert_product", "renshe_project_config", "user", "user_realname", "user_student", "admin_user", "plan", "order", "h3c_refund_request", "nisp_refund_request", "payment_refund_task", "cert_consultation_group"}
+    names = {"cert_product_catalog", "cert_product", "renshe_project_config", "holiday", "user", "user_realname", "user_student", "admin_user", "plan", "order", "h3c_refund_request", "nisp_refund_request", "payment_refund_task", "cert_consultation_group"}
     names.update(name for name in Base.metadata.tables if name.startswith(("renshe_", "offline_")))
     pending = list(names)
     while pending:

@@ -76,12 +76,14 @@ async def reporting_options(plan_id: int = Path(..., ge=1), current_user: User =
 async def upload_application_material(
     plan_id: int = Path(..., ge=1),
     kind: RensheApplicationMaterialKind = Path(...),
+    batch_project_id: int | None = Query(None, ge=1),
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
     result = await RensheApplicationService().upload_application_material(
         current_user.id, plan_id, kind, filename=file.filename or "material",
         content_type=file.content_type, content=await file.read(500 * 1024 + 1 if kind == "registration_portrait" else MAX_MATERIAL_READ_BYTES),
+        batch_project_id=batch_project_id,
     )
     return success(data=result)
 

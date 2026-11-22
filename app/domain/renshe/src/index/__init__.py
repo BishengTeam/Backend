@@ -3,6 +3,7 @@
 from app.domain.renshe.src.model import (
     RensheApplication,
     RensheApplicationVersion,
+    RensheBatchProject,
     RensheAuditLog,
     RensheCleanupRun,
     RensheExportItem,
@@ -47,6 +48,7 @@ __all__ = [
     "RensheProgram",
     "RensheApplication",
     "RensheApplicationVersion",
+    "RensheBatchProject",
     "RensheAuditLog",
     "RensheCleanupRun",
     "RensheExportItem",

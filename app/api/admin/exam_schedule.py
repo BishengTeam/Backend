@@ -27,6 +27,9 @@ router = APIRouter(prefix="/h3c/exam-schedules", tags=["管理后台-H3C考场�
 schedule_guard = require_any_permission(
     "h3c:batch_manage", "nisp:batch_manage", "user:write", "content:write"
 )
+holiday_guard = require_any_permission(
+    "h3c:batch_manage", "nisp:batch_manage", "user:write", "content:write"
+)
 
 
 DEFAULT_SLOT_TIMES = ("09:30", "11:30", "14:30", "16:30")
@@ -577,10 +580,9 @@ holiday_router = APIRouter(prefix="/holidays", tags=["管理后台-假期管理"
 
 @holiday_router.get("", response_model=APIResponse[list], summary="假期列表")
 async def list_holidays(
-    _admin=Depends(schedule_guard),
+    _admin=Depends(holiday_guard),
     db: AsyncSession = Depends(get_db),
 ):
-    require_vendor_permission(_admin, "h3c")
     rows = (await db.execute(select(Holiday).order_by(Holiday.holiday_date))).scalars().all()
     return success(data=[{
         "id": h.id, "name": h.name,
@@ -592,10 +594,9 @@ async def list_holidays(
 @holiday_router.post("", response_model=APIResponse[dict], summary="新增假期")
 async def create_holiday(
     data: HolidayCreate,
-    _admin=Depends(schedule_guard),
+    _admin=Depends(holiday_guard),
     db: AsyncSession = Depends(get_db),
 ):
-    require_vendor_permission(_admin, "h3c")
     existing = await db.scalar(
         select(Holiday.id).where(Holiday.holiday_date == data.holiday_date)
     )
@@ -610,10 +611,9 @@ async def create_holiday(
 @holiday_router.delete("/{holiday_id}", response_model=APIResponse[dict], summary="删除假期")
 async def delete_holiday(
     holiday_id: int,
-    _admin=Depends(schedule_guard),
+    _admin=Depends(holiday_guard),
     db: AsyncSession = Depends(get_db),
 ):
-    require_vendor_permission(_admin, "h3c")
     h = await db.get(Holiday, holiday_id)
     if h is None:
         raise NotFoundException("假期记录")

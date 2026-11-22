@@ -23,6 +23,10 @@ class PlanCreate(BaseModel):
     capacity: int = Field(0, ge=0, description="总名额，0=不限")
     price_cents: int = Field(50000, ge=1, description="报名价格，单位分")
     exam_location: str | None = Field(None, max_length=256, description="考试地点")
+    exam_org_name: str | None = Field(None, max_length=128, description="考试机构")
+    exam_org_code: str | None = Field(None, max_length=64, description="考试机构代码")
+    exam_date_note: str | None = Field(None, max_length=64, description="考试时间备注")
+    confirm_holiday: bool = Field(False, description="确认为假期考试（人社批次）")
     description: str | None = Field(None, max_length=5000, description="报名说明")
     registration_notice: str | None = Field(
         None, max_length=5000, description="报名注意事项（退改规则等）"
@@ -58,6 +62,10 @@ class PlanUpdate(BaseModel):
     capacity: int | None = Field(None, ge=0)
     price_cents: int | None = Field(None, ge=1)
     exam_location: str | None = Field(None, max_length=256)
+    exam_org_name: str | None = Field(None, max_length=128)
+    exam_org_code: str | None = Field(None, max_length=64)
+    exam_date_note: str | None = Field(None, max_length=64)
+    confirm_holiday: bool | None = None
     description: str | None = Field(None, max_length=5000)
     registration_notice: str | None = Field(None, max_length=5000)
     contact_name: str | None = Field(None, max_length=64)
@@ -99,6 +107,9 @@ class PlanResponse(BaseModel):
     application_type: str
     price_cents: int = 50000
     exam_location: str | None = None
+    exam_org_name: str | None = None
+    exam_org_code: str | None = None
+    exam_date_note: str | None = None
     description: str | None = None
     registration_notice: str | None = None
     contact_name: str | None = None

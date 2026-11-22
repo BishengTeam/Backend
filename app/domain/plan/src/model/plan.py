@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.adapter.database import Base, TimestampMixin
@@ -17,7 +17,21 @@ class Plan(Base, TimestampMixin):
         CheckConstraint("price_cents >= 0", name="ck_plan_price_nonnegative"),
         CheckConstraint("capacity >= 0", name="ck_plan_capacity_nonnegative"),
         CheckConstraint("sort_order >= 0", name="ck_plan_sort_order_nonnegative"),
-        Index("uq_plan_product_name", "product_type", "name", unique=True),
+        Index(
+            "uq_plan_product_name",
+            "product_type",
+            "name",
+            unique=True,
+            postgresql_where=text("product_type IS NOT NULL"),
+            sqlite_where=text("product_type IS NOT NULL"),
+        ),
+        Index(
+            "uq_plan_name_without_product",
+            "name",
+            unique=True,
+            postgresql_where=text("product_type IS NULL"),
+            sqlite_where=text("product_type IS NULL"),
+        ),
         Index("ix_plan_status", "status"),
     )
 
@@ -52,6 +66,9 @@ class Plan(Base, TimestampMixin):
         Integer, nullable=False, default=50000, server_default="50000"
     )
     exam_location: Mapped[str | None] = mapped_column(String(256))
+    exam_org_name: Mapped[str | None] = mapped_column(String(128))
+    exam_org_code: Mapped[str | None] = mapped_column(String(64))
+    exam_date_note: Mapped[str | None] = mapped_column(String(64))
     description: Mapped[str | None] = mapped_column(Text)
     # 报名阶段注意事项（退改规则等），与考场须知分开维护。
     registration_notice: Mapped[str | None] = mapped_column(Text)

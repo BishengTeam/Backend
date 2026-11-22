@@ -177,6 +177,9 @@ class RensheLevelThreeQualification(BaseModel):
 class RensheDraftUpsert(BaseModel):
     model_config = ConfigDict(extra="forbid")
     plan_id: int = Field(..., ge=1, description="人社报考批次 ID")
+    batch_project_id: int | None = Field(
+        None, ge=1, description="人社多项目批次的报考项目 ID"
+    )
     contact_phone: str = Field(..., description="报名联系电话")
     mailing_address: str = Field(..., min_length=1, max_length=256, description="通讯地址")
     email: str = Field(..., min_length=3, max_length=128, description="电子邮箱")
