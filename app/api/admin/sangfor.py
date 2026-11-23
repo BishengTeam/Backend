@@ -52,7 +52,7 @@ async def close_batch(batch_id: int, admin=Depends(require_permission("cert:sang
 
 @router.get("/registrations")
 async def registrations(batch_id: int | None = None, state: str | None = None, keyword: str | None = Query(None, max_length=64),
-                        payment_state: str | None = None, refund_only: bool = False, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
+                        payment_state: str | None = None, refund_only: bool = False, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=2000),
                         admin=Depends(require_permission("cert:sangfor"))):
     return success(data=await service.registrations(batch_id=batch_id, state=state, keyword=keyword, payment_state=payment_state, refund_only=refund_only, page=page, page_size=page_size))
 
@@ -78,7 +78,7 @@ async def refunds(
     group: Literal["pending", "processing", "abnormal"] | None = None,
     status: Literal["approved", "exception", "succeeded"] | None = None,
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     admin=Depends(require_permission("cert:sangfor")),
 ):
     return success(data=await service.refunds(batch_id=batch_id, registration_id=registration_id, keyword=keyword,

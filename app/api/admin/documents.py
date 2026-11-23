@@ -20,7 +20,7 @@ async def list_documents(
     scene: str | None = Query(None, max_length=64),
     is_active: bool | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("document:read")),
 ):
     return success(

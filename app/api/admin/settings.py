@@ -64,7 +64,7 @@ def _credential_idempotency_key(
 )
 async def list_admins(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     search: str | None = Query(None, max_length=64),
     role: Literal[
         "super_admin", "quiz_admin", "cert_admin", "course_admin", "teacher", "operations_admin"
@@ -276,7 +276,7 @@ async def list_security_audit(
     started_at: datetime | None = Query(None),
     ended_at: datetime | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_super_admin),
 ) -> APIResponse[PaginatedData[AdminSecurityAuditListItem]]:
     result_data = await AdminSecurityAuditService().list_logs(

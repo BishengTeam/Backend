@@ -43,7 +43,7 @@ async def list_courses(
     created_from: str | None = Query(None),
     created_to: str | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("course:read")),
 ):
     from datetime import datetime
@@ -110,7 +110,7 @@ async def list_enrollments(
     user_id: int | None = Query(None, ge=1),
     status: EnrollmentStatus | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("course:read")),
 ):
     return success(
@@ -130,7 +130,7 @@ async def list_audit_logs(
     action: str | None = Query(None, max_length=64),
     result: str | None = Query(None, pattern="^(succeeded|failed)$"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("course:read")),
 ):
     return success(
@@ -209,7 +209,7 @@ async def delete_course(
 async def list_chapters(
     course_id: int = Path(..., ge=1),
     page: int = Query(1, ge=1),
-    page_size: int = Query(100, ge=1, le=100),
+    page_size: int = Query(100, ge=1, le=2000),
     _admin=Depends(require_permission("course:read")),
 ):
     return success(
@@ -372,7 +372,7 @@ async def set_binding_status(
 async def list_jobs(
     course_id: int = Path(..., ge=1),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("course:read")),
 ):
     return success(

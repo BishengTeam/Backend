@@ -40,7 +40,7 @@ async def list_batches(
     level: str | None = Query(None, pattern="^[12]$"),
     status: str | None = Query(None, max_length=32),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("cert:nisp")),
 ) -> APIResponse[PaginatedData[NispExamBatchResponse]]:
     items, total = await _service.list_batches(
@@ -115,7 +115,7 @@ async def cancel_batch(
 async def list_review_batch_options(
     keyword: str | None = Query(None, max_length=64),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("cert:nisp")),
 ) -> APIResponse[PaginatedData[NispReviewBatchOption]]:
     items, total = await _service.list_review_batch_options(
@@ -135,7 +135,7 @@ async def list_registrations(
     keyword: str | None = Query(None, max_length=64),
     has_valid_export: bool | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("cert:nisp")),
 ) -> APIResponse[PaginatedData[NispRegistrationResponse]]:
     items, total = await _service.list_registrations(
@@ -259,7 +259,7 @@ async def precheck_export(
 async def list_export_jobs(
     batch_id: int | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("cert:nisp")),
 ):
     """List NISP export jobs."""
@@ -279,7 +279,7 @@ async def list_export_job_items(
     is_valid: bool | None = Query(None),
     keyword: str | None = Query(None, max_length=64),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("cert:nisp")),
 ):
     """List the frozen registration items belonging to one NISP export job."""
@@ -319,7 +319,7 @@ async def list_refunds(
     group: str | None = Query(None, pattern="^(pending|processing|abnormal)$"),
     status: str | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("cert:nisp")),
 ):
     """List NISP refund requests."""

@@ -272,7 +272,7 @@ async def list_activation_codes(
     code_schema: Literal["2", "3"] | None = Query(None),
     status: AdminQuizActivationDisplayStatus | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("quiz:list")),
 ) -> APIResponse[PaginatedData[AdminQuizActivationCodeItem]]:
     if status == "expired":
@@ -622,7 +622,7 @@ async def admin_audit_query(
     start_at: datetime | None = Query(None),
     end_at: datetime | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
 ) -> AdminQuizAuditQuery:
     return _validated_query(
         AdminQuizAuditQuery,
@@ -662,7 +662,7 @@ async def admin_stats_question_query(
     sort: str = Query("updated_at"),
     order: str = Query("desc"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
 ) -> AdminQuizStatsQuestionQuery:
     return _validated_query(
         AdminQuizStatsQuestionQuery,
@@ -687,7 +687,7 @@ async def admin_import_query(
     status: QuizImportStatus | None = Query(None),
     source_type: QuizImportSourceType | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
 ) -> AdminQuizImportJobQuery:
     return _validated_query(
         AdminQuizImportJobQuery,
@@ -1293,7 +1293,7 @@ async def get_daily_stats(
 )
 async def list_user_stats(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("quiz:list")),
 ) -> APIResponse[PaginatedData[AdminQuizUserStatsListItem]]:
     query = _validated_query(
@@ -1369,7 +1369,7 @@ async def list_student_stats(
     date_from: date | None = Query(None),
     date_to: date | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("quiz:list")),
 ) -> APIResponse[PaginatedData[AdminQuizStudentStatsItem]]:
     query = _validated_query(

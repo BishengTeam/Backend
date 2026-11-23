@@ -65,7 +65,7 @@ async def list_users(
         description="组合审核筛选：pending=任一待审；approved=均通过；rejected=任一驳回",
     ),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页数量"),
     _admin=Depends(require_permission("user:list")),
 ) -> APIResponse[PaginatedData[AdminUserListItem]]:
     has_filters = user_id or openid or phone or created_at_start or created_at_end or identity_status or student_status or review_status

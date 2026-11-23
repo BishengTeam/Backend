@@ -18,7 +18,7 @@ AdminQuizReviewStatus = Literal["pending", "in_progress", "recalled", "completed
 class AdminQuizReviewListQuery(QuizContractModel):
     status: Literal["pending", "in_progress", "recalled"] | None = None
     page: int = Field(default=1, ge=1)
-    page_size: int = Field(default=20, ge=1, le=100)
+    page_size: int = Field(default=20, ge=1, le=2000)
 
 
 class AdminQuizReviewListItem(QuizContractModel):

@@ -30,7 +30,7 @@ router = APIRouter(prefix="/certifications", tags=["管理后台-认证管理"])
 async def list_certifications(
     keyword: str | None = Query(None, description="按名称关键词模糊搜索"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页数量"),
     _admin=Depends(require_permission("content:list")),
 ):
     """分页查询认证类型列表，支持按名称关键词模糊搜索"""

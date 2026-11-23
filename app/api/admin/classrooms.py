@@ -23,7 +23,7 @@ def _teacher_scope(admin) -> int | None:
 
 @router.get("", response_model=APIResponse[PaginatedData], summary="课堂列表")
 async def list_classrooms(
-    page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
+    page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=2000),
     admin=Depends(require_permission("classroom:manage")),
 ):
     result = await ClassroomAdminService().list_classrooms(
@@ -159,7 +159,7 @@ async def import_questions(
 async def list_questions(
     classroom_id: int = Path(..., ge=1),
     status: str | None = Query(None),
-    page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
+    page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=2000),
     admin=Depends(require_permission("classroom:manage")),
 ):
     result = await ClassroomAdminService().list_questions(

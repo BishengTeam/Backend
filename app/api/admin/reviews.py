@@ -56,7 +56,7 @@ async def list_reviews(
     target_type: str | None = Query(None, description="按审核对象类型筛选"),
     target_id: int | None = Query(None, ge=1, description="按审核对象 ID 筛选"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页数量"),
     _admin=Depends(require_permission("user:list")),
 ) -> APIResponse[PaginatedData[ReviewResponse]]:
     filters = ReviewFilter(target_type=target_type, target_id=target_id) if (target_type or target_id) else None

@@ -32,7 +32,7 @@ router = APIRouter(prefix="/gzh-articles", tags=["管理后台-公众号资讯"]
 async def list_gzh_articles(
     keyword: str | None = Query(None, description="按标题模糊搜索"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页数量"),
     _admin=Depends(require_permission("homepage:list")),
 ) -> APIResponse[PaginatedData[GzhArticleListItem]]:
     result = await AdminGzhArticleService().list_articles(keyword, page, page_size)

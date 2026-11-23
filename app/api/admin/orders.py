@@ -48,7 +48,7 @@ async def list_orders(
     start_time: datetime | None = Query(None, description="创建时间起，ISO 8601"),
     end_time: datetime | None = Query(None, description="创建时间止，ISO 8601"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页数量"),
     _admin=Depends(require_permission("order:list")),
 ) -> APIResponse[PaginatedData[OrderResponse]]:
     filters = OrderFilter(status=status, product_type=product_type, phone=phone, payment_channel=payment_channel, offline_status=offline_status, keyword=keyword, plan_id=plan_id)

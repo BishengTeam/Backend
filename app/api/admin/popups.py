@@ -31,7 +31,7 @@ router = APIRouter(prefix="/popups", tags=["管理后台-弹窗海报"])
 async def list_popups(
     keyword: str | None = Query(None, description="按图片地址/跳转链接模糊搜索"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页数量"),
     _admin=Depends(require_permission("homepage:list")),
 ) -> APIResponse[PaginatedData[PopupListItem]]:
     result = await AdminPopupService().list_popups(keyword, page, page_size)

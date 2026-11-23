@@ -29,7 +29,7 @@ router = APIRouter(prefix="/agreements", tags=["管理后台-协议管理"])
 )
 async def list_agreements(
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页数量"),
     _admin=Depends(require_permission("content:list")),
 ) -> APIResponse[PaginatedData[AdminAgreementListItem]]:
     result = await AdminAgreementService().list_agreements(page, page_size)

@@ -29,7 +29,7 @@ router = APIRouter(prefix="/coupons", tags=["管理后台-优惠券管理"])
 )
 async def list_coupons(
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页数量"),
     _admin=Depends(require_permission("content:list")),
 ) -> APIResponse[PaginatedData[AdminCouponListItem]]:
     result = await AdminCouponService().list_coupons(page, page_size)

@@ -92,7 +92,7 @@ async def recycle_bin_items(
     state: str = Query("deleted", pattern="^(deleted|archived)$"),
     keyword: str | None = Query(None, description="按标题模糊搜索"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     admin=Depends(require_normal_admin),
 ) -> APIResponse[PaginatedData[RecycleBinItem]]:
     service = RecycleBinService()
@@ -137,8 +137,12 @@ async def recycle_bin_restore(
         )
         return success(data=restored, message=f"已恢复 {restored} 条")
     spec = _ensure_module_visible(admin, body.module)
+    # 课堂类模块按归属隔离：老师只能恢复自己课堂下的条目
+    teacher_admin_id = (
+        admin.id if spec.teacher_scoped and admin.role != "super_admin" else None
+    )
     restored = await service.restore_items(
-        spec, body.ids, actor_id=admin.id
+        spec, body.ids, actor_id=admin.id, teacher_admin_id=teacher_admin_id
     )
     return success(data=restored, message=f"已恢复 {restored} 条")
 

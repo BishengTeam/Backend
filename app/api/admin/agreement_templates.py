@@ -32,7 +32,7 @@ async def list_templates(
     type: str | None = Query(None, description="按类型筛选"),
     status: str | None = Query(None, description="按状态筛选"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页数量"),
     _admin=Depends(require_permission("content:list")),
 ) -> APIResponse[PaginatedData[AdminAgreementTemplateItem]]:
     """协议模板列表（含历史版本）"""

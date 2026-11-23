@@ -312,8 +312,8 @@ class SangforService:
         transfers use their own exception path, including completed returns whose
         order is closed rather than refunded. All joins remain one row per order.
         """
-        if page < 1 or not 1 <= page_size <= 100:
-            raise BusinessException("分页参数不正确，页码须大于零，每页最多100条")
+        if page < 1 or not 1 <= page_size <= 2000:
+            raise BusinessException("分页参数不正确，页码须大于零，每页最多2000条")
         if any(value is not None and value <= 0 for value in (batch_id, registration_id)):
             raise BusinessException("请选择有效的批次或报名记录")
         for value in (requested_at_start, requested_at_end):

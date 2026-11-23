@@ -37,7 +37,7 @@ async def list_virtual_products(
         description="not_started=未开始；ended=已结束；sold_out=已兑完",
     ),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("points:manage")),
 ):
     return success(
@@ -97,7 +97,7 @@ async def list_virtual_orders(
     created_from: datetime | None = Query(None),
     created_to: datetime | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("points:manage")),
 ):
     return success(
@@ -152,7 +152,7 @@ async def list_items(
         description="active=可兑换；inactive=已下架；expired=已过期；sold_out=已兑完",
     ),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin = Depends(require_permission("points:manage")),
 ) -> APIResponse[PaginatedData[PointsMallItemResponse]]:
     items, total = await _service.admin_list(

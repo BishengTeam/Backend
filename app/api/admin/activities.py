@@ -44,7 +44,7 @@ async def list_activities(
     keyword: str | None = Query(None, description="按标题关键词模糊搜索"),
     category: CategoryQuery = Query(None, description="专区分类：yingcai=仅英才计划活动；缺省=仅普通活动"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页条数"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页条数"),
     _admin=Depends(require_permission("activity:list")),
 ) -> APIResponse[PaginatedData[AdminActivityListItem]]:
     """活动列表（分页+搜索+专区分类）"""
@@ -148,7 +148,7 @@ async def delete_activity(
 async def list_activity_registrations(
     activity_id: int = Path(..., description="活动 ID"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="页码数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="页码数量"),
     _admin=Depends(require_permission("activity:list")),
 ) -> APIResponse[PaginatedData[AdminActivityRegistrationListItem]]:
     """活动报名列表"""

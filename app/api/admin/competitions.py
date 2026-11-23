@@ -32,7 +32,7 @@ router = APIRouter(prefix="/competitions", tags=["管理后台-竞赛管理"])
 async def list_competitions(
     keyword: str | None = Query(None, description="按赛事名称模糊搜索"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页数量"),
     _admin=Depends(require_permission("competition:list")),
 ) -> APIResponse[PaginatedData[AdminCompetitionListItem]]:
     result = await AdminCompetitionService().list_competitions(
@@ -113,7 +113,7 @@ async def list_registrations(
     competition_id: int = Path(..., ge=1, description="赛事 ID"),
     track_id: int | None = Query(None, ge=1, description="赛道 ID 筛选"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页数量"),
     _admin=Depends(require_permission("competition:list")),
 ) -> APIResponse[PaginatedData[AdminCompetitionRegistrationItem]]:
     result = await AdminCompetitionService().list_registrations(

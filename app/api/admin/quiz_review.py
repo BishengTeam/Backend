@@ -29,7 +29,7 @@ service = AdminQuizReviewService()
 async def list_reviews(
     status: str | None = Query(default=None, pattern="^(pending|in_progress|recalled)$"),
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    page_size: int = Query(default=20, ge=1, le=2000),
     _admin=Depends(require_permission("quiz_review")),
 ) -> APIResponse[PaginatedData[AdminQuizReviewListItem]]:
     return success(

@@ -130,7 +130,7 @@ def test_admin_refunds_requires_vendor_grant_and_validates_filters(monkeypatch):
     assert mocked.call_args.kwargs["registration_id"] == 8
     assert mocked.call_args.kwargs["group"] == "abnormal"
     assert mocked.call_args.kwargs["requested_at_start"].utcoffset().total_seconds() == 28800
-    for params in ({"page": 0}, {"page_size": 101}, {"page_size": 0}, {"batch_id": 0}, {"registration_id": -1},
+    for params in ({"page": 0}, {"page_size": 2001}, {"page_size": 0}, {"batch_id": 0}, {"registration_id": -1},
                    {"group": "other"}, {"status": "requested"}, {"request_kind": "batch_cancel"},
                    {"requested_at_start": "not-a-date"}):
         assert client.get(url, params=params).status_code == 422, params
@@ -138,7 +138,7 @@ def test_admin_refunds_requires_vendor_grant_and_validates_filters(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("params", [
-    {"page": 0}, {"page_size": 101}, {"batch_id": -1}, {"registration_id": 0},
+    {"page": 0}, {"page_size": 2001}, {"batch_id": -1}, {"registration_id": 0},
     {"group": "other"}, {"status": "requested"}, {"request_kind": "invalid"},
     {"requested_at_start": datetime(2026, 10, 1)},
     {"requested_at_start": datetime.fromisoformat("2026-10-02T00:00:00+08:00"),

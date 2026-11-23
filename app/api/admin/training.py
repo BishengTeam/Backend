@@ -29,7 +29,7 @@ router = APIRouter(prefix="/training", tags=["管理后台-培训管理"])
 async def list_trainings(
     keyword: str | None = Query(None, description="按标题关键词模糊搜索"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页数量"),
     _admin=Depends(require_permission("training:list")),
 ) -> APIResponse[PaginatedData[AdminTrainingListItem]]:
     """分页查询培训列表，支持按标题关键词模糊搜索"""

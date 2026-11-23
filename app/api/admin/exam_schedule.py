@@ -119,7 +119,7 @@ class HolidayCreate(BaseModel):
 async def list_schedules(
     vendor: Annotated[str | None, Query(pattern="^(h3c|sangfor)$")] = None,
     page: Annotated[int | None, Query(ge=1)] = None,
-    page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+    page_size: Annotated[int, Query(ge=1, le=2000)] = 50,
     _admin=Depends(schedule_guard),
     db: AsyncSession = Depends(get_db),
 ):

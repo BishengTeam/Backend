@@ -64,7 +64,7 @@ async def list_batches(
     status: str | None = Query(None),
     certification_code: str | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[PaginatedData[H3cExamBatchResponse]]:
     return success(
@@ -223,7 +223,7 @@ async def list_registrations(
     keyword: str | None = Query(None, max_length=64),
     has_valid_export: bool | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[PaginatedData[H3cRegistrationResponse]]:
     return success(
@@ -371,7 +371,7 @@ async def list_refunds(
     group: str | None = Query(None, pattern="^(pending|processing|abnormal)$"),
     status: str | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[PaginatedDataWithCounts[H3cRefundResponse]]:
     return success(
@@ -438,7 +438,7 @@ async def list_export_items(
     is_valid: bool | None = Query(None),
     keyword: str | None = Query(None, max_length=64),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[PaginatedData[H3cExportItemResponse]]:
     return success(
@@ -479,7 +479,7 @@ async def list_exports(
     batch_id: int | None = Query(None, gt=0),
     status: str | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[PaginatedData[H3cExportJobResponse]]:
     return success(

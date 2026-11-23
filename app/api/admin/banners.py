@@ -44,7 +44,7 @@ router = APIRouter(prefix="/banners", tags=["管理后台-Banner管理"])
 async def list_banners(
     keyword: str | None = Query(None, description="按图片地址/跳转链接模糊搜索"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页数量"),
     _admin=Depends(require_permission("homepage:list")),
 ) -> APIResponse[PaginatedData[BannerListItem]]:
     result = await AdminBannerService().list_banners(keyword, page, page_size)

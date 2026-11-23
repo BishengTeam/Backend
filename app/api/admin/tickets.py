@@ -37,7 +37,7 @@ router = APIRouter(prefix="/tickets", tags=["管理后台-工单管理"])
 async def list_tickets(
     status: str | None = Query(None, description="按状态筛选"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页数量"),
     _admin=Depends(require_permission("user:list")),
 ) -> APIResponse[PaginatedData[AdminTicketListItem]]:
     filters = AdminTicketFilter(status=status) if status else None

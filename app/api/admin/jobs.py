@@ -29,7 +29,7 @@ router = APIRouter(prefix="/jobs", tags=["管理后台-就业管理"])
 async def list_jobs(
     keyword: str | None = Query(None, description="按标题关键词模糊搜索"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页数量"),
     _admin=Depends(require_permission("job:list")),
 ):
     """分页查询岗位列表，支持按标题关键词模糊搜索"""

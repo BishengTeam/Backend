@@ -380,7 +380,7 @@ class AdminQuizStatsQuestionQuery(QuizContractModel):
     )
     order: Literal["asc", "desc"] = "desc"
     page: int = Field(default=1, ge=1)
-    page_size: int = Field(default=20, ge=1, le=100)
+    page_size: int = Field(default=20, ge=1, le=2000)
 
 
 class AdminQuizQuestionStatsListItem(QuizContractModel):
@@ -416,7 +416,7 @@ class AdminQuizDailyStatsItem(QuizContractModel):
 
 class AdminQuizUserStatsQuery(QuizContractModel):
     page: int = Field(default=1, ge=1)
-    page_size: int = Field(default=20, ge=1, le=100)
+    page_size: int = Field(default=20, ge=1, le=2000)
 
 
 class AdminQuizUserStatsListItem(QuizContractModel):
@@ -498,7 +498,7 @@ class AdminQuizStudentStatsQuery(QuizContractModel):
     date_from: date | None = None
     date_to: date | None = None
     page: int = Field(default=1, ge=1)
-    page_size: int = Field(default=20, ge=1, le=100)
+    page_size: int = Field(default=20, ge=1, le=2000)
 
     @model_validator(mode="after")
     def validate_range(self) -> "AdminQuizStudentStatsQuery":
@@ -645,7 +645,7 @@ class AdminQuizImportJobQuery(QuizContractModel):
     status: QuizImportStatus | None = None
     source_type: QuizImportSourceType | None = None
     page: int = Field(default=1, ge=1)
-    page_size: int = Field(default=20, ge=1, le=100)
+    page_size: int = Field(default=20, ge=1, le=2000)
 
 
 class AdminQuizImportJobResponse(QuizContractModel):
@@ -760,7 +760,7 @@ class AdminQuizAuditQuery(QuizContractModel):
     start_at: datetime | None = None
     end_at: datetime | None = None
     page: int = Field(default=1, ge=1)
-    page_size: int = Field(default=20, ge=1, le=100)
+    page_size: int = Field(default=20, ge=1, le=2000)
 
     @field_validator("start_at", "end_at")
     @classmethod
@@ -1124,7 +1124,7 @@ class AdminQuizActivationCodeQuery(QuizContractModel):
     library_id: int = Field(ge=1)
     status: AdminQuizActivationDisplayStatus | None = None
     page: int = Field(default=1, ge=1)
-    page_size: int = Field(default=20, ge=1, le=100)
+    page_size: int = Field(default=20, ge=1, le=2000)
 
 
 class AdminQuizActivationCodeItem(QuizContractModel):

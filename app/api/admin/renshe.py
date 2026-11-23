@@ -187,7 +187,7 @@ async def list_applications(
     submitted_at_start: datetime | None = Query(None),
     submitted_at_end: datetime | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[PaginatedData[RensheAdminApplicationListItem]]:
     result = await RensheReviewService().list_applications(
@@ -331,7 +331,7 @@ async def list_refunds(
     group: str | None = Query(None, pattern="^(pending|processing|abnormal)$"),
     status: str | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     _admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[PaginatedDataWithCounts[RensheRefundResponse]]:
     from app.services.renshe_refund import RensheRefundService
@@ -544,7 +544,7 @@ async def list_audit_logs(
     started_at: datetime | None = Query(None),
     ended_at: datetime | None = Query(None),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=2000),
     admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[PaginatedData[RensheAuditLogResponse]]:
     from app.services.renshe_audit import RensheAuditQueryService

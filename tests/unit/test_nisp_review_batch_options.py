@@ -149,7 +149,7 @@ async def test_vendor_grant_also_covers_batch_management(review_client):
 @pytest.mark.parametrize("params, field", [
     ({"page": 0}, "page"),
     ({"page_size": 0}, "page_size"),
-    ({"page_size": 101}, "page_size"),
+    ({"page_size": 2001}, "page_size"),
     ({"keyword": "批" * 65}, "keyword"),
 ])
 async def test_options_validate_query_bounds(review_client, params, field):

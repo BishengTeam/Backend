@@ -43,7 +43,7 @@ async def list_plan_orders(
     status: OrderStatus | None = Query(None, description="按订单状态筛选"),
     phone: str | None = Query(None, description="按考生手机号筛选"),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页数量"),
     _admin=Depends(require_permission("order:list")),
 ) -> APIResponse[PaginatedData[OrderResponse]]:
     result = await PlanOrderManagementService().list_orders(
@@ -70,7 +70,7 @@ async def list_plan_approvals(
         description="按审核动作筛选",
     ),
     page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(20, ge=1, le=2000, description="每页数量"),
     _admin=Depends(require_permission("order:list")),
 ) -> APIResponse[PaginatedData[ReviewResponse]]:
     result = await PlanOrderManagementService().list_approvals(
