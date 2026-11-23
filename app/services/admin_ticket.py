@@ -3,7 +3,12 @@ from sqlalchemy import func, select
 from app.adapter.database import get_db_ctx
 from app.port.exceptions import NotFoundException
 from app.domain.content.src.index import Ticket
-from app.schemas.admin_ticket import AdminTicketFilter, AdminTicketListItem, AdminTicketUpdate
+from app.schemas.admin_ticket import (
+    AdminTicketBatchStatusResult,
+    AdminTicketFilter,
+    AdminTicketListItem,
+    AdminTicketUpdate,
+)
 from app.schemas.common import PaginatedData
 
 
@@ -39,3 +44,23 @@ class AdminTicketService:
             await db.commit()
             await db.refresh(ticket)
             return AdminTicketListItem.model_validate(ticket)
+
+    async def batch_update_status(
+        self, ids: list[int], status: str
+    ) -> AdminTicketBatchStatusResult:
+        """一个事务内批量改状态；不存在的 id 与已是目标状态的记录计入 skipped。"""
+
+        unique_ids = list(dict.fromkeys(ids))
+        async with get_db_ctx() as db:
+            result = await db.execute(select(Ticket).where(Ticket.id.in_(unique_ids)))
+            updated = 0
+            for ticket in result.scalars().all():
+                if ticket.status == status:
+                    continue
+                ticket.status = status
+                updated += 1
+            await db.commit()
+            return AdminTicketBatchStatusResult(
+                updated=updated,
+                skipped=len(unique_ids) - updated,
+            )

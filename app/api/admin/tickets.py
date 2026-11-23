@@ -1,7 +1,13 @@
 from fastapi import APIRouter, Depends, Path, Query
 
 from app.middleware.auth import require_permission
-from app.schemas.admin_ticket import AdminTicketFilter, AdminTicketListItem, AdminTicketUpdate
+from app.schemas.admin_ticket import (
+    AdminTicketBatchStatusResult,
+    AdminTicketBatchStatusUpdate,
+    AdminTicketFilter,
+    AdminTicketListItem,
+    AdminTicketUpdate,
+)
 from app.schemas.common import APIResponse, PaginatedData, success
 from app.services.admin_ticket import AdminTicketService
 
@@ -37,6 +43,36 @@ async def list_tickets(
     filters = AdminTicketFilter(status=status) if status else None
     result = await AdminTicketService().list_tickets(filters, page, page_size)
     return success(data=result)
+
+
+@router.post("/batch-status",
+    response_model=APIResponse[AdminTicketBatchStatusResult],
+    summary="批量更新工单状态",
+    description="""
+管理后台 **工单管理** 页面使用。
+
+**页面路径**: `/admin/tickets`
+
+**使用场景**: 勾选当前页多条工单后批量标记「处理中 / 已解决」
+
+**请求体**:
+- `ids`: 工单 ID 列表（1-200 条，空列表返回 422）
+- `status`: `waiting_manual` / `processing` / `resolved`
+
+**响应**: `{updated, skipped}`；不存在或已是目标状态的记录计入 skipped，不报错
+
+**认证**: 需 `user:list` 权限
+    """,
+)
+async def batch_update_ticket_status(
+    body: AdminTicketBatchStatusUpdate,
+    _admin=Depends(require_permission("user:list")),
+) -> APIResponse[AdminTicketBatchStatusResult]:
+    result = await AdminTicketService().batch_update_status(body.ids, body.status)
+    return success(
+        data=result,
+        message=f"已更新 {result.updated} 条，跳过 {result.skipped} 条",
+    )
 
 
 @router.put("/{ticket_id}",
