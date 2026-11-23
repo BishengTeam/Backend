@@ -257,7 +257,7 @@ async def test_multi_product_refund_list_resolves_selected_subject(context):
         permission = await ConsultationGroupService.required_permission(
             db, seed.plan_id
         )
-    assert permission == "h3c:batch_manage"
+    assert permission == "cert:h3c"
 
     journey = await user_journey(
         "h3c", seed.registration_id, seed.user_id

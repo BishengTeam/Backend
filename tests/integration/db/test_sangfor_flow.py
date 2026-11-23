@@ -388,9 +388,12 @@ async def test_refund_http_read_permission_and_date_validation(context, refund_r
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         url = "/admin/cert-products/sangfor/refunds"
         assert (await client.get(url)).status_code == 403
+        # 订单只读权限不再够用：深信服模块统一由 cert:sangfor 授权
         monkeypatch.setitem(ROLE_PERMISSIONS, "ledger_reader", ["order:list"])
         app.dependency_overrides[require_normal_admin] = lambda: SimpleNamespace(id=101, role="ledger_reader")
         assert (await client.get("/admin/cert-products/sangfor/batches")).status_code == 403
+        assert (await client.get("/admin/cert-products/sangfor/refund-batches")).status_code == 403
+        monkeypatch.setitem(ROLE_PERMISSIONS, "ledger_reader", ["cert:sangfor"])
         batches = await client.get("/admin/cert-products/sangfor/refund-batches")
         assert batches.status_code == 200
         assert {"id": context.plan_id, "name": next(row["batch_name"] for row in

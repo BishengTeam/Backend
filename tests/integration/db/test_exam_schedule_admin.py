@@ -277,8 +277,9 @@ async def test_published_schedule_quota_can_increase_and_closed_schedule_cannot_
 
 async def test_vendor_permissions_are_scoped_per_vendor(context):
     factory, prefix, products = context.factory, context.prefix, context.products
-    h3c_admin = SimpleNamespace(role="cert_admin", permissions=["h3c:batch_manage"])
-    content_admin = SimpleNamespace(role="cert_admin", permissions=["content:write"])
+    h3c_admin = SimpleNamespace(role="cert_admin", permissions=["cert:h3c"])
+    sangfor_admin = SimpleNamespace(role="cert_admin", permissions=["cert:sangfor"])
+    content_admin = SimpleNamespace(role="cert_admin", permissions=["content:manage"])
     today = date.today()
 
     def payload(vendor: str, product_id: int):
@@ -311,7 +312,7 @@ async def test_vendor_permissions_are_scoped_per_vendor(context):
         )
 
         visible = await list_schedules(
-            vendor=None, _admin=content_admin, db=db
+            vendor=None, _admin=sangfor_admin, db=db
         )
         visible_ids = {row["id"] for row in visible.data}
         assert sangfor_schedule.data["id"] in visible_ids

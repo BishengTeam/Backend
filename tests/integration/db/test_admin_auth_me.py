@@ -70,9 +70,9 @@ class TestAdminAuthMe:
                 assert isinstance(info.role, str)
 
     async def test_role_permissions_mapping(self, db_factory):
-        """ROLE_PERMISSIONS.get(admin.role, []) returns the correct list."""
+        """resolve_admin_permissions 将大类授权展开为细粒度权限。"""
         from app.domain.user.src.index import AdminUser
-        from app.policy.permissions import ROLE_PERMISSIONS
+        from app.policy.permissions import resolve_admin_permissions
 
         factory, prefix = db_factory
 
@@ -90,7 +90,7 @@ class TestAdminAuthMe:
             await db.flush()
 
             for admin in admins:
-                permissions = ROLE_PERMISSIONS.get(admin.role, [])
+                permissions = resolve_admin_permissions(admin)
                 assert isinstance(permissions, list), (
                     f"permissions for {admin.role} should be a list"
                 )

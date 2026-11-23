@@ -60,6 +60,8 @@ async def quiz_http_env(monkeypatch, tmp_path):
             username=f"{prefix}_admin",
             password_hash="integration-test-only",
             role="quiz_admin",
+            # 本文件覆盖跨库接口（旧分类/审计/导入），需要 all 范围
+            permissions=["quiz:manage", "quiz:course"],
             must_change_password=False,
         )
         db.add(admin)
