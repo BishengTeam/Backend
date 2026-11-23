@@ -547,6 +547,8 @@ class AdminUserService:
                 if user.phone != phone:
                     changed_fields.add("phone")
                 user.phone = phone
+                # 详情聚合接口优先读 user_profile.phone，必须同步，否则改完仍显示旧号
+                profile.phone = phone
 
             db.add(
                 RensheAuditLog(

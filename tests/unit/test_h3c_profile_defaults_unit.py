@@ -62,6 +62,7 @@ def _user():
         id=1,
         openid="openid-unit",
         is_active=True,
+        phone=None,
         level2_edit_count=0,
         level2_edit_reset_at=None,
         created_at=None,
@@ -139,6 +140,34 @@ async def test_get_profile_admin_gets_raw_pii(monkeypatch):
     assert detail.phone_raw == RAW_PHONE
     assert detail.id_card == RAW_ID_CARD
     assert detail.id_card_raw == RAW_ID_CARD
+
+
+async def test_get_profile_falls_back_to_user_phone(monkeypatch):
+    """登录绑定写的是 user.phone，user_profile.phone 可能为空：
+    后台应拿到明文，小程序端仍须脱敏。
+    """
+    user = _user()
+    user.phone = RAW_PHONE
+    profile = _profile()
+    profile.phone = None
+
+    monkeypatch.setattr(
+        user_module,
+        "get_db_ctx",
+        _fake_db(user, profile, _realname("pending")),
+    )
+    detail = await UserService().get_profile(1, is_admin=True)
+    assert detail.phone == RAW_PHONE
+    assert detail.phone_raw == RAW_PHONE
+
+    monkeypatch.setattr(
+        user_module,
+        "get_db_ctx",
+        _fake_db(user, profile, _realname("pending")),
+    )
+    c_end = await UserService().get_profile(1)
+    assert c_end.phone == MASKED_PHONE
+    assert c_end.phone_raw is None
 
 
 def _detail(id_card_raw, phone_raw):

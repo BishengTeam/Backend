@@ -239,7 +239,9 @@ class UserService:
             student = (await db.execute(
                 select(UserStudent).where(UserStudent.user_id == user_id)
             )).scalar_one_or_none()
-            phone = profile.phone if profile else None
+            # user.phone 是登录/微信授权绑定手机号的落库位置；user_profile.phone
+            # 仅作历史兼容，两者任一有值即可（否则后台详情/个人资料永远为空）
+            phone = (profile.phone if profile else None) or user.phone
             return UserProfileDetail(
                 id=user.id,
                 openid=user.openid,
@@ -901,6 +903,12 @@ class UserService:
             if user is None or not user.is_active:
                 raise NotFoundException("用户")
             user.phone = None
+            # 两处字段一起清，否则解绑后详情仍显示旧号
+            await db.execute(
+                update(UserProfile)
+                .where(UserProfile.user_id == user_id)
+                .values(phone=None)
+            )
             await db.commit()
 
     async def decrypt_phone(self, user_id: int, encrypted_data: str, iv: str) -> str:
@@ -926,5 +934,11 @@ class UserService:
             if user is None:
                 raise NotFoundException("用户")
             user.phone = phone
+            # 与 user.phone 保持同步，资料聚合接口读的是 user_profile.phone
+            await db.execute(
+                update(UserProfile)
+                .where(UserProfile.user_id == user_id)
+                .values(phone=phone)
+            )
             await db.commit()
         return phone

@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.port.config import settings
 from app.adapter.database import get_db_ctx
@@ -125,6 +125,13 @@ class AuthService:
             logger.warning("登录时手机号已被其他账号绑定，跳过: user_id=%s", user.id)
             return
         user.phone = phone
+        # 同步 user_profile.phone：资料聚合接口（/api/user/profile、后台用户详情）
+        # 从该字段读取，不同步会导致抓到号了后台仍显示空
+        await db.execute(
+            update(DomainUserProfile)
+            .where(DomainUserProfile.user_id == user.id)
+            .values(phone=phone)
+        )
 
     async def refresh(self, refresh_token: str) -> RefreshResponse:
         key = f"{REFRESH_TOKEN_PREFIX}{refresh_token}"

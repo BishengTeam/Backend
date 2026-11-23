@@ -25,8 +25,10 @@ class _FakeWechat:
 class _FakeDB:
     def __init__(self, conflict: SimpleNamespace | None = None):
         self.conflict = conflict
+        self.executed: list[object] = []
 
     async def execute(self, statement):
+        self.executed.append(statement)
         return SimpleNamespace(scalar_one_or_none=lambda: self.conflict)
 
 
@@ -46,11 +48,14 @@ def test_login_request_accepts_optional_phone_code() -> None:
 async def test_bind_phone_sets_user_phone() -> None:
     wechat = _FakeWechat(phone="13800000000")
     user = SimpleNamespace(id=1, phone=None)
+    db = _FakeDB()
 
-    await _service(wechat)._bind_phone_best_effort(_FakeDB(), user, "phone_code")
+    await _service(wechat)._bind_phone_best_effort(db, user, "phone_code")
 
     assert user.phone == "13800000000"
     assert wechat.calls == ["phone_code"]
+    # 冲突查询 + user_profile.phone 同步写入
+    assert len(db.executed) == 2
 
 
 @pytest.mark.asyncio
