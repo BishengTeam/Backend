@@ -17,6 +17,7 @@ from sqlalchemy import func, or_, select
 
 from app.adapter.database import get_db_ctx
 from app.adapter.logging import client_ip_var, request_id_var
+from app.policy.quiz_scope import current_quiz_library_scope, ensure_library_in_scope
 from app.domain.community.src.index import (
     QuizActivationCode,
     QuizAdminAuditLog,
@@ -214,6 +215,7 @@ class QuizActivationCodeService:
             library = await db.get(QuizLibrary, int(library_id))
             if library is None:
                 raise NotFoundException("题库")
+            ensure_library_in_scope(current_quiz_library_scope(), library)
             now = _now().replace(microsecond=0)
             rows: list[QuizActivationCode] = []
             reserved: set[str] = set()
@@ -271,6 +273,10 @@ class QuizActivationCodeService:
         self, query: AdminQuizActivationCodeQuery, *, schema_version: int = 3
     ) -> PaginatedData[AdminQuizActivationCodeItem]:
         async with get_db_ctx() as db:
+            library = await db.get(QuizLibrary, int(query.library_id))
+            if library is None:
+                raise NotFoundException("题库")
+            ensure_library_in_scope(current_quiz_library_scope(), library)
             conditions = [QuizActivationCode.library_id == int(query.library_id)]
             if query.status is not None:
                 conditions.append(QuizActivationCode.status == query.status)
@@ -304,6 +310,10 @@ class QuizActivationCodeService:
         """导出全部（或按状态筛选的）激活码，供线下发放。"""
 
         async with get_db_ctx() as db:
+            library = await db.get(QuizLibrary, int(library_id))
+            if library is None:
+                raise NotFoundException("题库")
+            ensure_library_in_scope(current_quiz_library_scope(), library)
             conditions = [QuizActivationCode.library_id == int(library_id)]
             if status is not None:
                 conditions.append(QuizActivationCode.status == status)
@@ -346,6 +356,10 @@ class QuizActivationCodeService:
             ).scalar_one_or_none()
             if row is None:
                 raise NotFoundException("激活码")
+            library = await db.get(QuizLibrary, int(row.library_id))
+            if library is None:
+                raise NotFoundException("题库")
+            ensure_library_in_scope(current_quiz_library_scope(), library)
             if row.status == QuizActivationCodeStatus.REDEEMED:
                 raise BusinessException("已兑换的激活码不能作废")
             if row.status == QuizActivationCodeStatus.REVOKED:

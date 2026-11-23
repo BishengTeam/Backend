@@ -17,6 +17,7 @@ from app.domain.community.src.model.quiz import (
 )
 from app.domain.user.src.index import AdminUser
 from app.policy.permissions import resolve_admin_permissions
+from app.policy.quiz_scope import current_quiz_library_scope, ensure_library_in_scope
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException, ForbiddenException, ValidationException
 from app.schemas.admin_quiz_contract import (
     AdminQuizPublicationRequest, AdminQuizBatchRequest, AdminQuizLibraryStatusUpdate,
@@ -52,6 +53,7 @@ class QuizPublicationService:
             library = await session.get(QuizLibrary, library_id)
             if not library:
                 raise NotFoundException("题库")
+            ensure_library_in_scope(current_quiz_library_scope(), library)
             rows = list((await session.execute(select(QuizQuestion, QuizKnowledgePoint, QuizModule)
                 .outerjoin(QuizKnowledgePoint, QuizKnowledgePoint.id == QuizQuestion.knowledge_point_id)
                 .join(QuizModule, QuizModule.id == QuizQuestion.module_id)
@@ -149,6 +151,9 @@ class QuizPublicationService:
     async def create(self, library_id, data: AdminQuizPublicationRequest, *, admin_id):
         async with get_db_ctx() as db:
             library = await AdminQuizV2Service._locked(db, QuizLibrary, library_id)
+            if library is None:
+                raise NotFoundException("题库")
+            ensure_library_in_scope(current_quiz_library_scope(), library)
             self.require_active_library(library)
             old = await db.scalar(select(QuizPublicationOperation).where(QuizPublicationOperation.request_key == data.request_key))
             payload = data.model_dump(mode="json")
@@ -180,10 +185,16 @@ class QuizPublicationService:
         async with get_db_ctx() as db:
             job = await db.get(QuizPublicationOperation, job_id)
             if not job: raise NotFoundException("发布任务")
+            library = await db.get(QuizLibrary, job.library_id)
+            if library is None: raise NotFoundException("题库")
+            ensure_library_in_scope(current_quiz_library_scope(), library)
             return self.response(job)
 
     async def list(self, library_id):
         async with get_db_ctx() as db:
+            library = await db.get(QuizLibrary, library_id)
+            if library is None: raise NotFoundException("题库")
+            ensure_library_in_scope(current_quiz_library_scope(), library)
             jobs = (await db.execute(select(QuizPublicationOperation).where(
                 QuizPublicationOperation.library_id == library_id).order_by(QuizPublicationOperation.id.desc()).limit(20))).scalars()
             return [self.response(job) for job in jobs]
@@ -192,6 +203,9 @@ class QuizPublicationService:
         async with get_db_ctx() as db:
             job = await AdminQuizV2Service._locked(db, QuizPublicationOperation, job_id)
             if not job: raise NotFoundException("发布任务")
+            library = await db.get(QuizLibrary, job.library_id)
+            if library is None: raise NotFoundException("题库")
+            ensure_library_in_scope(current_quiz_library_scope(), library)
             data = AdminQuizPublicationRequest.model_validate(job.payload)
             for permission in self.required_permissions(data): await self.permission(db, admin_id, permission)
             if job.status == "failed":

@@ -16,6 +16,7 @@ from typing import Any
 from sqlalchemy import delete, exists, func, or_, select
 
 from app.adapter.database import get_db_ctx
+from app.policy.quiz_scope import current_quiz_library_scope, library_scope_clause
 from app.domain.certification.src.index import (
     Competition,
     CompetitionReg,
@@ -94,10 +95,23 @@ class TrashModuleSpec:
     tombstone_fields: dict[str, Any] = field(default_factory=dict)
     # 模块内按归属过滤（teacher 只能看自己的课堂内容）
     teacher_scoped: bool = False
+    # 模块内按题库数据范围过滤（独立题库 / 课程题库）
+    library_scoped: bool = False
 
 
 def _tombstone(title_key: str) -> dict[str, Any]:
     return {title_key: TOMBSTONE_TEXT, "description": None, "cover_url": None}
+
+
+def _library_scope_filter(model):
+    """按当前管理员的题库范围过滤回收站条目；all 范围返回 None。"""
+
+    clause = library_scope_clause(current_quiz_library_scope(), QuizLibrary)
+    if clause is None:
+        return None
+    if model is QuizLibrary:
+        return clause
+    return model.library_id.in_(select(QuizLibrary.id).where(clause))
 
 
 TRASH_MODULES: dict[str, TrashModuleSpec] = {
@@ -127,12 +141,14 @@ TRASH_MODULES: dict[str, TrashModuleSpec] = {
         TrashModuleSpec("course_chapter", "课程章节", CourseChapter, "title", "course:write",
                         "tombstone", {"title": TOMBSTONE_TEXT}),
         TrashModuleSpec("quiz_question", "题目", QuizQuestion, "question_text",
-                        "quiz:write"),
-        TrashModuleSpec("quiz_module", "题库模块", QuizModule, "name", "quiz:write"),
+                        "quiz:write", library_scoped=True),
+        TrashModuleSpec("quiz_module", "题库模块", QuizModule, "name", "quiz:write",
+                        library_scoped=True),
         TrashModuleSpec("quiz_knowledge_point", "知识点", QuizKnowledgePoint, "name",
-                        "quiz:write"),
+                        "quiz:write", library_scoped=True),
         TrashModuleSpec("quiz_library", "题库", QuizLibrary, "name", "quiz_library_manage",
-                        "tombstone", {"name": TOMBSTONE_TEXT, "name_reserved": False}),
+                        "tombstone", {"name": TOMBSTONE_TEXT, "name_reserved": False},
+                        library_scoped=True),
     ]
 }
 
@@ -321,14 +337,14 @@ class RecycleBinService:
                     out.append({"module": key, "label": "用户", "deleted_count": disabled_count})
                     continue
                 spec = TRASH_MODULES[key]
-                deleted_count = (
-                    await db.scalar(
-                        select(func.count())
-                        .select_from(spec.model)
-                        .where(spec.model.deleted_at.isnot(None))
-                    )
-                    or 0
+                count_stmt = select(func.count()).select_from(spec.model).where(
+                    spec.model.deleted_at.isnot(None)
                 )
+                if spec.library_scoped:
+                    scope_filter = _library_scope_filter(spec.model)
+                    if scope_filter is not None:
+                        count_stmt = count_stmt.where(scope_filter)
+                deleted_count = (await db.scalar(count_stmt)) or 0
                 out.append({"module": key, "label": spec.label, "deleted_count": deleted_count})
             return out
 
@@ -347,6 +363,10 @@ class RecycleBinService:
                     db, keyword=keyword, page=page, page_size=page_size
                 )
             base = select(spec.model).where(spec.model.deleted_at.isnot(None))
+            if spec.library_scoped:
+                scope_filter = _library_scope_filter(spec.model)
+                if scope_filter is not None:
+                    base = base.where(scope_filter)
             if keyword and spec.title_attr:
                 base = base.where(getattr(spec.model, spec.title_attr).ilike(f"%{keyword}%"))
             if spec.teacher_scoped and teacher_admin_id is not None:
@@ -575,6 +595,10 @@ class RecycleBinService:
         model, title = meta["model"], meta["title"]
         async with get_db_ctx() as db:
             base = select(model).where(model.status == "archived")
+            if module_key == "quiz_library":
+                scope_filter = _library_scope_filter(QuizLibrary)
+                if scope_filter is not None:
+                    base = base.where(scope_filter)
             if keyword:
                 base = base.where(getattr(model, title).ilike(f"%{keyword}%"))
             total = (

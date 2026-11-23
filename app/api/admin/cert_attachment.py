@@ -20,7 +20,7 @@ from app.services.upload import ALLOWED_EXTENSIONS, UploadService
 router = APIRouter(prefix="/cert-attachments", tags=["管理后台-认证附件"])
 
 guard = require_any_permission(
-    "h3c:batch_manage", "nisp:batch_manage", "user:write", "content:write"
+    "cert:h3c", "cert:nisp", "cert:renshe", "cert:sangfor"
 )
 VENDOR_PATTERN = "^(h3c|nisp|renshe|sangfor)$"
 CERT_ATTACHMENT_PREFIX = "/api/media/cert-attachments/"

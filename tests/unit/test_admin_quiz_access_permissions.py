@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.api.admin import quiz as quiz_api
-from app.policy.permissions import ROLE_PERMISSIONS
+from app.policy.permissions import PERMISSION_GRANTS
 from app.schemas.admin_quiz_contract import (
     AdminQuizLibraryAccessModeConvert,
     AdminQuizLibraryUpdate,
@@ -42,7 +42,7 @@ async def test_quiz_admin_can_change_library_access_configuration(
 
 
 def test_library_access_change_uses_the_frozen_library_permission() -> None:
-    assert "quiz_library_manage" in ROLE_PERMISSIONS["quiz_admin"]
+    assert "quiz_library_manage" in PERMISSION_GRANTS["quiz:manage"]
     route_source = inspect.getsource(quiz_api.update_library)
     service_source = inspect.getsource(AdminQuizV2Service.update_library)
     assert 'require_permission("quiz_library_manage")' in route_source

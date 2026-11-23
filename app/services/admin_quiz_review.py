@@ -13,9 +13,21 @@ from app.domain.community.src.index import (
     QuizExam,
     QuizExamQuestion,
     QuizExamQuestionReview,
+    QuizLibrary,
     QuizQuestionRevisionStats,
 )
-from app.port.exceptions import ConflictException, NotFoundException, ValidationException
+from app.policy.quiz_scope import (
+    QuizLibraryScope,
+    current_quiz_library_scope,
+    ensure_library_in_scope,
+    library_scope_clause,
+)
+from app.port.exceptions import (
+    ConflictException,
+    ForbiddenException,
+    NotFoundException,
+    ValidationException,
+)
 from app.schemas.admin_quiz_review_contract import (
     AdminQuizReviewClaimResponse,
     AdminQuizReviewCompleteResponse,
@@ -60,6 +72,11 @@ class AdminQuizReviewService:
             )
             if query.status:
                 statement = statement.where(QuizExam.review_status == query.status)
+            scope_clause = library_scope_clause(current_quiz_library_scope(), QuizLibrary)
+            if scope_clause is not None:
+                statement = statement.where(
+                    QuizExam.library_id.in_(select(QuizLibrary.id).where(scope_clause))
+                )
             total = int(
                 (
                     await db.execute(
@@ -110,6 +127,14 @@ class AdminQuizReviewService:
         exam = (await db.execute(statement)).scalar_one_or_none()
         if exam is None:
             raise NotFoundException("考试")
+        scope = current_quiz_library_scope()
+        if scope is not QuizLibraryScope.ALL:
+            if exam.library_id is None:
+                raise ForbiddenException("缺少该题库的管理权限")
+            library = await db.get(QuizLibrary, exam.library_id)
+            if library is None:
+                raise ForbiddenException("缺少该题库的管理权限")
+            ensure_library_in_scope(scope, library)
         if exam.status not in {"completed", "timed_out"}:
             raise ConflictException("考试尚未交卷，不能评阅")
         if exam.review_status == "none":

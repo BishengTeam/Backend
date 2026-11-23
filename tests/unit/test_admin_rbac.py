@@ -27,6 +27,7 @@ class TestTwoRoleRbac:
             "cert_admin",
             "course_admin",
             "teacher",
+            "operations_admin",
         }
 
     @pytest.mark.asyncio

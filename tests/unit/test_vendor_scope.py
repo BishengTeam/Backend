@@ -22,10 +22,10 @@ def test_super_admin_can_manage_every_vendor():
 
 
 @pytest.mark.parametrize("permission,vendor", [
-    ("h3c:batch_manage", "h3c"),
-    ("nisp:batch_manage", "nisp"),
-    ("user:write", "renshe"),
-    ("content:write", "sangfor"),
+    ("cert:h3c", "h3c"),
+    ("cert:nisp", "nisp"),
+    ("cert:renshe", "renshe"),
+    ("cert:sangfor", "sangfor"),
 ])
 def test_each_vendor_maps_to_its_own_write_permission(permission, vendor):
     admin = _admin(permissions=[permission])

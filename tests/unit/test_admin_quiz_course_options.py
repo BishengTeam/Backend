@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.api.admin import quiz as quiz_api
-from app.policy.permissions import ROLE_PERMISSIONS
+from app.policy.permissions import PERMISSION_GRANTS, ROLE_PERMISSIONS
 from app.schemas.admin_quiz_contract import AdminQuizCourseOptionResponse
 from app.services import admin_quiz_v2 as service_module
 from app.services.admin_quiz_v2 import AdminQuizV2Service
@@ -61,7 +61,8 @@ async def test_course_options_are_an_active_narrow_projection(monkeypatch) -> No
 
 def test_course_option_route_does_not_grant_general_course_access() -> None:
     permissions = set(ROLE_PERMISSIONS["quiz_admin"])
-    assert "course_quiz_bind" in permissions
+    assert "quiz:manage" in permissions
+    assert "course_quiz_bind" in PERMISSION_GRANTS["quiz:manage"]
     assert "course:list" not in permissions
     assert set(AdminQuizCourseOptionResponse.model_fields) == {
         "id",

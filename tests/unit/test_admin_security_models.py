@@ -30,16 +30,7 @@ from app.services.admin_security_audit import admin_idempotency_digest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-QUIZ_ADMIN_PERMISSIONS = {
-    "quiz:list",
-    "quiz:write",
-    "quiz:import",
-    "quiz_content_edit",
-    "quiz_content_publish",
-    "quiz_library_manage",
-    "quiz_review",
-    "course_quiz_bind",
-}
+QUIZ_ADMIN_PERMISSIONS = {"quiz:manage"}
 
 
 def test_only_frozen_roles_are_persistable_and_quiz_role_is_scoped() -> None:
@@ -49,6 +40,7 @@ def test_only_frozen_roles_are_persistable_and_quiz_role_is_scoped() -> None:
         "cert_admin",
         "course_admin",
         "teacher",
+        "operations_admin",
     )
     assert set(ROLE_PERMISSIONS) == set(ADMIN_ROLES)
     assert ROLE_PERMISSIONS["super_admin"] == ["*"]

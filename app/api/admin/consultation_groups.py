@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Path
 
 from app.middleware.auth import require_normal_admin
 from app.adapter.database import get_db_ctx
-from app.policy.permissions import resolve_admin_permissions
+from app.policy.permissions import admin_has_permission
 from app.port.exceptions import ForbiddenException, NotFoundException
 from app.schemas.common import APIResponse, success
 from app.schemas.consultation_group import (
@@ -28,8 +28,7 @@ async def require_batch_permission(
         return admin
     async with get_db_ctx() as db:
         permission = await ConsultationGroupService.required_permission(db, plan_id)
-    allowed = resolve_admin_permissions(admin)
-    if permission not in allowed and "*" not in allowed:
+    if not admin_has_permission(admin, permission):
         raise ForbiddenException(f"缺少权限: {permission}")
     return admin
 

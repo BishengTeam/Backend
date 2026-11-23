@@ -86,7 +86,7 @@ def test_sangfor_http_only_opens_public_batches(monkeypatch):
     assert client.post("/api/sangfor/registrations/1/resubmit", json={}).status_code == 401
 
 
-def test_admin_refunds_uses_order_list_permission_and_validates_filters(monkeypatch):
+def test_admin_refunds_requires_vendor_grant_and_validates_filters(monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
     from fastapi import FastAPI
@@ -116,10 +116,12 @@ def test_admin_refunds_uses_order_list_permission_and_validates_filters(monkeypa
     assert client.get(url).status_code == 403
     assert client.get("/admin/cert-products/sangfor/refund-batches").status_code == 403
     mocked.assert_not_awaited()
-    # A ledger-only role needs no content permission for its batch selector.
+    # 深信服模块统一由厂商大类授权；仅订单权限不再够用。
     monkeypatch.setitem(ROLE_PERMISSIONS, "ledger_reader", ["order:list"])
     app.dependency_overrides[require_normal_admin] = lambda: SimpleNamespace(id=101, role="ledger_reader")
     assert client.get("/admin/cert-products/sangfor/batches").status_code == 403
+    assert client.get("/admin/cert-products/sangfor/refund-batches").status_code == 403
+    monkeypatch.setitem(ROLE_PERMISSIONS, "ledger_reader", ["cert:sangfor"])
     assert client.get("/admin/cert-products/sangfor/refund-batches").json()["data"] == [{"id": 7, "name": "批次"}]
     response = client.get(url, params={"batch_id": 7, "registration_id": 8, "request_kind": "exception", "group": "abnormal",
         "keyword": "考生", "requested_at_start": "2026-10-01T00:00:00+08:00", "page_size": 20})

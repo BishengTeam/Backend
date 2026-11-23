@@ -46,7 +46,7 @@ router = APIRouter(prefix="/cert-products/h3c", tags=["管理后台-H3C 认证"]
 )
 async def create_batch(
     body: H3cExamBatchCreate,
-    admin=Depends(require_permission("h3c:batch_manage")),
+    admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[H3cExamBatchResponse]:
     return success(
         data=await H3cAdminBatchService().create_batch(admin_id=admin.id, data=body)
@@ -65,7 +65,7 @@ async def list_batches(
     certification_code: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    _admin=Depends(require_permission("h3c:batch_manage")),
+    _admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[PaginatedData[H3cExamBatchResponse]]:
     return success(
         data=await H3cAdminBatchService().list_batches(
@@ -86,7 +86,7 @@ async def list_batches(
 )
 async def get_batch(
     batch_id: int = Path(..., gt=0),
-    _admin=Depends(require_permission("h3c:batch_manage")),
+    _admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[H3cExamBatchResponse]:
     return success(data=await H3cAdminBatchService().get_batch(batch_id))
 
@@ -100,7 +100,7 @@ async def get_batch(
 async def update_batch(
     body: H3cExamBatchUpdate,
     batch_id: int = Path(..., gt=0),
-    admin=Depends(require_permission("h3c:batch_manage")),
+    admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[H3cExamBatchResponse]:
     return success(
         data=await H3cAdminBatchService().update_batch(
@@ -119,7 +119,7 @@ async def update_batch(
 )
 async def publish_batch(
     batch_id: int = Path(..., gt=0),
-    admin=Depends(require_permission("h3c:batch_manage")),
+    admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[H3cExamBatchResponse]:
     return success(
         data=await H3cAdminBatchService().publish_batch(
@@ -138,7 +138,7 @@ async def publish_batch(
 )
 async def close_registration(
     batch_id: int = Path(..., gt=0),
-    admin=Depends(require_permission("h3c:batch_manage")),
+    admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[H3cExamBatchResponse]:
     return success(
         data=await H3cAdminBatchService().close_registration(
@@ -157,7 +157,7 @@ async def close_registration(
 )
 async def finalize_batch(
     batch_id: int = Path(..., gt=0),
-    admin=Depends(require_permission("h3c:batch_manage")),
+    admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[H3cExamBatchResponse]:
     return success(
         data=await H3cAdminBatchService().finalize_batch(
@@ -176,7 +176,7 @@ async def finalize_batch(
 )
 async def archive_batch(
     batch_id: int = Path(..., gt=0),
-    admin=Depends(require_permission("h3c:batch_manage")),
+    admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[H3cExamBatchResponse]:
     return success(
         data=await H3cAdminBatchService().archive_batch(
@@ -195,7 +195,7 @@ async def archive_batch(
 )
 async def cancel_batch(
     batch_id: int = Path(..., gt=0),
-    _authorized=Depends(require_permission("h3c:batch_manage")),
+    _authorized=Depends(require_permission("cert:h3c")),
     admin=Depends(require_reauthenticated_admin),
 ) -> APIResponse[H3cExamBatchResponse]:
     # Reauthentication is role-independent but does not replace the preset
@@ -224,7 +224,7 @@ async def list_registrations(
     has_valid_export: bool | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    _admin=Depends(require_permission("h3c:review")),
+    _admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[PaginatedData[H3cRegistrationResponse]]:
     return success(
         data=await H3cRegistrationService().list_admin_registrations(
@@ -248,7 +248,7 @@ async def list_registrations(
 )
 async def get_registration(
     registration_id: int = Path(..., gt=0),
-    _admin=Depends(require_permission("h3c:review")),
+    _admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[H3cRegistrationResponse]:
     service = H3cRegistrationService()
     return success(data=await service._admin_registration(registration_id))
@@ -263,7 +263,7 @@ async def get_registration(
 async def review_registration(
     body: H3cReviewDecision,
     registration_id: int = Path(..., gt=0),
-    admin=Depends(require_permission("h3c:review")),
+    admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[H3cRegistrationResponse]:
     return success(
         data=await H3cRegistrationService().review(
@@ -282,8 +282,8 @@ async def review_registration(
 async def reject_registration_and_refund(
     body: H3cRejectRefundRequest,
     registration_id: int = Path(..., gt=0),
-    _review_admin=Depends(require_permission("h3c:review")),
-    _refund_admin=Depends(require_permission("h3c:refund")),
+    _review_admin=Depends(require_permission("cert:h3c")),
+    _refund_admin=Depends(require_permission("cert:h3c")),
     _reauth_admin=Depends(require_reauthenticated_admin),
 ) -> APIResponse[H3cRegistrationResponse]:
     return success(
@@ -303,7 +303,7 @@ async def reject_registration_and_refund(
 async def final_review_registration(
     body: H3cFinalReviewRequest,
     registration_id: int = Path(..., gt=0),
-    _review_admin=Depends(require_permission("h3c:final_review")),
+    _review_admin=Depends(require_permission("cert:h3c")),
     _reauth_admin=Depends(require_reauthenticated_admin),
 ) -> APIResponse[H3cRegistrationResponse]:
     return success(
@@ -322,7 +322,7 @@ async def final_review_registration(
 )
 async def batch_final_review(
     body: H3cBatchFinalReviewRequest,
-    _review_admin=Depends(require_permission("h3c:final_review")),
+    _review_admin=Depends(require_permission("cert:h3c")),
     _reauth_admin=Depends(require_reauthenticated_admin),
 ) -> APIResponse[H3cBatchFinalReviewResponse]:
     return success(
@@ -342,7 +342,7 @@ async def batch_final_review(
 async def close_registration_record(
     body: H3cCloseRequest,
     registration_id: int = Path(..., gt=0),
-    _authorized=Depends(require_permission("h3c:order_close")),
+    _authorized=Depends(require_permission("cert:h3c")),
     admin=Depends(require_reauthenticated_admin),
 ) -> APIResponse[H3cRegistrationResponse]:
     return success(
@@ -372,7 +372,7 @@ async def list_refunds(
     status: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    _admin=Depends(require_permission("h3c:refund")),
+    _admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[PaginatedDataWithCounts[H3cRefundResponse]]:
     return success(
         data=await H3cRefundService().list_refunds(
@@ -400,7 +400,7 @@ async def list_refunds(
 async def confirm_refund(
     body: H3cRefundConfirmRequest,
     refund_id: int = Path(..., gt=0),
-    _authorized=Depends(require_permission("h3c:refund")),
+    _authorized=Depends(require_permission("cert:h3c")),
     admin=Depends(require_reauthenticated_admin),
 ) -> APIResponse[H3cRefundResponse]:
     return success(
@@ -420,7 +420,7 @@ async def confirm_refund(
 )
 async def precheck_export(
     body: H3cExportPrecheckRequest,
-    _admin=Depends(require_permission("h3c:export")),
+    _admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[H3cExportPrecheckResponse]:
     return success(data=await H3cExportService().precheck(body))
 
@@ -439,7 +439,7 @@ async def list_export_items(
     keyword: str | None = Query(None, max_length=64),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    _admin=Depends(require_permission("h3c:export")),
+    _admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[PaginatedData[H3cExportItemResponse]]:
     return success(
         data=await H3cExportService().list_items(
@@ -462,7 +462,7 @@ async def list_export_items(
 )
 async def create_export(
     body: H3cExportCreate,
-    admin=Depends(require_permission("h3c:export")),
+    admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[H3cExportJobResponse]:
     return success(
         data=await H3cExportService().create_job(admin_id=admin.id, data=body)
@@ -480,7 +480,7 @@ async def list_exports(
     status: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    _admin=Depends(require_permission("h3c:export")),
+    _admin=Depends(require_permission("cert:h3c")),
 ) -> APIResponse[PaginatedData[H3cExportJobResponse]]:
     return success(
         data=await H3cExportService().list_jobs(
@@ -500,7 +500,7 @@ async def list_exports(
 )
 async def download_export(
     job_id: int = Path(..., gt=0),
-    _authorized=Depends(require_permission("h3c:export")),
+    _authorized=Depends(require_permission("cert:h3c")),
     admin=Depends(require_reauthenticated_admin),
 ) -> APIResponse[H3cSignedUrlResponse]:
     return success(

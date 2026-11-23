@@ -15,8 +15,12 @@ from pydantic import ValidationError
 from app.domain.user.src.index import AdminSecurityAudit, AdminUser
 from app.policy.permissions import (
     ALL_PERMISSIONS,
+    INTERNAL_GRANTS,
+    PERMISSION_CATALOG,
+    PERMISSION_GRANTS,
     ROLE_PERMISSIONS,
     resolve_admin_permissions,
+    resolve_granted_permissions,
 )
 from app.port.exceptions import BusinessException
 from app.schemas.admin_settings import (
@@ -112,9 +116,61 @@ def test_resolver_super_admin_is_always_wildcard() -> None:
 
 def test_resolver_prefers_override_then_falls_back_to_preset() -> None:
     admin = _admin(permissions=["points:manage"])
+    assert resolve_granted_permissions(admin) == ["points:manage"]
     assert resolve_admin_permissions(admin) == ["points:manage"]
-    assert resolve_admin_permissions(_admin()) == ROLE_PERMISSIONS["quiz_admin"]
-    assert resolve_admin_permissions(_admin(role="legacy_role")) == []
+    assert resolve_granted_permissions(_admin()) == ROLE_PERMISSIONS["quiz_admin"]
+    # 鉴权口径是展开后的细粒度权限，预设仍然生效
+    assert "quiz:list" in resolve_admin_permissions(_admin())
+    assert resolve_granted_permissions(_admin(role="legacy_role")) == []
+
+
+def test_legacy_fine_grained_overrides_normalize_to_grants() -> None:
+    admin = _admin(permissions=["h3c:review", "renshe:export", "points:manage", "h3c:export"])
+    assert resolve_granted_permissions(admin) == ["cert:h3c", "cert:renshe", "points:manage"]
+    expanded = resolve_admin_permissions(admin)
+    assert {"h3c:review", "h3c:final_review", "renshe:export", "points:manage"} <= set(expanded)
+
+
+def test_catalog_is_coarse_and_expansion_targets_are_valid() -> None:
+    catalog_keys = [
+        permission
+        for group in PERMISSION_CATALOG
+        for permission, _label in group["permissions"]  # type: ignore[misc]
+    ]
+    assert len(catalog_keys) == 17
+    assert catalog_keys.count("cert:h3c") == 1
+    assert {"cert:h3c", "cert:nisp", "cert:renshe", "cert:sangfor"} <= set(catalog_keys)
+    assert {"course:manage", "classroom:manage"} <= set(catalog_keys)
+    assert {"user:manage", "order:manage"} <= set(catalog_keys)
+    # 题库拆成独立题库 / 课程题库两项
+    assert {"quiz:manage", "quiz:course"} <= set(catalog_keys)
+    # 目录只暴露大类，不再出现厂商/课程细粒度项
+    assert not any(
+        key.startswith(("h3c:", "nisp:", "renshe:", "sangfor:", "course:read", "course:write", "course:publish"))
+        for key in catalog_keys
+    )
+    for grant, permissions in PERMISSION_GRANTS.items():
+        if grant in INTERNAL_GRANTS:
+            # 内部只读 grant 仅供角色预设使用，不在后台勾选目录展示
+            continue
+        assert grant in catalog_keys, grant
+    for grant, permissions in PERMISSION_GRANTS.items():
+        for permission in permissions:
+            assert permission in ALL_PERMISSIONS, permission
+
+
+def test_internal_readonly_grants_are_preset_only() -> None:
+    from app.policy.permissions import INTERNAL_GRANTS, ROLE_PERMISSIONS
+
+    assert INTERNAL_GRANTS == {"course:view", "quiz:view"}
+    operations = _admin(role="operations_admin", permissions=None)
+    granted = resolve_granted_permissions(operations)
+    assert granted == ROLE_PERMISSIONS["operations_admin"]
+    effective = set(resolve_admin_permissions(operations))
+    assert {"points:manage", "homepage:write", "competition:write", "job:write"} <= effective
+    # 只读：课程/题库只有读权限，没有写与发布
+    assert {"course:read", "quiz:list"} <= effective
+    assert not {"course:write", "course:publish", "quiz:write", "quiz:import"} & effective
 
 
 def test_permission_catalog_covers_every_route_literal() -> None:
@@ -176,20 +232,18 @@ async def test_update_sets_permissions_with_diff_audit(monkeypatch) -> None:
 
     result = await service.update_admin(
         admin.id,
-        AdminSettingsUserUpdate(permissions=["points:manage", "quiz:list"]),
+        AdminSettingsUserUpdate(permissions=["points:manage"]),
         actor_id=1,
     )
 
-    assert admin.permissions == ["points:manage", "quiz:list"]
-    assert result.permissions == ["points:manage", "quiz:list"]
+    assert admin.permissions == ["points:manage"]
+    assert result.permissions == ["points:manage"]
     assert result.permissions_source == "override"
     audit = _audits(db)[0]
     assert audit.reason_code == "permissions_updated"
-    # quiz:list 本就在 quiz_admin 预设内，相对生效集只有 points:manage 是新增
+    # 覆盖式语义：提交的即最终授权，未勾选的预设大类被移除
     assert audit.summary["permissions_added"] == ["points:manage"]
-    assert set(audit.summary["permissions_removed"]) == (
-        set(ROLE_PERMISSIONS["quiz_admin"]) - {"quiz:list"}
-    )
+    assert audit.summary["permissions_removed"] == list(ROLE_PERMISSIONS["quiz_admin"])
 
 
 @pytest.mark.asyncio
@@ -252,7 +306,7 @@ def test_list_item_resolves_permissions_and_source() -> None:
     item = AdminSettingsUserListItem.model_validate(
         _admin(permissions=["offline:view"])
     )
-    assert item.permissions == ["offline:view"]
+    assert item.permissions == ["offline:manage"]
     assert item.permissions_source == "override"
 
     item = AdminSettingsUserListItem.model_validate(_admin())

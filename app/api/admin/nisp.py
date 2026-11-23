@@ -41,7 +41,7 @@ async def list_batches(
     status: str | None = Query(None, max_length=32),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    _admin=Depends(require_permission("nisp:batch_manage")),
+    _admin=Depends(require_permission("cert:nisp")),
 ) -> APIResponse[PaginatedData[NispExamBatchResponse]]:
     items, total = await _service.list_batches(
         keyword=keyword,
@@ -56,7 +56,7 @@ async def list_batches(
 @router.post("/batches/full", response_model=APIResponse[NispExamBatchResponse])
 async def create_full_batch(
     body: NispExamBatchFullCreate,
-    _admin=Depends(require_permission("nisp:batch_manage")),
+    _admin=Depends(require_permission("cert:nisp")),
 ) -> APIResponse[NispExamBatchResponse]:
     """Create a NISP Plan and level-specific batch in one transaction."""
     return success(data=await _service.create_full_batch(body))
@@ -65,7 +65,7 @@ async def create_full_batch(
 @router.post("/batches", response_model=APIResponse[NispExamBatchResponse])
 async def create_batch(
     body: NispExamBatchCreate,
-    _admin=Depends(require_permission("nisp:batch_manage")),
+    _admin=Depends(require_permission("cert:nisp")),
 ) -> APIResponse[NispExamBatchResponse]:
     return success(data=await _service.create_batch(body))
 
@@ -73,7 +73,7 @@ async def create_batch(
 @router.get("/batches/{batch_id}", response_model=APIResponse[NispExamBatchResponse])
 async def get_batch(
     batch_id: int,
-    _admin=Depends(require_permission("nisp:batch_manage")),
+    _admin=Depends(require_permission("cert:nisp")),
 ) -> APIResponse[NispExamBatchResponse]:
     return success(data=await _service.get_batch(batch_id))
 
@@ -82,7 +82,7 @@ async def get_batch(
 async def update_batch(
     batch_id: int,
     body: NispExamBatchUpdate,
-    _admin=Depends(require_permission("nisp:batch_manage")),
+    _admin=Depends(require_permission("cert:nisp")),
 ) -> APIResponse[NispExamBatchResponse]:
     return success(data=await _service.update_batch(batch_id, body))
 
@@ -90,7 +90,7 @@ async def update_batch(
 @router.post("/batches/{batch_id}/publish", response_model=APIResponse[NispExamBatchResponse])
 async def publish_batch(
     batch_id: int,
-    _admin=Depends(require_permission("nisp:batch_manage")),
+    _admin=Depends(require_permission("cert:nisp")),
 ) -> APIResponse[NispExamBatchResponse]:
     return success(data=await _service.publish_batch(batch_id))
 
@@ -98,7 +98,7 @@ async def publish_batch(
 @router.post("/batches/{batch_id}/close-registration", response_model=APIResponse[NispExamBatchResponse])
 async def close_registration(
     batch_id: int,
-    _admin=Depends(require_permission("nisp:batch_manage")),
+    _admin=Depends(require_permission("cert:nisp")),
 ) -> APIResponse[NispExamBatchResponse]:
     return success(data=await _service.close_registration(batch_id))
 
@@ -106,7 +106,7 @@ async def close_registration(
 @router.post("/batches/{batch_id}/cancel", response_model=APIResponse[NispExamBatchResponse])
 async def cancel_batch(
     batch_id: int,
-    _admin=Depends(require_permission("nisp:batch_manage")),
+    _admin=Depends(require_permission("cert:nisp")),
 ) -> APIResponse[NispExamBatchResponse]:
     return success(data=await _service.cancel_batch(batch_id))
 
@@ -116,7 +116,7 @@ async def list_review_batch_options(
     keyword: str | None = Query(None, max_length=64),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    _admin=Depends(require_permission("nisp:review")),
+    _admin=Depends(require_permission("cert:nisp")),
 ) -> APIResponse[PaginatedData[NispReviewBatchOption]]:
     items, total = await _service.list_review_batch_options(
         keyword=keyword,
@@ -136,7 +136,7 @@ async def list_registrations(
     has_valid_export: bool | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    _admin=Depends(require_permission("nisp:review")),
+    _admin=Depends(require_permission("cert:nisp")),
 ) -> APIResponse[PaginatedData[NispRegistrationResponse]]:
     items, total = await _service.list_registrations(
         batch_id=batch_id,
@@ -157,7 +157,7 @@ async def list_registrations(
 )
 async def get_registration(
     registration_id: int,
-    _admin=Depends(require_permission("nisp:review")),
+    _admin=Depends(require_permission("cert:nisp")),
 ) -> APIResponse[NispRegistrationResponse]:
     """Get one registration with current and historical review materials."""
     return success(
@@ -169,7 +169,7 @@ async def get_registration(
 async def review_registration(
     registration_id: int,
     body: NispReviewDecisionRequest,
-    _admin=Depends(require_permission("nisp:review")),
+    _admin=Depends(require_permission("cert:nisp")),
 ) -> APIResponse[NispRegistrationResponse]:
     return success(data=await _service.review(admin_id=_admin.id, registration_id=registration_id, data=body))
 
@@ -181,8 +181,8 @@ async def review_registration(
 async def reject_registration_and_refund(
     registration_id: int,
     body: NispRejectRefundRequest,
-    _review_admin=Depends(require_permission("nisp:review")),
-    _refund_admin=Depends(require_permission("nisp:refund")),
+    _review_admin=Depends(require_permission("cert:nisp")),
+    _refund_admin=Depends(require_permission("cert:nisp")),
     _reauth_admin=Depends(require_reauthenticated_admin),
 ) -> APIResponse[NispRegistrationResponse]:
     return success(
@@ -201,7 +201,7 @@ async def reject_registration_and_refund(
 async def final_review_registration(
     registration_id: int,
     body: NispFinalReviewRequest,
-    _review_admin=Depends(require_permission("nisp:final_review")),
+    _review_admin=Depends(require_permission("cert:nisp")),
     _reauth_admin=Depends(require_reauthenticated_admin),
 ) -> APIResponse[NispRegistrationResponse]:
     return success(
@@ -219,7 +219,7 @@ async def final_review_registration(
 )
 async def batch_final_review(
     body: NispBatchFinalReviewRequest,
-    _review_admin=Depends(require_permission("nisp:final_review")),
+    _review_admin=Depends(require_permission("cert:nisp")),
     _reauth_admin=Depends(require_reauthenticated_admin),
 ) -> APIResponse[NispBatchFinalReviewResponse]:
     return success(
@@ -233,7 +233,7 @@ async def batch_final_review(
 @router.post("/export", response_model=APIResponse[NispExportJobResponse])
 async def create_export_job(
     body: NispExportCreate,
-    _admin=Depends(require_permission("nisp:export")),
+    _admin=Depends(require_permission("cert:nisp")),
 ):
     """Create an async NISP export job."""
     result = await NispExportService().create_job(
@@ -249,7 +249,7 @@ async def create_export_job(
 @router.post("/export/precheck", response_model=APIResponse[NispExportPrecheckResponse])
 async def precheck_export(
     body: NispExportPrecheckRequest,
-    _admin=Depends(require_permission("nisp:export")),
+    _admin=Depends(require_permission("cert:nisp")),
 ):
     """Precheck selectable NISP registrations for a full package export."""
     return success(data=await NispExportService().precheck(body))
@@ -260,7 +260,7 @@ async def list_export_jobs(
     batch_id: int | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    _admin=Depends(require_permission("nisp:export")),
+    _admin=Depends(require_permission("cert:nisp")),
 ):
     """List NISP export jobs."""
     items, total = await NispExportService().list_jobs(
@@ -280,7 +280,7 @@ async def list_export_job_items(
     keyword: str | None = Query(None, max_length=64),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    _admin=Depends(require_permission("nisp:export")),
+    _admin=Depends(require_permission("cert:nisp")),
 ):
     """List the frozen registration items belonging to one NISP export job."""
     return success(
@@ -298,7 +298,7 @@ async def list_export_job_items(
 @router.get("/export/jobs/{job_id}/signed-url", response_model=APIResponse)
 async def get_export_signed_url(
     job_id: int,
-    _admin=Depends(require_permission("nisp:export")),
+    _admin=Depends(require_permission("cert:nisp")),
 ):
     """Get a signed download URL for a completed export."""
     from app.schemas.nisp import NispSignedUrlResponse
@@ -320,7 +320,7 @@ async def list_refunds(
     status: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    _admin=Depends(require_permission("nisp:refund")),
+    _admin=Depends(require_permission("cert:nisp")),
 ):
     """List NISP refund requests."""
     result = await NispRefundService().list_refunds(
@@ -342,7 +342,7 @@ async def list_refunds(
 @router.post("/refunds/{refund_id}/confirm", response_model=APIResponse[NispRefundResponse])
 async def confirm_refund(
     refund_id: int,
-    _admin=Depends(require_permission("nisp:refund")),
+    _admin=Depends(require_permission("cert:nisp")),
 ):
     """Confirm and process a NISP refund."""
     result = await NispRefundService().confirm(
@@ -354,7 +354,7 @@ async def confirm_refund(
 @router.post("/refunds/{refund_id}/reconcile", response_model=APIResponse[NispRefundResponse])
 async def reconcile_refund(
     refund_id: int,
-    _admin=Depends(require_permission("nisp:refund")),
+    _admin=Depends(require_permission("cert:nisp")),
 ):
     """Reconcile a processing NISP refund with WeChat Pay."""
     result = await NispRefundService().reconcile(refund_id)

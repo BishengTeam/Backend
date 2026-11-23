@@ -66,7 +66,9 @@ async def list_admins(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: str | None = Query(None, max_length=64),
-    role: Literal["super_admin", "quiz_admin", "cert_admin", "course_admin", "teacher"]
+    role: Literal[
+        "super_admin", "quiz_admin", "cert_admin", "course_admin", "teacher", "operations_admin"
+    ]
     | None = Query(None),
     is_active: bool | None = Query(None),
     is_locked: bool | None = Query(None),

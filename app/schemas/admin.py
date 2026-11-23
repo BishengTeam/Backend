@@ -13,7 +13,9 @@ class AdminInfo(BaseModel):
     id: int
     username: str
     display_name: str
-    role: Literal["super_admin", "quiz_admin", "cert_admin", "course_admin", "teacher"]
+    role: Literal[
+        "super_admin", "quiz_admin", "cert_admin", "course_admin", "teacher", "operations_admin"
+    ]
     is_active: bool
     must_change_password: bool
     locked_until: datetime | None = None
@@ -121,6 +123,8 @@ class AdminLoginResponse(BaseModel):
 class AdminMeResponse(BaseModel):
     admin: AdminInfo
     permissions: list[str]
+    # 题库数据范围：all / independent / course / none（前端据此隐藏跨库页面）
+    quiz_library_scope: Literal["all", "independent", "course", "none"] = "all"
     session_mode: Literal["normal", "restricted"]
     must_change_password: bool
 

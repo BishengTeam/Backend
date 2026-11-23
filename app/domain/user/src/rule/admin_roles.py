@@ -1,7 +1,8 @@
 """Versioned, non-editable administrator role definitions.
 
-Roles are deliberately code-owned.  There is no database role catalogue and
-no per-administrator permission override: adding a role requires a coordinated
+Roles are deliberately code-owned.  There is no database role catalogue.
+Per-administrator permission overrides are stored on ``admin_user.permissions``
+(see ``app.policy.permissions``); adding a role still requires a coordinated
 Backend/Admin release and a database migration.
 """
 
@@ -10,6 +11,7 @@ QUIZ_ADMIN_ROLE = "quiz_admin"
 CERT_ADMIN_ROLE = "cert_admin"
 COURSE_ADMIN_ROLE = "course_admin"
 TEACHER_ROLE = "teacher"
+OPERATIONS_ADMIN_ROLE = "operations_admin"
 
 ADMIN_ROLES = (
     SUPER_ADMIN_ROLE,
@@ -17,11 +19,13 @@ ADMIN_ROLES = (
     CERT_ADMIN_ROLE,
     COURSE_ADMIN_ROLE,
     TEACHER_ROLE,
+    OPERATIONS_ADMIN_ROLE,
 )
 
 __all__ = [
     "ADMIN_ROLES",
     "COURSE_ADMIN_ROLE",
+    "OPERATIONS_ADMIN_ROLE",
     "TEACHER_ROLE",
     "CERT_ADMIN_ROLE",
     "QUIZ_ADMIN_ROLE",

@@ -4,7 +4,7 @@ from sqlalchemy import select
 from app.adapter.database import get_db_ctx
 from app.domain.order.src.index import Order
 from app.middleware.auth import get_current_user, require_normal_admin
-from app.policy.permissions import resolve_admin_permissions
+from app.policy.permissions import admin_has_permission
 from app.port.exceptions import ForbiddenException, NotFoundException
 from app.schemas.certification_journey import CertificationVendor, JourneyContentUpdate
 from app.schemas.common import success
@@ -13,13 +13,12 @@ from app.services.certification_journey import CertificationJourneyService, user
 router = APIRouter(prefix="/cert/enrollment", tags=["认证统一报名"])
 admin_router = APIRouter(prefix="/certification-journeys", tags=["管理后台-认证报名须知"])
 service = CertificationJourneyService()
-WRITE_PERMISSION = {"h3c": "h3c:batch_manage", "nisp": "nisp:batch_manage", "renshe": "user:write", "sangfor": "content:write"}
+WRITE_PERMISSION = {"h3c": "cert:h3c", "nisp": "cert:nisp", "renshe": "cert:renshe", "sangfor": "cert:sangfor"}
 
 
 async def journey_admin(request: Request, vendor: CertificationVendor, admin=Depends(require_normal_admin)):
-    allowed = resolve_admin_permissions(admin)
     permission = WRITE_PERMISSION[vendor] if request.method == "PUT" else "content:read"
-    if admin.role != "super_admin" and "*" not in allowed and permission not in allowed:
+    if not admin_has_permission(admin, permission):
         raise ForbiddenException(f"缺少权限: {permission}")
     return admin
 

@@ -7,6 +7,7 @@ from app.api.admin.error_contracts import admin_error_contract
 from app.middleware.auth import get_current_admin, require_normal_admin
 from app.middleware.rate_limit import limiter
 from app.policy.permissions import resolve_admin_permissions
+from app.policy.quiz_scope import resolve_quiz_library_scope
 from app.port.exceptions import BusinessException
 from app.schemas.admin import (
     AdminChangePasswordRequest,
@@ -46,6 +47,7 @@ async def me(request: Request, admin=Depends(get_current_admin)):
         data=AdminMeResponse(
             admin=AdminInfo.model_validate(admin),
             permissions=resolve_admin_permissions(admin),
+            quiz_library_scope=resolve_quiz_library_scope(admin).value,
             session_mode=session_mode,
             must_change_password=admin.must_change_password,
         )

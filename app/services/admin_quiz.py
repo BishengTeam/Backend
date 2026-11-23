@@ -20,9 +20,16 @@ from sqlalchemy.exc import IntegrityError
 
 from app.adapter.database import get_db_ctx
 from app.adapter.logging import client_ip_var, request_id_var
+from app.policy.quiz_scope import (
+    QuizLibraryScope,
+    current_quiz_library_scope,
+    ensure_library_in_scope,
+    library_scope_clause,
+)
 from app.port.exceptions import (
     BusinessException,
     ConflictException,
+    ForbiddenException,
     NotFoundException,
     ThirdPartyException,
     ValidationException,
@@ -148,6 +155,24 @@ class ImportValidationResult:
     errors: list[dict[str, object]]
     missing_errors: list[dict[str, object]]
     impact: AdminQuizImportCategoryImpactResponse | None
+
+
+def _require_all_library_scope() -> None:
+    """跨库页面（统计/审计/旧分类）只对同时管理两类题库的管理员开放。"""
+
+    if current_quiz_library_scope() is not QuizLibraryScope.ALL:
+        raise ForbiddenException("该功能需要同时管理独立题库与课程题库的权限")
+
+
+async def _ensure_library_scope(db, library_id: int | None) -> None:
+    if library_id is None:
+        return
+    if current_quiz_library_scope() is QuizLibraryScope.ALL:
+        return
+    library = await db.get(QuizLibrary, library_id)
+    if library is None:
+        raise NotFoundException("题库")
+    ensure_library_in_scope(current_quiz_library_scope(), library)
 
 
 class AdminQuizService:
@@ -406,6 +431,7 @@ class AdminQuizService:
         status: str | None = None,
         parent_id: int | None = None,
     ) -> list[QuizCategory]:
+        _require_all_library_scope()
         if query is not None:
             status = query.status
             parent_id = query.parent_id
@@ -449,6 +475,7 @@ class AdminQuizService:
         query: AdminQuizCategoryImpactQuery,
     ) -> AdminQuizCategoryImpactResponse:
         """Calculate a read-only impact snapshot for one category operation."""
+        _require_all_library_scope()
 
         calculated_at = datetime.now(timezone.utc)
         async with get_db_ctx() as db:
@@ -605,6 +632,7 @@ class AdminQuizService:
         page: int = 1,
         page_size: int = 20,
     ) -> PaginatedData[AdminQuizQuestionResponse]:
+        _require_all_library_scope()
         async with get_db_ctx() as db:
             base = select(QuizQuestion)
             if category_id is not None:
@@ -658,6 +686,7 @@ class AdminQuizService:
     ) -> QuizCategory:
         if admin_id is None:
             raise BusinessException("缺少管理员身份，无法创建题库分类")
+        _require_all_library_scope()
         async with get_db_ctx() as db:
             try:
                 normalized_name = normalize_category_name(data.name)
@@ -730,6 +759,7 @@ class AdminQuizService:
         *,
         admin_id: int | None = None,
     ) -> QuizCategory:
+        _require_all_library_scope()
         if admin_id is None:
             raise BusinessException("缺少管理员身份，无法编辑题库分类")
         async with get_db_ctx() as db:
@@ -823,6 +853,7 @@ class AdminQuizService:
         *,
         admin_id: int | None = None,
     ) -> QuizCategory:
+        _require_all_library_scope()
         if admin_id is None:
             raise BusinessException("缺少管理员身份，无法修改题库分类状态")
         async with get_db_ctx() as db:
@@ -857,6 +888,7 @@ class AdminQuizService:
         *,
         admin_id: int | None = None,
     ) -> None:
+        _require_all_library_scope()
         async with get_db_ctx() as db:
             category = await self._get_for_update(db, QuizCategory, category_id)
             if category is None:
@@ -1517,6 +1549,10 @@ class AdminQuizService:
             question = await db.get(QuizQuestion, question_id)
             if question is None:
                 raise NotFoundException("题目")
+            if question.library_id is not None and current_quiz_library_scope() is not QuizLibraryScope.ALL:
+                library = await db.get(QuizLibrary, question.library_id)
+                if library is not None:
+                    ensure_library_in_scope(current_quiz_library_scope(), library)
             stats = (
                 await db.execute(
                     select(QuizQuestionStats).where(
@@ -1563,6 +1599,7 @@ class AdminQuizService:
 
     async def get_stats_overview(self) -> AdminQuizStatsOverviewResponse:
         """Return anonymous aggregate counters for the admin overview."""
+        _require_all_library_scope()
 
         async with get_db_ctx() as db:
             library_row = (
@@ -1712,6 +1749,9 @@ class AdminQuizService:
 
         async with get_db_ctx() as db:
             filters = [QuizLibrary.status != "deleted"]
+            scope_clause = library_scope_clause(current_quiz_library_scope(), QuizLibrary)
+            if scope_clause is not None:
+                filters.append(scope_clause)
             if query.library_id is not None:
                 filters.append(QuizLibrary.id == query.library_id)
             if query.module_id is not None:
@@ -1852,6 +1892,7 @@ class AdminQuizService:
         self, query: AdminQuizDailyStatsQuery
     ) -> list[AdminQuizDailyStatsItem]:
         """Daily practice volume and active users from the check-in ledger."""
+        _require_all_library_scope()
 
         async with get_db_ctx() as db:
             today = datetime.now(ZoneInfo(settings.APP_TIMEZONE)).date()
@@ -1891,6 +1932,7 @@ class AdminQuizService:
     ) -> PaginatedData[AdminQuizUserStatsListItem]:
         """Leaderboard of users ranked by cumulative practice attempts."""
 
+        _require_all_library_scope()
         async with get_db_ctx() as db:
             base = (
                 select(QuizUserStats, User, UserProfile, UserRealname)
@@ -1971,6 +2013,8 @@ class AdminQuizService:
         """
 
         timezone_name = settings.APP_TIMEZONE
+        async with get_db_ctx() as db:
+            await _ensure_library_scope(db, query.library_id)
         start_at = datetime.combine(query.date_from, time.min, tzinfo=ZoneInfo(timezone_name))
         end_at = datetime.combine(
             query.date_to + timedelta(days=1), time.min, tzinfo=ZoneInfo(timezone_name)
@@ -2148,11 +2192,12 @@ class AdminQuizService:
         self, query: AdminQuizStudentStatsQuery
     ) -> PaginatedData[AdminQuizStudentStatsItem]:
         """按题库汇总每个学生的练习与考试情况（一行一人）。
-
         练习口径含重做，首答指标与排行榜一致；考试只统计已完成/超时结算
         且已出分的场次（待人工阅卷的分数为 NULL，整场不计入）。
         """
 
+        async with get_db_ctx() as db:
+            await _ensure_library_scope(db, query.library_id)
         rows = await self._collect_student_stats(query)
         rows.sort(key=lambda row: (-row[0].practice_total_attempts, row[0].user_id))
         total = len(rows)
@@ -2169,6 +2214,8 @@ class AdminQuizService:
     ) -> str:
         """导出学生练习 + 考试汇总 CSV（UTF-8 BOM，Excel 可直开）。"""
 
+        async with get_db_ctx() as db:
+            await _ensure_library_scope(db, query.library_id)
         rows = await self._collect_student_stats(query)
         rows.sort(key=lambda row: (-row[0].practice_total_attempts, row[0].user_id))
         zone = ZoneInfo(settings.APP_TIMEZONE)
@@ -2647,6 +2694,7 @@ class AdminQuizService:
         query: AdminQuizAuditQuery | None = None,
     ) -> PaginatedData[AdminQuizAuditLogResponse]:
         """Return immutable quiz-management audit rows with stable pagination."""
+        _require_all_library_scope()
         query = query or AdminQuizAuditQuery()
         async with get_db_ctx() as db:
             stmt = select(QuizAdminAuditLog)
@@ -2983,6 +3031,9 @@ class AdminQuizService:
     ) -> QuizImportJob:
         if source_type not in {"csv", "json", "xlsx"}:
             raise ValidationException("导入类型必须为 csv、json 或 xlsx")
+        scope = current_quiz_library_scope()
+        if scope is not QuizLibraryScope.ALL and library_id is None:
+            raise ValidationException("请先选择题库后再导入")
         expected_suffix = f".{source_type}"
         if not Path(filename).name.lower().endswith(expected_suffix):
             raise ValidationException(f"文件扩展名必须为 {expected_suffix}")
@@ -3010,6 +3061,7 @@ class AdminQuizService:
                     library = await db.get(QuizLibrary, library_id)
                     if library is None:
                         raise NotFoundException("题库")
+                    ensure_library_in_scope(scope, library)
                     if library.status in {"archived", "deleted"}:
                         raise BusinessException("已归档或删除题库不可导入")
                 job = QuizImportJob(
@@ -3072,6 +3124,11 @@ class AdminQuizService:
         query = query or AdminQuizImportJobQuery()
         async with get_db_ctx() as db:
             stmt = select(QuizImportJob)
+            scope_clause = library_scope_clause(current_quiz_library_scope(), QuizLibrary)
+            if scope_clause is not None:
+                stmt = stmt.where(
+                    QuizImportJob.library_id.in_(select(QuizLibrary.id).where(scope_clause))
+                )
             if query.library_id is not None:
                 stmt = stmt.where(QuizImportJob.library_id == query.library_id)
             if query.status is not None:
@@ -3104,6 +3161,14 @@ class AdminQuizService:
             job = await db.get(QuizImportJob, job_id)
             if job is None:
                 raise NotFoundException("导入任务")
+            scope = current_quiz_library_scope()
+            if scope is not QuizLibraryScope.ALL:
+                if job.library_id is None:
+                    raise ForbiddenException("旧分类导入任务仅可由同时管理全部题库的管理员查看")
+                library = await db.get(QuizLibrary, job.library_id)
+                if library is None:
+                    raise NotFoundException("题库")
+                ensure_library_in_scope(scope, library)
             if admin_id is not None:
                 self._add_audit(
                     db,
@@ -3130,6 +3195,14 @@ class AdminQuizService:
             job = await db.get(QuizImportJob, job_id)
             if job is None:
                 raise NotFoundException("导入任务")
+            scope = current_quiz_library_scope()
+            if scope is not QuizLibraryScope.ALL:
+                if job.library_id is None:
+                    raise ForbiddenException("旧分类导入任务仅可由同时管理全部题库的管理员查看")
+                library = await db.get(QuizLibrary, job.library_id)
+                if library is None:
+                    raise NotFoundException("题库")
+                ensure_library_in_scope(scope, library)
             expires_at = self._aware(job.expires_at)
             if expires_at <= datetime.now(timezone.utc):
                 self._add_audit(
@@ -3234,6 +3307,14 @@ class AdminQuizService:
             job = await db.get(QuizImportJob, job_id)
             if job is None:
                 raise NotFoundException("导入任务")
+            scope = current_quiz_library_scope()
+            if scope is not QuizLibraryScope.ALL:
+                if job.library_id is None:
+                    raise ForbiddenException("旧分类导入任务仅可由同时管理全部题库的管理员查看")
+                library = await db.get(QuizLibrary, job.library_id)
+                if library is None:
+                    raise NotFoundException("题库")
+                ensure_library_in_scope(scope, library)
             if job.status != "awaiting_category_confirmation" or not job.category_impact:
                 self._add_audit(
                     db,

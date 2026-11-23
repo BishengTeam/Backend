@@ -23,7 +23,9 @@ class AdminSettingsUserCreate(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=64)
     # The creation API deliberately omits ``super_admin`` from this literal.
     # Super admin remains non-creatable; fixed staff roles are code-owned.
-    role: Literal["quiz_admin", "cert_admin", "course_admin", "teacher"] = "quiz_admin"
+    role: Literal[
+        "quiz_admin", "cert_admin", "course_admin", "teacher", "operations_admin"
+    ] = "quiz_admin"
     # 覆盖式按人授权：提供则存库为该管理员的最终权限集（可为空表），
     # 缺省则存 NULL、跟随角色预设。合法性（白名单）由服务层校验。
     permissions: list[str] | None = None
@@ -89,7 +91,9 @@ class AdminSettingsUserListItem(BaseModel):
     id: int
     username: str
     display_name: str
-    role: Literal["super_admin", "quiz_admin", "cert_admin", "course_admin", "teacher"]
+    role: Literal[
+        "super_admin", "quiz_admin", "cert_admin", "course_admin", "teacher", "operations_admin"
+    ]
     permissions: list[str] = Field(default_factory=list)
     permissions_source: Literal["wildcard", "preset", "override"] = "preset"
     is_active: bool
@@ -104,9 +108,9 @@ class AdminSettingsUserListItem(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _resolve_permissions(cls, value: object) -> object:
-        # ORM 对象传入时先展开为 dict 并计算生效权限集；显式 dict（测试
-        # 构造）原样放行。
-        from app.policy.permissions import resolve_admin_permissions
+        # ORM 对象传入时先展开为 dict 并计算大类授权（编辑弹窗勾选口径）；
+        # 显式 dict（测试构造）原样放行。
+        from app.policy.permissions import resolve_granted_permissions
 
         if not hasattr(value, "role"):
             return value
@@ -125,7 +129,7 @@ class AdminSettingsUserListItem(BaseModel):
                 "updated_at",
             )
         }
-        data["permissions"] = resolve_admin_permissions(value)
+        data["permissions"] = resolve_granted_permissions(value)
         data["permissions_source"] = (
             "wildcard"
             if value.role == "super_admin"

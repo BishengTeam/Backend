@@ -12,7 +12,7 @@ from app.domain.user.src.index import (
     AdminSecurityAudit,
     AdminUser,
 )
-from app.policy.permissions import ALL_PERMISSIONS, ROLE_PERMISSIONS
+from app.policy.permissions import ALL_PERMISSIONS, ROLE_PERMISSIONS, normalize_grants
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.schemas.admin_settings import (
     AdminSettingsTemporaryPasswordResponse,
@@ -534,7 +534,8 @@ class AdminSettingsService:
         unknown = sorted(set(values) - ALL_PERMISSIONS)
         if unknown:
             raise BusinessException(f"包含未知权限项: {', '.join(unknown)}")
-        return list(dict.fromkeys(values))
+        # 统一落库为大类授权，历史细粒度 key 在此归一化。
+        return normalize_grants(values)
 
     @staticmethod
     async def _get_manageable_admin(db, admin_id: int) -> AdminUser:

@@ -11,6 +11,7 @@ class TestRolePermissions:
             "cert_admin",
             "course_admin",
             "teacher",
+            "operations_admin",
         }
 
     def test_super_admin_has_wildcard(self):
@@ -22,22 +23,14 @@ class TestRolePermissions:
         from app.policy.permissions import ROLE_PERMISSIONS
 
         permissions = ROLE_PERMISSIONS["quiz_admin"]
-        for permission in (
-            "quiz:list",
-            "quiz:write",
-            "quiz:import",
-            "quiz_content_edit",
-            "quiz_content_publish",
-            "quiz_library_manage",
-            "course_quiz_bind",
-        ):
-            assert permission in permissions
+        assert permissions == ["quiz:manage"]
         for forbidden in (
             "dashboard:view",
-            "user:list",
-            "order:list",
-            "content:write",
-            "course:list",
+            "user:manage",
+            "order:manage",
+            "content:manage",
+            "course:manage",
+            "cert:h3c",
         ):
             assert forbidden not in permissions
 
@@ -50,38 +43,18 @@ class TestRolePermissions:
         from app.policy.permissions import ROLE_PERMISSIONS
 
         permissions = ROLE_PERMISSIONS["course_admin"]
-        assert set(permissions) == {
-            "course:read",
-            "course:write",
-            "course:publish",
-        }
+        assert permissions == ["course:manage", "quiz:course"]
 
     def test_cert_admin_manages_all_certification_business(self):
         from app.policy.permissions import ROLE_PERMISSIONS
 
         permissions = ROLE_PERMISSIONS["cert_admin"]
         assert set(permissions) == {
-            "content:read",
-            "content:list",
-            "content:write",
-            "document:read",
-            "document:write",
-            "user:list",
-            "user:write",
-            "order:list",
-            "h3c:batch_manage",
-            "h3c:review",
-            "h3c:export",
-            "h3c:refund",
-            "h3c:order_close",
-            "h3c:final_review",
-            "nisp:batch_manage",
-            "nisp:review",
-            "nisp:export",
-            "nisp:refund",
-            "nisp:final_review",
-            "renshe:review",
-            "renshe:export",
-            "sangfor:review",
-            "sangfor:export",
+            "content:manage",
+            "user:manage",
+            "order:manage",
+            "cert:h3c",
+            "cert:nisp",
+            "cert:renshe",
+            "cert:sangfor",
         }

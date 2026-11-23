@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db
+from app.policy.quiz_scope import current_admin_var
 from app.port.exceptions import (
     AppException,
     BusinessException,
@@ -17,7 +18,7 @@ from app.adapter.security import (
     validate_admin_reauth_token,
 )
 from app.domain.user.src.index import AdminUser, User, UserRealname
-from app.policy.permissions import resolve_admin_permissions
+from app.policy.permissions import admin_has_any_permission, admin_has_permission
 
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,7 @@ async def require_identity(
 async def require_normal_admin(admin=Depends(get_current_admin)):
     if getattr(admin, "_session_mode", None) != "normal":
         raise ForbiddenException("请先完成首次密码修改")
+    current_admin_var.set(admin)
     return admin
 
 
@@ -143,23 +145,23 @@ def require_permission(permission: str):
     ):
         if admin.role == "super_admin":
             return admin
-        allowed = resolve_admin_permissions(admin)
-        if permission not in allowed and "*" not in allowed:
-            if permission.startswith("quiz:"):
-                try:
-                    from app.services.admin_quiz import AdminQuizService
+        if admin_has_permission(admin, permission):
+            return admin
+        if permission.startswith("quiz:"):
+            try:
+                from app.services.admin_quiz import AdminQuizService
 
-                    await AdminQuizService.record_permission_denied(
-                        admin_id=admin.id,
-                        permission=permission,
-                    )
-                except Exception:
-                    logger.error(
-                        "quiz permission denial audit failed: admin_id=%s permission=%s",
-                        admin.id,
-                        permission,
-                    )
-            raise ForbiddenException(f"缺少权限: {permission}")
+                await AdminQuizService.record_permission_denied(
+                    admin_id=admin.id,
+                    permission=permission,
+                )
+            except Exception:
+                logger.error(
+                    "quiz permission denial audit failed: admin_id=%s permission=%s",
+                    admin.id,
+                    permission,
+                )
+        raise ForbiddenException(f"缺少权限: {permission}")
         return admin
 
     return _check
@@ -173,8 +175,7 @@ def require_any_permission(*permissions: str):
     ):
         if admin.role == "super_admin":
             return admin
-        allowed = resolve_admin_permissions(admin)
-        if "*" in allowed or any(item in allowed for item in permissions):
+        if admin_has_any_permission(admin, permissions):
             return admin
         raise ForbiddenException(f"缺少权限: {' / '.join(permissions)}")
 

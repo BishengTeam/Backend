@@ -186,16 +186,18 @@ class ConsultationGroupService:
         from app.domain.h3c.src.index import H3cExamBatch
 
         if await db.scalar(select(H3cExamBatch.id).where(H3cExamBatch.plan_id == plan.id)):
-            return "h3c:batch_manage"
+            return "cert:h3c"
         product = await db.scalar(
             select(CertProduct).where(CertProduct.code == plan.product_type)
         ) if plan.product_type is not None else None
         product_type = product.type if product is not None else ""
         normalized = (plan.product_type or "").strip().upper()
         if product_type == "nisp" or normalized.startswith("NISP-"):
-            return "nisp:batch_manage"
+            return "cert:nisp"
         if product_type == "h3c" or normalized.startswith("H3C"):
-            return "h3c:batch_manage"
+            return "cert:h3c"
         if product_type == "renshe" or normalized == "RS-ZY":
-            return "user:write"
+            return "cert:renshe"
+        if product_type == "sangfor" or normalized.startswith("SANGFOR"):
+            return "cert:sangfor"
         return "content:write"

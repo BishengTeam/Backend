@@ -20,6 +20,13 @@ from app.services.quiz_question_pool import practice_count_breakdown, practice_p
 from app.adapter.database import get_db_ctx
 from app.services.quiz_image_upload import sign_quiz_media_map, sign_quiz_media_urls
 from app.adapter.logging import client_ip_var, request_id_var
+from app.policy.quiz_scope import (
+    QuizLibraryScope,
+    current_quiz_library_scope,
+    ensure_library_in_scope,
+    library_scope_clause,
+    scope_allows,
+)
 from app.domain.community.src.index import (
     QuizAdminAuditLog,
     QuizKnowledgePoint,
@@ -40,6 +47,7 @@ from app.domain.community.src.rule.quiz import (
 from app.port.exceptions import (
     BusinessException,
     ConflictException,
+    ForbiddenException,
     NotFoundException,
     ValidationException,
 )
@@ -334,11 +342,35 @@ class AdminQuizV2Service:
         if row is None:
             raise NotFoundException("知识点")
         library, module, point = row
+        ensure_library_in_scope(current_quiz_library_scope(), library)
         if library.status in {"archived", "deleted"}:
             raise BusinessException("已归档或删除题库不可写入题目")
         if module.status != "active" or point.status != "active":
             raise BusinessException("题目只能写入有效模块下的有效知识点")
         return library, module, point
+
+    @staticmethod
+    async def _ensure_library_scope(db, library_id: int | None) -> QuizLibrary | None:
+        """按当前管理员范围校验题库可操作性；all 范围直接放行（保持既有查询量）。"""
+
+        if current_quiz_library_scope() is QuizLibraryScope.ALL:
+            return None
+        library = await db.get(QuizLibrary, library_id) if library_id is not None else None
+        if library is None:
+            raise NotFoundException("题库")
+        ensure_library_in_scope(current_quiz_library_scope(), library)
+        return library
+
+    @staticmethod
+    async def _library_in_scope(db, library_id: int | None) -> bool:
+        if current_quiz_library_scope() is QuizLibraryScope.ALL:
+            return library_id is not None
+        if library_id is None:
+            return False
+        library = await db.get(QuizLibrary, library_id)
+        return library is not None and scope_allows(
+            current_quiz_library_scope(), library.access_mode
+        )
 
     @staticmethod
     async def _active_module(db, module_id: int) -> tuple[QuizLibrary, QuizModule]:
@@ -355,6 +387,7 @@ class AdminQuizV2Service:
         if row is None:
             raise NotFoundException("模块")
         library, module = row
+        ensure_library_in_scope(current_quiz_library_scope(), library)
         if library.status in {"archived", "deleted"}:
             raise BusinessException("已归档或删除题库不可写入题目")
         if module.status != "active":
@@ -548,6 +581,9 @@ class AdminQuizV2Service:
                 stmt = stmt.where(QuizLibrary.status == str(query.status))
             if query.access_mode is not None:
                 stmt = stmt.where(QuizLibrary.access_mode == str(query.access_mode))
+            scope_clause = library_scope_clause(current_quiz_library_scope(), QuizLibrary)
+            if scope_clause is not None:
+                stmt = stmt.where(scope_clause)
             if query.keyword:
                 keyword = f"%{query.keyword.strip()}%"
                 stmt = stmt.where(
@@ -576,10 +612,12 @@ class AdminQuizV2Service:
             return result
 
     async def get_library(self, library_id: int) -> AdminQuizLibraryResponse:
+        scope = current_quiz_library_scope()
         async with get_db_ctx() as db:
             library = await db.get(QuizLibrary, library_id)
             if library is None:
                 raise NotFoundException("题库")
+            ensure_library_in_scope(scope, library)
             counts = await self._library_counts(db, [library_id])
             return self._library_response(library, counts[library_id])
 
@@ -587,6 +625,8 @@ class AdminQuizV2Service:
         self, data: AdminQuizLibraryCreate, *, admin_id: int
     ) -> AdminQuizLibraryResponse:
         name = normalize_category_name(data.name)
+        if not scope_allows(current_quiz_library_scope(), str(data.access_mode)):
+            raise ForbiddenException("当前管理员无权创建该类题库")
         library = QuizLibrary(
             name=name,
             normalized_name=name,
@@ -642,6 +682,8 @@ class AdminQuizV2Service:
             library = await self._locked(db, QuizLibrary, library_id)
             if library is None:
                 raise NotFoundException("题库")
+            scope = current_quiz_library_scope()
+            ensure_library_in_scope(scope, library)
             self._check_version(library, data.lock_version)
             if library.status in {"archived", "deleted"}:
                 raise BusinessException("已归档或删除题库不可编辑")
@@ -654,6 +696,8 @@ class AdminQuizV2Service:
                 library.name = normalize_category_name(data.name)
                 library.normalized_name = library.name
             if "access_mode" in fields and data.access_mode is not None:
+                if not scope_allows(scope, str(data.access_mode)):
+                    raise ForbiddenException("无权把题库改为该访问模式")
                 library.access_mode = str(data.access_mode)
             if "vendor_tag" in fields and data.vendor_tag is not None:
                 library.vendor_tag = str(data.vendor_tag)
@@ -1080,6 +1124,7 @@ class AdminQuizV2Service:
             library = await self._locked(db, QuizLibrary, library_id)
             if library is None:
                 raise NotFoundException("题库")
+            ensure_library_in_scope(current_quiz_library_scope(), library)
             self._check_version(library, data.lock_version)
             now = self._now()
             before = self._library_fields(library)
@@ -1216,8 +1261,10 @@ class AdminQuizV2Service:
         self, library_id: int
     ) -> list[AdminQuizCourseBindingResponse]:
         async with get_db_ctx() as db:
-            if await db.get(QuizLibrary, library_id) is None:
+            library = await db.get(QuizLibrary, library_id)
+            if library is None:
                 raise NotFoundException("题库")
+            ensure_library_in_scope(current_quiz_library_scope(), library)
             bindings = list(
                 (
                     await db.execute(
@@ -1239,6 +1286,8 @@ class AdminQuizV2Service:
         *,
         admin_id: int,
     ) -> AdminQuizCourseBindingResponse:
+        async with get_db_ctx() as db:
+            await self._ensure_library_scope(db, library_id)
         job = await CourseEntitlementService.create_binding(
             data.course_id, library_id, admin_id=admin_id
         )
@@ -1256,6 +1305,11 @@ class AdminQuizV2Service:
         *,
         admin_id: int,
     ) -> AdminQuizCourseBindingResponse:
+        async with get_db_ctx() as db:
+            existing = await db.get(QuizCourseLibraryBinding, binding_id)
+            if existing is None:
+                raise NotFoundException("课程题库绑定")
+            await self._ensure_library_scope(db, existing.library_id)
         await CourseEntitlementService.set_binding_status(
             binding_id,
             str(data.status),
@@ -1332,9 +1386,12 @@ class AdminQuizV2Service:
         )
 
     async def get_content_tree(self, library_id: int) -> AdminQuizContentTreeResponse:
+        scope = current_quiz_library_scope()
         async with get_db_ctx() as db:
-            if await db.get(QuizLibrary, library_id) is None:
+            library = await db.get(QuizLibrary, library_id)
+            if library is None:
                 raise NotFoundException("题库")
+            ensure_library_in_scope(scope, library)
             modules = list(
                 (
                     await db.execute(
@@ -1413,6 +1470,7 @@ class AdminQuizV2Service:
             library = await self._locked(db, QuizLibrary, data.library_id)
             if library is None:
                 raise NotFoundException("题库")
+            ensure_library_in_scope(current_quiz_library_scope(), library)
             if library.status in {"archived", "deleted"}:
                 raise BusinessException("已归档或删除题库不可新增模块")
             module = QuizModule(
@@ -1455,6 +1513,7 @@ class AdminQuizV2Service:
             module = await self._locked(db, QuizModule, module_id)
             if module is None:
                 raise NotFoundException("模块")
+            await self._ensure_library_scope(db, module.library_id)
             self._check_version(module, data.lock_version)
             # quiz023：默认/迁移模块（system_kind 非 none）允许改名，删除闸门不变。
             if module.status == "deleted":
@@ -1494,6 +1553,7 @@ class AdminQuizV2Service:
             module = await self._locked(db, QuizModule, module_id)
             if module is None:
                 raise NotFoundException("模块")
+            await self._ensure_library_scope(db, module.library_id)
             self._check_version(module, data.lock_version)
             # quiz023：默认/迁移模块允许停用/启用，删除闸门不变。
             if module.status == "deleted":
@@ -1533,6 +1593,7 @@ class AdminQuizV2Service:
             module = await self._locked(db, QuizModule, module_id)
             if module is None:
                 raise NotFoundException("模块")
+            await self._ensure_library_scope(db, module.library_id)
             self._check_version(module, data.lock_version)
             if module.system_kind != "none":
                 raise BusinessException("系统待整理模块需先清空，由迁移清理流程移除")
@@ -1577,6 +1638,7 @@ class AdminQuizV2Service:
             module = await self._locked(db, QuizModule, module_id)
             if module is None:
                 raise NotFoundException("模块")
+            await self._ensure_library_scope(db, module.library_id)
             self._check_version(module, data.lock_version)
             now = self._now()
             if module.status != "deleted":
@@ -1611,6 +1673,10 @@ class AdminQuizV2Service:
             module = await self._locked(db, QuizModule, data.module_id)
             if module is None:
                 raise NotFoundException("模块")
+            ensure_library_in_scope(
+                current_quiz_library_scope(),
+                await self._locked(db, QuizLibrary, module.library_id),
+            )
             if module.status != "active" or module.system_kind != "none":
                 raise BusinessException("目标模块不可用")
             point = QuizKnowledgePoint(
@@ -1658,6 +1724,7 @@ class AdminQuizV2Service:
             point = await self._locked(db, QuizKnowledgePoint, point_id)
             if point is None:
                 raise NotFoundException("知识点")
+            await self._ensure_library_scope(db, point.library_id)
             self._check_version(point, data.lock_version)
             # quiz023：默认/未分类知识点（system_kind 非 none）允许改名，删除闸门见 delete。
             if point.status == "deleted":
@@ -1719,6 +1786,7 @@ class AdminQuizV2Service:
             point = await self._locked(db, QuizKnowledgePoint, point_id)
             if point is None:
                 raise NotFoundException("知识点")
+            await self._ensure_library_scope(db, point.library_id)
             self._check_version(point, data.lock_version)
             # quiz023：默认/未分类知识点允许停用/启用（删除前置），删除闸门见 delete。
             if point.status == "deleted":
@@ -1769,6 +1837,7 @@ class AdminQuizV2Service:
             point = await self._locked(db, QuizKnowledgePoint, point_id)
             if point is None:
                 raise NotFoundException("知识点")
+            await self._ensure_library_scope(db, point.library_id)
             self._check_version(point, data.lock_version)
             if point.status != "disabled":
                 raise BusinessException("只有已停用知识点可以删除")
@@ -1831,6 +1900,7 @@ class AdminQuizV2Service:
             point = await self._locked(db, QuizKnowledgePoint, point_id)
             if point is None:
                 raise NotFoundException("知识点")
+            await self._ensure_library_scope(db, point.library_id)
             self._check_version(point, data.lock_version)
             now = self._now()
             if point.status != "deleted":
@@ -1864,6 +1934,11 @@ class AdminQuizV2Service:
     ) -> PaginatedData[AdminQuizQuestionResponse]:
         async with get_db_ctx() as db:
             stmt = select(QuizQuestion).where(QuizQuestion.library_id.is_not(None))
+            scope_clause = library_scope_clause(current_quiz_library_scope(), QuizLibrary)
+            if scope_clause is not None:
+                stmt = stmt.where(
+                    QuizQuestion.library_id.in_(select(QuizLibrary.id).where(scope_clause))
+                )
             if not query.include_deleted:
                 stmt = stmt.where(QuizQuestion.status != "deleted")
             if query.import_default_ownership is not None:
@@ -1954,6 +2029,7 @@ class AdminQuizV2Service:
         if query.library_id is None:
             raise ValidationException("导出必须指定题库")
         async with get_db_ctx() as db:
+            await self._ensure_library_scope(db, query.library_id)
             stmt = select(QuizQuestion).where(
                 QuizQuestion.library_id == query.library_id,
             )
@@ -2097,6 +2173,7 @@ class AdminQuizV2Service:
         if query.library_id is None:
             raise ValidationException("导出必须指定题库")
         async with get_db_ctx() as db:
+            await self._ensure_library_scope(db, query.library_id)
             stmt = select(QuizQuestion).where(
                 QuizQuestion.library_id == query.library_id,
             )
@@ -2243,6 +2320,10 @@ class AdminQuizV2Service:
             question = await db.get(QuizQuestion, question_id)
             if question is None or question.library_id is None:
                 raise NotFoundException("题目")
+            ensure_library_in_scope(
+                current_quiz_library_scope(),
+                await self._locked(db, QuizLibrary, question.library_id),
+            )
             return await self._question_response(db, question)
 
     async def list_question_revisions(
@@ -2252,6 +2333,10 @@ class AdminQuizV2Service:
             question = await db.get(QuizQuestion, question_id)
             if question is None or question.library_id is None:
                 raise NotFoundException("题目")
+            ensure_library_in_scope(
+                current_quiz_library_scope(),
+                await self._locked(db, QuizLibrary, question.library_id),
+            )
             revisions = list(
                 (
                     await db.execute(
@@ -2358,6 +2443,10 @@ class AdminQuizV2Service:
             question = await self._locked(db, QuizQuestion, question_id)
             if question is None or question.library_id is None:
                 raise NotFoundException("题目")
+            ensure_library_in_scope(
+                current_quiz_library_scope(),
+                await self._locked(db, QuizLibrary, question.library_id),
+            )
             self._check_version(question, data.lock_version)
             if question.status == "deleted":
                 raise BusinessException("已删除题目不可编辑")
@@ -2584,6 +2673,10 @@ class AdminQuizV2Service:
             question = await self._locked(db, QuizQuestion, question_id)
             if question is None or question.library_id is None:
                 raise NotFoundException("题目")
+            ensure_library_in_scope(
+                current_quiz_library_scope(),
+                await self._locked(db, QuizLibrary, question.library_id),
+            )
             self._check_version(question, data.lock_version)
             now = self._now()
             before = self._question_fields(question)
@@ -2667,6 +2760,9 @@ class AdminQuizV2Service:
                 question = await self._locked(db, QuizQuestion, item.question_id)
                 if question is None or question.library_id is None:
                     errors.append(AdminQuizBatchItemError(question_id=item.question_id, code=40300, field=None, message="V2 题目不存在"))
+                    continue
+                if not await self._library_in_scope(db, question.library_id):
+                    errors.append(AdminQuizBatchItemError(question_id=item.question_id, code=40300, field=None, message="缺少该题库的管理权限"))
                     continue
                 questions[item.question_id] = question
                 if int(question.lock_version) != item.lock_version:
@@ -2830,6 +2926,14 @@ class AdminQuizV2Service:
                         )
                     )
                     continue
+                if not await self._library_in_scope(db, question.library_id):
+                    errors.append(
+                        AdminQuizBatchItemError(
+                            question_id=item.question_id, code=40300,
+                            field=None, message="缺少该题库的管理权限",
+                        )
+                    )
+                    continue
                 if question.status == "deleted":
                     errors.append(
                         AdminQuizBatchItemError(
@@ -2887,6 +2991,7 @@ class AdminQuizV2Service:
                 library = await self._locked(db, QuizLibrary, library_id)
                 if library is None:
                     raise NotFoundException("题库")
+                ensure_library_in_scope(current_quiz_library_scope(), library)
                 if library.status == "published":
                     raise BusinessException("题库已发布，请先停用题库再一键清空")
                 rows = (
@@ -2904,6 +3009,7 @@ class AdminQuizV2Service:
                 module = await self._locked(db, QuizModule, module_id)
                 if module is None:
                     raise NotFoundException("模块")
+                await self._ensure_library_scope(db, module.library_id)
                 # quiz023：直查题目 module_id，覆盖模块直挂题。
                 rows = (
                     await db.execute(
@@ -2920,6 +3026,7 @@ class AdminQuizV2Service:
                 point = await self._locked(db, QuizKnowledgePoint, knowledge_point_id)
                 if point is None:
                     raise NotFoundException("知识点")
+                await self._ensure_library_scope(db, point.library_id)
                 rows = (
                     await db.execute(
                         select(QuizQuestion)
@@ -2991,6 +3098,8 @@ class AdminQuizV2Service:
             ).scalar_one_or_none() is not None
 
     async def migration_report(self) -> AdminQuizMigrationReportResponse:
+        if current_quiz_library_scope() is not QuizLibraryScope.ALL:
+            raise ForbiddenException("仅同时管理全部题库的管理员可查看迁移报告")
         async with get_db_ctx() as db:
             libraries = list((await db.execute(select(QuizLibrary))).scalars())
             issues = list(

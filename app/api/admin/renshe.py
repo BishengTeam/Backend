@@ -38,7 +38,7 @@ router = APIRouter(prefix="/cert-products/renshe", tags=["管理后台-人社报
 
 
 @router.get("/references/{document_id}")
-async def read_reference(document_id: str, _admin=Depends(require_permission("user:list"))):
+async def read_reference(document_id: str, _admin=Depends(require_permission("cert:renshe"))):
     from app.services.renshe_references import reference_file
     from fastapi.responses import Response
     path, mime = reference_file(document_id)
@@ -55,12 +55,12 @@ async def read_reference(document_id: str, _admin=Depends(require_permission("us
 
 
 @router.get("/project-capabilities", response_model=APIResponse[dict])
-async def project_capabilities(_admin=Depends(require_permission("content:read"))):
+async def project_capabilities(_admin=Depends(require_permission("cert:renshe"))):
     return success(data=RensheProjectService.capabilities())
 
 
 @router.get("/export-template")
-async def download_current_registration_template(_admin=Depends(require_permission("content:read"))):
+async def download_current_registration_template(_admin=Depends(require_permission("cert:renshe"))):
     from app.services.renshe_export import RensheExportService
     registration, _ = RensheExportService._template_paths()
     from io import BytesIO
@@ -79,7 +79,7 @@ async def download_current_registration_template(_admin=Depends(require_permissi
 
 
 @router.post("/commitment-templates")
-async def upload_commitment_template(file: UploadFile = File(...), admin=Depends(require_permission("content:write"))):
+async def upload_commitment_template(file: UploadFile = File(...), admin=Depends(require_permission("cert:renshe"))):
     from app.services.renshe_graduated import save_template
     from app.services.renshe_audit import record_best_effort_audit
     template = save_template(file.filename or "template", await file.read(10 * 1024 * 1024 + 1))
@@ -89,7 +89,7 @@ async def upload_commitment_template(file: UploadFile = File(...), admin=Depends
 
 
 @router.get("/commitment-templates/{filename}")
-async def download_commitment_template(filename: str, _admin=Depends(require_permission("content:read"))):
+async def download_commitment_template(filename: str, _admin=Depends(require_permission("cert:renshe"))):
     import re
     from app.port.exceptions import NotFoundException, ConflictException
     from app.services.renshe_graduated import template_path
@@ -103,23 +103,23 @@ async def download_commitment_template(filename: str, _admin=Depends(require_per
 
 
 @router.get("/projects", response_model=APIResponse[list[RensheProjectResponse]])
-async def list_projects(_admin=Depends(require_permission("content:list"))):
+async def list_projects(_admin=Depends(require_permission("cert:renshe"))):
     return success(data=await RensheProjectService().list_projects())
 
 
 @router.post("/projects", response_model=APIResponse[RensheProjectResponse])
-async def create_project(body: RensheProjectWrite, admin=Depends(require_permission("content:write"))):
+async def create_project(body: RensheProjectWrite, admin=Depends(require_permission("cert:renshe"))):
     assert_project_selection_payload(body, creating=True)
     return success(data=await RensheProjectService().save(body, admin_id=admin.id))
 
 
 @router.put("/projects/{project_id}/commitment-template", response_model=APIResponse[RensheProjectResponse])
-async def save_project_commitment_template(project_id: int, body: RensheCommitmentTemplateBinding, admin=Depends(require_permission("content:write"))):
+async def save_project_commitment_template(project_id: int, body: RensheCommitmentTemplateBinding, admin=Depends(require_permission("cert:renshe"))):
     return success(data=await RensheProjectService().save_commitment_template(project_id, body, admin_id=admin.id))
 
 
 @router.put("/projects/{project_id}", response_model=APIResponse[RensheProjectResponse])
-async def update_project(project_id: int, body: RensheProjectWrite, admin=Depends(require_permission("content:write"))):
+async def update_project(project_id: int, body: RensheProjectWrite, admin=Depends(require_permission("cert:renshe"))):
     assert_project_selection_payload(body, creating=False)
     return success(data=await RensheProjectService().save(body, product_id=project_id, admin_id=admin.id))
 
@@ -133,13 +133,13 @@ def assert_project_selection_payload(body: RensheProjectWrite, *, creating: bool
 
 
 @router.delete("/projects/{project_id}")
-async def delete_project(project_id: int, admin=Depends(require_permission("content:write"))):
+async def delete_project(project_id: int, admin=Depends(require_permission("cert:renshe"))):
     await RensheProjectService().delete(project_id, admin_id=admin.id)
     return success(message="草稿项目已删除")
 
 
 @router.get("/batches")
-async def list_renshe_batches(_admin=Depends(require_permission("user:list"))):
+async def list_renshe_batches(_admin=Depends(require_permission("cert:renshe"))):
     from app.services.plan import PlanService
     return success(data=await PlanService().list_renshe_plans())
 
@@ -156,7 +156,7 @@ def _client_ip(request: Request) -> str | None:
     summary="当前支持的人社报考组合",
 )
 async def list_programs(
-    _admin=Depends(require_permission("user:write")),
+    _admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[list[RensheProgramResponse]]:
     return success(
         data=[
@@ -188,7 +188,7 @@ async def list_applications(
     submitted_at_end: datetime | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    _admin=Depends(require_permission("user:list")),
+    _admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[PaginatedData[RensheAdminApplicationListItem]]:
     result = await RensheReviewService().list_applications(
         plan_id=plan_id,
@@ -211,7 +211,7 @@ async def list_applications(
 )
 async def get_application(
     application_id: int = Path(..., ge=1),
-    _admin=Depends(require_permission("user:list")),
+    _admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[RensheAdminApplicationDetailResponse]:
     result = await RensheReviewService().get_application(
         application_id, actor_id=_admin.id
@@ -228,7 +228,7 @@ async def get_application(
 async def initial_review(
     body: RensheReviewCreate,
     application_id: int = Path(..., ge=1),
-    admin=Depends(require_permission("renshe:review")),
+    admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[RensheReviewResponse]:
     result = await RensheReviewService().review(
         reviewer_id=admin.id,
@@ -251,7 +251,7 @@ async def initial_review(
 async def return_application_for_correction(
     body: RensheReviewCreate,
     application_id: int = Path(..., ge=1),
-    admin=Depends(require_permission("renshe:review")),
+    admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[RensheReviewResponse]:
     result = await RensheReviewService().return_for_correction(
         reviewer_id=admin.id,
@@ -269,7 +269,7 @@ async def return_application_for_correction(
 )
 async def batch_external_review(
     body: RensheBatchExternalReviewRequest,
-    admin=Depends(require_permission("renshe:review")),
+    admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[RensheBatchExternalReviewResponse]:
     result = await RensheReviewService().batch_external_review(
         reviewer_id=admin.id,
@@ -286,7 +286,7 @@ async def batch_external_review(
 async def external_review(
     body: RensheReviewCreate,
     application_id: int = Path(..., ge=1),
-    admin=Depends(require_permission("renshe:review")),
+    admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[RensheReviewResponse]:
     result = await RensheReviewService().review(
         reviewer_id=admin.id,
@@ -332,7 +332,7 @@ async def list_refunds(
     status: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    _admin=Depends(require_permission("order:list")),
+    _admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[PaginatedDataWithCounts[RensheRefundResponse]]:
     from app.services.renshe_refund import RensheRefundService
 
@@ -387,7 +387,7 @@ async def decide_refund(
 async def create_export_job(
     plan_id: int = Path(..., ge=1),
     body: RensheExportCreate | None = None,
-    admin=Depends(require_permission("renshe:export")),
+    admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[RensheExportJobResponse]:
     from app.services.renshe_export import RensheExportService
 
@@ -406,7 +406,7 @@ async def create_export_job(
 )
 async def list_export_jobs(
     plan_id: int = Path(..., ge=1),
-    _admin=Depends(require_permission("user:list")),
+    _admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[list[RensheExportJobResponse]]:
     from app.services.renshe_export import RensheExportService
 
@@ -420,7 +420,7 @@ async def list_export_jobs(
 )
 async def get_export_job(
     job_id: int = Path(..., ge=1),
-    _admin=Depends(require_permission("user:list")),
+    _admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[RensheExportJobResponse]:
     from app.services.renshe_export import RensheExportService
 
@@ -434,7 +434,7 @@ async def get_export_job(
 )
 async def retry_export_job(
     job_id: int = Path(..., ge=1),
-    admin=Depends(require_permission("renshe:export")),
+    admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[RensheExportJobResponse]:
     from app.services.renshe_export import RensheExportService
 
@@ -452,7 +452,7 @@ async def get_material_signed_url(
     request: Request,
     material_id: int = Path(..., ge=1),
     download: bool = Query(False, description="true 为下载，false 为预览"),
-    admin=Depends(require_permission("user:list")),
+    admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[RensheSignedUrlResponse]:
     from app.services.renshe_export import RensheExportService
 
@@ -476,7 +476,7 @@ async def get_verification_material_signed_url(
     user_id: int = Path(..., ge=1),
     kind: RensheMaterialKind = Path(...),
     download: bool = Query(False),
-    admin=Depends(require_permission("user:list")),
+    admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[RensheSignedUrlResponse]:
     from app.services.renshe_export import RensheExportService
 
@@ -499,7 +499,7 @@ async def get_verification_material_signed_url(
 async def get_export_volume_signed_url(
     request: Request,
     volume_id: int = Path(..., ge=1),
-    admin=Depends(require_permission("renshe:export")),
+    admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[RensheSignedUrlResponse]:
     from app.services.renshe_export import RensheExportService
 
@@ -518,7 +518,7 @@ async def get_export_volume_signed_url(
 )
 async def list_cleanup_runs(
     plan_id: int = Path(..., ge=1),
-    _admin=Depends(require_permission("user:list")),
+    _admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[list[RensheCleanupRunResponse]]:
     from app.services.renshe_cleanup import RensheCleanupService
 
@@ -545,7 +545,7 @@ async def list_audit_logs(
     ended_at: datetime | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    admin=Depends(require_permission("user:list")),
+    admin=Depends(require_permission("cert:renshe")),
 ) -> APIResponse[PaginatedData[RensheAuditLogResponse]]:
     from app.services.renshe_audit import RensheAuditQueryService
 

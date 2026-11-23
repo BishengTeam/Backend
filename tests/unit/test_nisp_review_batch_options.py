@@ -124,16 +124,26 @@ async def test_options_require_review_permission(review_client):
     response = await review_client.client.get("/admin/nisp/review-batch-options")
 
     assert response.status_code == 403
-    assert response.json()["message"] == "缺少权限: nisp:review"
+    assert response.json()["message"] == "缺少权限: cert:nisp"
     review_client.options.assert_not_awaited()
 
 
-async def test_reviewer_options_do_not_grant_batch_management(review_client):
+async def test_reviewer_without_vendor_grant_cannot_manage_batches(review_client):
+    review_client.principal.permissions = ["user:manage"]
+
     response = await review_client.client.get("/admin/nisp/batches")
 
     assert response.status_code == 403
-    assert response.json()["message"] == "缺少权限: nisp:batch_manage"
+    assert response.json()["message"] == "缺少权限: cert:nisp"
     review_client.batches.assert_not_awaited()
+
+
+async def test_vendor_grant_also_covers_batch_management(review_client):
+    # 大类授权下「审核」与「批次管理」同属 cert:nisp，不再存在只审不管的账号
+    response = await review_client.client.get("/admin/nisp/batches")
+
+    assert response.status_code == 200
+    review_client.batches.assert_awaited_once()
 
 
 @pytest.mark.parametrize("params, field", [
