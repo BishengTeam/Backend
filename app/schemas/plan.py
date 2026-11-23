@@ -141,8 +141,11 @@ class PlanProjectResponse(BaseModel):
     product_id: int
     product_code: str
     product_name: str
+    product_is_active: bool = True
+    product_renshe_status: str | None = None
     skill_level: str | None = None
     config_id: int | None = None
+    config: dict | None = None
     price_cents: int
     sort_order: int
     is_active: bool

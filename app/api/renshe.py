@@ -59,17 +59,29 @@ def _client_ip(request: Request) -> str | None:
 
 
 @router.get("/batches/{plan_id}/reporting-options")
-async def reporting_options(plan_id: int = Path(..., ge=1), current_user: User = Depends(get_current_user)):
+async def reporting_options(
+    plan_id: int = Path(..., ge=1),
+    batch_project_id: int | None = Query(None, ge=1),
+    current_user: User = Depends(get_current_user),
+):
     from app.adapter.database import get_db_ctx
     from app.domain.plan.src.index import Plan
-    from app.services.renshe_project import batch_configuration, is_renshe_plan
+    from app.services.renshe_project import is_renshe_plan
+    from app.services.renshe_batch_project import resolve_project
     from app.services.renshe_reporting import resolve_contract, public_options
     from app.port.exceptions import NotFoundException
     async with get_db_ctx() as db:
         plan = await db.get(Plan, plan_id)
         if not await is_renshe_plan(db, plan) or plan.status == "draft":
             raise NotFoundException("人社批次")
-        return success(data=public_options(await resolve_contract(db, plan), batch_configuration(plan)))
+        config_id = None
+        if batch_project_id is not None:
+            resolution = await resolve_project(db, plan, batch_project_id=batch_project_id)
+            config_id = resolution.config_id
+        elif plan.product_type is None:
+            raise NotFoundException("人社批次")
+        contract = await resolve_contract(db, plan, config_id)
+        return success(data=public_options(contract, contract["config"]))
 
 
 @router.post("/batches/{plan_id}/materials/{kind}")
@@ -89,21 +101,31 @@ async def upload_application_material(
 
 
 @router.get("/batches/{plan_id}/commitment-template")
-async def download_commitment_template(plan_id: int = Path(..., ge=1), current_user: User = Depends(get_current_user)):
+async def download_commitment_template(
+    plan_id: int = Path(..., ge=1),
+    batch_project_id: int | None = Query(None, ge=1),
+    current_user: User = Depends(get_current_user),
+):
     from app.adapter.database import get_db_ctx
     from app.domain.plan.src.index import Plan
-    from app.services.renshe_project import batch_configuration, is_renshe_plan
+    from app.services.renshe_project import is_renshe_plan
+    from app.services.renshe_batch_project import resolve_project
     from app.services.renshe_graduated import is_self_reported, template_path
     from app.port.exceptions import NotFoundException
     async with get_db_ctx() as db:
         plan = await db.get(Plan, plan_id)
         if not await is_renshe_plan(db, plan):
             raise NotFoundException("人社批次")
-        config = batch_configuration(plan)
+        config_id = None
+        if batch_project_id is not None:
+            resolution = await resolve_project(db, plan, batch_project_id=batch_project_id)
+            config_id = resolution.config_id
+        elif plan.product_type is None:
+            raise NotFoundException("人社批次")
+        from app.services.renshe_reporting import resolve_contract
+        config = (await resolve_contract(db, plan, config_id))["config"]
         if not is_self_reported(config) or plan.status == "draft":
             raise NotFoundException("承诺书模板")
-        from app.services.renshe_reporting import resolve_contract
-        config = (await resolve_contract(db, plan))["config"]
         path = template_path(config["reporting_policy"])
     return FileResponse(path, filename=path.name)
 
@@ -208,6 +230,7 @@ async def save_application_draft(
 )
 async def list_own_applications(
     plan_id: int | None = Query(None, ge=1, description="按批次 ID 筛选"),
+    batch_project_id: int | None = Query(None, ge=1, description="按报考项目筛选"),
     status: RensheApplicationStatus | None = Query(None, description="按报名状态筛选"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
@@ -216,6 +239,7 @@ async def list_own_applications(
     result = await RensheApplicationService().list_applications(
         current_user.id,
         plan_id=plan_id,
+        batch_project_id=batch_project_id,
         status=status,
         page=page,
         page_size=page_size,

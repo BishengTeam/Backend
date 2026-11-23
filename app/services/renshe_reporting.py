@@ -162,20 +162,27 @@ async def resolve_contract(db, plan, config_id: int | None = None) -> dict:
     )
     from app.services.renshe_project import batch_configuration
 
-    frozen = batch_configuration(plan)
+    if config_id is not None:
+        row = await db.get(RensheProjectConfig, config_id)
+        if row is None:
+            raise ConflictException("项目配置版本不存在，请联系管理员")
+        frozen = row.config
+    else:
+        row = None
+        frozen = batch_configuration(plan)
     if not is_self_reported(frozen):
         return {
-            "config_id": plan.renshe_config_id,
+            "config_id": config_id or plan.renshe_config_id,
             "config": {**frozen, "reporting_policy": {"commitment_template": None}},
         }
-    product = await db.scalar(
+    product = await db.get(CertProduct, row.product_id) if row is not None else await db.scalar(
         select(CertProduct).where(
             CertProduct.code == plan.product_type, CertProduct.type == "renshe"
         )
     )
     if product is None:
         raise ConflictException("承诺书配置缺少项目归属")
-    row = await db.scalar(
+    row = row or await db.scalar(
         select(RensheProjectConfig)
         .where(RensheProjectConfig.product_id == product.id)
         .order_by(RensheProjectConfig.version.desc())

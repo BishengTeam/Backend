@@ -127,7 +127,32 @@ class RensheRefundService:
             if order.price <= 0:
                 raise ConflictException("零元报名没有可退金额，请联系管理员处理报名关闭")
             plan = await db.get(Plan, application.plan_id)
-            if plan is None or order.plan_id != plan.id or order.product_type != plan.product_type:
+            if plan is None or order.plan_id != plan.id:
+                raise ConflictException("退款订单与报名项目或批次归属不一致")
+            if plan.product_type is None:
+                from app.domain.renshe.src.index import RensheBatchProject
+                from app.models.cert_product import CertProduct
+
+                project_id = (order.extra_data or {}).get("batch_project_id")
+                project = (
+                    await db.get(RensheBatchProject, project_id)
+                    if project_id
+                    else None
+                )
+                product = (
+                    await db.get(CertProduct, project.product_id)
+                    if project
+                    else None
+                )
+                if (
+                    project is None
+                    or project.plan_id != plan.id
+                    or application.batch_project_id != project.id
+                    or product is None
+                    or product.code != order.product_type
+                ):
+                    raise ConflictException("退款订单与报名项目或批次归属不一致")
+            elif order.product_type != plan.product_type:
                 raise ConflictException("退款订单与报名项目或批次归属不一致")
             cleanup_run = await db.scalar(
                 select(RensheCleanupRun)

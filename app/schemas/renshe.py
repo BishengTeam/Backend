@@ -223,6 +223,7 @@ class RensheVersionSummary(BaseModel):
 class RensheApplicationResponse(BaseModel):
     id: int
     plan_id: int
+    batch_project_id: int | None = None
     user_id: int
     current_version_id: int | None = None
     status: RensheApplicationStatus

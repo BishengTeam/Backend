@@ -572,9 +572,15 @@ class RensheReviewService:
             await require_review_payment(db, order, application)
             if application.current_version_id != review.version_id:
                 raise ConflictException("该审核版本已被后续重提替代，不能更正")
-            from app.services.renshe_project import batch_configuration
             from app.services.renshe_graduated import is_self_reported
-            if is_self_reported(batch_configuration(await db.get(Plan, application.plan_id))):
+            plan = await db.get(Plan, application.plan_id)
+            version = await db.get(RensheApplicationVersion, review.version_id)
+            config = (
+                await version_configuration(db, plan, version)
+                if version is not None
+                else None
+            )
+            if is_self_reported(config or {}):
                 raise ConflictException("本申报路径请使用打回补正和逐项重新初审，以保留完整核验与期限记录")
 
             if data.to_decision == "approved" and review.stage == "initial":

@@ -75,6 +75,86 @@ async def update_multi_project(
     )
 
 
+@router.put("/renshe/multi-batches/{plan_id}/publish", response_model=APIResponse[PlanResponse])
+async def publish_multi_batch(
+    plan_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("user:write")),
+):
+    return success(
+        data=await PlanService().publish_plan(plan_id, None, admin_id=admin.id, multi_only=True),
+        message="批次已发布",
+    )
+
+
+@router.put("/renshe/multi-batches/{plan_id}/close-registration", response_model=APIResponse[PlanResponse])
+async def close_multi_batch(
+    plan_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("user:write")),
+):
+    return success(
+        data=await PlanService().close_registration(plan_id, None, admin_id=admin.id, multi_only=True),
+        message="批次报名已关闭",
+    )
+
+
+@router.put("/renshe/multi-batches/{plan_id}/archive", response_model=APIResponse[PlanResponse])
+async def archive_multi_batch(
+    plan_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("user:write")),
+):
+    return success(
+        data=await PlanService().archive_plan(plan_id, None, admin_id=admin.id, multi_only=True),
+        message="批次已归档",
+    )
+
+
+@router.put("/renshe/multi-batches/{plan_id}/cancel", response_model=APIResponse[PlanResponse])
+async def cancel_multi_batch(
+    plan_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("user:write")),
+):
+    return success(
+        data=await PlanService().cancel_plan(plan_id, None, admin_id=admin.id, multi_only=True),
+        message="批次已取消",
+    )
+
+
+@router.put("/renshe/multi-batches/{plan_id}/finalize", response_model=APIResponse[PlanResponse])
+async def finalize_multi_batch(
+    plan_id: int = Path(..., ge=1),
+    admin=Depends(require_super_admin),
+):
+    return success(
+        data=await PlanService().finalize_plan(plan_id, None, admin_id=admin.id, multi_only=True),
+        message="批次已终结",
+    )
+
+
+@router.delete("/renshe/multi-batches/{plan_id}", response_model=APIResponse)
+async def delete_multi_batch(
+    plan_id: int = Path(..., ge=1),
+    _admin=Depends(require_permission("user:write")),
+):
+    await PlanService().delete_plan(plan_id, None, multi_only=True)
+    return success(message="批次已删除")
+
+
+@router.get(
+    "/renshe/multi-batches/{plan_id}/impact",
+    response_model=APIResponse[PlanImpactResponse],
+)
+async def preview_multi_batch_impact(
+    plan_id: int = Path(..., ge=1),
+    action: PlanImpactAction = Query(..., description="危险操作：cancel 或 finalize"),
+    admin=Depends(require_permission("user:write")),
+):
+    if action == "finalize":
+        await require_super_admin(admin)
+    return success(
+        data=await PlanService().preview_impact(plan_id, None, action=action, multi_only=True)
+    )
+
+
 @router.get("/{code}/plans",
     response_model=APIResponse[list[PlanResponse]],
     summary="某认证下的批次列表",

@@ -101,6 +101,11 @@ class CertificationJourneyService:
                     .where(
                         RensheBatchProject.plan_id == plan.id,
                         RensheBatchProject.is_active.is_(True),
+                        CertProduct.type == "renshe",
+                        *([] if admin else [
+                            CertProduct.is_active.is_(True),
+                            CertProduct.renshe_status == "available",
+                        ]),
                     )
                     .order_by(RensheBatchProject.sort_order, RensheBatchProject.id)
                 )).all()
@@ -115,6 +120,7 @@ class CertificationJourneyService:
                         "level_five_employment_v1",
                         "level_three_v1",
                     } and config_data.get("reporting_policy", {}).get("contract_version") == 2
+                    product_available = prod.is_active and prod.renshe_status == "available"
                     result.append({
                         "id": plan.id,
                         "plan_id": plan.id,
@@ -128,7 +134,7 @@ class CertificationJourneyService:
                         "exam_location": plan.exam_location,
                         "remaining_count": remaining,
                         "capacity": plan.capacity,
-                        "can_apply": bool(supported and plan.status == "published" and start_ts and end_ts and start_ts <= now_ts < end_ts and remaining != 0),
+                        "can_apply": bool(supported and product_available and plan.status == "published" and start_ts and end_ts and start_ts <= now_ts < end_ts and remaining != 0),
                         "skill_level": bp.skill_level,
                         "application_type": (config_data.get("application_types") or [None])[0],
                         "prices": [{
@@ -290,9 +296,19 @@ class CertificationJourneyService:
             raise BusinessException("请先选择本批次的报名方式")
         plan = await db.get(Plan, batch["plan_id"])
         requirements_config = plan.renshe_config
+        project_config_id = None
         if vendor == "renshe":
+            if batch.get("batch_project_id"):
+                from app.domain.renshe.src.index import RensheBatchProject
+
+                project = await db.get(
+                    RensheBatchProject, batch["batch_project_id"]
+                )
+                project_config_id = project.config_id if project else None
             from app.services.renshe_reporting import resolve_contract
-            requirements_config = (await resolve_contract(db, plan))["config"]
+            requirements_config = (
+                await resolve_contract(db, plan, project_config_id)
+            )["config"]
         general = await content_record(db, vendor)
         supplement = await content_record(db, vendor, plan.id)
         subject = next(item for item in catalog["subjects"] if item["id"] == batch["subject_id"])
@@ -320,7 +336,7 @@ class CertificationJourneyService:
             public[key] = {field: snapshot[key][field] for field in ("title", "blocks")}
         requirements = []
         if vendor == "renshe":
-            config = plan.renshe_config or {}
+            config = requirements_config or {}
             profile = config.get("rule_profile") or {}
             requirements = [*profile.get("source_conditions", []), *profile.get("project_limits", [])]
             requirements.extend(f"{item.get('name', item['kind'])}：{'必交' if item.get('required') else '按申报情况提供'}" for item in config.get("materials", []))
@@ -329,8 +345,12 @@ class CertificationJourneyService:
         return {**jsonable_encoder(public), "requirements_summary": requirements, "notice_hash": digest, "_snapshot": jsonable_encoder(snapshot)}
 
 
-async def confirmed_notice(db, *, vendor, batch_id, notice_hash, registration_type=None):
-    current = await CertificationJourneyService().notice_in_db(db, vendor, batch_id, registration_type)
+async def confirmed_notice(
+    db, *, vendor, batch_id, notice_hash, registration_type=None, batch_project_id=None
+):
+    current = await CertificationJourneyService().notice_in_db(
+        db, vendor, batch_id, registration_type, batch_project_id=batch_project_id
+    )
     if notice_hash != current["notice_hash"]:
         raise ConflictException("报名须知、费用或批次要求已变化，请重新阅读并确认；已填资料仍保留")
     return {**current["_snapshot"], "notice_hash": notice_hash, "confirmed_at": datetime.now(timezone.utc).isoformat()}
@@ -419,6 +439,14 @@ async def user_journey(vendor, registration_id, user_id):
             )
             if batch_product is not None:
                 product = await db.get(CertProduct, batch_product.product_id)
+        if vendor == "renshe" and getattr(record, "batch_project_id", None) is not None:
+            from app.domain.renshe.src.index import RensheBatchProject
+
+            batch_project = await db.get(
+                RensheBatchProject, record.batch_project_id
+            )
+            if batch_project is not None:
+                product = await db.get(CertProduct, batch_project.product_id)
         if product is None:
             product = await db.scalar(
                 select(CertProduct).where(CertProduct.code == plan.product_type)

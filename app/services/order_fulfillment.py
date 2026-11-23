@@ -60,7 +60,38 @@ class OrderFulfillmentService:
             from app.domain.plan.src.index import Plan
             from app.port.exceptions import ConflictException
             plan = await db.get(Plan, application.plan_id)
-            if plan is None or application.user_id != order.user_id or application.plan_id != order.plan_id or plan.product_type != order.product_type:
+            if (
+                plan is None
+                or application.user_id != order.user_id
+                or application.plan_id != order.plan_id
+            ):
+                raise ConflictException("人社订单与报名项目、批次或用户归属不一致")
+            if plan.product_type is None:
+                from app.domain.renshe.src.index import RensheBatchProject
+                from app.models.cert_product import CertProduct
+
+                project_id = (order.extra_data or {}).get("batch_project_id")
+                project = (
+                    await db.get(RensheBatchProject, project_id)
+                    if project_id
+                    else None
+                )
+                product = (
+                    await db.get(CertProduct, project.product_id)
+                    if project
+                    else None
+                )
+                if (
+                    project is None
+                    or project.plan_id != plan.id
+                    or application.batch_project_id != project.id
+                    or product is None
+                    or product.code != order.product_type
+                ):
+                    raise ConflictException(
+                        "人社多项目订单与报名项目、批次或用户归属不一致"
+                    )
+            elif plan.product_type != order.product_type:
                 raise ConflictException("人社订单与报名项目、批次或用户归属不一致")
         return application
 

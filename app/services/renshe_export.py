@@ -26,6 +26,7 @@ from app.domain.renshe.src.index import (
     RensheApplication,
     RensheApplicationVersion,
     RensheAuditLog,
+    RensheBatchProject,
     RensheCleanupRun,
     RensheExportItem,
     RensheExportJob,
@@ -50,6 +51,7 @@ from app.schemas.renshe import (
     RensheSignedUrlResponse,
 )
 from app.services.renshe_project import batch_configuration, is_renshe_plan
+from app.models.renshe_project import RensheProjectConfig
 from app.services.renshe_graduated import is_self_reported
 from app.services.renshe_reporting import EDUCATIONS, report_date, validate_row, validate_snapshot, assert_template, validate_reporting
 from app.services.renshe_export_definition import (
@@ -90,6 +92,8 @@ class ExportCandidate:
     student_snapshot: dict
     form_data: dict
     materials: tuple[ExportMaterial, ...]
+    config: dict | None = None
+    project_price_cents: int | None = None
 
 
 def partition_export_candidates(
@@ -135,9 +139,11 @@ def partition_export_candidates(
 def build_registration_row(candidate: ExportCandidate, plan: Plan) -> list[object | None]:
     """The current 25 columns always read the selected material version."""
     from app.services.renshe_catalog import combinations
-    config = batch_configuration(plan)
+    config = candidate.config or batch_configuration(plan)
+    application_type = (config.get("application_types") or [plan.application_type])[0]
+    exam_type = (config.get("exam_types") or [plan.exam_type])[0]
     selected = next((item for item in combinations() if item["occupation_code"] == config["occupation_code"]
-                     and item["skill_level"] == config["skill_level"] and item["application_type"] == plan.application_type), None)
+                     and item["skill_level"] == config["skill_level"] and item["application_type"] == application_type), None)
     if selected is None or not selected["adapted"]:
         raise BusinessException("该报考组合尚未完成导出适配")
     # Existing batches retain their frozen condition when source text evolves.
@@ -155,9 +161,43 @@ def build_registration_row(candidate: ExportCandidate, plan: Plan) -> list[objec
               EDUCATIONS.get((form.get("qualification_info") or {}).get("cultural_education") or education.get("education")), info.get("ethnicity"), info.get("political_status"),
               form.get("contact_phone"), form.get("mailing_address"), info.get("work_unit"), info.get("occupation_status"),
               config["occupation_name"], config["export_skill_level"], title.get("major"), "初级职称" if title else None, report_date(info, {"work_date_required": config.get("application_types") != ["学历型"]}), float(info["occupation_years"]),
-              config["occupation_code"], condition, plan.application_type, plan.exam_type, info.get("social_insurance_unit"), form.get("email")]
+              config["occupation_code"], condition, application_type, exam_type, info.get("social_insurance_unit"), form.get("email")]
     validate_row(values, info, {}, config={**config, "application_condition": condition})
     return values
+
+
+async def allowed_project_config_ids(db, plan: Plan) -> set[int]:
+    """多项目批次允许的配置版本集合；单项目批次固定为批次配置。"""
+    if plan.renshe_config_id is not None:
+        return {plan.renshe_config_id}
+    from app.domain.renshe.src.index import RensheBatchProject
+
+    return {
+        item
+        for item in (
+            await db.scalars(
+                select(RensheBatchProject.config_id).where(
+                    RensheBatchProject.plan_id == plan.id,
+                    RensheBatchProject.config_id.is_not(None),
+                )
+            )
+        ).all()
+        if item is not None
+    }
+
+
+async def version_config(db, plan: Plan, version, allowed: set[int]) -> dict:
+    """导出按报名版本快照的项目配置生成，不信任批次当前字段。"""
+    if version.project_config_id is None:
+        if plan.renshe_config_id is None:
+            raise ConflictException("导出报名缺少项目配置版本")
+        return batch_configuration(plan)
+    if version.project_config_id not in allowed:
+        raise ConflictException("导出报名与批次项目配置版本不一致")
+    row = await db.get(RensheProjectConfig, version.project_config_id)
+    if row is None:
+        raise ConflictException("导出报名的项目配置版本已不存在")
+    return row.config
 
 
 class RensheExportService:
@@ -184,8 +224,12 @@ class RensheExportService:
             if plan.status not in {"published", "registration_closed", "finalized"}:
                 raise ConflictException("当前批次状态不能导出")
             if plan.renshe_config_id is None:
-                raise ConflictException("批次尚未确认项目配置，请核实历史归属后再导出")
-            batch_configuration(plan)
+                from app.services.renshe_batch_project import list_projects
+
+                if not await list_projects(db, plan.id):
+                    raise ConflictException("批次尚未确认项目配置，请核实历史归属后再导出")
+            else:
+                batch_configuration(plan)
             current_templates = self._template_paths()
             await self._assert_export_window_open(db, plan)
 
@@ -317,7 +361,7 @@ class RensheExportService:
 
     @staticmethod
     async def _preflight(db, plan: Plan, candidates: list[tuple[int, int, int]]) -> None:
-        config = batch_configuration(plan)
+        allowed = await allowed_project_config_ids(db, plan)
         versions = (await db.execute(select(RensheApplicationVersion).where(
             RensheApplicationVersion.id.in_([row[1] for row in candidates])))).scalars().all()
         by_id = {version.id: version for version in versions}
@@ -327,8 +371,7 @@ class RensheExportService:
             version = by_id.get(version_id)
             if version is None or version.application_id != application_id:
                 raise ConflictException("导出版本归属不一致")
-            if version.project_config_id != plan.renshe_config_id:
-                raise ConflictException("导出报名与批次项目配置版本不一致")
+            config = await version_config(db, plan, version, allowed)
             owned = {item.kind: item for item in materials if item.version_id == version_id and item.application_id == application_id}
             from app.services.renshe_level_three import material_requirements
             for requirement in material_requirements(config, version.form_data):
@@ -337,8 +380,8 @@ class RensheExportService:
                     raise ConflictException(f"报名 {application_id} 缺少材料：{requirement['name']}")
                 if material is not None and material.extension not in requirement["extensions"]:
                     raise ConflictException(f"报名 {application_id} 材料格式与固定配置不一致")
-            candidate = ExportCandidate(application_id, version_id, 0, version.realname_snapshot, version.student_snapshot, version.form_data, ())
-            await validate_snapshot(db, plan, version.form_data)
+            candidate = ExportCandidate(application_id, version_id, 0, version.realname_snapshot, version.student_snapshot, version.form_data, (), config=config)
+            await validate_snapshot(db, plan, version.form_data, config=config)
             build_registration_row(candidate, plan)
 
     async def list_jobs(self, plan_id: int) -> list[RensheExportJobResponse]:
@@ -922,13 +965,15 @@ class RensheExportService:
             await db.commit()
 
     @staticmethod
-    def _write_batch_info_workbook(plan, output_path: Path) -> None:
+    def _write_batch_info_workbook(
+        plan, output_path: Path, extra_rows: list[tuple[str, str]] | None = None
+    ) -> None:
         from openpyxl import Workbook
 
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "批次信息"
-        rows = [("字段", "值"), *batch_info_rows(plan)]
+        rows = [("字段", "值"), *batch_info_rows(plan), *(extra_rows or [])]
         for row_no, (label, value) in enumerate(rows, 1):
             for column_no, text in enumerate((label, value), 1):
                 cell = sheet.cell(row=row_no, column=column_no, value=text)
@@ -964,12 +1009,37 @@ class RensheExportService:
                 plan,
             )
             from app.services.renshe_employment import is_employment
-            if is_employment(batch_configuration(plan)):
-                await asyncio.to_thread(self._write_work_history_workbook, work_template, work_path, candidates)
+            fallback_config = (
+                batch_configuration(plan) if plan.renshe_config_id is not None else None
+            )
+            employment_candidates = [
+                candidate
+                for candidate in candidates
+                if is_employment(candidate.config or fallback_config or {})
+            ]
+            if employment_candidates:
+                await asyncio.to_thread(self._write_work_history_workbook, work_template, work_path, employment_candidates)
             else:
                 await asyncio.to_thread(shutil.copyfile, work_template, work_path)
+            project_rows: list[tuple[str, str]] = []
+            seen_projects: set[tuple] = set()
+            for candidate in candidates if plan.product_type is None else ():
+                config = candidate.config
+                if not config:
+                    continue
+                key = (
+                    config.get("occupation_name"),
+                    config.get("export_skill_level") or config.get("skill_level"),
+                )
+                if key in seen_projects:
+                    continue
+                seen_projects.add(key)
+                summary = " · ".join(item for item in key if item)
+                if candidate.project_price_cents is not None:
+                    summary += f" · ¥{candidate.project_price_cents / 100:.2f}"
+                project_rows.append(("报考项目", summary))
             await asyncio.to_thread(
-                self._write_batch_info_workbook, plan, batch_info_path
+                self._write_batch_info_workbook, plan, batch_info_path, project_rows
             )
 
             archive = zipfile.ZipFile(
@@ -1079,16 +1149,33 @@ class RensheExportService:
                 raise ConflictException("导出任务与批次配置版本不一致")
             rows = (
                 await db.execute(
-                    select(RensheExportItem, RensheApplicationVersion)
+                    select(
+                        RensheExportItem,
+                        RensheApplicationVersion,
+                        RensheApplication.batch_project_id,
+                    )
                     .join(
                         RensheApplicationVersion,
                         RensheApplicationVersion.id == RensheExportItem.version_id,
+                    )
+                    .join(
+                        RensheApplication,
+                        RensheApplication.id == RensheExportItem.application_id,
                     )
                     .where(RensheExportItem.job_id == job_id)
                     .order_by(RensheExportItem.application_id)
                 )
             ).all()
-            version_ids = [version.id for _, version in rows]
+            version_ids = [version.id for _, version, _ in rows]
+            project_ids = {batch_project_id for _, _, batch_project_id in rows if batch_project_id}
+            project_prices = dict(
+                (
+                    await db.execute(
+                        select(RensheBatchProject.id, RensheBatchProject.price_cents)
+                        .where(RensheBatchProject.id.in_(project_ids))
+                    )
+                ).all()
+            ) if project_ids else {}
             materials = (
                 await db.execute(
                     select(RensheMaterial)
@@ -1103,16 +1190,17 @@ class RensheExportService:
             for material in materials:
                 by_version.setdefault(material.version_id, []).append(material)
             candidates: list[ExportCandidate] = []
-            config = batch_configuration(plan)
-            expected_kinds = {item["kind"] for item in config["materials"] if item["required"]}
-            allowed_kinds = {item["kind"] for item in config["materials"]}
-            for item, version in rows:
-                await validate_snapshot(db, plan, version.form_data)
+            allowed = await allowed_project_config_ids(db, plan)
+            for item, version, batch_project_id in rows:
+                config = await version_config(db, plan, version, allowed)
+                await validate_snapshot(db, plan, version.form_data, config=config)
+                expected_kinds = {requirement["kind"] for requirement in config["materials"] if requirement["required"]}
+                allowed_kinds = {requirement["kind"] for requirement in config["materials"]}
                 version_materials = by_version.get(version.id, [])
                 actual = {material.kind for material in version_materials}
                 if not expected_kinds <= actual or not actual <= allowed_kinds:
                     raise ConflictException("导出版本材料不完整")
-                if version.application_id != item.application_id or (version.project_config_id is not None and version.project_config_id != plan.renshe_config_id):
+                if version.application_id != item.application_id:
                     raise ConflictException("导出人员、材料或项目配置版本归属不一致")
                 if not version.realname_snapshot or (not version.student_snapshot and not (is_self_reported(config) and (version.form_data.get("education_info") or version.form_data.get("qualification_info")))):
                     raise ConflictException("导出版本敏感快照已清理")
@@ -1135,6 +1223,8 @@ class RensheExportService:
                             )
                             for material in version_materials
                         ),
+                        config=config,
+                        project_price_cents=project_prices.get(batch_project_id),
                     )
                 )
             return plan, candidates

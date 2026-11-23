@@ -445,6 +445,7 @@ def test_stage2_todo_routes_publish_bearer_filters_and_strict_response_schemas()
     assert list_operation["security"] == [{"BearerAuth": []}]
     assert {item["name"] for item in list_operation["parameters"]} == {
         "plan_id",
+        "batch_project_id",
         "status",
         "page",
         "page_size",

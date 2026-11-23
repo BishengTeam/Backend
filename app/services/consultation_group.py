@@ -187,6 +187,15 @@ class ConsultationGroupService:
 
         if await db.scalar(select(H3cExamBatch.id).where(H3cExamBatch.plan_id == plan.id)):
             return "cert:h3c"
+        if plan.product_type is None:
+            from app.domain.renshe.src.index import RensheBatchProject
+
+            if await db.scalar(
+                select(RensheBatchProject.id)
+                .where(RensheBatchProject.plan_id == plan.id)
+                .limit(1)
+            ):
+                return "cert:renshe"
         product = await db.scalar(
             select(CertProduct).where(CertProduct.code == plan.product_type)
         ) if plan.product_type is not None else None

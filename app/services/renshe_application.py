@@ -44,6 +44,7 @@ from app.services.plan_enrollment import CAPACITY_OCCUPYING_ORDER_STATUSES, Plan
 from app.services.renshe_project import batch_configuration, is_renshe_plan, default_configuration
 from app.services.renshe_batch_project import (
     resolve_project,
+    resolve_application_project,
     resolve_enrollable_project,
     select_write_application,
 )
@@ -66,8 +67,19 @@ class RensheApplicationService:
         return datetime.now(timezone.utc)
 
     @staticmethod
-    def _assert_supported_program(plan: Plan) -> None:
-        batch_configuration(plan)
+    def _assert_supported_program(plan: Plan, config: dict | None = None) -> dict:
+        return config if config is not None else batch_configuration(plan)
+
+    @staticmethod
+    async def _project_config(db, plan: Plan, resolution) -> dict:
+        if resolution.config_id is not None:
+            from app.models.renshe_project import RensheProjectConfig
+
+            row = await db.get(RensheProjectConfig, resolution.config_id)
+            if row is None:
+                raise ConflictException("报考项目配置版本不存在，请联系管理员")
+            return row.config
+        return batch_configuration(plan)
 
     async def save_draft(
         self, user_id: int, data: RensheDraftUpsert
@@ -79,7 +91,6 @@ class RensheApplicationService:
             )
             if not await is_renshe_plan(db, plan):
                 raise NotFoundException("人社报名批次")
-            self._assert_supported_program(plan)
             active_applications = list((await db.scalars(
                 select(RensheApplication)
                 .where(
@@ -119,11 +130,13 @@ class RensheApplicationService:
             )
             if adopt_legacy:
                 application.batch_project_id = resolved_project.batch_project_id
-            if plan.renshe_config_id is None:
+            config = await self._project_config(db, plan, resolved_project)
+            self._assert_supported_program(plan, config)
+            if resolved_project.config_id is None and plan.renshe_config_id is None:
                 raise ConflictException("批次尚未确认项目配置，请联系管理员核实历史归属")
-            if application is None and not is_self_reported(batch_configuration(plan)):
+            if application is None and not is_self_reported(config):
                 raise ConflictException("本期新报名仅开放已适配批次；历史报名请从我的报名继续办理")
-            if application is None and not is_v2(batch_configuration(plan).get("reporting_policy", {})):
+            if application is None and not is_v2(config.get("reporting_policy", {})):
                 raise ConflictException("历史批次仅办理已有报名，新报名请选择当前批次")
             now = await db_now_utc(db)
             self._validate_edit_window(
@@ -131,6 +144,7 @@ class RensheApplicationService:
                 application,
                 paid_order=await self._paid_correction_order(db, application),
                 now=now,
+                config=config,
             )
             if application is None:
                 application = RensheApplication(
@@ -145,20 +159,20 @@ class RensheApplicationService:
                 raise ConflictException("当前报名状态不可编辑")
             if application.frozen_at is not None:
                 raise ConflictException("退款处理中，报名已冻结")
-            realname, _ = await self._verified_profiles(db, user_id, plan)
+            realname, _ = await self._verified_profiles(db, user_id, plan, config)
 
             values = data.model_dump(mode="json", exclude_none=True)
             if (application.draft_data or {}).get("enrollment_notice"):
                 values["enrollment_notice"] = application.draft_data["enrollment_notice"]
-            if is_self_reported(batch_configuration(plan)):
-                contract = await resolve_contract(db, plan)
-                values.update(await self._admission_values(db, application, realname, batch_configuration(plan), values))
-                values["reporting_info"] = validate_reporting(values.get("reporting_info"), contract["config"]["reporting_policy"], config=batch_configuration(plan))
+            if is_self_reported(config):
+                contract = await resolve_contract(db, plan, resolved_project.config_id)
+                values.update(await self._admission_values(db, application, realname, config, values))
+                values["reporting_info"] = validate_reporting(values.get("reporting_info"), contract["config"]["reporting_policy"], config=config)
                 values.pop("reporting_config_id", None)
                 values["commitment_template"] = contract["config"]["reporting_policy"]["commitment_template"]
                 values["materials"] = (application.draft_data or {}).get("materials", {})
             else:
-                values["reporting_info"] = validate_reporting(values.get("reporting_info"), {}, config=batch_configuration(plan))
+                values["reporting_info"] = validate_reporting(values.get("reporting_info"), {}, config=config)
             application.draft_data = values
             db.add(
                 self._audit(
@@ -184,8 +198,10 @@ class RensheApplicationService:
                 )
                 if application.status not in EDITABLE_APPLICATION_STATUSES:
                     raise ConflictException("当前报名状态不可提交")
-                self._assert_supported_program(plan)
-                if plan.renshe_config_id is None:
+                resolution = await resolve_application_project(db, application, plan)
+                config = await self._project_config(db, plan, resolution)
+                self._assert_supported_program(plan, config)
+                if resolution.config_id is None and plan.renshe_config_id is None:
                     raise ConflictException("批次尚未确认项目配置，请联系管理员核实历史归属")
                 if application.frozen_at is not None:
                     raise ConflictException("退款处理中，报名已冻结")
@@ -200,19 +216,18 @@ class RensheApplicationService:
 
                 db_now = await db_now_utc(db)
                 self._validate_edit_window(
-                    plan, application, paid_order=paid_order, now=db_now
+                    plan, application, paid_order=paid_order, now=db_now, config=config
                 )
-                realname, student = await self._verified_profiles(db, user_id, plan)
-                config = batch_configuration(plan)
+                realname, student = await self._verified_profiles(db, user_id, plan, config)
                 graduated = is_self_reported(config)
                 now = db_now
-                await validate_snapshot(db, plan, application.draft_data)
+                await validate_snapshot(db, plan, application.draft_data, config=config)
                 if graduated:
                     try:
                         RensheDraftUpsert.model_validate({key: value for key, value in application.draft_data.items() if key not in {"materials", "reporting_contract", "commitment_template", "eligibility_snapshot", "enrollment_notice"}})
                     except ValueError as exc:
                         raise BusinessException("请先完整填写本申报路径的资格信息和联系方式并保存") from exc
-                    policy = await validate_snapshot(db, plan, application.draft_data)
+                    policy = await validate_snapshot(db, plan, application.draft_data, config=config)
                     validate_reporting(application.draft_data.get("reporting_info"), policy, config=config)
                     application.draft_data = {**application.draft_data, **await self._admission_values(db, application, realname, config, application.draft_data, submitted_at=now)}
 
@@ -225,7 +240,7 @@ class RensheApplicationService:
                         raise BusinessException("请先选择科目并阅读确认报名须知")
                     if notice_hash:
                         from app.services.certification_journey import confirmed_notice
-                        application.draft_data = {**application.draft_data, "enrollment_notice": await confirmed_notice(db, vendor="renshe", batch_id=plan.id, notice_hash=notice_hash)}
+                        application.draft_data = {**application.draft_data, "enrollment_notice": await confirmed_notice(db, vendor="renshe", batch_id=plan.id, notice_hash=notice_hash, batch_project_id=resolution.batch_project_id)}
 
                 latest_no = await db.scalar(
                     select(func.max(RensheApplicationVersion.version_no)).where(
@@ -236,7 +251,7 @@ class RensheApplicationService:
                 version = RensheApplicationVersion(
                     application_id=application.id,
                     version_no=version_no,
-                    project_config_id=plan.renshe_config_id,
+                    project_config_id=resolution.config_id,
                     submitted_by_user_id=user_id,
                     realname_snapshot=self._realname_snapshot(realname),
                     student_snapshot={} if graduated else self._student_snapshot(student),
@@ -311,17 +326,23 @@ class RensheApplicationService:
                     order = Order(
                         user_id=user_id,
                         order_kind="certification",
-                        product_type=plan.product_type,
+                        product_type=resolution.product_code or plan.product_type,
                         plan_id=plan.id,
                         application_id=application.id,
                         candidate_name=realname.real_name,
                         candidate_phone=draft["contact_phone"],
                         candidate_idcard=realname.id_card_number,
-                        price=plan.price_cents,
+                        price=resolution.price_cents,
                         status="pending",
                         out_trade_no=generate_out_trade_no("RS"),
                         expires_at=now + timedelta(minutes=RENSHE_ORDER_EXPIRE_MINUTES),
-                        extra_data={"application_version_id": version.id, "business_type": "renshe", "project_name": plan.project_name, "project_config_id": plan.renshe_config_id},
+                        extra_data={
+                            "application_version_id": version.id,
+                            "business_type": "renshe",
+                            "project_name": plan.project_name or resolution.occupation_name,
+                            "project_config_id": resolution.config_id,
+                            "batch_project_id": resolution.batch_project_id,
+                        },
                     )
                     db.add(order)
                     await db.flush()
@@ -400,7 +421,21 @@ class RensheApplicationService:
             raise NotFoundException("人社报名")
         if application.plan_id != plan.id:
             raise ConflictException("报名归属批次已变化，请重试")
-        if any(order.plan_id != plan.id or order.user_id != user_id or order.product_type != plan.product_type for order in orders):
+        multi = plan.product_type is None
+        if any(
+            order.plan_id != plan.id
+            or order.user_id != user_id
+            or (
+                not multi
+                and order.product_type != plan.product_type
+            )
+            or (
+                multi
+                and order.extra_data
+                and order.extra_data.get("batch_project_id") not in {None, application.batch_project_id}
+            )
+            for order in orders
+        ):
             raise ConflictException("报名与订单的项目、批次或用户归属不一致")
 
         paid_order = next(
@@ -414,8 +449,11 @@ class RensheApplicationService:
         return application, plan, paid_order
 
     @classmethod
-    def _validate_edit_window(cls, plan, application, *, paid_order=None, now=None):
-        config = batch_configuration(plan)
+    def _validate_edit_window(
+        cls, plan, application, *, paid_order=None, now=None, config: dict | None = None
+    ):
+        if config is None:
+            config = batch_configuration(plan)
         if (is_self_reported(config) and application is not None
                 and application.status in {"initial_rejected", "external_rejected"}):
             if plan.status not in {"published", "registration_closed"} or application.closed_at is not None:
@@ -458,12 +496,6 @@ class RensheApplicationService:
                 plan = await db.scalar(select(Plan).where(Plan.id == plan_id).with_for_update())
                 if not await is_renshe_plan(db, plan):
                     raise NotFoundException("人社批次")
-                config = batch_configuration(plan)
-                upload_kinds = {item["kind"] for item in config["materials"]} - {
-                    "id_card_front", "id_card_back", "portrait"
-                }
-                if not is_self_reported(config) or kind not in upload_kinds:
-                    raise BusinessException("当前批次不支持该报名材料上传")
                 applications = list((await db.scalars(
                     select(RensheApplication).where(
                         RensheApplication.user_id == user_id,
@@ -499,6 +531,12 @@ class RensheApplicationService:
                     resolved_project = await resolve_enrollable_project(
                         db, plan, batch_project_id
                     )
+                config = await self._project_config(db, plan, resolved_project)
+                upload_kinds = {item["kind"] for item in config["materials"]} - {
+                    "id_card_front", "id_card_back", "portrait"
+                }
+                if not is_self_reported(config) or kind not in upload_kinds:
+                    raise BusinessException("当前批次不支持该报名材料上传")
                 if (
                     application is not None
                     and application.batch_project_id is None
@@ -510,6 +548,7 @@ class RensheApplicationService:
                     application,
                     paid_order=await self._paid_correction_order(db, application),
                     now=await db_now_utc(db),
+                    config=config,
                 )
                 if application is None:
                     if not is_v2(config.get("reporting_policy", {})):
@@ -525,7 +564,7 @@ class RensheApplicationService:
                     await db.flush()
                 if application.status not in EDITABLE_APPLICATION_STATUSES or application.frozen_at is not None:
                     raise ConflictException("当前报名不可修改材料")
-                await self._verified_profiles(db, user_id, plan)
+                await self._verified_profiles(db, user_id, plan, config)
                 stored = await self.storage.save_source(user_id=user_id, kind=kind, filename=filename, content_type=content_type, data=content)
                 requirement = next((item for item in config["materials"] if item["kind"] == kind), None)
                 if requirement is None:
@@ -556,6 +595,7 @@ class RensheApplicationService:
         user_id: int,
         *,
         plan_id: int | None = None,
+        batch_project_id: int | None = None,
         status: RensheApplicationStatus | None = None,
         page: int = 1,
         page_size: int = 20,
@@ -563,12 +603,30 @@ class RensheApplicationService:
         """List only the signed-in user's applications for client recovery."""
 
         async with get_db_ctx() as db:
+            from sqlalchemy import and_, exists, or_
+
+            from app.domain.renshe.src.index import RensheBatchProject
+
             filters = [
                 RensheApplication.user_id == user_id,
-                Plan.product_type.in_(select(CertProduct.code).where(CertProduct.type == "renshe")),
+                or_(
+                    Plan.product_type.in_(
+                        select(CertProduct.code).where(CertProduct.type == "renshe")
+                    ),
+                    and_(
+                        Plan.product_type.is_(None),
+                        exists().where(
+                            RensheBatchProject.plan_id == Plan.id
+                        ),
+                    ),
+                ),
             ]
             if plan_id is not None:
                 filters.append(RensheApplication.plan_id == plan_id)
+            if batch_project_id is not None:
+                filters.append(
+                    RensheApplication.batch_project_id == batch_project_id
+                )
             if status is not None:
                 filters.append(RensheApplication.status == status)
 
@@ -639,7 +697,7 @@ class RensheApplicationService:
                         **RensheApplicationResponse.model_validate(
                             application
                         ).model_dump(),
-                        plan=RensheApplicationPlanSummary.model_validate(plan),
+                        plan=await self._application_plan_summary(db, plan, application),
                         current_order=(
                             RensheApplicationOrderSummary(
                                 id=order.id,
@@ -676,6 +734,45 @@ class RensheApplicationService:
                 page=page,
                 page_size=page_size,
             )
+
+    @staticmethod
+    async def _application_plan_summary(
+        db, plan, application
+    ) -> RensheApplicationPlanSummary:
+        """报名展示优先使用所选项目的快照，而不是多项目批次的空 Plan 字段。"""
+        summary = RensheApplicationPlanSummary.model_validate(plan)
+        project_id = getattr(application, "batch_project_id", None)
+        if project_id is None:
+            if plan.product_type is None:
+                raise ConflictException("报名缺少报考项目归属，请联系管理员核实")
+            return summary
+        from app.models.renshe_project import RensheProjectConfig
+
+        try:
+            resolution = await resolve_project(
+                db, plan, batch_project_id=project_id
+            )
+        except BusinessException as exc:
+            raise ConflictException(f"报名项目数据异常：{exc}") from exc
+        config = None
+        if resolution.config_id is not None:
+            row = await db.get(RensheProjectConfig, resolution.config_id)
+            if row is None:
+                raise ConflictException("报名项目配置版本不存在，请联系管理员核实")
+            config = row.config
+        elif plan.renshe_config_id is None:
+            raise ConflictException("报名项目缺少配置版本，请联系管理员核实")
+        payload = config or {}
+        return summary.model_copy(
+            update={
+                "price_cents": resolution.price_cents,
+                "occupation_name": resolution.occupation_name or summary.occupation_name,
+                "occupation_code": resolution.occupation_code or summary.occupation_code,
+                "skill_level": resolution.skill_level or summary.skill_level,
+                "application_type": (payload.get("application_types") or [summary.application_type])[0],
+                "exam_type": (payload.get("exam_types") or [summary.exam_type])[0],
+            }
+        )
 
     async def get_application(
         self, user_id: int, application_id: int
@@ -723,7 +820,7 @@ class RensheApplicationService:
                 )
             return RensheApplicationDetailResponse(
                 **RensheApplicationResponse.model_validate(application).model_dump(),
-                plan=RensheApplicationPlanSummary.model_validate(plan),
+                plan=await self._application_plan_summary(db, plan, application),
                 versions=[RensheVersionSummary.model_validate(item) for item in versions],
                 current_order_id=order.id if order else None,
                 current_order_status=order.status if order else None,
@@ -819,8 +916,14 @@ class RensheApplicationService:
         return validate_admission(form, config, as_of=assessment_date, verified_birth_date=realname.birth_date, age_as_of=age_as_of)
 
     @staticmethod
-    async def _verified_profiles(db, user_id: int, plan: Plan | None = None) -> tuple[UserRealname, UserStudent | None]:
-        config = batch_configuration(plan) if plan else default_configuration()
+    async def _verified_profiles(
+        db,
+        user_id: int,
+        plan: Plan | None = None,
+        config: dict | None = None,
+    ) -> tuple[UserRealname, UserStudent | None]:
+        if config is None:
+            config = batch_configuration(plan) if plan else default_configuration()
         realname = await db.scalar(
             select(UserRealname).where(
                 UserRealname.user_id == user_id,

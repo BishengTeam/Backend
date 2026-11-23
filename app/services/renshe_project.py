@@ -329,6 +329,14 @@ def batch_configuration(plan: Plan) -> dict:
 async def is_renshe_plan(db, plan: Plan | None) -> bool:
     if plan is None:
         return False
+    if plan.product_type is None:
+        from app.domain.renshe.src.index import RensheBatchProject
+
+        return await db.scalar(
+            select(RensheBatchProject.id).where(
+                RensheBatchProject.plan_id == plan.id
+            ).limit(1)
+        ) is not None
     product = await db.scalar(
         select(CertProduct).where(CertProduct.code == plan.product_type)
     )

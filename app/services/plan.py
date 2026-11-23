@@ -46,6 +46,29 @@ PUBLISHED_RENSHE_EDITABLE_FIELDS = {
 RENSHE_ORG_FIELDS = {"exam_org_name", "exam_org_code", "exam_date_note"}
 class PlanService:
     @staticmethod
+    async def _is_renshe_batch(db, plan) -> bool:
+        if plan is None:
+            return False
+        if plan.product_type is not None:
+            return await is_renshe_plan(db, plan)
+        from app.domain.renshe.src.index import RensheBatchProject
+
+        matched = await db.scalar(
+            select(RensheBatchProject.id).where(
+                RensheBatchProject.plan_id == plan.id
+            ).limit(1)
+        ) is not None
+        if matched:
+            plan._is_renshe_multi = True
+        return matched
+
+    @staticmethod
+    async def _is_renshe_multi(db, plan) -> bool:
+        if plan is None or plan.product_type is not None:
+            return False
+        return await PlanService._is_renshe_batch(db, plan)
+
+    @staticmethod
     def plan_update_data(data: PlanUpdate) -> dict:
         """流程控制字段不参与 Plan 持久化，显式 null 必须保留。"""
         return data.model_dump(exclude_unset=True, exclude={"confirm_holiday"})
@@ -96,7 +119,7 @@ class PlanService:
                 raise ValidationException("报名截止时间必须晚于当前时间")
 
     @staticmethod
-    def _validate_renshe_publish_fields(plan: Plan) -> None:
+    def _validate_renshe_publish_fields(plan: Plan, *, require_price: bool = True) -> None:
         missing = []
         for field, label in (
             ("exam_date", "考试时间"),
@@ -110,7 +133,7 @@ class PlanService:
                 missing.append(label)
         if missing:
             raise ValidationException(f"发布人社批次前必须填写: {', '.join(missing)}")
-        if plan.price_cents < 1:
+        if require_price and plan.price_cents < 1:
             raise ValidationException("人社批次价格必须大于 0 分")
 
     @staticmethod
@@ -174,14 +197,39 @@ class PlanService:
                 ))
             )
             if project_id is not None:
-                stmt = stmt.where(CertProduct.id == project_id)
+                from app.domain.renshe.src.index import RensheBatchProject
+
+                stmt = stmt.where(
+                    or_(
+                        CertProduct.id == project_id,
+                        exists().where(
+                            RensheBatchProject.plan_id == Plan.id,
+                            RensheBatchProject.product_id == project_id,
+                            RensheBatchProject.is_active.is_(True),
+                        ),
+                    )
+                )
             if public:
                 now = datetime.now(timezone.utc)
                 # Stopping a project does not silently close published batches.
-                stmt = stmt.where(Plan.status == "published", Plan.apply_start <= now, Plan.apply_end >= now)
+                stmt = stmt.where(
+                    Plan.status == "published",
+                    Plan.apply_start <= now,
+                    Plan.apply_end >= now,
+                )
             rows = (await db.execute(stmt.order_by(Plan.sort_order.desc(), Plan.id.desc()))).scalars().all()
             if public:
-                rows = [row for row in rows if row.renshe_config_id is not None]
+                from app.domain.renshe.src.index import RensheBatchProject
+
+                project_plan_ids = set((await db.scalars(
+                    select(RensheBatchProject.plan_id).where(
+                        RensheBatchProject.is_active.is_(True)
+                    )
+                )).all())
+                rows = [
+                    row for row in rows
+                    if row.renshe_config_id is not None or row.id in project_plan_ids
+                ]
             enrolled = await self._batch_enrolled(db, [row.id for row in rows])
             return [
                 await self._response_with_projects(db, row, enrolled.get(row.id, 0))
@@ -209,6 +257,9 @@ class PlanService:
             apply_end=data.apply_end,
             exam_date=data.exam_date,
         )
+        if data.exam_date and not data.confirm_holiday:
+            async with get_db_ctx() as db:
+                await self._assert_not_holiday(db, data.exam_date)
         async with get_db_ctx() as db:
             existing = await db.scalar(
                 select(Plan).where(
@@ -260,27 +311,90 @@ class PlanService:
     ) -> PlanResponse:
         async with get_db_ctx() as db:
             plan = await self._get_plan(db, plan_id, None, for_update=True)
-            if plan.product_type is not None:
-                raise BusinessException("该批次不是多项目批次")
-            if plan.status != "draft":
-                raise BusinessException("仅草稿多项目批次可编辑")
-            for field in (
-                "name", "apply_start", "apply_end", "exam_date", "capacity",
-                "exam_location", "exam_org_name", "exam_org_code",
-                "exam_date_note", "description", "registration_notice",
-                "contact_name", "contact_phone", "sort_order",
+            if not await self._is_renshe_multi(db, plan):
+                raise NotFoundException("批次")
+            if plan.status in {"finalized", "cancelled", "archived"}:
+                raise BusinessException("已终结、取消或归档的多项目批次不可编辑")
+            published = plan.status != "draft"
+            if published and data.projects is not None:
+                raise BusinessException("已发布批次不能修改报考项目集合")
+            update_data = data.model_dump(
+                exclude_unset=True,
+                exclude={"confirm_holiday", "projects"},
+            )
+            allowed = (
+                PUBLISHED_RENSHE_EDITABLE_FIELDS - {"price_cents"}
+                if published
+                else {
+                    "name", "apply_start", "apply_end", "exam_date", "capacity",
+                    "exam_location", "exam_org_name", "exam_org_code",
+                    "exam_date_note", "description", "registration_notice",
+                    "contact_name", "contact_phone", "sort_order",
+                }
+            )
+            if set(update_data) - allowed:
+                raise BusinessException("多项目批次不支持修改该字段")
+            if "name" in update_data and update_data["name"] != plan.name:
+                duplicate = await db.scalar(
+                    select(Plan.id).where(
+                        Plan.product_type.is_(None),
+                        Plan.name == update_data["name"],
+                        Plan.id != plan.id,
+                    ).limit(1)
+                )
+                if duplicate:
+                    raise BusinessException(
+                        f"已存在名为「{update_data['name']}」的多项目批次"
+                    )
+            if (
+                update_data.get("exam_date") is not None
+                and not data.confirm_holiday
+                and self._normalize_datetime(update_data["exam_date"]) != plan.exam_date
             ):
-                value = getattr(data, field, None)
-                if value is not None:
-                    setattr(plan, field, self._normalize_datetime(value) if field in {"apply_start", "apply_end", "exam_date"} else value)
+                await self._assert_not_holiday(db, update_data["exam_date"])
+            org_before = {
+                field: getattr(plan, field, None)
+                for field in RENSHE_ORG_FIELDS
+                if field in update_data
+            }
+            changed_fields: list[str] = []
+            for field, value in update_data.items():
+                if field in {"apply_start", "apply_end", "exam_date"}:
+                    value = self._normalize_datetime(value)
+                if getattr(plan, field) != value:
+                    setattr(plan, field, value)
+                    changed_fields.append(field)
             if data.projects is not None:
                 from app.services.renshe_batch_project import replace_projects
 
                 await replace_projects(db, plan, data.projects)
+            org_changes = {
+                field: {"old": org_before[field], "new": getattr(plan, field)}
+                for field in org_before
+                if org_before[field] != getattr(plan, field)
+            }
+            if org_changes:
+                db.add(RensheAuditLog(
+                    actor_type="admin" if admin_id is not None else "system",
+                    actor_id=admin_id,
+                    action="renshe.batch.org_change",
+                    object_type="plan",
+                    object_id=plan.id,
+                    result="succeeded",
+                    summary={"changes": org_changes},
+                ))
+            self._add_audit(
+                db,
+                plan=plan,
+                admin_id=admin_id,
+                action="batch.update",
+                summary={"changed_fields": changed_fields},
+            )
             self._validate_schedule(
                 apply_start=plan.apply_start,
                 apply_end=plan.apply_end,
                 exam_date=plan.exam_date,
+                require_window=plan.status == "published",
             )
             await db.commit()
             await db.refresh(plan)
@@ -299,14 +413,39 @@ class PlanService:
     ) -> PlanResponse:
         async with get_db_ctx() as db:
             plan = await self._get_plan(db, plan_id, None, for_update=True)
-            if plan.product_type is not None:
-                raise BusinessException("该批次不是多项目批次")
+            if not await self._is_renshe_multi(db, plan):
+                raise NotFoundException("批次")
+            if plan.status != "draft" and price_cents is not None:
+                raise BusinessException("已发布批次的项目价格不可修改")
+            from app.domain.renshe.src.index import RensheBatchProject
             from app.services.renshe_batch_project import update_project
 
-            await update_project(
+            before = await db.get(RensheBatchProject, project_id)
+            if before is None or before.plan_id != plan_id:
+                raise BusinessException("报考项目不存在")
+            old_price = before.price_cents
+            old_active = before.is_active
+            project = await update_project(
                 db, plan_id, project_id,
                 price_cents=price_cents, is_active=is_active,
             )
+            changes = {}
+            if project.price_cents != old_price:
+                changes["price_cents"] = {"old": old_price, "new": project.price_cents}
+            if project.is_active != old_active:
+                changes["is_active"] = {"old": old_active, "new": project.is_active}
+            if changes:
+                db.add(
+                    RensheAuditLog(
+                        actor_type="admin" if admin_id is not None else "system",
+                        actor_id=admin_id,
+                        action="renshe.batch.project_change",
+                        object_type="renshe_batch_project",
+                        object_id=project.id,
+                        result="succeeded",
+                        summary={"plan_id": plan_id, **changes},
+                    )
+                )
             await db.commit()
             await db.refresh(plan)
             return await self._response_with_projects(
@@ -494,13 +633,17 @@ class PlanService:
         product_type: str | None = None,
         *,
         admin_id: int | None = None,
+        multi_only: bool = False,
     ) -> PlanResponse:
         async with get_db_ctx() as db:
             plan = await self._get_plan(db, plan_id, product_type, for_update=True)
+            multi = await self._is_renshe_multi(db, plan)
+            if multi_only and not multi:
+                raise NotFoundException("批次")
             if plan.status != "draft":
                 raise BusinessException("仅草稿状态的批次可发布")
             program = None
-            if plan.product_type is None:
+            if multi:
                 from app.services.renshe_batch_project import list_projects
 
                 projects = await list_projects(db, plan.id)
@@ -508,8 +651,17 @@ class PlanService:
                     raise BusinessException("发布前至少配置一个报考项目")
                 if any(not item.is_active or item.price_cents <= 0 for item in projects):
                     raise BusinessException("发布前所有报考项目必须启用且价格大于 0")
-                self._validate_renshe_publish_fields(plan)
-            if await is_renshe_plan(db, plan):
+                for item in projects:
+                    product = await db.get(CertProduct, item.product_id)
+                    config = await db.get(RensheProjectConfig, item.config_id) if item.config_id else None
+                    if (
+                        product is None or product.type != "renshe" or not product.is_active
+                        or product.renshe_status not in {None, "available"}
+                        or config is None or config.product_id != product.id
+                    ):
+                        raise BusinessException("多项目批次存在无效或已停用的报考项目")
+                self._validate_renshe_publish_fields(plan, require_price=False)
+            elif await is_renshe_plan(db, plan):
                 program = self._required_renshe_program(plan)
                 from app.services.renshe_graduated import activation_errors
                 activation = activation_errors(program)
@@ -535,7 +687,7 @@ class PlanService:
                 require_direction(product.code)
                 if not product.is_active or plan.exam_date is None:
                     raise BusinessException("深信服批次发布需启用产品并配置考试时间")
-            if await is_renshe_plan(db, plan):
+            if not multi and await is_renshe_plan(db, plan):
                 self._validate_renshe_publish_fields(plan)
             plan.status = "published"
             plan.published_at = datetime.now(timezone.utc)
@@ -564,9 +716,13 @@ class PlanService:
         product_type: str | None = None,
         *,
         admin_id: int | None = None,
+        multi_only: bool = False,
     ) -> PlanResponse:
         async with get_db_ctx() as db:
             plan = await self._get_plan(db, plan_id, product_type, for_update=True)
+            is_renshe = await self._is_renshe_batch(db, plan)
+            if multi_only and not await self._is_renshe_multi(db, plan):
+                raise NotFoundException("批次")
             if plan.status != "published":
                 raise BusinessException("仅已发布批次可关闭报名")
             plan.status = "registration_closed"
@@ -588,10 +744,14 @@ class PlanService:
         product_type: str | None,
         *,
         admin_id: int,
+        multi_only: bool = False,
     ) -> PlanResponse:
         async with get_db_ctx() as db:
             plan = await self._get_plan(db, plan_id, product_type, for_update=True)
-            if not await is_renshe_plan(db, plan):
+            is_renshe = await self._is_renshe_batch(db, plan)
+            if multi_only and not await self._is_renshe_multi(db, plan):
+                raise NotFoundException("批次")
+            if not is_renshe:
                 raise BusinessException("批次终结接口仅用于人社报名")
             await RensheBatchService().finalize(db, plan=plan, admin_id=admin_id)
             await db.commit()
@@ -604,10 +764,14 @@ class PlanService:
         product_type: str | None,
         *,
         action: PlanImpactAction,
+        multi_only: bool = False,
     ) -> PlanImpactResponse:
         async with get_db_ctx() as db:
             plan = await self._get_plan(db, plan_id, product_type)
-            if not await is_renshe_plan(db, plan):
+            is_renshe = await self._is_renshe_batch(db, plan)
+            if multi_only and not await self._is_renshe_multi(db, plan):
+                raise NotFoundException("批次")
+            if not is_renshe:
                 raise BusinessException("批次影响预览接口仅用于人社报名")
             return await RensheBatchService().preview_impact(
                 db,
@@ -621,11 +785,15 @@ class PlanService:
         product_type: str | None = None,
         *,
         admin_id: int | None = None,
+        multi_only: bool = False,
     ) -> PlanResponse:
         async with get_db_ctx() as db:
             plan = await self._get_plan(db, plan_id, product_type, for_update=True)
             await self._reject_dedicated_certification_batch(db, plan.id)
-            allowed = {"finalized", "cancelled"} if await is_renshe_plan(db, plan) else {"published"}
+            is_renshe = await self._is_renshe_batch(db, plan)
+            if multi_only and not await self._is_renshe_multi(db, plan):
+                raise NotFoundException("批次")
+            allowed = {"finalized", "cancelled"} if is_renshe else {"published"}
             if plan.status not in allowed:
                 raise BusinessException("当前批次状态不可归档")
             plan.status = "archived"
@@ -646,11 +814,15 @@ class PlanService:
         product_type: str | None = None,
         *,
         admin_id: int | None = None,
+        multi_only: bool = False,
     ) -> PlanResponse:
         async with get_db_ctx() as db:
             plan = await self._get_plan(db, plan_id, product_type, for_update=True)
             await self._reject_dedicated_certification_batch(db, plan.id)
-            if await is_renshe_plan(db, plan):
+            is_renshe = await self._is_renshe_batch(db, plan)
+            if multi_only and not await self._is_renshe_multi(db, plan):
+                raise NotFoundException("批次")
+            if is_renshe:
                 await RensheBatchService().cancel(db, plan=plan, admin_id=admin_id)
             else:
                 if plan.status != "published":
@@ -675,10 +847,16 @@ class PlanService:
             return self._response(plan, await self._count_enrolled(db, plan_id))
 
     async def delete_plan(
-        self, plan_id: int, product_type: str | None = None
+        self,
+        plan_id: int,
+        product_type: str | None = None,
+        *,
+        multi_only: bool = False,
     ) -> None:
         async with get_db_ctx() as db:
             plan = await self._get_plan(db, plan_id, product_type, for_update=True)
+            if multi_only and not await self._is_renshe_multi(db, plan):
+                raise NotFoundException("批次")
             if plan.status != "draft":
                 raise BusinessException("仅草稿状态的批次可删除")
             linked_order_id = await db.scalar(
@@ -725,7 +903,10 @@ class PlanService:
                 "cancelled",
             }:
                 raise NotFoundException("批次")
-            return self._response(plan, await self._count_enrolled(db, plan_id))
+            enrolled = await self._count_enrolled(db, plan_id)
+            if plan.product_type is None and await is_renshe_plan(db, plan):
+                return await self._response_with_projects(db, plan, enrolled)
+            return self._response(plan, enrolled)
 
     async def _get_plan(
         self,
@@ -814,7 +995,11 @@ class PlanService:
         action: str,
         summary: dict,
     ) -> None:
-        if not plan.renshe_config_id and plan.product_type != "RS-ZY":
+        if (
+            not plan.renshe_config_id
+            and plan.product_type != "RS-ZY"
+            and not getattr(plan, "_is_renshe_multi", False)
+        ):
             return
         db.add(
             RensheAuditLog(

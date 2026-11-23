@@ -55,3 +55,17 @@ def test_batch_info_cells_are_text_not_formulas(tmp_path):
     }
     assert cells["批次名称"].data_type == "s"
     assert cells["考试机构"].data_type == "s"
+
+
+def test_batch_info_appends_multi_project_rows_as_text(tmp_path):
+    path = tmp_path / BATCH_INFO_FILENAME
+    RensheExportService._write_batch_info_workbook(
+        _plan(),
+        path,
+        [("报考项目", "=HYPERLINK(\"https://example.test\",\"项目\") · 四级 · ¥380.00")],
+    )
+    sheet = load_workbook(path).active
+    rows = list(sheet.iter_rows(min_row=2))
+    project = next(row for row in rows if row[0].value == "报考项目")
+    assert project[1].value == '=HYPERLINK("https://example.test","项目") · 四级 · ¥380.00'
+    assert project[1].data_type == "s"

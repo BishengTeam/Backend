@@ -582,6 +582,50 @@ def test_export_row_uses_material_snapshot_and_current_fixed_columns():
     assert row[21:23] == ["学历型", "新考"]
 
 
+def test_export_row_uses_candidate_project_config_for_multi_batch():
+    from app.services.renshe_project import default_configuration
+
+    config = default_configuration()
+    candidate = ExportCandidate(
+        application_id=1,
+        version_id=2,
+        estimated_size_bytes=100,
+        realname_snapshot={
+            "real_name": "张三",
+            "gender": "男",
+            "birth_date": "2003-01-02",
+            "id_card_number": "11010519491231002X",
+            "ethnicity": "汉族",
+            "political_status": "群众",
+        },
+        student_snapshot={"education": "bachelor", "enrollment_date": "2023-09-01"},
+        form_data={
+            "contact_phone": "13800138000",
+            "mailing_address": "成都市",
+            "email": "student@example.com",
+            "reporting_info": {"occupation_status": "职工", "ethnicity": "汉族", "political_status": "群众", "has_work_experience": True, "work_start_date": "2022-09-21", "occupation_years": 0},
+        },
+        materials=(),
+        config=config,
+    )
+    # 多项目批次的 Plan 不再持有项目属性，行内容必须来自报名版本快照的配置。
+    plan = Plan(
+        product_type=None,
+        name="多项目批次",
+        exam_type=None,
+        application_type=None,
+        occupation_name="",
+        occupation_code="",
+        skill_level="",
+    )
+    row = build_registration_row(candidate, plan)
+    assert row[13] == config["occupation_name"]
+    assert row[14] == config["export_skill_level"]
+    assert row[19] == config["occupation_code"]
+    assert row[21] == config["application_types"][0]
+    assert row[22] == config["exam_types"][0]
+
+
 def test_export_and_private_download_routes_are_registered():
     required = {
         ("GET", "/admin/cert-products/renshe/programs"),

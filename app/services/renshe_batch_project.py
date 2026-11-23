@@ -116,6 +116,8 @@ async def resolve_enrollable_project(
         raise BusinessException("报考项目对应的认证产品无效")
     if not product.is_active:
         raise BusinessException("报考项目对应产品已下架")
+    if getattr(product, "renshe_status", None) not in {None, "available"}:
+        raise BusinessException("报考项目当前不可报名")
     if project.config_id is not None:
         config = await db.get(RensheProjectConfig, project.config_id)
         if config is None or config.product_id != project.product_id:
@@ -135,6 +137,8 @@ async def _validated_project_rows(db: AsyncSession, inputs) -> list[dict]:
             raise BusinessException("仅可选择人社认证项目")
         if not product.is_active:
             raise BusinessException(f"项目已下架：{product.chinese_name}")
+        if getattr(product, "renshe_status", None) != "available":
+            raise BusinessException(f"项目尚未启用报名：{product.chinese_name}")
         config = await db.scalar(
             select(RensheProjectConfig)
             .where(RensheProjectConfig.product_id == product.id)
@@ -192,13 +196,23 @@ async def project_response_rows(db: AsyncSession, plan_id: int) -> list[dict]:
     result = []
     for project in projects:
         product = await db.get(CertProduct, project.product_id)
+        config = (
+            await db.get(RensheProjectConfig, project.config_id)
+            if project.config_id
+            else None
+        )
         result.append({
             "id": project.id,
             "product_id": project.product_id,
             "product_code": product.code if product else "",
             "product_name": product.chinese_name if product else "",
+            "product_is_active": bool(product.is_active) if product else False,
+            "product_renshe_status": (
+                getattr(product, "renshe_status", None) if product else None
+            ),
             "skill_level": project.skill_level,
             "config_id": project.config_id,
+            "config": config.config if config else None,
             "price_cents": project.price_cents,
             "sort_order": project.sort_order,
             "is_active": project.is_active,
