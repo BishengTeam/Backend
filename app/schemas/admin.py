@@ -236,11 +236,23 @@ class AdminUserOrderBrief(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AdminConversationMessage(BaseModel):
+    """单条对话消息（user / assistant 原文）"""
+    role: str
+    content: str
+
+
 class AdminUserConversationBrief(BaseModel):
-    """管理端用户对话摘要（用户详情页子资源）"""
+    """管理端用户对话摘要（用户详情页子资源）
+
+    messages 为该会话的完整多轮问答原文（按时间顺序），供管理员排查
+    用户与 AI 的对话内容；message_count 为消息条数，便于前端展示轮数。
+    """
     id: int
     session_id: str
     backend_type: str
+    message_count: int = 0
+    messages: list[AdminConversationMessage] = Field(default_factory=list)
     created_at: datetime
 
     model_config = {"from_attributes": True}

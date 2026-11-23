@@ -12,6 +12,7 @@ from app.domain.user.src.index import (
     DeletedOpenid, User, UserProfile, UserRealname, UserStudent, UserEnterprise,
 )
 from app.schemas.admin import (
+    AdminConversationMessage,
     AdminIdentityReview,
     AdminUserConversationBrief,
     AdminUserFilter,
@@ -24,6 +25,25 @@ from app.schemas.admin import (
 from app.schemas.common import PaginatedData
 from app.services.user import _assert_account_closure_allowed
 from app.services.renshe_audit import record_best_effort_audit
+
+
+def _conversation_brief(conv: Conversation) -> AdminUserConversationBrief:
+    """Flatten Conversation.messages ({"messages": [{role, content}]}) for admin."""
+
+    raw = conv.messages if isinstance(conv.messages, dict) else {}
+    messages = [
+        AdminConversationMessage(role=str(item.get("role") or ""), content=str(item.get("content") or ""))
+        for item in (raw.get("messages") or [])
+        if isinstance(item, dict)
+    ]
+    return AdminUserConversationBrief(
+        id=conv.id,
+        session_id=conv.session_id,
+        backend_type=conv.backend_type,
+        message_count=len(messages),
+        messages=messages,
+        created_at=conv.created_at,
+    )
 
 
 class AdminUserService:
@@ -555,7 +575,10 @@ class AdminUserService:
                 .order_by(Conversation.id.desc())
             )
             result = await db.execute(stmt)
-            payload = [AdminUserConversationBrief.model_validate(c) for c in result.scalars().all()]
+            conversations = result.scalars().all()
+            payload = [
+                _conversation_brief(c) for c in conversations
+            ]
         if actor_id is not None:
             await record_best_effort_audit(
                 actor_type="admin",

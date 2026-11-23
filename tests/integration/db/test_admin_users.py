@@ -243,6 +243,10 @@ async def test_get_user_conversations_returns_session_list(test_context):
             user_id=user_id,
             session_id=f"{prefix}_session",
             backend_type="manual",
+            messages={"messages": [
+                {"role": "user", "content": "怎么报名 H3C 认证？"},
+                {"role": "assistant", "content": "登录后在认证专区选择新华三认证即可报名。"},
+            ]},
         )
         db.add(conv)
         await db.commit()
@@ -255,6 +259,10 @@ async def test_get_user_conversations_returns_session_list(test_context):
     conv = conversations[0]
     assert conv.session_id == f"{prefix}_session"
     assert conv.backend_type == "manual"
+    # 管理端要能看到完整问答原文，而不只是会话摘要
+    assert conv.message_count == 2
+    assert [m.role for m in conv.messages] == ["user", "assistant"]
+    assert conv.messages[0].content == "怎么报名 H3C 认证？"
 
 
 # ---------------------------------------------------------------------------
