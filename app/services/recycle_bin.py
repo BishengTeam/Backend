@@ -27,7 +27,13 @@ from app.domain.certification.src.index import (
     JobApplication,
     UserChapterProgress,
 )
-from app.domain.classroom.src.index import Classroom, ClassroomQuestion, ClassroomVideo
+from app.domain.classroom.src.index import (
+    Classroom,
+    ClassroomMember,
+    ClassroomQuestion,
+    ClassroomQuiz,
+    ClassroomVideo,
+)
 from app.domain.community.src.index import (
     QuizActivationCode,
     QuizCollection,
@@ -132,6 +138,9 @@ TRASH_MODULES: dict[str, TrashModuleSpec] = {
         TrashModuleSpec("competition", "赛事", Competition, "name", "competition:write",
                         "tombstone", {"name": TOMBSTONE_TEXT, "description": None,
                                       "cover_url": None, "poster_url": None}),
+        TrashModuleSpec("classroom", "教学课堂", Classroom, "name",
+                        "classroom:manage", "tombstone",
+                        {"name": TOMBSTONE_TEXT}, teacher_scoped=True),
         TrashModuleSpec("classroom_video", "课堂视频", ClassroomVideo, "title",
                         "classroom:manage", teacher_scoped=True),
         TrashModuleSpec("classroom_question", "课堂练习题", ClassroomQuestion, "stem",
@@ -206,6 +215,20 @@ async def _competition_has_refs(db, competition_id: int) -> bool:
         select(exists().where(CompetitionReg.track_id.in_(track_ids)))
     ):
         return True
+    return False
+
+
+async def _classroom_has_refs(db, classroom_id: int) -> bool:
+    """课堂是容器：学生、视频、题目、测验任一存在即转墓碑，避免连带删学生作答数据。"""
+    checks = [
+        (ClassroomMember, ClassroomMember.classroom_id),
+        (ClassroomVideo, ClassroomVideo.classroom_id),
+        (ClassroomQuestion, ClassroomQuestion.classroom_id),
+        (ClassroomQuiz, ClassroomQuiz.classroom_id),
+    ]
+    for model, column in checks:
+        if await _has_reference(db, model, column, classroom_id):
+            return True
     return False
 
 
@@ -296,6 +319,7 @@ async def _purge_generic(db, spec: TrashModuleSpec, obj) -> str:
         "activity": _activity_has_refs,
         "job": _job_has_refs,
         "competition": _competition_has_refs,
+        "classroom": _classroom_has_refs,
         "course": _course_has_refs,
         "course_chapter": _course_chapter_has_refs,
         "quiz_module": lambda d, i: _quiz_module_has_refs(d, i),
@@ -370,14 +394,18 @@ class RecycleBinService:
             if keyword and spec.title_attr:
                 base = base.where(getattr(spec.model, spec.title_attr).ilike(f"%{keyword}%"))
             if spec.teacher_scoped and teacher_admin_id is not None:
-                # 课堂内容按归属隔离：老师只能看到自己课堂的条目
-                base = base.where(
-                    spec.model.classroom_id.in_(
-                        select(Classroom.id).where(
-                            Classroom.teacher_admin_id == teacher_admin_id
+                # 课堂内容按归属隔离：老师只能看到自己课堂的条目。
+                # 课堂本身没有 classroom_id，直接按 teacher_admin_id 归属过滤。
+                if spec.model is Classroom:
+                    base = base.where(Classroom.teacher_admin_id == teacher_admin_id)
+                else:
+                    base = base.where(
+                        spec.model.classroom_id.in_(
+                            select(Classroom.id).where(
+                                Classroom.teacher_admin_id == teacher_admin_id
+                            )
                         )
                     )
-                )
             total = (
                 await db.execute(select(func.count()).select_from(base.subquery()))
             ).scalar() or 0
@@ -444,7 +472,10 @@ class RecycleBinService:
 
     # -- 恢复 ---------------------------------------------------------------
 
-    async def restore_items(self, spec: TrashModuleSpec, ids: list[int], *, actor_id: int | None = None) -> int:
+    async def restore_items(
+        self, spec: TrashModuleSpec, ids: list[int], *, actor_id: int | None = None,
+        teacher_admin_id: int | None = None,
+    ) -> int:
         # quiz 四类对象必须走 V2 服务的 undo_delete（有状态映射：曾发布→停用、纯草稿→草稿），
         # 通用恢复只清时间戳，status 仍是 deleted 会导致"恢复无效"。
         if spec.key in {"quiz_question", "quiz_module", "quiz_knowledge_point", "quiz_library"}:
@@ -464,13 +495,22 @@ class RecycleBinService:
                     continue
             return restored
         async with get_db_ctx() as db:
-            rows = (
-                await db.execute(
-                    select(spec.model).where(
-                        spec.model.id.in_(ids), spec.model.deleted_at.isnot(None)
+            stmt = select(spec.model).where(
+                spec.model.id.in_(ids), spec.model.deleted_at.isnot(None)
+            )
+            # 课堂类模块按归属隔离：老师只能恢复自己课堂下的条目
+            if spec.teacher_scoped and teacher_admin_id is not None:
+                if spec.model is Classroom:
+                    stmt = stmt.where(Classroom.teacher_admin_id == teacher_admin_id)
+                else:
+                    stmt = stmt.where(
+                        spec.model.classroom_id.in_(
+                            select(Classroom.id).where(
+                                Classroom.teacher_admin_id == teacher_admin_id
+                            )
+                        )
                     )
-                )
-            ).scalars().all()
+            rows = (await db.execute(stmt)).scalars().all()
             now = utcnow()
             restored = 0
             for row in rows:

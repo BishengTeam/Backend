@@ -118,7 +118,11 @@ class AdminStatisticsService:
             courses_total = await count(Course, Course.status == "published")
             competitions_active = await count(Competition, Competition.is_active.is_(True))
             competition_registrations = await count(CompetitionReg)
-            classrooms_active = await count(Classroom, Classroom.status == "active")
+            classrooms_active = await count(
+                Classroom,
+                Classroom.status == "active",
+                Classroom.deleted_at.is_(None),
+            )
 
             order_type_rows = (await db.execute(
                 select(Order.product_type, func.count()).where(paid).group_by(Order.product_type)

@@ -68,6 +68,15 @@ async def stop_classroom(
     return success(message="课堂已停课")
 
 
+@router.delete("/{classroom_id}", response_model=APIResponse, summary="删除课堂（进回收站，30 天可恢复）")
+async def delete_classroom(
+    classroom_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("classroom:manage")),
+):
+    await ClassroomAdminService().delete(classroom_id, _teacher_scope(admin))
+    return success(message="课堂已删除，可在回收站恢复")
+
+
 @router.post("/{classroom_id}/join-code/refresh", response_model=APIResponse, summary="刷新课堂码（30 分钟有效）")
 async def refresh_join_code(
     classroom_id: int = Path(..., ge=1),

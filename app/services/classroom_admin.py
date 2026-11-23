@@ -48,7 +48,12 @@ def _now() -> datetime:
 
 
 async def _get_classroom(db, classroom_id: int, *, teacher_admin_id: int | None) -> Classroom:
-    classroom = await db.get(Classroom, classroom_id)
+    # 已删（进回收站）的课堂对管理端等同不存在，恢复只能在回收站操作
+    classroom = (await db.execute(
+        select(Classroom).where(
+            Classroom.id == classroom_id, Classroom.deleted_at.is_(None)
+        )
+    )).scalar_one_or_none()
     if classroom is None:
         raise NotFoundException("课堂")
     if teacher_admin_id is not None and classroom.teacher_admin_id != teacher_admin_id:
@@ -81,7 +86,7 @@ class ClassroomAdminService:
         self, teacher_admin_id: int | None, page: int, page_size: int
     ) -> dict:
         async with get_db_ctx() as db:
-            base = select(Classroom)
+            base = select(Classroom).where(Classroom.deleted_at.is_(None))
             if teacher_admin_id is not None:
                 base = base.where(Classroom.teacher_admin_id == teacher_admin_id)
             total = (await db.execute(
@@ -150,21 +155,38 @@ class ClassroomAdminService:
         """停课：课堂冻结为只读，进行中的测验立即结束。"""
         async with get_db_ctx() as db:
             classroom = await _get_classroom(db, classroom_id, teacher_admin_id=teacher_admin_id)
-            classroom.status = "stopped"
-            now = _now()
-            classroom.stopped_at = now
-            classroom.join_code = None
-            classroom.join_code_expires_at = None
-            ongoing = (await db.execute(
-                select(ClassroomQuiz).where(
-                    ClassroomQuiz.classroom_id == classroom_id,
-                    ClassroomQuiz.status == "ongoing",
-                )
-            )).scalars().all()
-            for quiz in ongoing:
-                quiz.status = "ended"
-                quiz.ended_at = now
+            await self._freeze(db, classroom)
             await db.commit()
+
+    async def delete(self, classroom_id: int, teacher_admin_id: int | None) -> None:
+        """删除课堂：仅打软删标记进回收站，不改课堂状态。
+
+        软删后管理端列表与学生端「我的课堂」都立即不可见；30 自然日内可在
+        后台回收站「教学课堂」页签恢复。停课是单向操作，删除若也冻结就再也
+        恢复不成可用课堂，因此这里保留原状态（进行中的测验也只是学生端
+        够不到，恢复后照旧）。
+        """
+        async with get_db_ctx() as db:
+            classroom = await _get_classroom(db, classroom_id, teacher_admin_id=teacher_admin_id)
+            soft_delete_row(classroom)
+            await db.commit()
+
+    async def _freeze(self, db, classroom: Classroom) -> None:
+        """停课公共逻辑：状态置 stopped、清课堂码、结束进行中的测验。"""
+        now = _now()
+        classroom.status = "stopped"
+        classroom.stopped_at = now
+        classroom.join_code = None
+        classroom.join_code_expires_at = None
+        ongoing = (await db.execute(
+            select(ClassroomQuiz).where(
+                ClassroomQuiz.classroom_id == classroom.id,
+                ClassroomQuiz.status == "ongoing",
+            )
+        )).scalars().all()
+        for quiz in ongoing:
+            quiz.status = "ended"
+            quiz.ended_at = now
 
     async def refresh_join_code(self, classroom_id: int, teacher_admin_id: int | None) -> dict:
         """手动刷新课堂码：6 位数字，30 分钟有效。"""

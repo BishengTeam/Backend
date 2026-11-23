@@ -47,6 +47,8 @@ class ClassroomService:
                 select(Classroom).where(
                     Classroom.join_code == code.strip(),
                     Classroom.status == "active",
+                    # 已删（回收站）课堂的课堂码一律作废
+                    Classroom.deleted_at.is_(None),
                 )
             )).scalar_one_or_none()
             if classroom is None:
@@ -80,6 +82,8 @@ class ClassroomService:
                 .join(ClassroomMember, ClassroomMember.classroom_id == Classroom.id)
                 .where(
                     ClassroomMember.user_id == user_id,
+                    # 已删（回收站）的课堂对学生完全不可见
+                    Classroom.deleted_at.is_(None),
                 ).order_by(
                     case((Classroom.status == "active", 0), else_=1),
                     ClassroomMember.id.desc(),
@@ -367,7 +371,8 @@ class ClassroomService:
     ):
         classroom = await db.get(Classroom, classroom_id)
         allowed = {"active", "stopped"} if allow_stopped else {"active"}
-        if classroom is None or classroom.status not in allowed:
+        # 已删（回收站）的课堂等同不存在，学生端一律按"不存在"处理
+        if classroom is None or classroom.deleted_at is not None or classroom.status not in allowed:
             raise NotFoundException("课堂不存在或已停课")
         member = (await db.execute(
             select(ClassroomMember).where(

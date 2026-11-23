@@ -64,6 +64,136 @@ async def test_stop_ends_ongoing_quizzes(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_delete_soft_deletes_without_changing_classroom_state(monkeypatch):
+    """删除只打软删标记：停课是单向的，若删除也冻结，恢复出来就是废课堂。"""
+    from app.services import classroom_admin
+    from app.services.recycle_bin import RESTORE_WINDOW
+
+    classroom = classroom_admin.Classroom(
+        name="秋季班", teacher_admin_id=5, status="active"
+    )
+    classroom.id = 43
+    classroom.join_code = "654321"
+    classroom.join_code_expires_at = _utc(3)
+    committed = []
+
+    class Db:
+        async def execute(self, _query):
+            raise AssertionError("删除不应查询/结束测验")
+
+        async def commit(self):
+            committed.append(True)
+
+    @asynccontextmanager
+    async def get_db_ctx():
+        yield Db()
+
+    async def get_classroom(_db, classroom_id, *, teacher_admin_id):
+        assert classroom_id == 43
+        assert teacher_admin_id == 5
+        return classroom
+
+    monkeypatch.setattr(classroom_admin, "get_db_ctx", get_db_ctx)
+    monkeypatch.setattr(classroom_admin, "_get_classroom", get_classroom)
+
+    await classroom_admin.ClassroomAdminService().delete(43, teacher_admin_id=5)
+
+    # 状态与课堂码原样保留，恢复后即可继续使用
+    assert classroom.status == "active"
+    assert classroom.join_code == "654321"
+    assert classroom.deleted_at is not None
+    assert classroom.restore_until == classroom.deleted_at + RESTORE_WINDOW
+    assert committed == [True]
+
+
+@pytest.mark.asyncio
+async def test_admin_get_classroom_hides_deleted_row(monkeypatch):
+    """已删课堂对管理端等同不存在：详情/视频/题目等子资源都经 _get_classroom 拦截。"""
+    from app.port.exceptions import NotFoundException
+    from app.services import classroom_admin
+
+    class Db:
+        async def execute(self, query):
+            assert "deleted_at IS NULL" in str(query)
+            return SimpleNamespace(scalar_one_or_none=lambda: None)
+
+    with pytest.raises(NotFoundException, match="课堂"):
+        await classroom_admin._get_classroom(Db(), 42, teacher_admin_id=None)
+
+
+def test_classroom_registered_in_recycle_bin_as_teacher_scoped_tombstone():
+    """课堂必须进回收站：teacher 只能看到自己的课堂，有引用时转墓碑而非物理删。"""
+    from app.services.recycle_bin import TRASH_MODULES
+
+    spec = TRASH_MODULES["classroom"]
+    assert spec.label == "教学课堂"
+    assert spec.restore_permission == "classroom:manage"
+    assert spec.teacher_scoped is True
+    assert spec.purge_policy == "tombstone"
+    assert spec.title_attr == "name"
+
+
+@pytest.mark.asyncio
+async def test_trash_list_teacher_scope_filters_by_teacher_admin_id(monkeypatch):
+    """课堂本身没有 classroom_id 列：teacher 看自己的回收站课堂要按 teacher_admin_id 过滤。"""
+    from app.services import recycle_bin as rb
+
+    sqls = []
+
+    class Db:
+        async def execute(self, query):
+            sqls.append(str(query))
+            return SimpleNamespace(
+                scalar=lambda: 0,
+                scalars=lambda: SimpleNamespace(all=lambda: []),
+            )
+
+    @asynccontextmanager
+    async def get_db_ctx():
+        yield Db()
+
+    monkeypatch.setattr(rb, "get_db_ctx", get_db_ctx)
+
+    out = await rb.RecycleBinService().list_items(
+        rb.TRASH_MODULES["classroom"], keyword=None, page=1, page_size=20,
+        teacher_admin_id=5,
+    )
+
+    assert out["total"] == 0
+    assert sqls, "应至少发出计数查询"
+    assert "teacher_admin_id" in " ".join(sqls)
+
+
+@pytest.mark.asyncio
+async def test_trash_restore_teacher_scope_only_touches_own_classroom(monkeypatch):
+    """恢复同样按归属隔离：teacher 不能凭 ID 恢复别人的课堂。"""
+    from app.services import recycle_bin as rb
+
+    sqls = []
+
+    class Db:
+        async def execute(self, query):
+            sqls.append(str(query))
+            return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))
+
+        async def commit(self):
+            pass
+
+    @asynccontextmanager
+    async def get_db_ctx():
+        yield Db()
+
+    monkeypatch.setattr(rb, "get_db_ctx", get_db_ctx)
+
+    restored = await rb.RecycleBinService().restore_items(
+        rb.TRASH_MODULES["classroom"], [42], actor_id=5, teacher_admin_id=5
+    )
+
+    assert restored == 0
+    assert "teacher_admin_id" in " ".join(sqls)
+
+
+@pytest.mark.asyncio
 async def test_my_classrooms_keeps_stopped_and_orders_active_first(monkeypatch):
     """我的课堂列表必须包含停课课堂，且 active 在前、stopped 在后。"""
     from app.services import classroom as service
@@ -121,6 +251,8 @@ async def test_my_classrooms_keeps_stopped_and_orders_active_first(monkeypatch):
     assert "ORDER BY CASE" in captured["sql"].upper()
     where_part = captured["sql"].upper().split("WHERE", 1)[1].split("ORDER BY")[0]
     assert "STATUS" not in where_part
+    # 已删（回收站）课堂不得出现在「我的课堂」
+    assert "DELETED_AT IS NULL" in where_part
 
 
 @pytest.mark.asyncio
@@ -160,6 +292,32 @@ async def test_member_classroom_stopped_read_write_matrix():
         await ClassroomService._member_classroom(db, 9, 2)
     with pytest.raises(NotFoundException):
         await ClassroomService._member_classroom(db, 9, 99, allow_stopped=True)
+
+
+@pytest.mark.asyncio
+async def test_member_classroom_deleted_is_invisible_even_for_read_paths():
+    """已删（回收站）课堂对学生完全隐藏：连 allow_stopped 的读路径也按不存在处理。"""
+    from app.domain.classroom.src.index import Classroom, ClassroomMember
+    from app.port.exceptions import NotFoundException
+    from app.services.classroom import ClassroomService
+
+    deleted = Classroom(name="已删除课堂", teacher_admin_id=5, status="stopped")
+    deleted.id = 3
+    deleted.deleted_at = _utc(10)
+    deleted.restore_until = _utc(11)
+    member = ClassroomMember(classroom_id=3, user_id=9, real_name_snapshot="张三")
+    member.id = 13
+
+    class Db:
+        async def get(self, model, classroom_id):
+            return deleted if classroom_id == 3 else None
+
+        async def execute(self, _query):
+            return SimpleNamespace(scalar_one_or_none=lambda: member)
+
+    db = Db()
+    with pytest.raises(NotFoundException, match="停课"):
+        await ClassroomService._member_classroom(db, 9, 3, allow_stopped=True)
 
 
 @pytest.mark.asyncio

@@ -17,7 +17,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.adapter.database import Base, RecycleBinMixin, TimestampMixin
 
 
-class Classroom(Base, TimestampMixin):
+class Classroom(Base, RecycleBinMixin, TimestampMixin):
     """线下课堂。teacher_admin_id 是数据隔离键：老师只能访问自己的课堂。"""
 
     __tablename__ = "classroom"
