@@ -119,7 +119,7 @@ async def test_actual_zip_matches_shared_preview_and_keeps_real_files(
         path = isolated.storage._local_path(volume.storage_key)
     candidate = candidates[0]
     identity = candidate.realname_snapshot["id_card_number"]
-    expected = {"报名信息.xlsx", "工作经历.xlsx"} | {
+    expected = {"报名信息.xlsx", "工作经历.xlsx", "批次信息.xlsx"} | {
         material_archive_path(identity, item.kind, item.extension)
         for item in candidate.materials
     }

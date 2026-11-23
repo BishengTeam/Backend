@@ -16,6 +16,7 @@ from app.port.exceptions import BusinessException
 
 REGISTRATION_TEMPLATE_NAME = "报名信息.xlsx"
 WORK_HISTORY_TEMPLATE_NAME = "工作经历.xlsx"
+BATCH_INFO_FILENAME = "批次信息.xlsx"
 MATERIAL_STEMS = {
     "work_proof": "工龄证明",
     "id_card_front": "证件正面",
@@ -43,6 +44,35 @@ RULE_ID = "renshe-degree-and-four-level-employment-20261018"
 
 def archive_download_name(plan_id: int | str, volume_no: int) -> str:
     return f"人社报名_批次{plan_id}_第{volume_no}卷.zip"
+
+
+def _format_datetime(value) -> str:
+    if not value:
+        return ""
+    from zoneinfo import ZoneInfo
+
+    from app.port.config import settings
+
+    zone = ZoneInfo(settings.APP_TIMEZONE)
+    # 历史无时区值按应用本地时区解释，避免再次偏移。
+    aware = value if value.tzinfo is not None else value.replace(tzinfo=zone)
+    return aware.astimezone(zone).strftime("%Y-%m-%d %H:%M")
+
+
+def batch_info_rows(plan) -> list[tuple[str, str]]:
+    """批次信息附表：不进入官方 25 列合同与指纹。"""
+    return [
+        ("批次名称", plan.name or ""),
+        ("报名开始", _format_datetime(plan.apply_start)),
+        ("报名截止", _format_datetime(plan.apply_end)),
+        ("考试时间", _format_datetime(plan.exam_date)),
+        ("考试时间备注", plan.exam_date_note or ""),
+        ("考试机构", plan.exam_org_name or ""),
+        ("考试机构代码", plan.exam_org_code or ""),
+        ("考试地点", plan.exam_location or ""),
+        ("联系人", plan.contact_name or ""),
+        ("联系电话", plan.contact_phone or ""),
+    ]
 
 
 def employment_rules(config: dict | None = None) -> dict:

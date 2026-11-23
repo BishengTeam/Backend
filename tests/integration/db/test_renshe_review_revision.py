@@ -4,12 +4,12 @@ import os
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.domain.order.src.index import Order
-from app.domain.renshe.src.index import RensheApplication, RensheReview
+from app.domain.renshe.src.index import RensheApplication, RensheAuditLog, RensheReview
 from app.port.exceptions import ConflictException
 from app.services.order_fulfillment import OrderFulfillmentService
 from app.services.renshe_application import RensheApplicationService
@@ -79,6 +79,38 @@ async def test_renshe_update_plan_can_clear_exam_date_without_server_error(pg_en
         admin_id=1,
     )
     assert cleared.exam_date is None
+
+    await PlanService().update_plan(
+        draft.id,
+        PlanUpdate(confirm_holiday=False, exam_org_name="机构A"),
+        project.code,
+        admin_id=1,
+    )
+    async with env.db() as db:
+        logs = list((await db.scalars(
+            select(RensheAuditLog).where(
+                RensheAuditLog.action == "renshe.batch.org_change"
+            ).order_by(RensheAuditLog.id)
+        )).all())
+    assert logs[-1].summary["changes"]["exam_org_name"] == {
+        "old": None,
+        "new": "机构A",
+    }
+
+    before = len(logs)
+    await PlanService().update_plan(
+        draft.id,
+        PlanUpdate(confirm_holiday=False, exam_org_name="机构A"),
+        project.code,
+        admin_id=1,
+    )
+    async with env.db() as db:
+        count_same = await db.scalar(
+            select(func.count()).select_from(RensheAuditLog).where(
+                RensheAuditLog.action == "renshe.batch.org_change"
+            )
+        )
+    assert count_same == before
 
     with pytest.raises(AppException):
         await PlanService().update_plan(

@@ -42,6 +42,7 @@ PUBLISHED_RENSHE_EDITABLE_FIELDS = {
     "contact_phone",
     "sort_order",
 }
+RENSHE_ORG_FIELDS = {"exam_org_name", "exam_org_code", "exam_date_note"}
 class PlanService:
     @staticmethod
     def plan_update_data(data: PlanUpdate) -> dict:
@@ -294,6 +295,11 @@ class PlanService:
             ):
                 await self._assert_not_holiday(db, update_data["exam_date"])
             changed_fields: list[str] = []
+            org_before = {
+                field: getattr(plan, field, None)
+                for field in RENSHE_ORG_FIELDS
+                if field in update_data
+            }
             for field in ("apply_start", "apply_end", "exam_date"):
                 normalized = self._normalize_datetime(update_data.get(field))
                 if field in update_data and getattr(plan, field) != normalized:
@@ -307,6 +313,21 @@ class PlanService:
                     changed_fields.append(field)
             if plan.status == "published" and renshe:
                 self._validate_renshe_publish_fields(plan)
+            org_changes = {
+                field: {"old": org_before[field], "new": getattr(plan, field)}
+                for field in org_before
+                if org_before[field] != getattr(plan, field)
+            }
+            if org_changes:
+                db.add(RensheAuditLog(
+                    actor_type="admin" if admin_id is not None else "system",
+                    actor_id=admin_id,
+                    action="renshe.batch.org_change",
+                    object_type="plan",
+                    object_id=plan.id,
+                    result="succeeded",
+                    summary={"changes": org_changes},
+                ))
             self._add_audit(
                 db,
                 plan=plan,

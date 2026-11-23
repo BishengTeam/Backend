@@ -52,7 +52,15 @@ from app.schemas.renshe import (
 from app.services.renshe_project import batch_configuration, is_renshe_plan
 from app.services.renshe_graduated import is_self_reported
 from app.services.renshe_reporting import EDUCATIONS, report_date, validate_row, validate_snapshot, assert_template, validate_reporting
-from app.services.renshe_export_definition import material_archive_path, definition_fingerprint, archive_download_name, REGISTRATION_TEMPLATE_NAME, WORK_HISTORY_TEMPLATE_NAME
+from app.services.renshe_export_definition import (
+    BATCH_INFO_FILENAME,
+    REGISTRATION_TEMPLATE_NAME,
+    WORK_HISTORY_TEMPLATE_NAME,
+    archive_download_name,
+    batch_info_rows,
+    definition_fingerprint,
+    material_archive_path,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -913,6 +921,24 @@ class RensheExportService:
             )
             await db.commit()
 
+    @staticmethod
+    def _write_batch_info_workbook(plan, output_path: Path) -> None:
+        from openpyxl import Workbook
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "批次信息"
+        rows = [("字段", "值"), *batch_info_rows(plan)]
+        for row_no, (label, value) in enumerate(rows, 1):
+            for column_no, text in enumerate((label, value), 1):
+                cell = sheet.cell(row=row_no, column=column_no, value=text)
+                # 批次字段来自管理员输入，必须按文本保存，禁止成为公式。
+                cell.data_type = "s"
+                cell.number_format = "@"
+        sheet.column_dimensions["A"].width = 20
+        sheet.column_dimensions["B"].width = 60
+        workbook.save(output_path)
+
     async def _generate_volume(
         self,
         *,
@@ -928,6 +954,7 @@ class RensheExportService:
             temp_root = Path(raw)
             registration_path = temp_root / REGISTRATION_TEMPLATE_NAME
             work_path = temp_root / WORK_HISTORY_TEMPLATE_NAME
+            batch_info_path = temp_root / BATCH_INFO_FILENAME
             zip_path = temp_root / f"volume-{volume_no}.zip"
             await asyncio.to_thread(
                 self._write_registration_workbook,
@@ -941,6 +968,9 @@ class RensheExportService:
                 await asyncio.to_thread(self._write_work_history_workbook, work_template, work_path, candidates)
             else:
                 await asyncio.to_thread(shutil.copyfile, work_template, work_path)
+            await asyncio.to_thread(
+                self._write_batch_info_workbook, plan, batch_info_path
+            )
 
             archive = zipfile.ZipFile(
                 zip_path,
@@ -954,6 +984,9 @@ class RensheExportService:
                 )
                 await asyncio.to_thread(
                     archive.write, work_path, WORK_HISTORY_TEMPLATE_NAME
+                )
+                await asyncio.to_thread(
+                    archive.write, batch_info_path, BATCH_INFO_FILENAME
                 )
                 objects_dir = temp_root / "objects"
                 objects_dir.mkdir()
