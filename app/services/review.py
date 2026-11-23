@@ -8,7 +8,8 @@ from app.adapter.database import get_db_ctx
 from app.port.exceptions import BusinessException, ConflictException, NotFoundException
 from app.domain.review.src.index import Review
 from app.domain.renshe.src.index import RensheAuditLog
-from app.domain.user.src.index import UserRealname, UserStudent
+from app.domain.user.src.index import AdminUser, UserRealname, UserStudent
+from app.policy.quiz_scope import current_admin_display_name
 from app.domain.order.src.index import Order
 from app.schemas.common import PaginatedData
 from app.schemas.review import ReviewCreate, ReviewFilter, ReviewResponse
@@ -77,13 +78,16 @@ class ReviewService:
             )
             await db.commit()
             await db.refresh(review)
+            reviewer_name = current_admin_display_name(reviewer_id)
 
         # 3. 查回调并执行
         callback = REVIEW_CALLBACKS.get((data.target_type, data.action))
         if callback is not None:
             await callback(data.target_id, data.comment)
 
-        return ReviewResponse.model_validate(review)
+        response = ReviewResponse.model_validate(review)
+        response.reviewer_name = reviewer_name
+        return response
 
     async def _create_profile_review(
         self, reviewer_id: int, data: ReviewCreate
@@ -154,7 +158,10 @@ class ReviewService:
             )
             await db.commit()
             await db.refresh(review)
-            return ReviewResponse.model_validate(review)
+            reviewer_name = current_admin_display_name(reviewer_id)
+            response = ReviewResponse.model_validate(review)
+            response.reviewer_name = reviewer_name
+            return response
 
     async def list_reviews(
         self, filters: ReviewFilter | None, page: int, page_size: int
@@ -173,8 +180,24 @@ class ReviewService:
             ).limit(page_size)
             result = await db.execute(stmt)
             reviews = result.scalars().all()
+            reviewer_ids = {review.reviewer_id for review in reviews}
+            names: dict[int, str] = {}
+            if reviewer_ids:
+                rows = (
+                    await db.execute(
+                        select(AdminUser.id, AdminUser.display_name).where(
+                            AdminUser.id.in_(reviewer_ids)
+                        )
+                    )
+                ).all()
+                names = {admin_id: display_name for admin_id, display_name in rows}
+            items = []
+            for review in reviews:
+                item = ReviewResponse.model_validate(review)
+                item.reviewer_name = names.get(review.reviewer_id)
+                items.append(item)
             return PaginatedData[ReviewResponse](
-                items=[ReviewResponse.model_validate(r) for r in reviews],
+                items=items,
                 total=total,
                 page=page,
                 page_size=page_size,

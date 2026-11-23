@@ -28,6 +28,7 @@ class ReviewResponse(BaseModel):
     target_type: str
     target_id: int
     reviewer_id: int
+    reviewer_name: str | None = None
     action: str
     comment: str | None
     created_at: datetime
