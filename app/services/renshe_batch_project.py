@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy import delete
 
 from app.domain.renshe.src.index import RensheBatchProject
 from app.models.cert_product import CertProduct
@@ -120,6 +121,111 @@ async def resolve_enrollable_project(
         if config is None or config.product_id != project.product_id:
             raise BusinessException("报考项目配置不属于该项目")
     return resolved
+
+
+async def _validated_project_rows(db: AsyncSession, inputs) -> list[dict]:
+    seen: set[int] = set()
+    rows: list[dict] = []
+    for item in inputs:
+        if item.product_id in seen:
+            raise BusinessException("同一报考项目不能重复添加")
+        seen.add(item.product_id)
+        product = await db.get(CertProduct, item.product_id)
+        if product is None or product.type != "renshe":
+            raise BusinessException("仅可选择人社认证项目")
+        if not product.is_active:
+            raise BusinessException(f"项目已下架：{product.chinese_name}")
+        config = await db.scalar(
+            select(RensheProjectConfig)
+            .where(RensheProjectConfig.product_id == product.id)
+            .order_by(RensheProjectConfig.version.desc())
+            .limit(1)
+        )
+        if config is None:
+            raise BusinessException(f"项目尚未配置规则：{product.chinese_name}")
+        payload = (config.config or {})
+        rows.append({
+            "product": product,
+            "config": config,
+            "price_cents": item.price_cents,
+            "sort_order": item.sort_order,
+            "occupation_name": payload.get("occupation_name"),
+            "occupation_code": payload.get("occupation_code"),
+            "skill_level": payload.get("skill_level"),
+        })
+    return rows
+
+
+async def replace_projects(db: AsyncSession, plan, inputs) -> list[RensheBatchProject]:
+    if not inputs:
+        raise BusinessException("多项目批次至少选择一个报考项目")
+    rows = await _validated_project_rows(db, inputs)
+    await db.execute(delete(RensheBatchProject).where(RensheBatchProject.plan_id == plan.id))
+    projects = []
+    for row in rows:
+        project = RensheBatchProject(
+            plan_id=plan.id,
+            product_id=row["product"].id,
+            config_id=row["config"].id,
+            price_cents=row["price_cents"],
+            occupation_name=row["occupation_name"],
+            occupation_code=row["occupation_code"],
+            skill_level=row["skill_level"],
+            sort_order=row["sort_order"],
+        )
+        db.add(project)
+        projects.append(project)
+    await db.flush()
+    return projects
+
+
+async def list_projects(db: AsyncSession, plan_id: int) -> list[RensheBatchProject]:
+    return list((await db.scalars(
+        select(RensheBatchProject)
+        .where(RensheBatchProject.plan_id == plan_id)
+        .order_by(RensheBatchProject.sort_order, RensheBatchProject.id)
+    )).all())
+
+
+async def project_response_rows(db: AsyncSession, plan_id: int) -> list[dict]:
+    projects = await list_projects(db, plan_id)
+    result = []
+    for project in projects:
+        product = await db.get(CertProduct, project.product_id)
+        result.append({
+            "id": project.id,
+            "product_id": project.product_id,
+            "product_code": product.code if product else "",
+            "product_name": product.chinese_name if product else "",
+            "skill_level": project.skill_level,
+            "config_id": project.config_id,
+            "price_cents": project.price_cents,
+            "sort_order": project.sort_order,
+            "is_active": project.is_active,
+            "updated_at": project.updated_at,
+        })
+    return result
+
+
+async def update_project(
+    db: AsyncSession,
+    plan_id: int,
+    project_id: int,
+    *,
+    price_cents: int | None = None,
+    is_active: bool | None = None,
+) -> RensheBatchProject:
+    project = await db.get(RensheBatchProject, project_id)
+    if project is None or project.plan_id != plan_id:
+        raise BusinessException("报考项目不存在")
+    if price_cents is not None:
+        if price_cents < 0:
+            raise BusinessException("项目价格不能为负数")
+        project.price_cents = price_cents
+    if is_active is not None:
+        project.is_active = is_active
+    await db.flush()
+    return project
 
 
 def select_write_application(

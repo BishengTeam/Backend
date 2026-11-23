@@ -71,6 +71,14 @@ class CertificationJourneyService:
                 H3cExamBatch.id.in_(select(H3cBatchProduct.batch_id))
             )
             _plan_conditions.append(Plan.id.in_(_h3c_multi_plan_ids))
+        if vendor == "renshe":
+            from app.domain.renshe.src.index import RensheBatchProject
+
+            _plan_conditions.append(Plan.id.in_(
+                select(RensheBatchProject.plan_id).where(
+                    RensheBatchProject.is_active.is_(True)
+                )
+            ))
         plans = list((await db.scalars(select(Plan).where(or_(*_plan_conditions)).order_by(Plan.sort_order.desc(), Plan.id.desc()))).all()) if codes else []
         if not admin:
             plans = [plan for plan in plans if plan.status in {"published", "registration_closed", "finalized"}]
@@ -82,6 +90,53 @@ class CertificationJourneyService:
         for plan in plans:
             batch = h3c.get(plan.id) if vendor == "h3c" else nisp.get(plan.id) if vendor == "nisp" else None
             if vendor in {"h3c", "nisp"} and batch is None:
+                continue
+            if vendor == "renshe" and plan.product_type is None:
+                from app.domain.renshe.src.index import RensheBatchProject
+                from app.models.renshe_project import RensheProjectConfig
+
+                projects = (await db.execute(
+                    select(RensheBatchProject, CertProduct)
+                    .join(CertProduct, CertProduct.id == RensheBatchProject.product_id)
+                    .where(
+                        RensheBatchProject.plan_id == plan.id,
+                        RensheBatchProject.is_active.is_(True),
+                    )
+                    .order_by(RensheBatchProject.sort_order, RensheBatchProject.id)
+                )).all()
+                remaining = max(0, plan.capacity - occupied.get(plan.id, 0)) if plan.capacity else -1
+                now_ts, start_ts, end_ts = datetime.now(timezone.utc), utc(plan.apply_start), utc(plan.apply_end)
+                for bp, prod in projects:
+                    config = await db.get(RensheProjectConfig, bp.config_id) if bp.config_id else None
+                    config_data = (config.config if config else {}) or {}
+                    supported = config_data.get("qualification_rule") in {
+                        "related_major_graduated_degree_v1",
+                        "documented_employment_v1",
+                        "level_five_employment_v1",
+                        "level_three_v1",
+                    } and config_data.get("reporting_policy", {}).get("contract_version") == 2
+                    result.append({
+                        "id": plan.id,
+                        "plan_id": plan.id,
+                        "batch_project_id": bp.id,
+                        "subject_id": prod.code,
+                        "name": plan.name,
+                        "status": plan.status,
+                        "apply_start": plan.apply_start,
+                        "apply_end": plan.apply_end,
+                        "exam_date": plan.exam_date,
+                        "exam_location": plan.exam_location,
+                        "remaining_count": remaining,
+                        "capacity": plan.capacity,
+                        "can_apply": bool(supported and plan.status == "published" and start_ts and end_ts and start_ts <= now_ts < end_ts and remaining != 0),
+                        "skill_level": bp.skill_level,
+                        "application_type": (config_data.get("application_types") or [None])[0],
+                        "prices": [{
+                            "value": "default",
+                            "label": prod.chinese_name or prod.name,
+                            "price_cents": bp.price_cents,
+                        }],
+                    })
                 continue
             # v2 多产品：H3C 批次按科目展开
             if vendor == "h3c" and plan.product_type is None and batch is not None:
@@ -207,13 +262,25 @@ class CertificationJourneyService:
         except IntegrityError as error:
             raise ConflictException("须知配置已更新，请刷新并核对后保存") from error
 
-    async def notice(self, vendor, batch_id, registration_type=None):
+    async def notice(self, vendor, batch_id, registration_type=None, batch_project_id=None):
         async with get_db_ctx() as db:
-            return await self.notice_in_db(db, vendor, batch_id, registration_type)
+            return await self.notice_in_db(
+                db, vendor, batch_id, registration_type,
+                batch_project_id=batch_project_id,
+            )
 
-    async def notice_in_db(self, db, vendor, batch_id, registration_type=None):
+    async def notice_in_db(
+        self, db, vendor, batch_id, registration_type=None, batch_project_id=None
+    ):
         catalog = await self.catalog_in_db(db, vendor)
-        batch = next((item for item in catalog["batches"] if item["id"] == batch_id), None)
+        batch = next((
+            item for item in catalog["batches"]
+            if item["id"] == batch_id
+            and (
+                batch_project_id is None
+                or item.get("batch_project_id") == batch_project_id
+            )
+        ), None)
         if not batch or not batch["can_apply"]:
             raise BusinessException("该批次已截止、下架、名额已满或暂不可报名，请重新选择")
         price = next((item for item in batch["prices"] if item["value"] == registration_type), None)
@@ -241,6 +308,7 @@ class CertificationJourneyService:
             "supplement": supplement.content if supplement else default_content(vendor, batch=True),
             "batch_description": plan.description or "",
             "registration_notice": plan.registration_notice or "",
+            "batch_project_id": batch.get("batch_project_id"),
             "exam_org_name": plan.exam_org_name or "",
             "exam_org_code": plan.exam_org_code or "",
             "exam_date_note": plan.exam_date_note or "",

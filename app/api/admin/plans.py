@@ -1,6 +1,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Path, Query
+from pydantic import BaseModel, Field
 
 from app.middleware.auth import require_permission, require_super_admin
 from app.schemas.common import APIResponse, PaginatedData, success
@@ -17,6 +18,61 @@ from app.services.plan import PlanService
 from app.services.plan_order_management import PlanOrderManagementService
 
 router = APIRouter(tags=["管理后台-批次管理"])
+
+
+class MultiProjectUpdate(BaseModel):
+    price_cents: int | None = Field(None, ge=0)
+    is_active: bool | None = None
+
+
+@router.get("/renshe/multi-batches", response_model=APIResponse[list[PlanResponse]])
+async def list_multi_batches(_admin=Depends(require_permission("user:list"))):
+    rows = await PlanService().list_renshe_plans()
+    return success(data=[item for item in rows if item.product_type is None])
+
+
+@router.post("/renshe/multi-batches", response_model=APIResponse[PlanResponse])
+async def create_multi_batch(
+    body: PlanCreate,
+    admin=Depends(require_permission("user:write")),
+):
+    return success(
+        data=await PlanService().create_renshe_multi_batch(body, admin_id=admin.id)
+    )
+
+
+@router.put("/renshe/multi-batches/{plan_id}", response_model=APIResponse[PlanResponse])
+async def update_multi_batch(
+    body: PlanUpdate,
+    plan_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("user:write")),
+):
+    return success(
+        data=await PlanService().update_renshe_multi_batch(
+            plan_id, body, admin_id=admin.id
+        )
+    )
+
+
+@router.put(
+    "/renshe/multi-batches/{plan_id}/projects/{project_id}",
+    response_model=APIResponse[PlanResponse],
+)
+async def update_multi_project(
+    body: MultiProjectUpdate,
+    plan_id: int = Path(..., ge=1),
+    project_id: int = Path(..., ge=1),
+    admin=Depends(require_permission("user:write")),
+):
+    return success(
+        data=await PlanService().update_multi_project(
+            plan_id,
+            project_id,
+            price_cents=body.price_cents,
+            is_active=body.is_active,
+            admin_id=admin.id,
+        )
+    )
 
 
 @router.get("/{code}/plans",

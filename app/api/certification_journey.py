@@ -105,8 +105,15 @@ async def plan_attachments(
 
 
 @router.get("/{vendor}/notice/{batch_id}")
-async def notice(vendor: CertificationVendor, batch_id: int = Path(ge=1), registration_type: str | None = Query(None, max_length=20)):
-    value = await service.notice(vendor, batch_id, registration_type)
+async def notice(
+    vendor: CertificationVendor,
+    batch_id: int = Path(ge=1),
+    registration_type: str | None = Query(None, max_length=20),
+    batch_project_id: int | None = Query(None, ge=1),
+):
+    value = await service.notice(
+        vendor, batch_id, registration_type, batch_project_id
+    )
     return success(data={key: item for key, item in value.items() if not key.startswith("_")})
 
 

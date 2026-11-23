@@ -27,6 +27,7 @@ class PlanCreate(BaseModel):
     exam_org_code: str | None = Field(None, max_length=64, description="考试机构代码")
     exam_date_note: str | None = Field(None, max_length=64, description="考试时间备注")
     confirm_holiday: bool = Field(False, description="确认为假期考试（人社批次）")
+    projects: list["PlanProjectInput"] | None = None
     description: str | None = Field(None, max_length=5000, description="报名说明")
     registration_notice: str | None = Field(
         None, max_length=5000, description="报名注意事项（退改规则等）"
@@ -66,6 +67,7 @@ class PlanUpdate(BaseModel):
     exam_org_code: str | None = Field(None, max_length=64)
     exam_date_note: str | None = Field(None, max_length=64)
     confirm_holiday: bool | None = None
+    projects: list["PlanProjectInput"] | None = None
     description: str | None = Field(None, max_length=5000)
     registration_notice: str | None = Field(None, max_length=5000)
     contact_name: str | None = Field(None, max_length=64)
@@ -91,7 +93,7 @@ class PlanUpdate(BaseModel):
 class PlanResponse(BaseModel):
     """批次响应"""
     id: int
-    product_type: str
+    product_type: str | None = None
     project_name: str | None = None
     renshe_config_id: int | None = None
     renshe_config: dict | None = None
@@ -100,11 +102,11 @@ class PlanResponse(BaseModel):
     apply_end: datetime | None = None
     exam_date: datetime | None = None
     capacity: int = 0
-    occupation_name: str
-    occupation_code: str
-    skill_level: str
-    exam_type: str
-    application_type: str
+    occupation_name: str | None = None
+    occupation_code: str | None = None
+    skill_level: str | None = None
+    exam_type: str | None = None
+    application_type: str | None = None
     price_cents: int = 50000
     exam_location: str | None = None
     exam_org_name: str | None = None
@@ -121,8 +123,29 @@ class PlanResponse(BaseModel):
     finalized_at: datetime | None = None
     cleanup_due_at: datetime | None = None
     enrolled: int = Field(0, description="当前占用名额的订单数，包含待支付、已支付和已完成")
+    projects: list["PlanProjectResponse"] = Field(default_factory=list)
     status: PlanStatus
     created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PlanProjectInput(BaseModel):
+    product_id: int = Field(..., ge=1)
+    price_cents: int = Field(..., ge=0)
+    sort_order: int = Field(0, ge=0)
+
+
+class PlanProjectResponse(BaseModel):
+    id: int
+    product_id: int
+    product_code: str
+    product_name: str
+    skill_level: str | None = None
+    config_id: int | None = None
+    price_cents: int
+    sort_order: int
+    is_active: bool
     updated_at: datetime
 
     model_config = {"from_attributes": True}
@@ -154,3 +177,8 @@ class PlanImpactResponse(BaseModel):
     cleanup_due_at: datetime
     can_execute: bool
     blockers: list[PlanImpactBlocker] = Field(default_factory=list)
+
+
+PlanCreate.model_rebuild()
+PlanUpdate.model_rebuild()
+PlanResponse.model_rebuild()

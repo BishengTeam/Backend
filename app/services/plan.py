@@ -17,6 +17,7 @@ from app.schemas.plan import (
     PlanCreate,
     PlanImpactAction,
     PlanImpactResponse,
+    PlanProjectResponse,
     PlanResponse,
     PlanUpdate,
 )
@@ -151,7 +152,27 @@ class PlanService:
 
     async def list_renshe_plans(self, *, public: bool = False, project_id: int | None = None) -> list[PlanResponse]:
         async with get_db_ctx() as db:
-            stmt = select(Plan).join(CertProduct, CertProduct.code == Plan.product_type).where(CertProduct.type == "renshe")
+            from app.domain.renshe.src.index import RensheBatchProject
+            from sqlalchemy import and_, exists, or_
+
+            multi_project_exists = exists().where(
+                RensheBatchProject.plan_id == Plan.id
+            )
+            if public:
+                multi_project_exists = multi_project_exists.where(
+                    RensheBatchProject.is_active.is_(True)
+                )
+            stmt = (
+                select(Plan)
+                .outerjoin(CertProduct, CertProduct.code == Plan.product_type)
+                .where(or_(
+                    CertProduct.type == "renshe",
+                    and_(
+                        Plan.product_type.is_(None),
+                        multi_project_exists,
+                    ),
+                ))
+            )
             if project_id is not None:
                 stmt = stmt.where(CertProduct.id == project_id)
             if public:
@@ -162,7 +183,135 @@ class PlanService:
             if public:
                 rows = [row for row in rows if row.renshe_config_id is not None]
             enrolled = await self._batch_enrolled(db, [row.id for row in rows])
-            return [self._response(row, enrolled.get(row.id, 0)) for row in rows]
+            return [
+                await self._response_with_projects(db, row, enrolled.get(row.id, 0))
+                for row in rows
+            ]
+
+    @staticmethod
+    async def _response_with_projects(db, plan, enrolled: int) -> PlanResponse:
+        from app.services.renshe_batch_project import project_response_rows
+
+        response = PlanService._response(plan, enrolled)
+        projects = [
+            PlanProjectResponse.model_validate(item)
+            for item in await project_response_rows(db, plan.id)
+        ]
+        return response.model_copy(update={"projects": projects})
+
+    async def create_renshe_multi_batch(
+        self, data: PlanCreate, *, admin_id: int | None = None
+    ) -> PlanResponse:
+        if not data.projects:
+            raise BusinessException("多项目批次至少选择一个报考项目")
+        self._validate_schedule(
+            apply_start=data.apply_start,
+            apply_end=data.apply_end,
+            exam_date=data.exam_date,
+        )
+        async with get_db_ctx() as db:
+            existing = await db.scalar(
+                select(Plan).where(
+                    Plan.product_type.is_(None), Plan.name == data.name
+                )
+            )
+            if existing:
+                raise BusinessException(f"已存在名为「{data.name}」的多项目批次")
+            plan = Plan(
+                product_type=None,
+                renshe_config_id=None,
+                name=data.name,
+                apply_start=self._normalize_datetime(data.apply_start),
+                apply_end=self._normalize_datetime(data.apply_end),
+                exam_date=self._normalize_datetime(data.exam_date),
+                capacity=data.capacity,
+                price_cents=0,
+                exam_location=data.exam_location,
+                exam_org_name=data.exam_org_name,
+                exam_org_code=data.exam_org_code,
+                exam_date_note=data.exam_date_note,
+                description=data.description,
+                registration_notice=data.registration_notice,
+                contact_name=data.contact_name,
+                contact_phone=data.contact_phone,
+                sort_order=data.sort_order,
+                status="draft",
+                occupation_name="",
+                occupation_code="",
+                skill_level="",
+                exam_type="新考",
+                application_type="学历型",
+            )
+            db.add(plan)
+            await db.flush()
+            from app.services.renshe_batch_project import replace_projects
+
+            await replace_projects(db, plan, data.projects)
+            await db.commit()
+            await db.refresh(plan)
+            return await self._response_with_projects(db, plan, 0)
+
+    async def update_renshe_multi_batch(
+        self,
+        plan_id: int,
+        data: PlanUpdate,
+        *,
+        admin_id: int | None = None,
+    ) -> PlanResponse:
+        async with get_db_ctx() as db:
+            plan = await self._get_plan(db, plan_id, None, for_update=True)
+            if plan.product_type is not None:
+                raise BusinessException("该批次不是多项目批次")
+            if plan.status != "draft":
+                raise BusinessException("仅草稿多项目批次可编辑")
+            for field in (
+                "name", "apply_start", "apply_end", "exam_date", "capacity",
+                "exam_location", "exam_org_name", "exam_org_code",
+                "exam_date_note", "description", "registration_notice",
+                "contact_name", "contact_phone", "sort_order",
+            ):
+                value = getattr(data, field, None)
+                if value is not None:
+                    setattr(plan, field, self._normalize_datetime(value) if field in {"apply_start", "apply_end", "exam_date"} else value)
+            if data.projects is not None:
+                from app.services.renshe_batch_project import replace_projects
+
+                await replace_projects(db, plan, data.projects)
+            self._validate_schedule(
+                apply_start=plan.apply_start,
+                apply_end=plan.apply_end,
+                exam_date=plan.exam_date,
+            )
+            await db.commit()
+            await db.refresh(plan)
+            return await self._response_with_projects(
+                db, plan, await self._count_enrolled(db, plan_id)
+            )
+
+    async def update_multi_project(
+        self,
+        plan_id: int,
+        project_id: int,
+        *,
+        price_cents: int | None = None,
+        is_active: bool | None = None,
+        admin_id: int | None = None,
+    ) -> PlanResponse:
+        async with get_db_ctx() as db:
+            plan = await self._get_plan(db, plan_id, None, for_update=True)
+            if plan.product_type is not None:
+                raise BusinessException("该批次不是多项目批次")
+            from app.services.renshe_batch_project import update_project
+
+            await update_project(
+                db, plan_id, project_id,
+                price_cents=price_cents, is_active=is_active,
+            )
+            await db.commit()
+            await db.refresh(plan)
+            return await self._response_with_projects(
+                db, plan, await self._count_enrolled(db, plan_id)
+            )
 
     async def create_plan(
         self,
@@ -351,6 +500,15 @@ class PlanService:
             if plan.status != "draft":
                 raise BusinessException("仅草稿状态的批次可发布")
             program = None
+            if plan.product_type is None:
+                from app.services.renshe_batch_project import list_projects
+
+                projects = await list_projects(db, plan.id)
+                if not projects:
+                    raise BusinessException("发布前至少配置一个报考项目")
+                if any(not item.is_active or item.price_cents <= 0 for item in projects):
+                    raise BusinessException("发布前所有报考项目必须启用且价格大于 0")
+                self._validate_renshe_publish_fields(plan)
             if await is_renshe_plan(db, plan):
                 program = self._required_renshe_program(plan)
                 from app.services.renshe_graduated import activation_errors
