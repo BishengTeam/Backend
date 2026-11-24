@@ -216,7 +216,10 @@ async def save_application_draft(
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[RensheApplicationResponse]:
     result = await RensheApplicationService().save_draft(current_user.id, body)
-    return success(data=result)
+    return success(
+        data=result,
+        message="已继续上次保存的草稿" if result.reused else "草稿已保存",
+    )
 
 
 @router.get(

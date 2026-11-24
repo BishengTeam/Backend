@@ -415,8 +415,8 @@ class PlanService:
             plan = await self._get_plan(db, plan_id, None, for_update=True)
             if not await self._is_renshe_multi(db, plan):
                 raise NotFoundException("批次")
-            if plan.status != "draft" and price_cents is not None:
-                raise BusinessException("已发布批次的项目价格不可修改")
+            if plan.status in {"finalized", "cancelled", "archived"}:
+                raise BusinessException("已终结、取消或归档的多项目批次不可编辑")
             from app.domain.renshe.src.index import RensheBatchProject
             from app.services.renshe_batch_project import update_project
 
@@ -429,12 +429,23 @@ class PlanService:
                 db, plan_id, project_id,
                 price_cents=price_cents, is_active=is_active,
             )
-            changes = {}
             if project.price_cents != old_price:
-                changes["price_cents"] = {"old": old_price, "new": project.price_cents}
+                db.add(
+                    RensheAuditLog(
+                        actor_type="admin" if admin_id is not None else "system",
+                        actor_id=admin_id,
+                        action="renshe.batch.price_change",
+                        object_type="renshe_batch_project",
+                        object_id=project.id,
+                        result="succeeded",
+                        summary={
+                            "plan_id": plan_id,
+                            "old": old_price,
+                            "new": project.price_cents,
+                        },
+                    )
+                )
             if project.is_active != old_active:
-                changes["is_active"] = {"old": old_active, "new": project.is_active}
-            if changes:
                 db.add(
                     RensheAuditLog(
                         actor_type="admin" if admin_id is not None else "system",
@@ -443,7 +454,13 @@ class PlanService:
                         object_type="renshe_batch_project",
                         object_id=project.id,
                         result="succeeded",
-                        summary={"plan_id": plan_id, **changes},
+                        summary={
+                            "plan_id": plan_id,
+                            "is_active": {
+                                "old": old_active,
+                                "new": project.is_active,
+                            },
+                        },
                     )
                 )
             await db.commit()
@@ -588,6 +605,9 @@ class PlanService:
                 for field in RENSHE_ORG_FIELDS
                 if field in update_data
             }
+            price_before = (
+                plan.price_cents if "price_cents" in update_data else None
+            )
             for field in ("apply_start", "apply_end", "exam_date"):
                 normalized = self._normalize_datetime(update_data.get(field))
                 if field in update_data and getattr(plan, field) != normalized:
@@ -615,6 +635,20 @@ class PlanService:
                     object_id=plan.id,
                     result="succeeded",
                     summary={"changes": org_changes},
+                ))
+            if (
+                renshe
+                and price_before is not None
+                and plan.price_cents != price_before
+            ):
+                db.add(RensheAuditLog(
+                    actor_type="admin" if admin_id is not None else "system",
+                    actor_id=admin_id,
+                    action="renshe.batch.price_change",
+                    object_type="plan",
+                    object_id=plan.id,
+                    result="succeeded",
+                    summary={"old": price_before, "new": plan.price_cents},
                 ))
             self._add_audit(
                 db,

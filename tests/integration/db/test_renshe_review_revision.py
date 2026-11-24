@@ -121,6 +121,29 @@ async def test_renshe_update_plan_can_clear_exam_date_without_server_error(pg_en
         )
 
 
+async def test_published_single_price_change_is_audited(pg_env, monkeypatch):
+    env = pg_env
+    project, published = await graduated_batch(env, monkeypatch)
+    assert published.price_cents == 50100
+    await PlanService().update_plan(
+        published.id,
+        PlanUpdate(confirm_holiday=False, price_cents=77700),
+        project.code,
+        admin_id=1,
+    )
+    async with env.db() as db:
+        log = await db.scalar(
+            select(RensheAuditLog)
+            .where(
+                RensheAuditLog.action == "renshe.batch.price_change",
+                RensheAuditLog.object_id == published.id,
+            )
+            .order_by(RensheAuditLog.id.desc())
+        )
+    assert log is not None
+    assert log.summary == {"old": 50100, "new": 77700}
+
+
 async def test_disabled_project_still_allows_historical_correction_draft(pg_env, monkeypatch):
     env = pg_env
     _, batch = await graduated_batch(env, monkeypatch)

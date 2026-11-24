@@ -106,7 +106,7 @@ async def multi_project_batch(env, monkeypatch):
     return first, second, batch, projects
 
 
-async def upload_project_materials(service, plan_id, config):
+async def upload_project_materials(service, plan_id, config, batch_project_id=None):
     for requirement in config["materials"]:
         kind = requirement["kind"]
         if kind in {"id_card_front", "id_card_back", "portrait"}:
@@ -119,6 +119,7 @@ async def upload_project_materials(service, plan_id, config):
             filename="实际原文件.pdf" if pdf else "证明材料.jpeg",
             content_type="application/pdf" if pdf else "image/jpeg",
             content=b"%PDF-1.4\nfixture" if pdf else b"\xff\xd8\xfffixture",
+            batch_project_id=batch_project_id,
         )
     return config
 
@@ -168,17 +169,30 @@ async def test_multi_project_submission_creates_project_order(pg_env, monkeypatc
     draft = await service.save_draft(
         1, draft_payload(batch, batch_project_id=chosen)
     )
+    reused = await service.save_draft(
+        1, draft_payload(batch, batch_project_id=chosen)
+    )
+    assert reused.id == draft.id
+    assert reused.reused is True
+    second_draft = await service.save_draft(
+        1, draft_payload(batch, batch_project_id=projects[second.id])
+    )
+    assert second_draft.id != draft.id
+    assert second_draft.batch_project_id == projects[second.id]
     listed = await service.list_applications(1, plan_id=batch.id)
     assert any(item.id == draft.id for item in listed.items)
+    assert any(item.id == second_draft.id for item in listed.items)
     other_project = await service.list_applications(
         1, plan_id=batch.id, batch_project_id=projects[second.id]
     )
-    assert other_project.total == 0
+    assert other_project.total == 1
     async with env.db() as db:
         application = await db.get(RensheApplication, draft.id)
         assert application.batch_project_id == chosen
 
-    await upload_project_materials(service, batch.id, graduated_project_config())
+    await upload_project_materials(
+        service, batch.id, graduated_project_config(), batch_project_id=chosen
+    )
     submitted = await service.submit(1, draft.id)
 
     async with env.db() as db:
@@ -232,16 +246,10 @@ async def test_multi_project_submission_creates_project_order(pg_env, monkeypatc
             sheet = load_workbook(handle).active
             info = {row[0]: row[1] for row in sheet.iter_rows(min_row=2, values_only=True)}
         assert "报考项目" in info and "¥380.00" in info["报考项目"]
+        assert "规则 v1" in info["报考项目"]
         with archive.open("报名信息.xlsx") as handle:
             sheet = load_workbook(handle).active
         assert sheet.cell(2, 14).value == first.config.occupation_name
-
-    # 同一批次不允许在已有项目报名后再选择另一个项目。
-    with pytest.raises(ConflictException, match="其他项目的报名"):
-        await service.save_draft(
-            1, draft_payload(batch, batch_project_id=projects[second.id])
-        )
-
 
 async def test_multi_project_close_and_project_change_are_audited(pg_env, monkeypatch):
     env = pg_env
@@ -272,12 +280,29 @@ async def test_multi_project_close_and_project_change_are_audited(pg_env, monkey
     assert lifecycle, "多项目批次关闭报名必须写人社审计"
 
 
-async def test_published_multi_project_price_is_locked(pg_env, monkeypatch):
+async def test_published_multi_project_price_change_is_audited(pg_env, monkeypatch):
     env = pg_env
     first, _second, batch, projects = await multi_project_batch(env, monkeypatch)
-    with pytest.raises(Exception, match="价格不可修改"):
+    updated = await PlanService().update_multi_project(
+        batch.id, projects[first.id], price_cents=99000, admin_id=1
+    )
+    project = next(item for item in updated.projects if item.id == projects[first.id])
+    assert project.price_cents == 99000
+    async with env.db() as db:
+        log = await db.scalar(
+            select(RensheAuditLog)
+            .where(
+                RensheAuditLog.action == "renshe.batch.price_change",
+                RensheAuditLog.object_id == projects[first.id],
+            )
+            .order_by(RensheAuditLog.id.desc())
+        )
+    assert log is not None
+    assert log.summary["old"] == 38000
+    assert log.summary["new"] == 99000
+    with pytest.raises(Exception, match="大于 0"):
         await PlanService().update_multi_project(
-            batch.id, projects[first.id], price_cents=99000, admin_id=1
+            batch.id, projects[first.id], price_cents=0, admin_id=1
         )
 
 

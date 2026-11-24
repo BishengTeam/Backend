@@ -43,6 +43,8 @@ from app.services.consultation_group import ConsultationGroupService
 from app.services.plan_enrollment import CAPACITY_OCCUPYING_ORDER_STATUSES, PlanEnrollmentService
 from app.services.renshe_project import batch_configuration, is_renshe_plan, default_configuration
 from app.services.renshe_batch_project import (
+    active_applications_for_project,
+    active_applications_for_plan,
     resolve_project,
     resolve_application_project,
     resolve_enrollable_project,
@@ -91,38 +93,105 @@ class RensheApplicationService:
             )
             if not await is_renshe_plan(db, plan):
                 raise NotFoundException("人社报名批次")
-            active_applications = list((await db.scalars(
-                select(RensheApplication)
-                .where(
-                    RensheApplication.user_id == user_id,
-                    RensheApplication.plan_id == data.plan_id,
-                    RensheApplication.status != "closed",
-                )
-                .with_for_update()
-            )).all())
-            if len(active_applications) > 1:
-                raise ConflictException("存在多条活跃报名，请联系管理员整理后再报名")
-            existing_application = active_applications[0] if active_applications else None
-            if (
-                existing_application is not None
-                and existing_application.batch_project_id is not None
-            ):
-                if (
-                    data.batch_project_id is not None
-                    and data.batch_project_id != existing_application.batch_project_id
-                ):
-                    raise ConflictException("该批次已有其他项目的报名，不能重复报名")
-                # 历史补正：允许已停用项目继续保存。
-                resolved_project = await resolve_project(
+            explicit_project_id = data.batch_project_id
+            if explicit_project_id is not None:
+                # 同批次不同项目互不干扰：只在该项目维度内查活跃报名。
+                active_applications = await active_applications_for_project(
                     db,
-                    plan,
-                    batch_project_id=existing_application.batch_project_id,
+                    user_id=user_id,
+                    plan_id=data.plan_id,
+                    batch_project_id=explicit_project_id,
+                )
+                resolved_project = (
+                    await resolve_project(
+                        db, plan, batch_project_id=explicit_project_id
+                    )
+                    if active_applications
+                    else await resolve_enrollable_project(
+                        db, plan, explicit_project_id
+                    )
                 )
             else:
-                # 无报名或 legacy NULL：按新报名规则选择/校验项目。
-                resolved_project = await resolve_enrollable_project(
-                    db, plan, data.batch_project_id
+                # 未显式传项目：优先沿用 legacy NULL 报名，仅在可唯一推断项目时收养。
+                active_applications = await active_applications_for_project(
+                    db,
+                    user_id=user_id,
+                    plan_id=data.plan_id,
+                    batch_project_id=None,
                 )
+                if active_applications:
+                    try:
+                        resolved_project = await resolve_enrollable_project(
+                            db, plan, None
+                        )
+                    except BusinessException:
+                        # 项目已停用/不可报名时仍允许历史补正：若用户仅有
+                        # 一条项目维度报名，就沿用该报名所属项目。
+                        historical = await active_applications_for_plan(
+                            db, user_id=user_id, plan_id=data.plan_id
+                        )
+                        if (
+                            len(historical) == 1
+                            and historical[0].batch_project_id is not None
+                        ):
+                            active_applications = historical
+                            resolved_project = await resolve_project(
+                                db,
+                                plan,
+                                batch_project_id=historical[0].batch_project_id,
+                            )
+                        else:
+                            resolved_project = await resolve_project(
+                                db, plan, batch_project_id=None
+                            )
+                    else:
+                        if resolved_project.batch_project_id is not None:
+                            active_applications = [
+                                *active_applications,
+                                *await active_applications_for_project(
+                                    db,
+                                    user_id=user_id,
+                                    plan_id=data.plan_id,
+                                    batch_project_id=resolved_project.batch_project_id,
+                                ),
+                            ]
+                else:
+                    try:
+                        resolved_project = await resolve_enrollable_project(
+                            db, plan, None
+                        )
+                    except BusinessException:
+                        historical = await active_applications_for_plan(
+                            db, user_id=user_id, plan_id=data.plan_id
+                        )
+                        if (
+                            len(historical) == 1
+                            and historical[0].batch_project_id is not None
+                        ):
+                            active_applications = historical
+                            resolved_project = await resolve_project(
+                                db,
+                                plan,
+                                batch_project_id=historical[0].batch_project_id,
+                            )
+                        else:
+                            raise
+                    else:
+                        if resolved_project.batch_project_id is not None:
+                            active_applications = await active_applications_for_project(
+                                db,
+                                user_id=user_id,
+                                plan_id=data.plan_id,
+                                batch_project_id=resolved_project.batch_project_id,
+                                include_legacy=True,
+                            )
+            if len(active_applications) > 1:
+                raise ConflictException(
+                    "该项目存在多条活跃报名，请联系管理员整理后再报名"
+                )
+            existing_application = (
+                active_applications[0] if active_applications else None
+            )
             application, adopt_legacy = select_write_application(
                 active_applications,
                 explicit_project_id=data.batch_project_id,
@@ -184,7 +253,10 @@ class RensheApplicationService:
             )
             await db.commit()
             await db.refresh(application)
-            return RensheApplicationResponse.model_validate(application)
+            response = RensheApplicationResponse.model_validate(application)
+            if existing_application is not None:
+                response = response.model_copy(update={"reused": True})
+            return response
 
     async def submit(
         self, user_id: int, application_id: int, *, notice_hash: str | None = None, require_notice: bool = False
@@ -496,40 +568,106 @@ class RensheApplicationService:
                 plan = await db.scalar(select(Plan).where(Plan.id == plan_id).with_for_update())
                 if not await is_renshe_plan(db, plan):
                     raise NotFoundException("人社批次")
-                applications = list((await db.scalars(
-                    select(RensheApplication).where(
-                        RensheApplication.user_id == user_id,
-                        RensheApplication.plan_id == plan_id,
-                        RensheApplication.status != "closed",
-                    ).with_for_update()
-                )).all())
+                explicit_project_id = batch_project_id
+                if explicit_project_id is not None:
+                    applications = await active_applications_for_project(
+                        db,
+                        user_id=user_id,
+                        plan_id=plan_id,
+                        batch_project_id=explicit_project_id,
+                    )
+                    resolved_project = (
+                        await resolve_project(
+                            db,
+                            plan,
+                            batch_project_id=applications[0].batch_project_id,
+                        )
+                        if applications
+                        else await resolve_enrollable_project(
+                            db, plan, explicit_project_id
+                        )
+                    )
+                else:
+                    applications = await active_applications_for_project(
+                        db,
+                        user_id=user_id,
+                        plan_id=plan_id,
+                        batch_project_id=None,
+                    )
+                    if applications:
+                        try:
+                            resolved_project = await resolve_enrollable_project(
+                                db, plan, None
+                            )
+                        except BusinessException:
+                            historical = await active_applications_for_plan(
+                                db, user_id=user_id, plan_id=plan_id
+                            )
+                            if (
+                                len(historical) == 1
+                                and historical[0].batch_project_id is not None
+                            ):
+                                applications = historical
+                                resolved_project = await resolve_project(
+                                    db,
+                                    plan,
+                                    batch_project_id=historical[0].batch_project_id,
+                                )
+                            else:
+                                resolved_project = await resolve_project(
+                                    db, plan, batch_project_id=None
+                                )
+                        else:
+                            if resolved_project.batch_project_id is not None:
+                                applications = [
+                                    *applications,
+                                    *await active_applications_for_project(
+                                        db,
+                                        user_id=user_id,
+                                        plan_id=plan_id,
+                                        batch_project_id=resolved_project.batch_project_id,
+                                    ),
+                                ]
+                    else:
+                        try:
+                            resolved_project = await resolve_enrollable_project(
+                                db, plan, None
+                            )
+                        except BusinessException:
+                            historical = await active_applications_for_plan(
+                                db, user_id=user_id, plan_id=plan_id
+                            )
+                            if (
+                                len(historical) == 1
+                                and historical[0].batch_project_id is not None
+                            ):
+                                applications = historical
+                                resolved_project = await resolve_project(
+                                    db,
+                                    plan,
+                                    batch_project_id=historical[0].batch_project_id,
+                                )
+                            else:
+                                raise
+                        else:
+                            if resolved_project.batch_project_id is not None:
+                                applications = await active_applications_for_project(
+                                    db,
+                                    user_id=user_id,
+                                    plan_id=plan_id,
+                                    batch_project_id=resolved_project.batch_project_id,
+                                    include_legacy=True,
+                                )
                 if len(applications) > 1:
                     raise ConflictException(
-                        "存在多条活跃报名，请联系管理员整理后再上传材料"
+                        "该项目存在多条活跃报名，请联系管理员整理后再上传材料"
                     )
                 application = applications[0] if applications else None
                 if application is not None and application.batch_project_id is not None:
-                    if (
-                        batch_project_id is not None
-                        and batch_project_id != application.batch_project_id
-                    ):
-                        raise ConflictException("上传材料与报名项目不一致")
                     resolved_project = await resolve_project(
                         db,
                         plan,
                         batch_project_id=application.batch_project_id,
-                    )
-                elif application is not None:
-                    if batch_project_id is not None:
-                        raise ConflictException(
-                            "该批次存在未关联项目的历史报名，请联系管理员处理"
-                        )
-                    resolved_project = await resolve_enrollable_project(
-                        db, plan, None
-                    )
-                else:
-                    resolved_project = await resolve_enrollable_project(
-                        db, plan, batch_project_id
                     )
                 config = await self._project_config(db, plan, resolved_project)
                 upload_kinds = {item["kind"] for item in config["materials"]} - {

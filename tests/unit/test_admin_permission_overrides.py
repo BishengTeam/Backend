@@ -23,6 +23,8 @@ from app.policy.permissions import (
     resolve_granted_permissions,
 )
 from app.port.exceptions import BusinessException
+from app.port.exceptions import ForbiddenException
+from app.middleware.auth import require_permission
 from app.schemas.admin_settings import (
     AdminSettingsUserCreate,
     AdminSettingsUserListItem,
@@ -126,9 +128,10 @@ def test_resolver_prefers_override_then_falls_back_to_preset() -> None:
 
 def test_legacy_fine_grained_overrides_normalize_to_grants() -> None:
     admin = _admin(permissions=["h3c:review", "renshe:export", "points:manage", "h3c:export"])
-    assert resolve_granted_permissions(admin) == ["cert:h3c", "cert:renshe", "points:manage"]
+    assert resolve_granted_permissions(admin) == ["cert:h3c", "renshe:export", "points:manage"]
     expanded = resolve_admin_permissions(admin)
     assert {"h3c:review", "h3c:final_review", "renshe:export", "points:manage"} <= set(expanded)
+    assert "renshe:review" not in expanded
 
 
 def test_catalog_is_coarse_and_expansion_targets_are_valid() -> None:
@@ -137,16 +140,18 @@ def test_catalog_is_coarse_and_expansion_targets_are_valid() -> None:
         for group in PERMISSION_CATALOG
         for permission, _label in group["permissions"]  # type: ignore[misc]
     ]
-    assert len(catalog_keys) == 17
+    assert len(catalog_keys) == 19
     assert catalog_keys.count("cert:h3c") == 1
     assert {"cert:h3c", "cert:nisp", "cert:renshe", "cert:sangfor"} <= set(catalog_keys)
+    assert {"renshe:review", "renshe:export"} <= set(catalog_keys)
     assert {"course:manage", "classroom:manage"} <= set(catalog_keys)
     assert {"user:manage", "order:manage"} <= set(catalog_keys)
     # 题库拆成独立题库 / 课程题库两项
     assert {"quiz:manage", "quiz:course"} <= set(catalog_keys)
-    # 目录只暴露大类，不再出现厂商/课程细粒度项
+    # 仅人社审核/导出可独立授予；其余厂商仍只暴露大类。
     assert not any(
-        key.startswith(("h3c:", "nisp:", "renshe:", "sangfor:", "course:read", "course:write", "course:publish"))
+        key.startswith(("h3c:", "nisp:", "sangfor:", "course:read", "course:write", "course:publish"))
+        or (key.startswith("renshe:") and key not in {"renshe:review", "renshe:export"})
         for key in catalog_keys
     )
     for grant, permissions in PERMISSION_GRANTS.items():
@@ -171,6 +176,34 @@ def test_internal_readonly_grants_are_preset_only() -> None:
     # 只读：课程/题库只有读权限，没有写与发布
     assert {"course:read", "quiz:list"} <= effective
     assert not {"course:write", "course:publish", "quiz:write", "quiz:import"} & effective
+
+
+@pytest.mark.asyncio
+async def test_renshe_review_and_export_are_independent_grants() -> None:
+    reviewer = _admin(permissions=["renshe:review"])
+    assert await require_permission("renshe:review")(admin=reviewer) is reviewer
+    with pytest.raises(ForbiddenException):
+        await require_permission("renshe:export")(admin=reviewer)
+
+    exporter = _admin(permissions=["renshe:export"])
+    assert await require_permission("renshe:export")(admin=exporter) is exporter
+    with pytest.raises(ForbiddenException):
+        await require_permission("renshe:review")(admin=exporter)
+
+    from app.api.admin.renshe import SHARED_READ
+
+    assert await SHARED_READ(admin=reviewer) is reviewer
+    assert await SHARED_READ(admin=exporter) is exporter
+
+
+@pytest.mark.asyncio
+async def test_holiday_guard_accepts_user_write_without_vendor_grant() -> None:
+    from app.api.admin.exam_schedule import holiday_guard
+
+    admin = _admin(permissions=["user:write"])
+    assert await holiday_guard(admin=admin) is admin
+    with pytest.raises(ForbiddenException):
+        await holiday_guard(admin=_admin(permissions=["renshe:review"]))
 
 
 def test_permission_catalog_covers_every_route_literal() -> None:

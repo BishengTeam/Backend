@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from pydantic import ValidationError
 
 from app.schemas.plan import PlanCreate
+from app.api.admin.plans import MultiProjectUpdate
 from app.services.plan import PlanService
 from app.services.renshe_project import RensheProjectService
 from tests.unit.test_renshe_projects import isolated as _isolated, project_data
@@ -11,6 +13,16 @@ from tests.unit.test_renshe_projects import isolated as _isolated, project_data
 @pytest.fixture
 def isolated(_isolated):
     return _isolated
+
+
+def test_plan_create_accepts_zero_price_for_multi_batches():
+    payload = PlanCreate(name="多项目批次", price_cents=0)
+    assert payload.price_cents == 0
+
+
+def test_multi_project_update_rejects_zero_price():
+    with pytest.raises(ValidationError):
+        MultiProjectUpdate(price_cents=0)
 
 
 @pytest.mark.asyncio

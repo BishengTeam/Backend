@@ -94,6 +94,8 @@ class ExportCandidate:
     materials: tuple[ExportMaterial, ...]
     config: dict | None = None
     project_price_cents: int | None = None
+    project_config_version: int | None = None
+    batch_project_id: int | None = None
 
 
 def partition_export_candidates(
@@ -198,6 +200,39 @@ async def version_config(db, plan: Plan, version, allowed: set[int]) -> dict:
     if row is None:
         raise ConflictException("导出报名的项目配置版本已不存在")
     return row.config
+
+
+def batch_project_info_rows(
+    candidates: list[ExportCandidate], plan: Plan
+) -> list[tuple[str, str]]:
+    """批次信息附表的报考项目行；按项目维度去重，避免同工种同等级项目丢失。"""
+    if plan.product_type is not None:
+        return []
+    rows: list[tuple[str, str]] = []
+    seen: set[tuple] = set()
+    for candidate in candidates:
+        config = candidate.config
+        if not config:
+            continue
+        occupation = config.get("occupation_name")
+        skill = config.get("export_skill_level") or config.get("skill_level")
+        key = (
+            candidate.batch_project_id,
+            occupation,
+            skill,
+            candidate.project_price_cents,
+            candidate.project_config_version,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        summary = " · ".join(item for item in (occupation, skill) if item)
+        if candidate.project_price_cents is not None:
+            summary += f" · ¥{candidate.project_price_cents / 100:.2f}"
+        if candidate.project_config_version is not None:
+            summary += f" · 规则 v{candidate.project_config_version}"
+        rows.append(("报考项目", summary))
+    return rows
 
 
 class RensheExportService:
@@ -1021,23 +1056,7 @@ class RensheExportService:
                 await asyncio.to_thread(self._write_work_history_workbook, work_template, work_path, employment_candidates)
             else:
                 await asyncio.to_thread(shutil.copyfile, work_template, work_path)
-            project_rows: list[tuple[str, str]] = []
-            seen_projects: set[tuple] = set()
-            for candidate in candidates if plan.product_type is None else ():
-                config = candidate.config
-                if not config:
-                    continue
-                key = (
-                    config.get("occupation_name"),
-                    config.get("export_skill_level") or config.get("skill_level"),
-                )
-                if key in seen_projects:
-                    continue
-                seen_projects.add(key)
-                summary = " · ".join(item for item in key if item)
-                if candidate.project_price_cents is not None:
-                    summary += f" · ¥{candidate.project_price_cents / 100:.2f}"
-                project_rows.append(("报考项目", summary))
+            project_rows = batch_project_info_rows(candidates, plan)
             await asyncio.to_thread(
                 self._write_batch_info_workbook, plan, batch_info_path, project_rows
             )
@@ -1193,6 +1212,12 @@ class RensheExportService:
             allowed = await allowed_project_config_ids(db, plan)
             for item, version, batch_project_id in rows:
                 config = await version_config(db, plan, version, allowed)
+                config_version = None
+                if version.project_config_id is not None:
+                    config_row = await db.get(
+                        RensheProjectConfig, version.project_config_id
+                    )
+                    config_version = config_row.version if config_row else None
                 await validate_snapshot(db, plan, version.form_data, config=config)
                 expected_kinds = {requirement["kind"] for requirement in config["materials"] if requirement["required"]}
                 allowed_kinds = {requirement["kind"] for requirement in config["materials"]}
@@ -1225,6 +1250,8 @@ class RensheExportService:
                         ),
                         config=config,
                         project_price_cents=project_prices.get(batch_project_id),
+                        project_config_version=config_version,
+                        batch_project_id=batch_project_id,
                     )
                 )
             return plan, candidates

@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy import delete
 
-from app.domain.renshe.src.index import RensheBatchProject
+from app.domain.renshe.src.index import RensheApplication, RensheBatchProject
 from app.models.cert_product import CertProduct
 from app.models.renshe_project import RensheProjectConfig
 from app.port.exceptions import BusinessException
@@ -75,6 +75,44 @@ async def resolve_application_project(db: AsyncSession, application, plan):
     return await resolve_project(
         db, plan, batch_project_id=getattr(application, "batch_project_id", None)
     )
+
+
+async def active_applications_for_project(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    plan_id: int,
+    batch_project_id: int | None,
+    include_legacy: bool = False,
+) -> list[RensheApplication]:
+    """只取目标项目维度的活跃报名，避免同人报同批次不同项目时互相拦截。"""
+    from sqlalchemy import or_
+
+    stmt = select(RensheApplication).where(
+        RensheApplication.user_id == user_id,
+        RensheApplication.plan_id == plan_id,
+        RensheApplication.status != "closed",
+    )
+    if batch_project_id is None:
+        stmt = stmt.where(RensheApplication.batch_project_id.is_(None))
+    else:
+        conditions = [RensheApplication.batch_project_id == batch_project_id]
+        if include_legacy:
+            conditions.append(RensheApplication.batch_project_id.is_(None))
+        stmt = stmt.where(or_(*conditions))
+    return list((await db.scalars(stmt.with_for_update())).all())
+
+
+async def active_applications_for_plan(
+    db: AsyncSession, *, user_id: int, plan_id: int
+) -> list[RensheApplication]:
+    """整个批次维度的活跃报名；仅在无法从项目推断时兜底历史补正。"""
+    stmt = select(RensheApplication).where(
+        RensheApplication.user_id == user_id,
+        RensheApplication.plan_id == plan_id,
+        RensheApplication.status != "closed",
+    ).with_for_update()
+    return list((await db.scalars(stmt)).all())
 
 
 async def resolve_existing_project(db: AsyncSession, application, plan):
@@ -233,8 +271,8 @@ async def update_project(
     if project is None or project.plan_id != plan_id:
         raise BusinessException("报考项目不存在")
     if price_cents is not None:
-        if price_cents < 0:
-            raise BusinessException("项目价格不能为负数")
+        if price_cents <= 0:
+            raise BusinessException("项目价格必须大于 0 分")
         project.price_cents = price_cents
     if is_active is not None:
         project.is_active = is_active

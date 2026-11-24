@@ -28,7 +28,8 @@ schedule_guard = require_any_permission(
     "cert:h3c", "cert:nisp", "cert:renshe", "cert:sangfor"
 )
 holiday_guard = require_any_permission(
-    "cert:h3c", "cert:nisp", "cert:renshe", "cert:sangfor"
+    "cert:h3c", "cert:nisp", "cert:renshe", "cert:sangfor",
+    "user:write", "content:write", "h3c:batch_manage", "nisp:batch_manage",
 )
 
 

@@ -21,7 +21,7 @@ class PlanCreate(BaseModel):
     apply_end: datetime | None = Field(None, description="报名截止时间")
     exam_date: datetime | None = Field(None, description="考试日期")
     capacity: int = Field(0, ge=0, description="总名额，0=不限")
-    price_cents: int = Field(50000, ge=1, description="报名价格，单位分")
+    price_cents: int = Field(50000, ge=0, description="报名价格，单位分；多项目批次由项目价格决定")
     exam_location: str | None = Field(None, max_length=256, description="考试地点")
     exam_org_name: str | None = Field(None, max_length=128, description="考试机构")
     exam_org_code: str | None = Field(None, max_length=64, description="考试机构代码")

@@ -79,6 +79,8 @@ PERMISSION_GRANTS: dict[str, tuple[str, ...]] = {
         "nisp:refund",
         "nisp:final_review",
     ),
+    "renshe:review": ("renshe:review",),
+    "renshe:export": ("renshe:export",),
     "cert:renshe": (
         "renshe:review",
         "renshe:export",
@@ -121,7 +123,9 @@ INTERNAL_GRANTS: frozenset[str] = frozenset({"course:view", "quiz:view"})
 LEGACY_PERMISSION_GRANTS: dict[str, str] = {}
 for _grant, _permissions in PERMISSION_GRANTS.items():
     for _permission in _permissions:
-        if _permission != _grant:
+        # 细粒度权限一旦同时是独立一级 grant，就不能再归一到其他大类；
+        # 否则“只审核不导出”的按人授权会被折叠回完整 cert:renshe。
+        if _permission != _grant and _permission not in PERMISSION_GRANTS:
             LEGACY_PERMISSION_GRANTS.setdefault(_permission, _grant)
 
 
@@ -201,6 +205,8 @@ PERMISSION_CATALOG: list[dict[str, object]] = [
             ("cert:h3c", "H3C 认证审核"),
             ("cert:nisp", "NISP 认证审核"),
             ("cert:renshe", "职业技能等级认证审核"),
+            ("renshe:review", "职业技能等级认证-仅审核"),
+            ("renshe:export", "职业技能等级认证-仅导出"),
             ("cert:sangfor", "深信服认证审核"),
         ],
     },

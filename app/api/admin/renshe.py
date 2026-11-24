@@ -7,7 +7,7 @@ from app.schemas.renshe_project import RensheProjectWrite, RensheProjectResponse
 from app.services.renshe_project import RensheProjectService
 from app.port.exceptions import BusinessException
 
-from app.middleware.auth import require_permission, require_super_admin
+from app.middleware.auth import require_any_permission, require_permission, require_super_admin
 from app.middleware.rate_limit import limiter
 from app.schemas.common import APIResponse, PaginatedData, PaginatedDataWithCounts, success
 from app.schemas.renshe import (
@@ -36,9 +36,13 @@ from app.services.renshe_review import RensheReviewService
 
 router = APIRouter(prefix="/cert-products/renshe", tags=["管理后台-人社报名"])
 
+REVIEW_PERMISSION = "renshe:review"
+EXPORT_PERMISSION = "renshe:export"
+SHARED_READ = require_any_permission("cert:renshe", REVIEW_PERMISSION, EXPORT_PERMISSION)
+
 
 @router.get("/references/{document_id}")
-async def read_reference(document_id: str, _admin=Depends(require_permission("cert:renshe"))):
+async def read_reference(document_id: str, _admin=Depends(SHARED_READ)):
     from app.services.renshe_references import reference_file
     from fastapi.responses import Response
     path, mime = reference_file(document_id)
@@ -55,12 +59,12 @@ async def read_reference(document_id: str, _admin=Depends(require_permission("ce
 
 
 @router.get("/project-capabilities", response_model=APIResponse[dict])
-async def project_capabilities(_admin=Depends(require_permission("cert:renshe"))):
+async def project_capabilities(_admin=Depends(SHARED_READ)):
     return success(data=RensheProjectService.capabilities())
 
 
 @router.get("/export-template")
-async def download_current_registration_template(_admin=Depends(require_permission("cert:renshe"))):
+async def download_current_registration_template(_admin=Depends(SHARED_READ)):
     from app.services.renshe_export import RensheExportService
     registration, _ = RensheExportService._template_paths()
     from io import BytesIO
@@ -89,7 +93,7 @@ async def upload_commitment_template(file: UploadFile = File(...), admin=Depends
 
 
 @router.get("/commitment-templates/{filename}")
-async def download_commitment_template(filename: str, _admin=Depends(require_permission("cert:renshe"))):
+async def download_commitment_template(filename: str, _admin=Depends(SHARED_READ)):
     import re
     from app.port.exceptions import NotFoundException, ConflictException
     from app.services.renshe_graduated import template_path
@@ -103,7 +107,7 @@ async def download_commitment_template(filename: str, _admin=Depends(require_per
 
 
 @router.get("/projects", response_model=APIResponse[list[RensheProjectResponse]])
-async def list_projects(_admin=Depends(require_permission("cert:renshe"))):
+async def list_projects(_admin=Depends(SHARED_READ)):
     return success(data=await RensheProjectService().list_projects())
 
 
@@ -139,7 +143,7 @@ async def delete_project(project_id: int, admin=Depends(require_permission("cert
 
 
 @router.get("/batches")
-async def list_renshe_batches(_admin=Depends(require_permission("cert:renshe"))):
+async def list_renshe_batches(_admin=Depends(SHARED_READ)):
     from app.services.plan import PlanService
     return success(data=await PlanService().list_renshe_plans())
 
@@ -156,7 +160,7 @@ def _client_ip(request: Request) -> str | None:
     summary="当前支持的人社报考组合",
 )
 async def list_programs(
-    _admin=Depends(require_permission("cert:renshe")),
+    _admin=Depends(SHARED_READ),
 ) -> APIResponse[list[RensheProgramResponse]]:
     return success(
         data=[
@@ -188,7 +192,7 @@ async def list_applications(
     submitted_at_end: datetime | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=2000),
-    _admin=Depends(require_permission("cert:renshe")),
+    _admin=Depends(SHARED_READ),
 ) -> APIResponse[PaginatedData[RensheAdminApplicationListItem]]:
     result = await RensheReviewService().list_applications(
         plan_id=plan_id,
@@ -211,7 +215,7 @@ async def list_applications(
 )
 async def get_application(
     application_id: int = Path(..., ge=1),
-    _admin=Depends(require_permission("cert:renshe")),
+    _admin=Depends(SHARED_READ),
 ) -> APIResponse[RensheAdminApplicationDetailResponse]:
     result = await RensheReviewService().get_application(
         application_id, actor_id=_admin.id
@@ -228,7 +232,7 @@ async def get_application(
 async def initial_review(
     body: RensheReviewCreate,
     application_id: int = Path(..., ge=1),
-    admin=Depends(require_permission("cert:renshe")),
+    admin=Depends(require_permission(REVIEW_PERMISSION)),
 ) -> APIResponse[RensheReviewResponse]:
     result = await RensheReviewService().review(
         reviewer_id=admin.id,
@@ -251,7 +255,7 @@ async def initial_review(
 async def return_application_for_correction(
     body: RensheReviewCreate,
     application_id: int = Path(..., ge=1),
-    admin=Depends(require_permission("cert:renshe")),
+    admin=Depends(require_permission(REVIEW_PERMISSION)),
 ) -> APIResponse[RensheReviewResponse]:
     result = await RensheReviewService().return_for_correction(
         reviewer_id=admin.id,
@@ -269,7 +273,7 @@ async def return_application_for_correction(
 )
 async def batch_external_review(
     body: RensheBatchExternalReviewRequest,
-    admin=Depends(require_permission("cert:renshe")),
+    admin=Depends(require_permission(REVIEW_PERMISSION)),
 ) -> APIResponse[RensheBatchExternalReviewResponse]:
     result = await RensheReviewService().batch_external_review(
         reviewer_id=admin.id,
@@ -286,7 +290,7 @@ async def batch_external_review(
 async def external_review(
     body: RensheReviewCreate,
     application_id: int = Path(..., ge=1),
-    admin=Depends(require_permission("cert:renshe")),
+    admin=Depends(require_permission(REVIEW_PERMISSION)),
 ) -> APIResponse[RensheReviewResponse]:
     result = await RensheReviewService().review(
         reviewer_id=admin.id,
@@ -387,7 +391,7 @@ async def decide_refund(
 async def create_export_job(
     plan_id: int = Path(..., ge=1),
     body: RensheExportCreate | None = None,
-    admin=Depends(require_permission("cert:renshe")),
+    admin=Depends(require_permission(EXPORT_PERMISSION)),
 ) -> APIResponse[RensheExportJobResponse]:
     from app.services.renshe_export import RensheExportService
 
@@ -406,7 +410,7 @@ async def create_export_job(
 )
 async def list_export_jobs(
     plan_id: int = Path(..., ge=1),
-    _admin=Depends(require_permission("cert:renshe")),
+    _admin=Depends(require_permission(EXPORT_PERMISSION)),
 ) -> APIResponse[list[RensheExportJobResponse]]:
     from app.services.renshe_export import RensheExportService
 
@@ -420,7 +424,7 @@ async def list_export_jobs(
 )
 async def get_export_job(
     job_id: int = Path(..., ge=1),
-    _admin=Depends(require_permission("cert:renshe")),
+    _admin=Depends(require_permission(EXPORT_PERMISSION)),
 ) -> APIResponse[RensheExportJobResponse]:
     from app.services.renshe_export import RensheExportService
 
@@ -434,7 +438,7 @@ async def get_export_job(
 )
 async def retry_export_job(
     job_id: int = Path(..., ge=1),
-    admin=Depends(require_permission("cert:renshe")),
+    admin=Depends(require_permission(EXPORT_PERMISSION)),
 ) -> APIResponse[RensheExportJobResponse]:
     from app.services.renshe_export import RensheExportService
 
@@ -452,7 +456,7 @@ async def get_material_signed_url(
     request: Request,
     material_id: int = Path(..., ge=1),
     download: bool = Query(False, description="true 为下载，false 为预览"),
-    admin=Depends(require_permission("cert:renshe")),
+    admin=Depends(require_permission(REVIEW_PERMISSION)),
 ) -> APIResponse[RensheSignedUrlResponse]:
     from app.services.renshe_export import RensheExportService
 
@@ -476,7 +480,7 @@ async def get_verification_material_signed_url(
     user_id: int = Path(..., ge=1),
     kind: RensheMaterialKind = Path(...),
     download: bool = Query(False),
-    admin=Depends(require_permission("cert:renshe")),
+    admin=Depends(require_permission(REVIEW_PERMISSION)),
 ) -> APIResponse[RensheSignedUrlResponse]:
     from app.services.renshe_export import RensheExportService
 
@@ -499,7 +503,7 @@ async def get_verification_material_signed_url(
 async def get_export_volume_signed_url(
     request: Request,
     volume_id: int = Path(..., ge=1),
-    admin=Depends(require_permission("cert:renshe")),
+    admin=Depends(require_permission(EXPORT_PERMISSION)),
 ) -> APIResponse[RensheSignedUrlResponse]:
     from app.services.renshe_export import RensheExportService
 

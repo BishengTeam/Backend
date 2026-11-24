@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 from openpyxl import load_workbook
 
-from app.services.renshe_export import RensheExportService
+from app.services.renshe_export import RensheExportService, batch_project_info_rows
 from app.services.renshe_export_definition import BATCH_INFO_FILENAME, batch_info_rows
 
 
@@ -69,3 +69,29 @@ def test_batch_info_appends_multi_project_rows_as_text(tmp_path):
     project = next(row for row in rows if row[0].value == "报考项目")
     assert project[1].value == '=HYPERLINK("https://example.test","项目") · 四级 · ¥380.00'
     assert project[1].data_type == "s"
+
+
+def test_multi_project_rows_dedupe_by_project_not_only_occupation():
+    plan = SimpleNamespace(product_type=None)
+    config = {"occupation_name": "网络安全管理员", "export_skill_level": "三级"}
+
+    def candidate(project_id, price, version):
+        return SimpleNamespace(
+            batch_project_id=project_id,
+            config=config,
+            project_price_cents=price,
+            project_config_version=version,
+        )
+
+    rows = batch_project_info_rows(
+        [
+            candidate(1, 38000, 1),
+            candidate(2, 45000, 1),
+            candidate(1, 38000, 1),
+        ],
+        plan,
+    )
+    values = [value for _, value in rows]
+    assert len(rows) == 2
+    assert any("¥380.00" in value and "规则 v1" in value for value in values)
+    assert any("¥450.00" in value and "规则 v1" in value for value in values)

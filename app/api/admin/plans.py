@@ -21,7 +21,7 @@ router = APIRouter(tags=["管理后台-批次管理"])
 
 
 class MultiProjectUpdate(BaseModel):
-    price_cents: int | None = Field(None, ge=0)
+    price_cents: int | None = Field(None, ge=1)
     is_active: bool | None = None
 
 
