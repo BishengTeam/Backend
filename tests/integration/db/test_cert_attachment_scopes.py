@@ -238,3 +238,72 @@ async def test_attachment_creation_rejects_missing_uploaded_file(context):
                 _admin=SUPER_ADMIN,
                 db=db,
             )
+
+
+async def test_multi_project_renshe_plan_accepts_attachments(context):
+    """人社多项目批次 product_type 为空：厂商归属必须按 renshe_batch_project 判断。"""
+    from app.domain.renshe.src.index import RensheBatchProject
+
+    code = f"{context.prefix}-RS"
+    now = datetime.now(timezone.utc)
+    async with context.factory() as db, db.begin():
+        product = CertProduct(
+            type="renshe",
+            code=code,
+            name=code,
+            chinese_name="人社多项目验收",
+            is_active=True,
+            renshe_status="available",
+        )
+        db.add(product)
+        await db.flush()
+        plan = Plan(
+            product_type=None,
+            name=f"{context.prefix} renshe multi",
+            status="published",
+            apply_start=now - timedelta(days=1),
+            apply_end=now + timedelta(days=10),
+            exam_date=now + timedelta(days=30),
+            capacity=100,
+            price_cents=0,
+        )
+        db.add(plan)
+        await db.flush()
+        db.add(RensheBatchProject(
+            plan_id=plan.id,
+            product_id=product.id,
+            price_cents=100,
+            sort_order=0,
+            is_active=True,
+        ))
+        plan_id, product_id = plan.id, product.id
+
+    try:
+        url = f"/api/media/cert-attachments/{context.prefix}_renshe.pdf"
+        path = Path(context.upload_dir) / url.removeprefix("/api/media/")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"%PDF-1.7\nfixture")
+        async with context.factory() as db:
+            await create_attachment(
+                data=AttachmentCreate(
+                    vendor="renshe",
+                    plan_id=plan_id,
+                    title="人社公共须知",
+                    file_url=url,
+                ),
+                _admin=SUPER_ADMIN,
+                db=db,
+            )
+
+        response = await batch_attachments(vendor="renshe", batch_id=plan_id)
+        assert [row["title"] for row in response.data] == ["人社公共须知"]
+
+        # 其他厂商仍不能认领这批人社附件
+        with pytest.raises(NotFoundException):
+            await batch_attachments(vendor="sangfor", batch_id=plan_id)
+    finally:
+        async with context.factory() as db, db.begin():
+            await db.execute(delete(CertAttachment).where(CertAttachment.plan_id == plan_id))
+            await db.execute(delete(RensheBatchProject).where(RensheBatchProject.plan_id == plan_id))
+            await db.execute(delete(Plan).where(Plan.id == plan_id))
+            await db.execute(delete(CertProduct).where(CertProduct.id == product_id))

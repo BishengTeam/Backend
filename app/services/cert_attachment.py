@@ -6,7 +6,7 @@ from app.domain.exam.src.index import CertAttachment
 
 
 async def plan_belongs_to_vendor(db: AsyncSession, plan, vendor: str) -> bool:
-    """判断批次是否属于指定厂商（兼容 H3C 多产品批次）。"""
+    """判断批次是否属于指定厂商（兼容 H3C / 人社多产品批次）。"""
     from app.models.cert_product import CertProduct
 
     if plan.product_type:
@@ -24,6 +24,20 @@ async def plan_belongs_to_vendor(db: AsyncSession, plan, vendor: str) -> bool:
             .where(
                 H3cExamBatch.plan_id == plan.id,
                 CertProduct.type == "h3c",
+            )
+            .limit(1)
+        )
+        return matched is not None
+    if vendor == "renshe":
+        # 人社多项目批次 product_type 为空，项目归属落在 renshe_batch_project。
+        from app.domain.renshe.src.index import RensheBatchProject
+
+        matched = await db.scalar(
+            select(RensheBatchProject.id)
+            .join(CertProduct, CertProduct.id == RensheBatchProject.product_id)
+            .where(
+                RensheBatchProject.plan_id == plan.id,
+                CertProduct.type == "renshe",
             )
             .limit(1)
         )
