@@ -71,6 +71,9 @@ def test_material_archive_path_project_prefix_is_opt_in():
     assert material_archive_path(
         "11010519491231002X", "commitment_letter", ".pdf", "bp6"
     ) == f"bp6/{flat}"
+    assert material_archive_path(
+        "11010519491231002X", "commitment_letter", ".docx"
+    ).endswith("_承诺书.docx")
 
 
 @pytest.mark.asyncio

@@ -99,7 +99,12 @@ def material_archive_path(
 ) -> str:
     if not re.fullmatch(r"\d{17}[\dXx]", id_card):
         raise BusinessException("导出快照中的身份证号无效")
-    if kind not in MATERIAL_STEMS or extension.lower() not in {".jpg", ".jpeg", ".pdf"}:
+    if kind not in MATERIAL_STEMS or extension.lower() not in {
+        ".jpg",
+        ".jpeg",
+        ".pdf",
+        ".docx",
+    }:
         raise BusinessException("导出材料类型或真实扩展名不受支持")
     filename = f"{id_card}_{MATERIAL_STEMS[kind]}{extension.lower()}"
     if project_prefix:
@@ -184,7 +189,17 @@ def export_instructions(config: dict | None = None) -> dict:
     ]
     if config is not None:
         examples = [
-            (item["kind"], next((ext for ext in (".pdf", ".jpeg", ".jpg") if ext in item["extensions"]), ".jpg"))
+            (
+                item["kind"],
+                next(
+                    (
+                        ext
+                        for ext in (".pdf", ".docx", ".jpeg", ".jpg")
+                        if ext in item["extensions"]
+                    ),
+                    ".jpg",
+                ),
+            )
             for item in config.get("materials", []) if item["kind"] in MATERIAL_STEMS
         ]
     masked = "110101********123X"

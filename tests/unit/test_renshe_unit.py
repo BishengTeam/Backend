@@ -22,6 +22,7 @@ from app.domain.renshe.src.index import (
     RensheRefundRequest,
     add_business_days,
     assert_application_transition,
+    material_extensions,
     validate_material,
 )
 from app.main import app
@@ -152,6 +153,13 @@ def test_application_state_machine_accepts_only_frozen_paths():
         ("id_card_front", "front.JPG", "image/jpeg", b"\xff\xd8\xffx", ".jpg"),
         ("portrait", "photo.jpeg", "image/pjpeg; charset=binary", b"\xff\xd8\xffx", ".jpeg"),
         ("xuexin_registration", "record.PDF", "application/pdf", b"%PDF-1.7", ".pdf"),
+        (
+            "commitment_letter",
+            "签署承诺书.DOCX",
+            "application/octet-stream",
+            b"PK\x03\x04fixture",
+            ".docx",
+        ),
     ],
 )
 def test_material_validation_accepts_matching_extension_mime_magic(
@@ -190,6 +198,50 @@ def test_material_validation_rejects_mismatches(kwargs, message):
     values.update(kwargs)
     with pytest.raises(ValueError, match=message):
         validate_material(**values)
+
+
+def test_docx_is_only_accepted_by_declared_commitment_material():
+    with pytest.raises(ValueError, match="扩展名"):
+        validate_material(
+            kind="education_report",
+            filename="学历备案表.docx",
+            content_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"
+            ),
+            size_bytes=8,
+            header=b"PK\x03\x04fixture",
+        )
+    with pytest.raises(ValueError, match="MIME"):
+        validate_material(
+            kind="commitment_letter",
+            filename="承诺书.docx",
+            content_type="application/zip",
+            size_bytes=8,
+            header=b"PK\x03\x04fixture",
+        )
+
+
+def test_commitment_docx_extension_is_safe_for_frozen_batch_configs():
+    assert ".docx" in material_extensions("commitment_letter", [".pdf"])
+    assert ".docx" not in material_extensions("education_report", [".pdf"])
+    from app.services.renshe_level_three import material_requirements
+
+    requirement = material_requirements(
+        {
+            "qualification_rule": "related_major_graduated_degree_v1",
+            "materials": [
+                {
+                    "kind": "commitment_letter",
+                    "name": "承诺书",
+                    "required": True,
+                    "extensions": [".pdf"],
+                }
+            ],
+        },
+        {},
+    )[0]
+    assert ".docx" in requirement["extensions"]
 
 
 def test_enterprise_identity_type_and_admin_certification_edits_are_rejected():

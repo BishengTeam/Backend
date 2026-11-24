@@ -4,7 +4,11 @@ import re
 
 from sqlalchemy import select
 
-from app.domain.renshe.src.index import MATERIAL_SPECS
+from app.domain.renshe.src.index import (
+    MATERIAL_SPECS,
+    material_extensions,
+    material_format_spec,
+)
 from app.models.renshe_project import RensheProjectConfig
 from app.port.exceptions import BusinessException, ConflictException
 
@@ -117,10 +121,17 @@ def build_requirements(config, version, materials):
     for item in required:
         record = records.get(item["kind"])
         spec = MATERIAL_SPECS.get(item["kind"])
+        format_spec = (
+            material_format_spec(record.extension)
+            if record is not None
+            else None
+        )
         valid = bool(record and not record.is_deleted and record.storage_key and re.fullmatch(r"[a-f0-9]{64}", record.sha256 or "")
-                     and spec and 0 < record.size_bytes <= spec.max_bytes and record.extension.lower() in item["extensions"]
+                     and spec and 0 < record.size_bytes <= spec.max_bytes
+                     and record.extension.lower() in material_extensions(item["kind"], item["extensions"])
                      and record.content_type.split(";", 1)[0].lower() in spec.content_types
-                     and (record.content_type.split(";", 1)[0].lower() == "application/pdf" if record.extension.lower() == ".pdf" else record.content_type.split(";", 1)[0].lower() in {"image/jpeg", "image/pjpeg"}))
+                     and format_spec is not None
+                     and record.content_type.split(";", 1)[0].lower() in format_spec.content_types)
         material_rules.append({**item, "group_id": MATERIAL_GROUPS.get(item["kind"], "extra"), "max_bytes": spec.max_bytes if spec else None,
                                "material_id": record.id if record else None, "valid": valid,
                                "error": None if valid else "材料已清理" if record and record.is_deleted else "未提交或材料格式、大小及快照记录无效"})

@@ -31,6 +31,9 @@ from app.domain.renshe.src.rule import (
     assert_application_transition,
     find_renshe_program,
     validate_material,
+    canonical_material_content_type,
+    material_extensions,
+    material_format_spec,
 )
 
 __all__ = [
@@ -39,6 +42,9 @@ __all__ = [
     "EXPORTABLE_APPLICATION_STATUSES",
     "MAX_EXPORT_VOLUME_BYTES",
     "MATERIAL_SPECS",
+    "canonical_material_content_type",
+    "material_extensions",
+    "material_format_spec",
     "PROFILE_LOCKING_APPLICATION_STATUSES",
     "RENSHE_PRODUCT_CODE",
     "RENSHE_ORDER_EXPIRE_MINUTES",

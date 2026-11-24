@@ -1,6 +1,7 @@
 """Graduated-degree lifecycle with a private local store and isolated SQL DB."""
 
 from datetime import datetime, timedelta, timezone
+import io
 from pathlib import Path
 import shutil
 import zipfile
@@ -114,6 +115,53 @@ async def uploads(service, batch, *, exclude=()):
             content_type="application/pdf" if pdf else "image/jpeg",
             content=b"%PDF-1.4\nfixture" if pdf else b"\xff\xd8\xfffixture",
         )
+
+
+def signed_docx() -> bytes:
+    result = io.BytesIO()
+    with zipfile.ZipFile(result, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types />")
+        archive.writestr("word/document.xml", "<w:document />")
+    return result.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_commitment_letter_accepts_a_real_docx_and_rejects_fake_zip(
+    isolated, monkeypatch
+):  # noqa: F811
+    _, batch = await graduated_batch(isolated, monkeypatch)
+    service = RensheApplicationService(isolated.storage)
+    uploaded = await service.upload_application_material(
+        1,
+        batch.id,
+        "commitment_letter",
+        filename="已签署承诺书.docx",
+        content_type="application/octet-stream",
+        content=signed_docx(),
+    )
+    assert uploaded["extension"] == ".docx"
+    assert uploaded["content_type"] == (
+        "application/vnd.openxmlformats-officedocument."
+        "wordprocessingml.document"
+    )
+    assert uploaded["original_filename"] == "已签署承诺书.docx"
+
+    with pytest.raises(ValidationException, match="DOCX 文件结构无效"):
+        await service.upload_application_material(
+            1,
+            batch.id,
+            "commitment_letter",
+            filename="伪造承诺书.docx",
+            content_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"
+            ),
+            content=b"PK\x03\x04not-a-docx",
+        )
+    await uploads(service, batch, exclude=("commitment_letter",))
+    draft = await service.save_draft(1, draft_payload(batch))
+    submitted = await service.submit(1, draft.id)
+    assert submitted.version.version_no == 1
 
 
 @pytest.mark.asyncio

@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import shutil
 import urllib.parse
 import uuid
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.domain.renshe.src.index import validate_material
+from app.domain.renshe.src.index import canonical_material_content_type, validate_material
 from app.port.config import settings
 from app.port.exceptions import ThirdPartyException, ValidationException
 
@@ -67,8 +69,10 @@ class RensheObjectStorage:
             )
         except ValueError as exc:
             raise ValidationException(str(exc)) from exc
+        if extension == ".docx":
+            _validate_docx_package(data)
 
-        normalized_type = (content_type or "").split(";", 1)[0].strip().lower()
+        normalized_type = canonical_material_content_type(extension, content_type)
         storage_key = f"{source_prefix(user_id)}{uuid.uuid4().hex}{extension}"
         await self._put(storage_key, data, normalized_type)
         return StoredMaterial(
@@ -106,19 +110,22 @@ class RensheObjectStorage:
             )
         except ValueError as exc:
             raise ValidationException(f"{kind}: {exc}") from exc
+        if extension == ".docx":
+            _validate_docx_package(data)
 
         destination = (
             f"{_safe_prefix()}/versions/{plan_id}/{application_id}/"
             f"v{version_no}/{uuid.uuid4().hex}{extension}"
         )
-        await self._put(destination, data, content_type)
+        normalized_type = canonical_material_content_type(extension, content_type)
+        await self._put(destination, data, normalized_type)
         return StoredMaterial(
             kind=kind,
             source_storage_key=source_key,
             storage_key=destination,
             original_filename=Path(source_key).name,
             extension=extension,
-            content_type=content_type,
+            content_type=normalized_type,
             size_bytes=len(data),
             sha256=hashlib.sha256(data).hexdigest(),
         )
@@ -250,9 +257,14 @@ class RensheObjectStorage:
             if not path.is_file():
                 raise ValidationException("材料对象不存在")
             data = await asyncio.to_thread(path.read_bytes)
-            content_type = (
-                "application/pdf" if path.suffix.lower() == ".pdf" else "image/jpeg"
-            )
+            suffixed_type = {
+                ".pdf": "application/pdf",
+                ".docx": (
+                    "application/vnd.openxmlformats-officedocument."
+                    "wordprocessingml.document"
+                ),
+            }
+            content_type = suffixed_type.get(path.suffix.lower(), "image/jpeg")
             return data, content_type
         if self.storage_type != "aliyun_oss":
             if self.storage_type == "disabled":
@@ -321,3 +333,15 @@ class RensheObjectStorage:
             settings.ALIYUN_OSS_ENDPOINT,
             settings.ALIYUN_OSS_BUCKET,
         )
+
+
+def _validate_docx_package(data: bytes) -> None:
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            names = set(archive.namelist())
+            if "[Content_Types].xml" not in names or "word/document.xml" not in names:
+                raise ValueError
+            with archive.open("word/document.xml") as document:
+                document.read(1)
+    except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
+        raise ValidationException("承诺书 DOCX 文件结构无效") from exc

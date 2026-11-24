@@ -130,6 +130,40 @@ PDF_SPEC = MaterialSpec(
     max_bytes=20 * 1024 * 1024,
     magic=(b"%PDF-",),
 )
+DOCX_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
+DOCX_SPEC = MaterialSpec(
+    extensions=frozenset({".docx"}),
+    content_types=frozenset({DOCX_CONTENT_TYPE, "application/octet-stream"}),
+    max_bytes=20 * 1024 * 1024,
+    magic=(b"PK\x03\x04",),
+)
+
+
+def material_format_spec(extension: str) -> MaterialSpec | None:
+    """Return the actual container format enforced for an uploaded extension."""
+    return {
+        **{value: JPEG_SPEC for value in JPEG_SPEC.extensions},
+        **{value: PDF_SPEC for value in PDF_SPEC.extensions},
+        **{value: DOCX_SPEC for value in DOCX_SPEC.extensions},
+    }.get(extension.lower())
+
+
+def material_extensions(kind: str, declared: list[str] | tuple[str, ...]) -> frozenset[str]:
+    """Apply format extensions that are safe additions to frozen batch configs."""
+    extensions = {str(value).lower() for value in declared}
+    if kind == "commitment_letter":
+        extensions.add(".docx")
+    return frozenset(extensions)
+
+
+def canonical_material_content_type(extension: str, content_type: str | None) -> str:
+    normalized = (content_type or "").split(";", 1)[0].strip().lower()
+    if extension.lower() == ".docx":
+        return DOCX_CONTENT_TYPE
+    return normalized
+
 
 MATERIAL_SPECS: dict[str, MaterialSpec] = {
     "id_card_front": JPEG_SPEC,
@@ -141,7 +175,12 @@ MATERIAL_SPECS: dict[str, MaterialSpec] = {
     "registration_portrait": MaterialSpec(JPEG_SPEC.extensions, JPEG_SPEC.content_types, 500 * 1024, JPEG_SPEC.magic),
     "graduation_certificate": MaterialSpec(JPEG_SPEC.extensions | PDF_SPEC.extensions, JPEG_SPEC.content_types | PDF_SPEC.content_types, PDF_SPEC.max_bytes, JPEG_SPEC.magic + PDF_SPEC.magic),
     "education_report": PDF_SPEC,
-    "commitment_letter": MaterialSpec(JPEG_SPEC.extensions | PDF_SPEC.extensions, JPEG_SPEC.content_types | PDF_SPEC.content_types, PDF_SPEC.max_bytes, JPEG_SPEC.magic + PDF_SPEC.magic),
+    "commitment_letter": MaterialSpec(
+        JPEG_SPEC.extensions | PDF_SPEC.extensions | DOCX_SPEC.extensions,
+        JPEG_SPEC.content_types | PDF_SPEC.content_types | DOCX_SPEC.content_types,
+        PDF_SPEC.max_bytes,
+        JPEG_SPEC.magic + PDF_SPEC.magic + DOCX_SPEC.magic,
+    ),
     "social_security_proof": PDF_SPEC,
     "work_proof": MaterialSpec(JPEG_SPEC.extensions | PDF_SPEC.extensions, JPEG_SPEC.content_types | PDF_SPEC.content_types, PDF_SPEC.max_bytes, JPEG_SPEC.magic + PDF_SPEC.magic),
     "vocational_qualification_certificate": JPEG_SPEC,
@@ -197,8 +236,10 @@ def validate_material(
     extension = Path(filename).suffix.lower()
     if extension not in spec.extensions:
         raise ValueError("材料文件扩展名不符合要求")
-    # Mixed image/PDF slots must still match the declared extension and MIME.
-    format_spec = PDF_SPEC if extension == ".pdf" else JPEG_SPEC
+    # Mixed-format slots must still match the declared extension and MIME.
+    format_spec = material_format_spec(extension)
+    if format_spec is None:
+        raise ValueError("材料文件扩展名不符合要求")
     normalized_content_type = (content_type or "").split(";", 1)[0].strip().lower()
     if normalized_content_type not in spec.content_types or normalized_content_type not in format_spec.content_types:
         raise ValueError("材料 MIME 类型不符合要求")

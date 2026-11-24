@@ -72,11 +72,26 @@ def selected_path(config: dict, form: dict) -> dict:
     return branch
 
 
+def _with_current_extensions(item: dict) -> dict:
+    from app.domain.renshe.src.index import material_extensions
+
+    return {
+        **item,
+        "extensions": sorted(
+            material_extensions(item["kind"], item.get("extensions", []))
+        ),
+    }
+
+
 def material_requirements(config: dict, form: dict) -> list[dict]:
     if not is_level_three(config):
-        return config["materials"]
+        return [_with_current_extensions(item) for item in config["materials"]]
     branch = selected_path(config, form)
-    result = [{**item, "required": True} for item in config["materials"] if item["kind"] in branch["material_kinds"]]
+    result = [
+        _with_current_extensions({**item, "required": True})
+        for item in config["materials"]
+        if item["kind"] in branch["material_kinds"]
+    ]
     for item in result:
         if item["kind"] == "education_report":
             item["name"] = "学信网学历备案表（验证有效期6个月）" if branch["id"] == "skill_4_degree" else "学历网查截图（PDF）"

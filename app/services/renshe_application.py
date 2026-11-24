@@ -707,7 +707,11 @@ class RensheApplicationService:
                 requirement = next((item for item in config["materials"] if item["kind"] == kind), None)
                 if requirement is None:
                     raise BusinessException("当前批次不支持该报名材料上传")
-                if stored.extension not in requirement["extensions"]:
+                from app.domain.renshe.src.index import material_extensions
+
+                if stored.extension not in material_extensions(
+                    kind, requirement.get("extensions", [])
+                ):
                     raise BusinessException("文件格式不符合本批次要求")
                 values = dict(application.draft_data or {})
                 materials = dict(values.get("materials", {}))
