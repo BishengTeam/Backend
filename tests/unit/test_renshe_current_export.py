@@ -63,6 +63,16 @@ async def approved(env, monkeypatch):
     return project, batch, result
 
 
+def test_material_archive_path_project_prefix_is_opt_in():
+    flat = material_archive_path(
+        "11010519491231002X", "commitment_letter", ".pdf"
+    )
+    assert "/" not in flat
+    assert material_archive_path(
+        "11010519491231002X", "commitment_letter", ".pdf", "bp6"
+    ) == f"bp6/{flat}"
+
+
 @pytest.mark.asyncio
 async def test_identical_active_export_scope_reuses_job_and_rejects_empty_selection(isolated, monkeypatch):
     _, batch, application = await approved(isolated, monkeypatch)

@@ -79,6 +79,8 @@ def test_each_trade_and_branch_has_own_rules(occupation, path):
     policy = config(path, occupation)
     result = validate_admission(payload(path), policy)
     assert result["eligibility_snapshot"]["required_years"] == PATHS[path]["years"]
+    effective = result["eligibility_snapshot"]["effective_years"]
+    assert len(effective.rsplit(".", 1)[-1]) == 2
     assert result["eligibility_snapshot"]["application_condition"] == selected_path(policy, payload(path))["condition"]
     required = {i["kind"] for i in material_requirements(policy, payload(path))}
     assert ("work_proof" in required) == bool(PATHS[path].get("work"))

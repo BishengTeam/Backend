@@ -94,12 +94,17 @@ def work_date(info: dict, *, required: bool = True) -> str | None:
     return f"{parsed.year}-{parsed.month}-{parsed.day}"
 
 
-def material_archive_path(id_card: str, kind: str, extension: str) -> str:
+def material_archive_path(
+    id_card: str, kind: str, extension: str, project_prefix: str | None = None
+) -> str:
     if not re.fullmatch(r"\d{17}[\dXx]", id_card):
         raise BusinessException("导出快照中的身份证号无效")
     if kind not in MATERIAL_STEMS or extension.lower() not in {".jpg", ".jpeg", ".pdf"}:
         raise BusinessException("导出材料类型或真实扩展名不受支持")
-    return f"{id_card}_{MATERIAL_STEMS[kind]}{extension.lower()}"
+    filename = f"{id_card}_{MATERIAL_STEMS[kind]}{extension.lower()}"
+    if project_prefix:
+        return f"{project_prefix.strip('/')}/{filename}"
+    return filename
 
 
 def definition_fingerprint(registration: Path, work: Path) -> str:

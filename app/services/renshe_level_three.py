@@ -172,7 +172,7 @@ def validate_admission(form: dict, config: dict, *, as_of: date | None = None) -
             raise BusinessException("职业年限须满足所选三级路径且不能超过实际去重经历")
     elif info["work_experiences"]:
         raise BusinessException("当前学历或证书加学历路径不使用工作经历资格，请清除其他路径的数据")
-    result = {"qualification_info": info, "eligibility_snapshot": {"as_of": today.isoformat(), "admission_path": branch["id"], "application_condition": branch["condition"], "required_years": branch["years"], "effective_years": str(total)}}
+    result = {"qualification_info": info, "eligibility_snapshot": {"as_of": today.isoformat(), "admission_path": branch["id"], "application_condition": branch["condition"], "required_years": branch["years"], "effective_years": str(total.quantize(Decimal("0.01")))}}
     if education:
         result["education_info"] = education
     return result

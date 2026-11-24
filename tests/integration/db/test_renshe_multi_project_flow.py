@@ -28,6 +28,7 @@ from app.services.certification_journey import CertificationJourneyService, user
 from app.services.order_fulfillment import OrderFulfillmentService
 from app.services.plan import PlanService
 from app.services.renshe_application import RensheApplicationService
+from app.services.renshe_audit import RensheAuditQueryService
 from app.services.renshe_graduated import save_template
 from app.services.renshe_export import RensheExportService
 from app.services.renshe_project import RensheProjectService, graduated_configuration
@@ -242,6 +243,9 @@ async def test_multi_project_submission_creates_project_order(pg_env, monkeypatc
         )
         archive_path = env.storage._local_path(volume.storage_key)
     with zipfile.ZipFile(archive_path) as archive:
+        names = archive.namelist()
+        assert len(names) == len(set(names))
+        assert any(name.startswith(f"bp{chosen}/") for name in names)
         with archive.open("批次信息.xlsx") as handle:
             sheet = load_workbook(handle).active
             info = {row[0]: row[1] for row in sheet.iter_rows(min_row=2, values_only=True)}
@@ -253,9 +257,13 @@ async def test_multi_project_submission_creates_project_order(pg_env, monkeypatc
 
 async def test_multi_project_close_and_project_change_are_audited(pg_env, monkeypatch):
     env = pg_env
+    monkeypatch.setattr("app.services.renshe_audit.get_db_ctx", env.db)
     first, _second, batch, projects = await multi_project_batch(env, monkeypatch)
     project_id = projects[first.id]
 
+    await PlanService().update_multi_project(
+        batch.id, project_id, price_cents=42000, admin_id=1
+    )
     await PlanService().update_multi_project(
         batch.id, project_id, is_active=False, admin_id=1
     )
@@ -278,6 +286,21 @@ async def test_multi_project_close_and_project_change_are_audited(pg_env, monkey
     assert plan.status == "registration_closed"
     assert project_logs[-1].summary["is_active"] == {"old": True, "new": False}
     assert lifecycle, "多项目批次关闭报名必须写人社审计"
+    audit_page = await RensheAuditQueryService().list_logs(
+        admin_id=1,
+        ip_address=None,
+        plan_id=batch.id,
+        application_id=None,
+        actor_admin_id=None,
+        action=None,
+        result=None,
+        started_at=None,
+        ended_at=None,
+        page=1,
+        page_size=50,
+    )
+    actions = {item.action for item in audit_page.items}
+    assert {"renshe.batch.price_change", "renshe.batch.project_change"} <= actions
 
 
 async def test_published_multi_project_price_change_is_audited(pg_env, monkeypatch):

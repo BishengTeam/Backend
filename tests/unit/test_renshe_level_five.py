@@ -82,6 +82,8 @@ def test_age_uses_verified_birth_on_first_submission_day(offset, allowed):
     if allowed:
         result = validate_qualification(form().model_dump(mode="json"), config(), verified_birth_date=birth.isoformat())
         assert result["eligibility_snapshot"]["required_years"] == 0
+        effective = result["eligibility_snapshot"]["effective_years"]
+        assert len(effective.rsplit(".", 1)[-1]) == 2
         assert result["eligibility_snapshot"]["age_as_of"] == today.isoformat()
     else:
         with pytest.raises(BusinessException, match="16周岁"):

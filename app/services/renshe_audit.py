@@ -12,6 +12,7 @@ from app.adapter.database import get_db_ctx
 from app.domain.renshe.src.index import (
     RensheApplication,
     RensheAuditLog,
+    RensheBatchProject,
     RensheCleanupRun,
     RensheExportJob,
     RensheExportVolume,
@@ -221,6 +222,9 @@ class RensheAuditQueryService:
         export_volume_ids = select(RensheExportVolume.id).where(
             RensheExportVolume.job_id.in_(export_job_ids)
         )
+        batch_project_ids = select(RensheBatchProject.id).where(
+            RensheBatchProject.plan_id == plan_id
+        )
         return or_(
             RensheAuditLog.application_id.in_(application_ids),
             and_(
@@ -254,6 +258,10 @@ class RensheAuditQueryService:
             and_(
                 RensheAuditLog.object_type == "export_volume",
                 RensheAuditLog.object_id.in_(export_volume_ids),
+            ),
+            and_(
+                RensheAuditLog.object_type == "renshe_batch_project",
+                RensheAuditLog.object_id.in_(batch_project_ids),
             ),
         )
 

@@ -1092,7 +1092,18 @@ class RensheExportService:
                         if actual_size != material.size_bytes or actual_sha256 != material.sha256:
                             raise ConflictException("导出材料完整性校验失败")
                         extension = material.extension or Path(material.storage_key).suffix.lower()
-                        archive_name = material_archive_path(id_card, material.kind, extension)
+                        project_prefix = (
+                            f"bp{candidate.batch_project_id}"
+                            if plan.product_type is None
+                            and candidate.batch_project_id is not None
+                            else None
+                        )
+                        archive_name = material_archive_path(
+                            id_card,
+                            material.kind,
+                            extension,
+                            project_prefix,
+                        )
                         await asyncio.to_thread(archive.write, local_path, archive_name)
                         await asyncio.to_thread(local_path.unlink)
             finally:
