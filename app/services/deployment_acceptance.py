@@ -176,7 +176,7 @@ class DeploymentAcceptanceService:
                 "release_manifest_sha256": acceptance.release_manifest_sha256,
                 "evidence": {
                     name: current[name].evidence_sha256
-                    for name in DEPLOYMENT_EVIDENCE_TYPES
+                    for name in REQUIRED_DEPLOYMENT_EVIDENCE_TYPES
                 },
             }
             summary_digest = hashlib.sha256(

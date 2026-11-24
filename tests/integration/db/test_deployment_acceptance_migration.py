@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models.deployment_acceptance import (
     DEPLOYMENT_EVIDENCE_TYPES,
+    REQUIRED_DEPLOYMENT_EVIDENCE_TYPES,
 )
 from app.port.exceptions import ConflictException
 from app.schemas.deployment_acceptance import DeploymentAcceptanceSignRequest
@@ -326,7 +327,7 @@ async def test_acceptance_service_cannot_sign_missing_evidence_and_is_terminal(
         "recovery_bundle",
     }
     assert set(pending.missing_evidence) == (
-        set(DEPLOYMENT_EVIDENCE_TYPES) - bootstrap_evidence
+        set(REQUIRED_DEPLOYMENT_EVIDENCE_TYPES) - bootstrap_evidence
     )
     assert pending.can_accept is False
     with pytest.raises(ConflictException, match="验收项未通过"):
@@ -374,7 +375,7 @@ async def test_acceptance_service_cannot_sign_missing_evidence_and_is_terminal(
                 "WHERE event_type = 'acceptance_signed'"
             )
         )
-        assert evidence_count == len(DEPLOYMENT_EVIDENCE_TYPES)
+        assert evidence_count == len(REQUIRED_DEPLOYMENT_EVIDENCE_TYPES)
         assert signature_count == 1
         signature = await db.scalar(
             text(
