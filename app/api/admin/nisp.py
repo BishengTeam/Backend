@@ -351,11 +351,27 @@ async def confirm_refund(
     return success(data=result)
 
 
-@router.post("/refunds/{refund_id}/reconcile", response_model=APIResponse[NispRefundResponse])
+@router.post(
+    "/refunds/{refund_id}/reconcile",
+    response_model=APIResponse[NispRefundResponse],
+    deprecated=True,
+    summary="[已停用] 查询微信退款结果",
+    description="微信支付已停用，退款以线下退款登记为准。",
+    responses={410: {"description": "微信支付已停用（40205）"}},
+)
 async def reconcile_refund(
     refund_id: int,
     _admin=Depends(require_permission("cert:nisp")),
 ):
-    """Reconcile a processing NISP refund with WeChat Pay."""
-    result = await NispRefundService().reconcile(refund_id)
-    return success(data=result)
+    """Retired: WeChat Pay is no longer provisioned."""
+
+    from app.contracts.payment import (
+        WECHAT_PAY_RETIRED_CODE,
+        WECHAT_PAY_RETIRED_MESSAGE,
+    )
+    from app.port.exceptions import RetiredFeatureException
+
+    raise RetiredFeatureException(
+        WECHAT_PAY_RETIRED_MESSAGE,
+        code=WECHAT_PAY_RETIRED_CODE,
+    )

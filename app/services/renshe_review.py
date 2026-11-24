@@ -17,6 +17,7 @@ from app.domain.renshe.src.index import (
     RensheMaterial,
     RensheReview,
     RensheReviewCorrection,
+    RensheRefundRequest,
 )
 from app.domain.user.src.index import UserRealname
 from app.port.exceptions import (
@@ -245,6 +246,12 @@ class RensheReviewService:
                 .order_by(Order.id.desc())
                 .limit(1)
             )
+            refund = await db.scalar(
+                select(RensheRefundRequest)
+                .where(RensheRefundRequest.application_id == application_id)
+                .order_by(RensheRefundRequest.id.desc())
+                .limit(1)
+            )
             plan = await db.get(Plan, application.plan_id)
             requirements_by_version = {version.id: await resolve_requirements(db, plan, version, materials_by_version.get(version.id, [])) for version in versions}
             payload = RensheAdminApplicationDetailResponse(
@@ -275,6 +282,10 @@ class RensheReviewService:
                 payment_summary=await payment_summary(db, order, application),
                 current_order_id=order.id if order else None,
                 current_order_status=order.status if order else None,
+                current_refund_id=refund.id if refund else None,
+                current_refund_status=refund.status if refund else None,
+                current_refund_last_error=refund.last_error if refund else None,
+                current_refund_retry_count=refund.retry_count if refund else None,
             )
         if actor_id is not None:
             await record_best_effort_audit(

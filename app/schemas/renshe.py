@@ -528,6 +528,10 @@ class RensheAdminApplicationDetailResponse(RensheApplicationResponse):
     versions: list[RensheAdminVersionDetailResponse] = Field(default_factory=list)
     current_order_id: int | None = None
     current_order_status: str | None = None
+    current_refund_id: int | None = None
+    current_refund_status: str | None = None
+    current_refund_last_error: str | None = None
+    current_refund_retry_count: int | None = None
 
 
 class RensheSignedUrlResponse(BaseModel):

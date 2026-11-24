@@ -161,9 +161,11 @@ class OrderSystemTests(unittest.TestCase):
         )
         self.assertIn("return h3c_processed or nisp_processed", source)
 
-    def test_payment_api_routes_declare_explicit_response_model(self):
+    def test_payment_api_routes_are_retired(self):
+        """WeChat Pay routes must stay published but deprecated and inert."""
+
         tree = _load_ast("app/api/payment.py")
-        missing = []
+        routes = []
 
         for node in ast.walk(tree):
             if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
@@ -177,11 +179,31 @@ class OrderSystemTests(unittest.TestCase):
                     and func.attr in {"post"}
                     and isinstance(func.value, ast.Name)
                     and func.value.id == "router"
-                    and not any(keyword.arg == "response_model" for keyword in decorator.keywords)
                 ):
-                    missing.append(node.name)
+                    routes.append(node.name)
+                    flags = {
+                        keyword.arg: keyword.value
+                        for keyword in decorator.keywords
+                        if keyword.arg in {"deprecated", "responses"}
+                    }
+                    self.assertIsInstance(
+                        flags.get("deprecated"),
+                        ast.Constant,
+                        f"{node.name} must declare deprecated=True",
+                    )
+                    self.assertIs(
+                        getattr(flags.get("deprecated"), "value", None),
+                        True,
+                        f"{node.name} must declare deprecated=True",
+                    )
+                    self.assertIn("responses", flags)
+                    body = ast.unparse(node)
+                    self.assertIn("_retired()", body)
 
-        self.assertFalse(missing, f"payment API routes missing explicit response_model: {missing}")
+        self.assertEqual(
+            sorted(routes),
+            ["payment_callback", "prepay", "refund_callback", "sync_order"],
+        )
 
     def test_order_status_machine_defines_required_transitions(self):
         source = (REPO_ROOT / "app/domain/order/src/rule/order_rules.py").read_text(encoding="utf-8")

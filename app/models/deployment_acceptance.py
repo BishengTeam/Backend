@@ -38,6 +38,15 @@ DEPLOYMENT_EVIDENCE_TYPES = (
     "backup_restore_config",
 )
 
+# WeChat Pay is retired, so its two evidence items can never be produced again.
+# They stay in the column contract (no migration) but no longer block signing.
+RETIRED_DEPLOYMENT_EVIDENCE_TYPES = ("wechat_payment", "wechat_refund")
+REQUIRED_DEPLOYMENT_EVIDENCE_TYPES = tuple(
+    evidence_type
+    for evidence_type in DEPLOYMENT_EVIDENCE_TYPES
+    if evidence_type not in RETIRED_DEPLOYMENT_EVIDENCE_TYPES
+)
+
 DEPLOYMENT_EVIDENCE_RESULTS = ("passed", "failed")
 
 

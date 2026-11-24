@@ -284,7 +284,7 @@ async def test_ready_returns_503_when_required_dependency_is_unavailable(
     assert response.json()["status"] == "not_ready"
 
 
-def test_readiness_requires_production_wechat_and_payment() -> None:
+def test_readiness_requires_production_wechat_login_but_not_retired_payment() -> None:
     previous = settings.APP_ENV
     try:
         settings.APP_ENV = "production"
@@ -296,11 +296,13 @@ def test_readiness_requires_production_wechat_and_payment() -> None:
             "quiz_oss": "ok",
             "quiz_worker": "ok",
             "wechat_login": "ok",
-            "wechat_payment": "disabled",
+            # WeChat Pay is retired and must never gate production readiness.
+            "wechat_payment": "retired",
         }
-        assert is_ready(checks) is False
-        checks["wechat_payment"] = "ok"
         assert is_ready(checks) is True
+        checks["wechat_login"] = "unavailable"
+        assert is_ready(checks) is False
+        checks["wechat_login"] = "ok"
         checks["admin_identity"] = "unavailable"
         assert is_ready(checks) is False
     finally:
@@ -418,7 +420,7 @@ async def test_local_quiz_storage_probe_reports_non_sensitive_write_failure(
     assert result["reason"] == "local_storage_not_writable"
 
 
-def test_production_settings_require_explicit_wechat_v3_configuration() -> None:
+def test_production_settings_validate_legacy_wechat_block_only_when_enabled() -> None:
     values = {
         "_env_file": None,
         "APP_ENV": "production",
@@ -491,6 +493,16 @@ def test_production_settings_require_explicit_wechat_v3_configuration() -> None:
     with pytest.raises(ValueError, match="WECHAT_PAY_API_V3_KEY"):
         Settings(**values)
 
+    # WeChat Pay is retired: a production build without the legacy switch and
+    # without any V3 credential must boot (bank transfer is the only channel).
+    retired_values = {
+        name: value
+        for name, value in values.items()
+        if not name.startswith("WECHAT_PAY")
+    }
+    retired = Settings(**retired_values)
+    assert retired.WECHAT_PAY_ENABLED is False
+
 
 def test_database_url_driver_is_derived_when_only_one_complete_url_is_given() -> None:
     common = {
@@ -558,56 +570,21 @@ def test_settings_load_secrets_from_read_only_files(tmp_path, monkeypatch) -> No
     assert "WECHAT_PAY_PUBLIC_KEY_FILE" not in file_settings.model_dump()
 
 
-def test_wechat_payment_health_requires_public_key_id_and_rsa_public_key(
+def test_wechat_payment_health_reports_retired_even_with_credentials(
     monkeypatch,
 ) -> None:
-    wechat_pay_key = RSA.generate(2048)
-    configured_values = {
-        "APP_ENV": "test",
-        "WECHAT_PAY_ENABLED": True,
-        "WECHAT_PAY_API_VERSION": "v3",
-        "WECHAT_PAY_MCHID": "1900000001",
-        "WECHAT_PAY_APPID": "wx-test-appid",
-        "WECHAT_PAY_CERT_SERIAL_NO": "merchant-serial",
-        "WECHAT_PAY_PRIVATE_KEY": "merchant-private-key",
-        "WECHAT_PAY_API_V3_KEY": "0123456789abcdef0123456789abcdef",
-        "WECHAT_PAY_PUBLIC_KEY": wechat_pay_key.public_key()
-        .export_key()
-        .decode("ascii"),
-        "WECHAT_PAY_PUBLIC_KEY_ID": ("PUB_KEY_ID_0000000000000024101100397200000006"),
-        "WECHAT_PAY_NOTIFY_URL": "https://example.test/payment/callback",
-        "WECHAT_PAY_REFUND_NOTIFY_URL": (
-            "https://example.test/payment/refund-callback"
-        ),
-    }
-    for name, value in configured_values.items():
-        monkeypatch.setattr(settings, name, value)
+    """WeChat Pay is retired: stale V3 credentials must not look healthy."""
+
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    monkeypatch.setattr(settings, "WECHAT_PAY_ENABLED", True)
 
     assert inspect_wechat_payment_configuration() == {
-        "status": "ok",
-        "configured": True,
-        "required": True,
-        "api": "v3",
+        "status": "retired",
+        "configured": False,
+        "required": False,
+        "reason": "wechat_pay_retired",
+        "message": "微信支付已停用，平台仅支持银行转账；历史微信订单请走线下退款登记",
     }
-
-    monkeypatch.setattr(settings, "WECHAT_PAY_PUBLIC_KEY_ID", "wrong-id")
-    assert inspect_wechat_payment_configuration()["reason"] == (
-        "invalid_wechat_pay_public_key_id"
-    )
-
-    monkeypatch.setattr(
-        settings,
-        "WECHAT_PAY_PUBLIC_KEY_ID",
-        configured_values["WECHAT_PAY_PUBLIC_KEY_ID"],
-    )
-    monkeypatch.setattr(
-        settings,
-        "WECHAT_PAY_PUBLIC_KEY",
-        wechat_pay_key.export_key().decode("ascii"),
-    )
-    assert inspect_wechat_payment_configuration()["reason"] == (
-        "invalid_wechat_pay_public_key"
-    )
 
 
 def test_settings_reject_ambiguous_or_empty_secret_files(tmp_path, monkeypatch) -> None:

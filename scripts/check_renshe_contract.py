@@ -45,10 +45,6 @@ EXPECTED_PATHS: dict[str, set[str]] = {
     "/api/renshe/refunds/{refund_id}": {"get"},
     "/api/renshe/verification-materials/{kind}": {"post"},
     "/api/renshe/verification-materials/{kind}/signed-url": {"get"},
-    "/api/payment/prepay": {"post"},
-    "/api/payment/orders/{order_id}/sync": {"post"},
-    "/api/payment/callback": {"post"},
-    "/api/payment/refund-callback": {"post"},
     "/admin/cert-products/renshe/applications": {"get"},
     "/admin/cert-products/renshe/applications/{application_id}": {"get"},
     "/admin/cert-products/renshe/applications/{application_id}/external-review": {"post"},
@@ -81,13 +77,11 @@ EXPECTED_PATHS: dict[str, set[str]] = {
     },
 }
 
-ADDITIONAL_RENSHE_PATHS = {
+ADDITIONAL_RENSHE_PATHS: set[str] = set()
+# WeChat Pay is retired: these paths must stay published as deprecated 410s.
+RETIRED_WECHAT_PAY_PATHS = {
     "/api/payment/prepay",
     "/api/payment/orders/{order_id}/sync",
-    "/api/payment/callback",
-    "/api/payment/refund-callback",
-}
-PUBLIC_CALLBACK_PATHS = {
     "/api/payment/callback",
     "/api/payment/refund-callback",
 }
@@ -129,22 +123,14 @@ def build_report() -> tuple[dict, list[str]]:
             if operation is None:
                 errors.append(f"missing operation: {method.upper()} {path}")
                 continue
-            if path not in PUBLIC_CALLBACK_PATHS and path not in PUBLIC_CATALOG_PATHS and not operation.get("security"):
+            if path not in PUBLIC_CATALOG_PATHS and not operation.get("security"):
                 errors.append(f"missing Bearer security: {method.upper()} {path}")
-            if path in PUBLIC_CALLBACK_PATHS and operation.get("security"):
-                errors.append(f"callback must not require Bearer security: {method.upper()} {path}")
             if path in PUBLIC_CATALOG_PATHS and operation.get("security"):
                 errors.append(f"public catalog must not require Bearer security: {method.upper()} {path}")
             if "200" not in operation.get("responses", {}):
                 errors.append(f"missing success response: {method.upper()} {path}")
             if operation.get("x-contract-version") != "2026-08-10":
                 errors.append(f"missing contract version: {method.upper()} {path}")
-            if path in PUBLIC_CALLBACK_PATHS:
-                if operation.get("x-wechat-pay-api-version") != "v3":
-                    errors.append(f"callback is not marked V3: {method.upper()} {path}")
-                if operation.get("x-error-codes"):
-                    errors.append(f"callback must use V3 ACK errors: {method.upper()} {path}")
-                continue
             if operation.get("x-error-codes") != [
                 "40001",
                 "40100",
@@ -156,6 +142,16 @@ def build_report() -> tuple[dict, list[str]]:
                 "50000",
             ]:
                 errors.append(f"error code drift: {method.upper()} {path}")
+
+    for path in sorted(RETIRED_WECHAT_PAY_PATHS):
+        operation = paths.get(path, {}).get("post")
+        if operation is None:
+            errors.append(f"missing retired WeChat Pay path: POST {path}")
+            continue
+        if operation.get("deprecated") is not True:
+            errors.append(f"retired WeChat Pay path must be deprecated: POST {path}")
+        if "410" not in operation.get("responses", {}):
+            errors.append(f"retired WeChat Pay path must document 410: POST {path}")
 
     human_operations = [
         (path, method, operation)

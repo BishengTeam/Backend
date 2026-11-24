@@ -63,13 +63,16 @@ class NispOperationsTests(unittest.TestCase):
         self.assertIn("async def handle_callback_raw", source)
         self.assertIn("parse_refund_notification", source)
 
-    def test_nisp_refund_notification_is_dispatched_by_payment_callback(self):
+    def test_nisp_refund_notification_callback_is_retired(self):
+        """WeChat Pay is retired: the public refund callback no longer dispatches."""
+
         source = _source("app/api/payment.py")
         callback = _functions(source)["refund_callback"]
         body = ast.unparse(callback)
 
-        self.assertIn("NispRefundService().handle_callback_raw", body)
-        self.assertIn("RensheRefundService().handle_callback_raw", body)
+        self.assertNotIn("handle_callback_raw", source)
+        self.assertIn("_retired()", body)
+        self.assertIn("deprecated=True", body)
 
     def test_nisp_export_worker_is_started_and_cancelled_with_application(self):
         source = _source("app/main.py")

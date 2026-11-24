@@ -14,6 +14,8 @@ from app.adapter.database import get_db_ctx
 from app.models.deployment_acceptance import (
     DEPLOYMENT_EVIDENCE_RESULTS,
     DEPLOYMENT_EVIDENCE_TYPES,
+    REQUIRED_DEPLOYMENT_EVIDENCE_TYPES,
+    RETIRED_DEPLOYMENT_EVIDENCE_TYPES,
     DeploymentAcceptance,
     DeploymentAcceptanceEvent,
 )
@@ -43,12 +45,12 @@ EVIDENCE_DEFINITIONS: dict[str, tuple[str, str]] = {
         "私有 OSS 的材料链路已通过，或该可选能力已明确标记为未配置",
     ),
     "wechat_payment": (
-        "0.01 元微信支付",
-        "JSAPI 支付及回调或主动查单确认成功",
+        "微信支付（已弃用）",
+        "微信支付已停用，无需验收",
     ),
     "wechat_refund": (
-        "全额微信退款",
-        "退款及退款回调或主动查单确认成功",
+        "微信退款（已弃用）",
+        "微信支付已停用，退款以线下退款登记为准，无需验收",
     ),
     "recovery_bundle": (
         "加密恢复包",
@@ -159,7 +161,7 @@ class DeploymentAcceptanceService:
             current = self._latest_evidence(events)
             missing = [
                 evidence_type
-                for evidence_type in DEPLOYMENT_EVIDENCE_TYPES
+                for evidence_type in REQUIRED_DEPLOYMENT_EVIDENCE_TYPES
                 if current.get(evidence_type) is None
                 or current[evidence_type].result != "passed"
             ]
@@ -293,7 +295,8 @@ class DeploymentAcceptanceService:
         for name in DEPLOYMENT_EVIDENCE_TYPES:
             event = latest.get(name)
             passed = event is not None and event.result == "passed"
-            if not passed:
+            retired = name in RETIRED_DEPLOYMENT_EVIDENCE_TYPES
+            if not passed and not retired:
                 missing.append(name)  # type: ignore[arg-type]
             label, meaning = EVIDENCE_DEFINITIONS[name]
             evidence.append(
@@ -302,6 +305,7 @@ class DeploymentAcceptanceService:
                     label=label,
                     meaning=meaning,
                     passed=passed,
+                    retired=retired,
                     latest_result=event.result if event is not None else None,
                     source=event.source if event is not None else None,
                     recorded_at=event.created_at if event is not None else None,

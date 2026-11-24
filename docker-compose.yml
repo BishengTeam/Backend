@@ -62,8 +62,8 @@ services:
       # 微信小程序 — 用实际值替换
       - WECHAT_APPID=${WECHAT_APPID:?WECHAT_APPID is required}
       - WECHAT_SECRET_FILE=/run/secrets/wechat_secret
-      # 人社微信支付 V3 — 未配置时生产容器必须启动失败，禁止假成功
-      - WECHAT_PAY_ENABLED=${WECHAT_PAY_ENABLED:?WECHAT_PAY_ENABLED is required}
+      # 微信支付已停用（410/40205）；变量仅为兼容历史部署，缺省 false
+      - WECHAT_PAY_ENABLED=${WECHAT_PAY_ENABLED:-false}
       - WECHAT_PAY_API_VERSION=${WECHAT_PAY_API_VERSION:-v3}
       - WECHAT_PAY_MCHID=${WECHAT_PAY_MCHID:-}
       - WECHAT_PAY_APPID=${WECHAT_PAY_APPID:-}
@@ -159,7 +159,7 @@ services:
       - ADMIN_SECURITY_MIGRATION_BACKUP_REF=${ADMIN_SECURITY_MIGRATION_BACKUP_REF:-}
       - WECHAT_APPID=${WECHAT_APPID:?WECHAT_APPID is required}
       - WECHAT_SECRET_FILE=/run/secrets/wechat_secret
-      - WECHAT_PAY_ENABLED=${WECHAT_PAY_ENABLED:?WECHAT_PAY_ENABLED is required}
+      - WECHAT_PAY_ENABLED=${WECHAT_PAY_ENABLED:-false}
       - WECHAT_PAY_API_VERSION=${WECHAT_PAY_API_VERSION:-v3}
       - WECHAT_PAY_MCHID=${WECHAT_PAY_MCHID:-}
       - WECHAT_PAY_APPID=${WECHAT_PAY_APPID:-}

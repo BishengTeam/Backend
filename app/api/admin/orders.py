@@ -171,18 +171,14 @@ async def review_order(
 
 @router.post("/{order_id}/refund",
     response_model=APIResponse[OrderDetailResponse],
-    summary="订单退款",
+    deprecated=True,
+    summary="[已停用] 订单退款（微信支付）",
+    responses={410: {"description": "微信支付已停用（40205）"}},
     description="""
-管理后台 **订单管理** 页面使用。
+微信支付已停用，该入口不再可用。
 
-**页面路径**: `/admin/orders`
-
-**使用场景**: 对指定订单执行退款操作
-
-**路径参数**:
-- `order_id`: 订单 ID
-
-**响应**: 退款后的订单详情
+请改用 `POST /admin/orders/{order_id}/offline-payment/refund`
+（先按认证流程完成退款审批，再登记银行流水、时间与实际退款凭证）。
     """,
 )
 @limiter.limit("10/minute")
@@ -191,5 +187,13 @@ async def refund_order(
     order_id: int = Path(..., description="订单 ID"),
     _admin=Depends(require_permission("order:write")),
 ) -> APIResponse[OrderDetailResponse]:
-    result = await AdminOrderService().refund_order(order_id)
-    return success(data=result)
+    from app.contracts.payment import (
+        WECHAT_PAY_RETIRED_CODE,
+        WECHAT_PAY_RETIRED_MESSAGE,
+    )
+    from app.port.exceptions import RetiredFeatureException
+
+    raise RetiredFeatureException(
+        WECHAT_PAY_RETIRED_MESSAGE,
+        code=WECHAT_PAY_RETIRED_CODE,
+    )

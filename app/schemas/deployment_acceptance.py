@@ -34,6 +34,7 @@ class DeploymentEvidenceResponse(BaseModel):
     label: str
     meaning: str
     passed: bool
+    retired: bool = False
     latest_result: Literal["passed", "failed"] | None = None
     source: str | None = None
     recorded_at: datetime | None = None

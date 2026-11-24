@@ -14,8 +14,6 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from Crypto.PublicKey import RSA
-
 from app.integrations.renshe_storage import RensheObjectStorage
 from app.port.config import settings
 
@@ -33,17 +31,6 @@ QUIZ_OSS_REQUIRED_SETTINGS = (
     "QUIZ_OSS_ACCESS_KEY_SECRET",
 )
 WECHAT_LOGIN_REQUIRED_SETTINGS = ("WECHAT_APPID", "WECHAT_SECRET")
-WECHAT_PAY_V3_REQUIRED_SETTINGS = (
-    "WECHAT_PAY_MCHID",
-    "WECHAT_PAY_APPID",
-    "WECHAT_PAY_CERT_SERIAL_NO",
-    "WECHAT_PAY_PRIVATE_KEY",
-    "WECHAT_PAY_API_V3_KEY",
-    "WECHAT_PAY_PUBLIC_KEY",
-    "WECHAT_PAY_PUBLIC_KEY_ID",
-    "WECHAT_PAY_NOTIFY_URL",
-    "WECHAT_PAY_REFUND_NOTIFY_URL",
-)
 
 
 def _missing(settings_names: tuple[str, ...]) -> list[str]:
@@ -219,91 +206,22 @@ def inspect_wechat_login_configuration() -> dict[str, Any]:
 
 
 def inspect_wechat_payment_configuration() -> dict[str, Any]:
-    """Check the V3 payment switch and required material names.
+    """Report the retired WeChat Pay integration.
 
-    The legacy V2 fields are intentionally not accepted for the human-
-    resources payment path.  A disabled switch is reported explicitly rather
-    than being treated as a successful payment integration.
+    WeChat Pay was removed from the product (every order settles by bank
+    transfer), so the probe is informational only: it can never make the
+    deployment unready, and stale V3 credentials are not inspected.
     """
 
-    enabled = bool(getattr(settings, "WECHAT_PAY_ENABLED", False))
-    if not enabled:
-        return {
-            "status": "disabled",
-            "configured": False,
-            "required": settings.APP_ENV == "production",
-            "reason": "payment_feature_disabled",
-        }
-    if (getattr(settings, "WECHAT_PAY_API_VERSION", "v3") or "").lower() != "v3":
-        return {
-            "status": "unavailable",
-            "configured": False,
-            "required": True,
-            "reason": "v3_required",
-        }
-    # ``WECHAT_PAY_APPID`` may intentionally inherit the login AppID.  Keep
-    # the health contract aligned with Settings' production validator.
-    missing = _missing(
-        tuple(
-            name
-            for name in WECHAT_PAY_V3_REQUIRED_SETTINGS
-            if name != "WECHAT_PAY_APPID"
-        )
-    )
-    if not (
-        str(getattr(settings, "WECHAT_PAY_APPID", "") or "").strip()
-        or str(getattr(settings, "WECHAT_APPID", "") or "").strip()
-    ):
-        missing.append("WECHAT_PAY_APPID/WECHAT_APPID")
-    if missing:
-        return {
-            "status": "unavailable",
-            "configured": False,
-            "required": True,
-            "reason": "missing_configuration",
-            "missing": missing,
-        }
-    if len(settings.WECHAT_PAY_API_V3_KEY.encode("utf-8")) != 32:
-        return {
-            "status": "unavailable",
-            "configured": False,
-            "required": True,
-            "reason": "invalid_api_v3_key_length",
-        }
-    if not settings.WECHAT_PAY_PUBLIC_KEY_ID.strip().startswith("PUB_KEY_ID_"):
-        return {
-            "status": "unavailable",
-            "configured": False,
-            "required": True,
-            "reason": "invalid_wechat_pay_public_key_id",
-        }
-    try:
-        public_key = RSA.import_key(settings.WECHAT_PAY_PUBLIC_KEY)
-    except (ValueError, IndexError, TypeError):
-        return {
-            "status": "unavailable",
-            "configured": False,
-            "required": True,
-            "reason": "invalid_wechat_pay_public_key",
-        }
-    if public_key.has_private() or public_key.size_in_bits() != 2048:
-        return {
-            "status": "unavailable",
-            "configured": False,
-            "required": True,
-            "reason": "invalid_wechat_pay_public_key",
-        }
-    if settings.APP_ENV == "production" and (
-        not settings.WECHAT_PAY_NOTIFY_URL.startswith("https://")
-        or not settings.WECHAT_PAY_REFUND_NOTIFY_URL.startswith("https://")
-    ):
-        return {
-            "status": "unavailable",
-            "configured": False,
-            "required": True,
-            "reason": "https_notify_url_required",
-        }
-    return {"status": "ok", "configured": True, "required": True, "api": "v3"}
+    from app.contracts.payment import WECHAT_PAY_RETIRED_MESSAGE
+
+    return {
+        "status": "retired",
+        "configured": False,
+        "required": False,
+        "reason": "wechat_pay_retired",
+        "message": WECHAT_PAY_RETIRED_MESSAGE,
+    }
 
 
 def required_dependency_names() -> set[str]:
@@ -327,11 +245,8 @@ def required_dependency_names() -> set[str]:
         ):
             required.add("quiz_oss")
     if settings.APP_ENV == "production":
-        required.update({"wechat_login", "wechat_payment"})
-    elif getattr(settings, "WECHAT_PAY_ENABLED", False):
-        # A test/staging deployment may explicitly enable payment; in that
-        # case readiness must not silently accept a missing V3 credential.
-        required.add("wechat_payment")
+        # ``wechat_payment`` is intentionally absent: WeChat Pay is retired.
+        required.add("wechat_login")
     return required
 
 

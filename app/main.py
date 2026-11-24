@@ -60,6 +60,7 @@ from app.services.dependency_health import (
 )
 from app.services.quiz_metrics import QuizMetricsMiddleware, quiz_metrics
 from app.services.videoweb import videoweb_code_reconciliation_worker_loop
+from app.contracts.payment import wechat_pay_retired
 
 logger = logging.getLogger(__name__)
 
@@ -80,29 +81,39 @@ async def lifespan(app: FastAPI):
     nisp_export_task = asyncio.create_task(nisp_export_worker_loop())
     nisp_lifecycle_task = asyncio.create_task(nisp_lifecycle_worker_loop())
     quiz_task = asyncio.create_task(quiz_worker_loop()) if quiz_embedded_enabled else None
+    # WeChat Pay is retired product-wide: its reconciliation workers must never
+    # start, even if a legacy deployment still carries V3 credentials.
+    wechat_workers_enabled = (
+        settings.WECHAT_PAY_ENABLED and not wechat_pay_retired()
+    )
+    if settings.WECHAT_PAY_ENABLED:
+        logger.warning(
+            "WECHAT_PAY_ENABLED is set but WeChat Pay is retired; "
+            "payment/refund reconciliation workers stay disabled"
+        )
     payment_reconciliation_task = (
         asyncio.create_task(payment_reconciliation_worker_loop())
-        if settings.WECHAT_PAY_ENABLED
+        if wechat_workers_enabled
         else None
     )
     late_payment_refund_task = (
         asyncio.create_task(late_payment_refund_worker_loop())
-        if settings.WECHAT_PAY_ENABLED
+        if wechat_workers_enabled
         else None
     )
     refund_reconciliation_task = (
         asyncio.create_task(renshe_refund_reconciliation_worker_loop())
-        if settings.WECHAT_PAY_ENABLED
+        if wechat_workers_enabled
         else None
     )
     h3c_refund_task = (
         asyncio.create_task(h3c_refund_reconciliation_worker_loop())
-        if settings.WECHAT_PAY_ENABLED
+        if wechat_workers_enabled
         else None
     )
     nisp_refund_task = (
         asyncio.create_task(nisp_refund_reconciliation_worker_loop())
-        if settings.WECHAT_PAY_ENABLED
+        if wechat_workers_enabled
         else None
     )
     videoweb_reconciliation_task = asyncio.create_task(
@@ -227,16 +238,7 @@ RENSHE_ERROR_CODES = {
 }
 RENSHE_ADDITIONAL_CONTRACT_PATHS = {
     "/admin/certifications/{code}/plans/{plan_id}/impact",
-    "/api/payment/prepay",
-    "/api/payment/orders/{order_id}/sync",
-    "/api/payment/callback",
-    "/api/payment/refund-callback",
 }
-RENSHE_PUBLIC_CALLBACK_PATHS = {
-    "/api/payment/callback",
-    "/api/payment/refund-callback",
-}
-
 QUIZ_ERROR_CODES = {
     "40001": {"status": 422, "description": "参数校验失败"},
     "40100": {"status": 401, "description": "请先登录"},
@@ -311,13 +313,6 @@ def _add_renshe_contract_metadata(schema: dict) -> None:
             if method not in {"get", "post", "put", "patch", "delete"}:
                 continue
             operation["x-contract-version"] = RENSHE_CONTRACT_VERSION
-            if path in RENSHE_PUBLIC_CALLBACK_PATHS:
-                operation["x-wechat-pay-api-version"] = "v3"
-                operation["x-notification-ack"] = {
-                    "success": {"code": "SUCCESS", "message": "成功"},
-                    "failure": {"code": "FAIL", "message": "失败"},
-                }
-                continue
             operation["x-error-codes"] = sorted(RENSHE_ERROR_CODES)
             responses = operation.setdefault("responses", {})
             for code, metadata in RENSHE_ERROR_CODES.items():

@@ -14,8 +14,6 @@ from Crypto.Cipher import AES
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
 from Crypto.Signature import pkcs1_15
-from starlette.requests import Request
-
 import app.api.payment as payment_api
 import app.integrations.wechat_pay as wechat_pay_module
 import app.services.admin_order as admin_order_module
@@ -913,51 +911,15 @@ async def test_worker_isolates_item_failures_and_can_retry(monkeypatch) -> None:
     )
 
 
-def _request_with_body(body: bytes) -> Request:
-    sent = False
+def test_payment_callback_route_is_retired() -> None:
+    """The WeChat Pay callback is gone: the handler refuses to run."""
 
-    async def receive():
-        nonlocal sent
-        if sent:
-            return {"type": "http.disconnect"}
-        sent = True
-        return {"type": "http.request", "body": body, "more_body": False}
+    from app.port.exceptions import RetiredFeatureException
 
-    return Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/api/payment/callback",
-            "headers": [],
-            "client": ("127.0.0.1", 12345),
-            "scheme": "https",
-            "server": ("testserver", 443),
-        },
-        receive,
-    )
-
-
-@pytest.mark.asyncio
-async def test_callback_returns_wechat_v3_ack_without_api_envelope(monkeypatch) -> None:
-    fake_service = SimpleNamespace(
-        handle_callback_raw=AsyncMock(
-            return_value=PaymentCallbackResponse(
-                order_id=1001,
-                status="paid",
-                processed=True,
-            )
-        )
-    )
-    monkeypatch.setattr(payment_api, "PaymentService", lambda: fake_service)
-    response = await payment_api.payment_callback(_request_with_body(b"{}"))
-    assert response.status_code == 200
-    assert json.loads(response.body) == {"code": "SUCCESS", "message": "成功"}
-    assert "data" not in json.loads(response.body)
-
-    fake_service.handle_callback_raw.side_effect = ThirdPartyException("bad signature")
-    response = await payment_api.payment_callback(_request_with_body(b"{}"))
-    assert response.status_code == 400
-    assert json.loads(response.body) == {"code": "FAIL", "message": "失败"}
+    with pytest.raises(RetiredFeatureException) as excinfo:
+        asyncio.run(payment_api.payment_callback())
+    assert excinfo.value.code == 40205
+    assert excinfo.value.http_status_code == 410
 
 
 def test_payment_rate_limit_key_is_per_authenticated_user(monkeypatch) -> None:

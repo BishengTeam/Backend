@@ -87,7 +87,8 @@ def test_r1_bypass_guards_are_present():
     assert "_reject_dedicated_certification_order" in admin_order
     assert "_reject_dedicated_certification_batch" in plan
     payment_api = Path("app/api/payment.py").read_text(encoding="utf-8")
-    assert "PaymentRefundService().handle_callback_raw" in payment_api
+    # WeChat Pay is retired: no public route may dispatch a provider callback.
+    assert "handle_callback_raw" not in payment_api
 
 
 @pytest.mark.asyncio

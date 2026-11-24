@@ -199,15 +199,24 @@ def test_response_is_fail_closed_until_every_latest_evidence_passes():
         event(index, evidence_type, "passed")
         for index, evidence_type in enumerate(DEPLOYMENT_EVIDENCE_TYPES, start=1)
     ]
+    # A retired WeChat evidence item can never be produced again; it must not
+    # block production signing even when its latest result is "failed".
     events.append(event(99, "wechat_refund", "failed"))
-    response = DeploymentAcceptanceService._response(acceptance, events)
-    assert response.can_accept is False
-    assert response.missing_evidence == ["wechat_refund"]
-
-    events.append(event(100, "wechat_refund", "passed"))
     response = DeploymentAcceptanceService._response(acceptance, events)
     assert response.can_accept is True
     assert response.missing_evidence == []
+    retired = {item.evidence_type: item for item in response.evidence}
+    assert retired["wechat_refund"].retired is True
+
+    # A still-required item keeps the contract fail-closed.
+    events = [
+        item
+        for item in events
+        if not (item.evidence_type == "backup_restore_config")
+    ]
+    response = DeploymentAcceptanceService._response(acceptance, events)
+    assert response.can_accept is False
+    assert response.missing_evidence == ["backup_restore_config"]
 
 
 def test_sign_request_requires_literal_confirmation_and_sha256():

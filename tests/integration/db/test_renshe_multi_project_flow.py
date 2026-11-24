@@ -16,6 +16,7 @@ from app.domain.renshe.src.index import (
     RensheAuditLog,
     RensheBatchProject,
     RensheExportVolume,
+    RensheRefundRequest,
 )
 from app.domain.user.src.index import UserRealname, UserStudent
 from app.port.config import settings
@@ -254,6 +255,32 @@ async def test_multi_project_submission_creates_project_order(pg_env, monkeypatc
         with archive.open("报名信息.xlsx") as handle:
             sheet = load_workbook(handle).active
         assert sheet.cell(2, 14).value == first.config.occupation_name
+
+    now = datetime.now(timezone.utc)
+    async with env.db() as db:
+        refund = RensheRefundRequest(
+            application_id=draft.id,
+            order_id=submitted.order_id,
+            user_id=1,
+            request_kind="normal",
+            reason_code="other",
+            amount_cents=38000,
+            status="approved",
+            previous_application_status="pending_external_review",
+            requested_at=now,
+            due_at=now + timedelta(days=1),
+            last_error="银行待退款",
+            retry_count=2,
+        )
+        db.add(refund)
+        await db.flush()
+        refund_id = refund.id
+        await db.commit()
+    admin_detail = await RensheReviewService().get_application(draft.id)
+    assert admin_detail.current_refund_id == refund_id
+    assert admin_detail.current_refund_status == "approved"
+    assert admin_detail.current_refund_last_error == "银行待退款"
+    assert admin_detail.current_refund_retry_count == 2
 
 async def test_multi_project_close_and_project_change_are_audited(pg_env, monkeypatch):
     env = pg_env

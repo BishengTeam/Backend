@@ -637,7 +637,9 @@ def test_refund_decision_contract_allows_approved_retry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_refund_callback_http_uses_direct_v3_ack(monkeypatch) -> None:
+async def test_refund_callback_http_is_retired(monkeypatch) -> None:
+    """WeChat Pay is retired: the public refund callback never reaches a service."""
+
     handler = AsyncMock(
         return_value=SimpleNamespace(refund_id=1, processed=True)
     )
@@ -656,10 +658,9 @@ async def test_refund_callback_http_uses_direct_v3_ack(monkeypatch) -> None:
             headers={"Wechatpay-Serial": "platform-serial"},
         )
 
-    assert response.status_code == 200
-    assert response.json() == {"code": "SUCCESS", "message": "成功"}
-    handler.assert_awaited_once()
-    assert handler.await_args.kwargs["raw_body"] == b"signed-refund-envelope"
+    assert response.status_code == 410
+    assert response.json()["code"] == 40205
+    handler.assert_not_awaited()
 
 
 @pytest.mark.asyncio

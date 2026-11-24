@@ -473,33 +473,33 @@ class Settings(BaseSettings):
                 "missing production WeChat login settings: " + ", ".join(missing_login)
             )
 
-        if not self.WECHAT_PAY_ENABLED:
-            raise ValueError(
-                "WECHAT_PAY_ENABLED must be true in production; "
-                "disable production traffic until V3 payment is provisioned"
-            )
-        if self.WECHAT_PAY_API_VERSION.lower() != "v3":
-            raise ValueError("WECHAT_PAY_API_VERSION must be v3 in production")
-        missing_payment = [
-            name
-            for name, value in {
-                "WECHAT_PAY_MCHID": self.WECHAT_PAY_MCHID,
-                "WECHAT_PAY_APPID": self.WECHAT_PAY_APPID or self.WECHAT_APPID,
-                "WECHAT_PAY_CERT_SERIAL_NO": self.WECHAT_PAY_CERT_SERIAL_NO,
-                "WECHAT_PAY_PRIVATE_KEY": self.WECHAT_PAY_PRIVATE_KEY,
-                "WECHAT_PAY_API_V3_KEY": self.WECHAT_PAY_API_V3_KEY,
-                "WECHAT_PAY_PUBLIC_KEY": self.WECHAT_PAY_PUBLIC_KEY,
-                "WECHAT_PAY_PUBLIC_KEY_ID": self.WECHAT_PAY_PUBLIC_KEY_ID,
-                "WECHAT_PAY_NOTIFY_URL": self.WECHAT_PAY_NOTIFY_URL,
-                "WECHAT_PAY_REFUND_NOTIFY_URL": self.WECHAT_PAY_REFUND_NOTIFY_URL,
-            }.items()
-            if not value
-        ]
-        if missing_payment:
-            raise ValueError(
-                "missing production WeChat Pay V3 settings: "
-                + ", ".join(missing_payment)
-            )
+        # WeChat Pay is retired: every settlement path uses bank transfer and
+        # the offline refund ledger, so a production build must *not* depend on
+        # V3 credentials.  The block below only sanity-checks a deployment that
+        # still carries the legacy switch; it is never used to enable payments.
+        if self.WECHAT_PAY_ENABLED:
+            if self.WECHAT_PAY_API_VERSION.lower() != "v3":
+                raise ValueError("WECHAT_PAY_API_VERSION must be v3 when present")
+            missing_payment = [
+                name
+                for name, value in {
+                    "WECHAT_PAY_MCHID": self.WECHAT_PAY_MCHID,
+                    "WECHAT_PAY_APPID": self.WECHAT_PAY_APPID or self.WECHAT_APPID,
+                    "WECHAT_PAY_CERT_SERIAL_NO": self.WECHAT_PAY_CERT_SERIAL_NO,
+                    "WECHAT_PAY_PRIVATE_KEY": self.WECHAT_PAY_PRIVATE_KEY,
+                    "WECHAT_PAY_API_V3_KEY": self.WECHAT_PAY_API_V3_KEY,
+                    "WECHAT_PAY_PUBLIC_KEY": self.WECHAT_PAY_PUBLIC_KEY,
+                    "WECHAT_PAY_PUBLIC_KEY_ID": self.WECHAT_PAY_PUBLIC_KEY_ID,
+                    "WECHAT_PAY_NOTIFY_URL": self.WECHAT_PAY_NOTIFY_URL,
+                    "WECHAT_PAY_REFUND_NOTIFY_URL": self.WECHAT_PAY_REFUND_NOTIFY_URL,
+                }.items()
+                if not value
+            ]
+            if missing_payment:
+                raise ValueError(
+                    "incomplete legacy WeChat Pay settings (the feature is retired; "
+                    "unset WECHAT_PAY_ENABLED instead): " + ", ".join(missing_payment)
+                )
         if not self.BANK_TRANSFER_NEW_ORDERS_ENABLED:
             raise ValueError(
                 "BANK_TRANSFER_NEW_ORDERS_ENABLED must be true in the unified production build"

@@ -168,7 +168,6 @@ def collect_runtime_evidence(
         "redis",
         "quiz_worker",
         "wechat_login",
-        "wechat_payment",
     ]
     disabled_optional: set[str] = set()
     for name in ("oss", "quiz_oss"):

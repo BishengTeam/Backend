@@ -65,6 +65,17 @@ class ThirdPartyException(AppException):
         super().__init__(code=40400, message=message, http_status_code=502)
 
 
+class RetiredFeatureException(AppException):
+    """A capability that was deliberately removed from the product.
+
+    ``410 Gone`` tells every client that retrying cannot succeed, which a
+    ``404`` or ``422`` does not convey.
+    """
+
+    def __init__(self, message: str, *, code: int = 40205):
+        super().__init__(code=code, message=message, http_status_code=410)
+
+
 class StorageUnavailableException(AppException):
     def __init__(self, message: str):
         super().__init__(code=50410, message=message, http_status_code=503)
