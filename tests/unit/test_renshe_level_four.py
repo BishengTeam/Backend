@@ -49,7 +49,7 @@ def test_fourth_level_materials_and_review_match_actual_selected_path(occupation
 def test_fourth_level_does_not_accept_other_grade_or_pre_certificate_work(compound):
     config = selection_configuration(find_selection(f"information_security:4:{'复合型' if compound else '工龄型'}"))
     data = payload(SimpleNamespace(id=1, occupation_name="信息安全管理员"), compound=compound).model_dump(mode="json")
-    assert validate_admission(data, config)["eligibility_snapshot"]["required_years"] == (3 if compound else 5)
+    assert validate_admission(data, config)["eligibility_snapshot"]["required_years"] == ("3.00" if compound else "5.00")
     if compound:
         data["qualification_info"]["skill_certificate"]["issued_on"] = anniversary(china_today(), -2).isoformat()
     else:

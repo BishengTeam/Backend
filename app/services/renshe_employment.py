@@ -175,4 +175,4 @@ def validate_qualification(form: dict, config: dict, *, as_of: date | None = Non
     all_years = cumulative_years(info["work_experiences"], as_of=today)
     if not declared.is_finite() or declared < required or declared > all_years:
         raise BusinessException("职业年限须满足申报条件，且不能超过所填去重工作经历的累计年限")
-    return {"qualification_info": info, "eligibility_snapshot": {"as_of": today.isoformat(), "effective_years": str(total.quantize(Decimal("0.01"))), "required_years": required, **age_snapshot}}
+    return {"qualification_info": info, "eligibility_snapshot": {"as_of": today.isoformat(), "effective_years": str(total.quantize(Decimal("0.01"))), "required_years": str(Decimal(str(required)).quantize(Decimal("0.01"))), **age_snapshot}}

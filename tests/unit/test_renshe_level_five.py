@@ -81,7 +81,7 @@ def test_age_uses_verified_birth_on_first_submission_day(offset, allowed):
     birth = anniversary(today, -16) + timedelta(days=offset)
     if allowed:
         result = validate_qualification(form().model_dump(mode="json"), config(), verified_birth_date=birth.isoformat())
-        assert result["eligibility_snapshot"]["required_years"] == 0
+        assert result["eligibility_snapshot"]["required_years"] == "0.00"
         effective = result["eligibility_snapshot"]["effective_years"]
         assert len(effective.rsplit(".", 1)[-1]) == 2
         assert result["eligibility_snapshot"]["age_as_of"] == today.isoformat()
@@ -175,7 +175,7 @@ async def test_five_path_material_review_and_export(isolated, monkeypatch, occup
     async with isolated.db() as db:
         version = await db.get(RensheApplicationVersion, submitted.version.id)
         assert version.student_snapshot == {}
-        assert version.form_data["eligibility_snapshot"]["required_years"] == 0
+        assert version.form_data["eligibility_snapshot"]["required_years"] == "0.00"
     await pay(isolated, submitted)
     reviewer = RensheReviewService()
     with pytest.raises(BusinessException, match="逐项"):
@@ -236,7 +236,7 @@ async def test_paid_five_correction_after_registration_closes_keeps_first_age_an
     async with isolated.db() as db:
         current = await db.get(RensheApplicationVersion, corrected.version.id)
         assert current.form_data["eligibility_snapshot"]["age_as_of"] == first_age
-        assert current.form_data["eligibility_snapshot"]["required_years"] == 0
+        assert current.form_data["eligibility_snapshot"]["required_years"] == "0.00"
         proofs = (await db.execute(select(RensheMaterial).where(RensheMaterial.application_id == draft.id, RensheMaterial.kind == "work_proof"))).scalars().all()
         assert len(proofs) == 2 and proofs[0].sha256 != proofs[1].sha256
     await reviewer.review(reviewer_id=1, application_id=draft.id, stage="initial", data=RensheReviewCreate(decision="approved", expected_version_id=corrected.version.id, checklist={key: True for key in review_checks(batch.renshe_config)}))

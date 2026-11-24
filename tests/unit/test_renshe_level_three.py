@@ -78,7 +78,7 @@ def payload(path, plan_id=1):
 def test_each_trade_and_branch_has_own_rules(occupation, path):
     policy = config(path, occupation)
     result = validate_admission(payload(path), policy)
-    assert result["eligibility_snapshot"]["required_years"] == PATHS[path]["years"]
+    assert result["eligibility_snapshot"]["required_years"] == f"{PATHS[path]['years']:.2f}"
     effective = result["eligibility_snapshot"]["effective_years"]
     assert len(effective.rsplit(".", 1)[-1]) == 2
     assert result["eligibility_snapshot"]["application_condition"] == selected_path(policy, payload(path))["condition"]
