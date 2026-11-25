@@ -131,26 +131,16 @@ async def create_video_web_codes(
     body: VideoWebCodeCreate,
     _admin=Depends(require_permission("course:write")),
 ) -> APIResponse[list[dict]]:
-    result = await VideoWebService.issue_code(
+    # The video site accepts a batch quantity, so issue the whole request in one
+    # round-trip; per-code loops exceeded the Admin client timeout for large N.
+    codes = await VideoWebService.issue_code(
         course_id=body.course_id,
         order_id=None,
         miniapp_user_id=None,
         created_by="admin",
         note=body.note,
+        quantity=body.quantity,
     )
-    # VideoWeb's order API returns one code. For a manual batch, call it once
-    # per requested code and let Admin show the returned codes immediately.
-    codes = list(result)
-    for _ in range(body.quantity - 1):
-        codes.extend(
-            await VideoWebService.issue_code(
-                course_id=body.course_id,
-                order_id=None,
-                miniapp_user_id=None,
-                created_by="admin",
-                note=body.note,
-            )
-        )
     return success(data=codes, message="兑换码生成成功")
 
 

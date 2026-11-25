@@ -176,10 +176,11 @@ class VideoWebService:
         miniapp_user_id: int | None,
         created_by: str,
         note: str | None = None,
+        quantity: int = 1,
     ) -> Any:
         payload = {
             "course_id": course_id,
-            "quantity": 1,
+            "quantity": quantity,
             "source_order_id": order_id,
             "created_by": created_by,
             "note": note,

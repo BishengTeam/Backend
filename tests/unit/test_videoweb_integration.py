@@ -117,6 +117,34 @@ async def test_videoweb_manual_code_omits_owner_and_order(
     assert "owner_miniapp_user_id" not in client.kwargs["json"]
 
 
+async def test_videoweb_batch_issue_sends_quantity_in_single_request(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(settings, "VIDEOWEB_BASE_URL", "http://videoweb.local")
+    monkeypatch.setattr(settings, "VIDEOWEB_SERVICE_TOKEN", "service-token")
+    client = _FakeAsyncClient()
+    calls: list[int] = []
+
+    def _client_factory(*args, **kwargs):
+        calls.append(1)
+        return client
+
+    monkeypatch.setattr(
+        "app.services.videoweb.httpx.AsyncClient", _client_factory
+    )
+
+    await VideoWebService.issue_code(
+        course_id=3,
+        order_id=None,
+        miniapp_user_id=None,
+        created_by="admin",
+        quantity=50,
+    )
+
+    assert len(calls) == 1
+    assert client.kwargs["json"]["quantity"] == 50
+
+
 async def test_videoweb_login_code_is_single_use_and_cooldown_applies(
     monkeypatch: pytest.MonkeyPatch,
 ):
