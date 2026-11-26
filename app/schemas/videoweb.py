@@ -36,6 +36,12 @@ class VideoWebCodeCreate(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class VideoWebAccessStatus(BaseModel):
+    enabled: bool
+
+    model_config = {"extra": "forbid"}
+
+
 class VideoWebCodeRedeemRequest(BaseModel):
     code: str = Field(min_length=4, max_length=64)
 

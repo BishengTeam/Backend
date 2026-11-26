@@ -274,6 +274,8 @@ class CourseService:
             course = await db.get(Course, course_id)
             if course is None:
                 raise NotFoundException("课程")
+            if user_id is not None and await self._videoweb_disabled(db, user_id):
+                raise NotFoundException("课程")
             has_access = (
                 await self._has_learning_access(db, user_id, course_id)
                 if user_id is not None
@@ -327,6 +329,8 @@ class CourseService:
             chapter = await db.get(CourseChapter, chapter_id)
             if course is None or chapter is None or chapter.course_id != course_id:
                 raise NotFoundException("课程章节")
+            if await self._videoweb_disabled(db, user_id):
+                raise ForbiddenException("视频站访问已禁用，请联系管理员")
             has_access = await self._has_learning_access(db, user_id, course_id)
             state = self._course_access_state(course)
             if state == "archived":
@@ -445,6 +449,14 @@ class CourseService:
             last_page=last.last_page if last else 1, resource_version=last.resource_version if last else 1,
             completed_chapter_ids=[row.chapter_id for row in rows if row.is_completed],
         )
+
+    @staticmethod
+    async def _videoweb_disabled(db, user_id: int) -> bool:
+        """B6：被禁用视频站访问的用户一律不可看目录/播放（授权数据保持原样）。"""
+        disabled_at = await db.scalar(
+            select(User.videoweb_access_disabled_at).where(User.id == user_id)
+        )
+        return disabled_at is not None
 
     @staticmethod
     async def _get_learning_enrollment(db, user_id: int, course_id: int):

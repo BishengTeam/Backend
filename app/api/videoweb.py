@@ -10,6 +10,7 @@ from app.port.config import settings
 from app.port.exceptions import NotFoundException, UnauthorizedException
 from app.schemas.common import APIResponse, success
 from app.schemas.videoweb import (
+    VideoWebAccessStatus,
     VideoWebCodeRedeemRequest,
     VideoWebCodeCreate,
     VideoWebCodeStatus,
@@ -21,6 +22,7 @@ from app.schemas.videoweb import (
 from app.services.videoweb import VideoWebService
 from app.services.course_code import CourseCodeService
 from app.services.course_code_admin import CourseCodeAdminService
+from app.services.videoweb_admin import VideoWebAdminService
 
 
 user_router = APIRouter(prefix="/videoweb", tags=["课程视频站"])
@@ -137,6 +139,47 @@ async def search_video_web_users(
         data=await CourseCodeAdminService.search_users(
             keyword=keyword, page=page, page_size=page_size
         )
+    )
+
+
+@admin_router.get("/learners", response_model=APIResponse[dict])
+async def list_videoweb_learners(
+    keyword: str | None = Query(default=None, max_length=64),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=2000),
+    _admin=Depends(require_permission("course:read")),
+) -> APIResponse[dict]:
+    """学习授权页：学习者列表（授权数 / 最后学习 / 视频站访问状态）。"""
+    return success(
+        data=await VideoWebAdminService.list_learners(
+            keyword=keyword, page=page, page_size=page_size
+        )
+    )
+
+
+@admin_router.get(
+    "/learners/{user_id}/entitlements", response_model=APIResponse[list[dict]]
+)
+async def list_videoweb_learner_entitlements(
+    user_id: int,
+    _admin=Depends(require_permission("course:read")),
+) -> APIResponse[list[dict]]:
+    return success(data=await VideoWebAdminService.list_entitlements(user_id))
+
+
+@admin_router.post(
+    "/learners/{user_id}/access-status", response_model=APIResponse[dict]
+)
+async def set_videoweb_learner_access(
+    user_id: int,
+    body: VideoWebAccessStatus,
+    _admin=Depends(require_permission("course:write")),
+) -> APIResponse[dict]:
+    return success(
+        data=await VideoWebAdminService.set_access(
+            user_id, enabled=body.enabled, admin_id=_admin.id
+        ),
+        message="已启用视频站访问" if body.enabled else "已禁用视频站访问",
     )
 
 

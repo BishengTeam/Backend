@@ -16,6 +16,7 @@ from app.adapter.database import get_db_ctx
 from app.domain.certification.src.index import Course, CourseAuditLog, CourseCode, CourseEnrollment
 from app.port.exceptions import BusinessException, NotFoundException
 from app.services.course_code_crypto import decrypt_code, hash_code, normalize_code
+from app.services.videoweb_admin import is_videoweb_disabled
 
 REDEEMABLE_COURSE_STATUSES = ("published",)
 
@@ -80,6 +81,8 @@ class CourseCodeService:
                     raise BusinessException(STATUS_MESSAGES[row.status])
                 if row.owner_user_id != user_id:
                     raise BusinessException("该兑换码不属于当前账号")
+                if await is_videoweb_disabled(db, user_id):
+                    raise BusinessException("视频站访问已禁用，请联系管理员")
                 course = await db.get(Course, row.course_id)
                 if course is None:
                     raise NotFoundException("课程")
