@@ -15,6 +15,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 
 os.environ.setdefault("APP_ENV", "test")
+os.environ.setdefault("REQUIRE_BOUND_PHONE", "false")
 os.environ.setdefault("APP_DEBUG", "false")
 os.environ.setdefault(
     "JWT_SECRET",

@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db
+from app.port.config import settings
 from app.policy.quiz_scope import current_admin_var
 from app.port.exceptions import (
     AppException,
@@ -73,7 +74,11 @@ async def get_current_user(
         raise UnauthorizedException("用户不存在")
     if not user.is_active:
         raise UnauthorizedException("账号已注销")
-    if _requires_bound_phone(request.method, request.url.path) and not (user.phone or "").strip():
+    if (
+        settings.REQUIRE_BOUND_PHONE
+        and _requires_bound_phone(request.method, request.url.path)
+        and not (user.phone or "").strip()
+    ):
         raise ForbiddenException("请先在小程序授权手机号后再使用该功能")
     return user
 

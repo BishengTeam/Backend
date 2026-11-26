@@ -385,6 +385,8 @@ class Settings(BaseSettings):
     # 迁移前后不得轮换，否则存量兑换码哈希/密文全部失配。
     CODE_HASH_PEPPER: str = ""
     CODE_ENCRYPTION_KEY: str = ""
+    # 手机号闸门（写操作要求 user.phone）；测试环境在 conftest 关闭
+    REQUIRE_BOUND_PHONE: bool = True
     # 深信服报名码激活页；未配置时小程序只展示复制报名码。
     SANGFOR_ACTIVATION_URL: str = ""
 
