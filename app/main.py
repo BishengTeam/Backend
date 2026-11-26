@@ -59,7 +59,7 @@ from app.services.dependency_health import (
     is_ready,
 )
 from app.services.quiz_metrics import QuizMetricsMiddleware, quiz_metrics
-from app.services.videoweb import videoweb_code_reconciliation_worker_loop
+from app.services.videoweb import videoweb_code_reconciliation_worker_loop  # noqa: F401  (B10 保留导入便于回滚)
 from app.contracts.payment import wechat_pay_retired
 
 logger = logging.getLogger(__name__)
@@ -116,9 +116,8 @@ async def lifespan(app: FastAPI):
         if wechat_workers_enabled
         else None
     )
-    videoweb_reconciliation_task = asyncio.create_task(
-        videoweb_code_reconciliation_worker_loop()
-    )
+    # vweb001 收编：不再自动发码，补偿 worker 一并停用（B10）。
+    videoweb_reconciliation_task = None
     gzh_article_task = asyncio.create_task(gzh_article_worker_loop())
     logger.info("Application startup complete")
     yield
@@ -202,10 +201,11 @@ async def lifespan(app: FastAPI):
             await nisp_refund_task
         except asyncio.CancelledError:
             pass
-    try:
-        await videoweb_reconciliation_task
-    except asyncio.CancelledError:
-        pass
+    if videoweb_reconciliation_task is not None:
+        try:
+            await videoweb_reconciliation_task
+        except asyncio.CancelledError:
+            pass
     try:
         await gzh_article_task
     except asyncio.CancelledError:

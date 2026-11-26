@@ -240,12 +240,12 @@ class OrderFulfillmentService:
         return True
 
     async def on_paid(self, db: AsyncSession, order: Order) -> bool:
-        """Fulfil an order, then schedule a closed-video-site code issue."""
-        from app.services.videoweb import VideoWebService
+        """Fulfil an order.
 
+        vweb001 收编：课程学习权益由 course_enrollment.learning_access 承载，
+        视频站按授权判权，因此不再自动发放视频站兑换码（B10 切换窗口起生效）。
+        """
         processed = await self._on_paid_impl(db, order)
-        if order.order_kind in {"course", "quiz_order"}:
-            VideoWebService.schedule_issue_for_order(order.id)
         if order.order_kind == "certification" and (order.extra_data or {}).get(
             "business_type"
         ) == "sangfor":

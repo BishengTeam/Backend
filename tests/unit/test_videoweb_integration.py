@@ -192,7 +192,8 @@ def test_videoweb_bridge_routes_and_payment_hook_exist():
     assert "compare_digest(x_service_token, expected)" in api_source
     assert "require_permission(\"course:read\")" in api_source
     assert "require_permission(\"course:write\")" in api_source
-    assert "VideoWebService.schedule_issue_for_order(order.id)" in fulfillment_source
+    # vweb001 收编（B10）：订单支付后不再自动发码，授权走 course_enrollment。
+    assert "VideoWebService.schedule_issue_for_order(order.id)" not in fulfillment_source
     assert "VIDEOWEB_BASE_URL" in config_source
     assert '"VIDEOWEB_SERVICE_TOKEN"' in config_source
     assert '"VIDEOWEB_LOOKUP_SERVICE_TOKEN"' in config_source
