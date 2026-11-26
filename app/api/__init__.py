@@ -46,6 +46,8 @@ router.include_router(certification_journey_router)
 router.include_router(user_router)
 router.include_router(chat_router)
 router.include_router(courses_router)
+from app.api.videoweb_site import router as videoweb_site_router
+router.include_router(videoweb_site_router)
 router.include_router(classroom_router)
 router.include_router(h3c_router)
 router.include_router(h3c_order_router)

@@ -113,6 +113,7 @@ class CourseCodeService:
                 return {
                     "code_id": row.id,
                     "course_id": row.course_id,
+                    "entitlement_id": enrollment.id,
                     "status": "redeemed",
                     "already_redeemed": already,
                     "learning_access": True,
