@@ -24,6 +24,8 @@ SECRET_FILE_FIELDS = (
     "QUIZ_METRICS_BEARER_TOKEN",
     "VIDEOWEB_SERVICE_TOKEN",
     "VIDEOWEB_LOOKUP_SERVICE_TOKEN",
+    "CODE_HASH_PEPPER",
+    "CODE_ENCRYPTION_KEY",
 )
 SECRET_FILE_NAMES = {f"{field_name}_FILE" for field_name in SECRET_FILE_FIELDS}
 OPTIONAL_EMPTY_SECRET_FIELDS = frozenset(
@@ -34,6 +36,8 @@ OPTIONAL_EMPTY_SECRET_FIELDS = frozenset(
         "QUIZ_OSS_ACCESS_KEY_SECRET",
         "VIDEOWEB_SERVICE_TOKEN",
         "VIDEOWEB_LOOKUP_SERVICE_TOKEN",
+        "CODE_HASH_PEPPER",
+        "CODE_ENCRYPTION_KEY",
     }
 )
 
@@ -377,6 +381,10 @@ class Settings(BaseSettings):
     VIDEOWEB_LOGIN_CODE_TTL_SECONDS: int = 300
     VIDEOWEB_LOGIN_CODE_COOLDOWN_SECONDS: int = 60
     VIDEOWEB_LOGIN_CODE_MAX_ATTEMPTS: int = 5
+    # Course code crypto (vweb001 收编)：必须与视频站现有值完全一致，
+    # 迁移前后不得轮换，否则存量兑换码哈希/密文全部失配。
+    CODE_HASH_PEPPER: str = ""
+    CODE_ENCRYPTION_KEY: str = ""
     # 深信服报名码激活页；未配置时小程序只展示复制报名码。
     SANGFOR_ACTIVATION_URL: str = ""
 

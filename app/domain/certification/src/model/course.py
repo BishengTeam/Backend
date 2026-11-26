@@ -128,9 +128,52 @@ class CourseEnrollment(Base, TimestampMixin):
     access_granted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     access_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     access_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 授权溯源（vweb001 收编）：order | points | redeem | admin | preview
+    source: Mapped[str | None] = mapped_column(String(16))
+    course_code_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("course_code.id")
+    )
 
     course: Mapped[Course] = relationship()
     order: Mapped[Order | None] = relationship()
+
+
+class CourseCode(Base, TimestampMixin):
+    """课程兑换码（vweb001 从视频站收编）：本人绑定，码只存哈希与密文。"""
+
+    __tablename__ = "course_code"
+    __table_args__ = (
+        Index("uq_course_code_hash", "code_hash", unique=True),
+        CheckConstraint(
+            "status IN ('issued', 'redeemed', 'revoked', 'refunded')",
+            name="ck_course_code_status",
+        ),
+        CheckConstraint(
+            "status IN ('revoked', 'refunded') OR owner_user_id IS NOT NULL",
+            name="ck_course_code_owner",
+        ),
+        Index("ix_course_code_owner", "owner_user_id"),
+        Index("ix_course_code_course_status", "course_id", "status"),
+    )
+
+    code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    code_cipher: Mapped[str] = mapped_column(String(512), nullable=False)
+    course_id: Mapped[int] = mapped_column(Integer, ForeignKey("course.id"), nullable=False)
+    owner_user_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("user.id"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="issued", server_default="issued"
+    )
+    source: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="admin", server_default="admin"
+    )
+    note: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str | None] = mapped_column(String(128))
+    redeemed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoke_reason: Mapped[str | None] = mapped_column(String(128))
+    revoked_by: Mapped[int | None] = mapped_column(Integer, ForeignKey("admin_user.id"))
 
 
 class CourseUpload(Base, TimestampMixin):
