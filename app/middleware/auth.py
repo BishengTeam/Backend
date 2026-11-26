@@ -133,13 +133,14 @@ async def get_current_admin(
 
 
 async def get_current_user_optional(
+    request: Request,
     authorization: str | None = Header(None),
     db: AsyncSession = Depends(get_db),
 ) -> User | None:
     if not authorization:
         return None
     try:
-        return await get_current_user(authorization=authorization, db=db)
+        return await get_current_user(request=request, authorization=authorization, db=db)
     except AppException:
         return None
 
