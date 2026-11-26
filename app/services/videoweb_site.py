@@ -4,6 +4,8 @@
 避免改动现有 `/api/courses`（小程序零影响）。
 """
 
+from datetime import datetime, timezone
+
 from sqlalchemy import func, select
 
 from app.adapter.database import get_db_ctx
@@ -12,12 +14,13 @@ from app.domain.certification.src.index import (
     Course,
     CourseChapter,
     CourseEnrollment,
+    UserChapterNote,
     UserChapterProgress,
 )
 from app.domain.user.src.index import User
 from app.domain.user.src.model.user_profile import UserProfile
 from app.port.config import settings
-from app.port.exceptions import NotFoundException
+from app.port.exceptions import ForbiddenException, NotFoundException
 from app.schemas.course import ChapterProgressUpsert, CourseFilter
 from app.services.course import CourseService
 from app.services.videoweb import VideoWebService
@@ -214,3 +217,81 @@ class VideoWebSiteService:
             "last_page": result.last_page,
             "is_completed": data.is_completed,
         }
+
+    @classmethod
+    async def _note_chapter(cls, db, user_id: int, course_id: int, chapter_id: int):
+        """笔记与学习进度同权限口径：课程已发布且该用户持有有效学习授权。"""
+        course = await db.get(Course, course_id)
+        chapter = await db.get(CourseChapter, chapter_id)
+        if (
+            course is None
+            or chapter is None
+            or chapter.course_id != course_id
+            or chapter.deleted_at is not None
+            or course.deleted_at is not None
+        ):
+            raise NotFoundException("课程章节")
+        if not course.is_active or course.status != "published":
+            raise ForbiddenException("课程或章节不可访问")
+        if not await CourseService()._has_learning_access(db, user_id, course_id):
+            raise ForbiddenException("无课程学习权限")
+        return chapter
+
+    @classmethod
+    async def get_note(cls, user_id: int, course_id: int, chapter_id: int) -> dict:
+        async with get_db_ctx() as db:
+            chapter = await cls._note_chapter(db, user_id, course_id, chapter_id)
+            row = (
+                await db.execute(
+                    select(UserChapterNote).where(
+                        UserChapterNote.user_id == user_id,
+                        UserChapterNote.course_id == course_id,
+                        UserChapterNote.chapter_id == chapter_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            return {
+                "chapter_id": chapter_id,
+                "content": row.content if row else "",
+                "content_updated": bool(
+                    row and row.resource_version != chapter.resource_version
+                ),
+                "updated_at": row.updated_at if row else datetime.now(timezone.utc),
+            }
+
+    @classmethod
+    async def save_note(
+        cls, user_id: int, course_id: int, chapter_id: int, content: str
+    ) -> dict:
+        async with get_db_ctx() as db:
+            chapter = await cls._note_chapter(db, user_id, course_id, chapter_id)
+            row = (
+                await db.execute(
+                    select(UserChapterNote)
+                    .where(
+                        UserChapterNote.user_id == user_id,
+                        UserChapterNote.course_id == course_id,
+                        UserChapterNote.chapter_id == chapter_id,
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                row = UserChapterNote(
+                    user_id=user_id,
+                    course_id=course_id,
+                    chapter_id=chapter_id,
+                    content=content,
+                )
+                db.add(row)
+            else:
+                row.content = content
+            row.resource_version = chapter.resource_version
+            await db.commit()
+            await db.refresh(row)
+            return {
+                "chapter_id": chapter_id,
+                "content": row.content,
+                "content_updated": False,
+                "updated_at": row.updated_at,
+            }

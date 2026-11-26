@@ -17,9 +17,11 @@ from app.domain.certification.src.index import (
     Course,
     CourseChapter,
     CourseEnrollment,
+    UserChapterNote,
     UserChapterProgress,
 )
 from app.domain.user.src.index import User
+from app.port.exceptions import ForbiddenException
 from app.services.videoweb_site import VideoWebSiteService
 
 pytestmark = [pytest.mark.integration_db, pytest.mark.asyncio]
@@ -101,6 +103,7 @@ async def ctx(monkeypatch):
     yield SimpleNamespace(factory=factory, cid=cid, uid=uid, chid=chid)
 
     async with factory() as db, db.begin():
+        await db.execute(delete(UserChapterNote).where(UserChapterNote.course_id == cid))
         await db.execute(delete(CourseEnrollment).where(CourseEnrollment.course_id == cid))
         await db.execute(delete(UserChapterProgress).where(UserChapterProgress.course_id == cid))
         await db.execute(delete(CourseChapter).where(CourseChapter.course_id == cid))
@@ -139,3 +142,44 @@ async def test_save_progress_maps_position_seconds_field(ctx):
     assert result["position_seconds"] == 77
     assert result["last_page"] == 1
     assert result["is_completed"] is False
+
+
+async def test_note_starts_empty(ctx):
+    data = await VideoWebSiteService.get_note(ctx.uid, ctx.cid, ctx.chid)
+    assert data["chapter_id"] == ctx.chid
+    assert data["content"] == ""
+    assert data["content_updated"] is False
+
+
+async def test_save_note_roundtrip(ctx):
+    saved = await VideoWebSiteService.save_note(ctx.uid, ctx.cid, ctx.chid, "第一章重点")
+    assert saved["content"] == "第一章重点"
+    loaded = await VideoWebSiteService.get_note(ctx.uid, ctx.cid, ctx.chid)
+    assert loaded["content"] == "第一章重点"
+    assert loaded["content_updated"] is False
+
+
+async def test_note_flags_content_updated_after_chapter_change(ctx):
+    await VideoWebSiteService.save_note(ctx.uid, ctx.cid, ctx.chid, "旧版本笔记")
+    async with ctx.factory() as db, db.begin():
+        chapter = await db.get(CourseChapter, ctx.chid)
+        chapter.resource_version = 2
+    data = await VideoWebSiteService.get_note(ctx.uid, ctx.cid, ctx.chid)
+    assert data["content"] == "旧版本笔记"
+    assert data["content_updated"] is True
+
+
+async def test_note_requires_learning_access(ctx):
+    async with ctx.factory() as db, db.begin():
+        outsider = User(openid=f"outsider-{uuid4().hex}")
+        db.add(outsider)
+        await db.flush()
+        outsider_id = outsider.id
+    try:
+        with pytest.raises(ForbiddenException):
+            await VideoWebSiteService.get_note(outsider_id, ctx.cid, ctx.chid)
+        with pytest.raises(ForbiddenException):
+            await VideoWebSiteService.save_note(outsider_id, ctx.cid, ctx.chid, "越权")
+    finally:
+        async with ctx.factory() as db, db.begin():
+            await db.execute(delete(User).where(User.id == outsider_id))

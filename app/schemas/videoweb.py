@@ -21,6 +21,12 @@ class VideoWebLoginExchangeRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class VideoWebNoteUpsert(BaseModel):
+    content: str = Field(max_length=5000)
+
+    model_config = {"extra": "forbid"}
+
+
 class VideoWebLoginExchangeResponse(BaseModel):
     user_id: int
     phone: str | None = None

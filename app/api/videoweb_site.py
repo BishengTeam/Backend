@@ -8,7 +8,7 @@ from fastapi import APIRouter, Body, Depends, Path
 from app.domain.user.src.index import User
 from app.middleware.auth import get_current_user
 from app.schemas.common import APIResponse, success
-from app.schemas.videoweb import VideoWebLoginExchangeRequest
+from app.schemas.videoweb import VideoWebLoginExchangeRequest, VideoWebNoteUpsert
 from app.services.videoweb_site import VideoWebSiteService
 
 router = APIRouter(prefix="/videoweb/site", tags=["课程视频站-站点接口"])
@@ -88,4 +88,40 @@ async def site_progress(
         data=await VideoWebSiteService.save_progress(
             current_user.id, course_id, chapter_id, payload
         )
+    )
+
+
+@router.get(
+    "/courses/{course_id}/chapters/{chapter_id}/note",
+    response_model=APIResponse[dict],
+    summary="读取章节学习笔记",
+)
+async def site_note(
+    course_id: int = Path(..., ge=1),
+    chapter_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[dict]:
+    return success(
+        data=await VideoWebSiteService.get_note(
+            current_user.id, course_id, chapter_id
+        )
+    )
+
+
+@router.put(
+    "/courses/{course_id}/chapters/{chapter_id}/note",
+    response_model=APIResponse[dict],
+    summary="保存章节学习笔记",
+)
+async def site_save_note(
+    body: VideoWebNoteUpsert,
+    course_id: int = Path(..., ge=1),
+    chapter_id: int = Path(..., ge=1),
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[dict]:
+    return success(
+        data=await VideoWebSiteService.save_note(
+            current_user.id, course_id, chapter_id, body.content
+        ),
+        message="学习笔记已保存",
     )

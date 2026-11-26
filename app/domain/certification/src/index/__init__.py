@@ -12,6 +12,7 @@ from app.domain.certification.src.model.course import (
     CourseUpload,
 )
 from app.domain.certification.src.model.course_chapter import CourseChapter
+from app.domain.certification.src.model.user_chapter_note import UserChapterNote
 from app.domain.certification.src.model.user_chapter_progress import UserChapterProgress
 from app.domain.certification.src.model.job import Job, JobApplication
 from app.domain.certification.src.model.competition import Competition, CompetitionTrack, CompetitionReg
@@ -30,5 +31,6 @@ __all__ = [
     "Job",
     "JobApplication",
     "CompetitionReg",
+    "UserChapterNote",
     "UserChapterProgress",
 ]
