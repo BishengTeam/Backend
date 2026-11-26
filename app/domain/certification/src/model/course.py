@@ -149,7 +149,7 @@ class CourseCode(Base, TimestampMixin):
             name="ck_course_code_status",
         ),
         CheckConstraint(
-            "status IN ('revoked', 'refunded') OR owner_user_id IS NOT NULL",
+            "status IN ('issued', 'revoked', 'refunded') OR owner_user_id IS NOT NULL",
             name="ck_course_code_owner",
         ),
         Index("ix_course_code_owner", "owner_user_id"),

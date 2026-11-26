@@ -1,4 +1,4 @@
-"""B2 兑换码：本人兑换、幂等、状态矩阵、我的码直读本表。"""
+"""匿名兑换码：兑换时绑定归属人、已有权益不消耗、手机号门槛。"""
 
 import importlib
 import os
@@ -16,7 +16,6 @@ from sqlalchemy.pool import NullPool
 from app.domain.certification.src.index import (
     Course,
     CourseAuditLog,
-    CourseChapter,
     CourseCode,
     CourseEnrollment,
 )
@@ -58,29 +57,15 @@ async def ctx(monkeypatch):
             is_active=True,
             preview_chapter_count=0,
         )
-        owner = User(openid=f"own-{prefix}")
-        stranger = User(openid=f"str-{prefix}")
-        db.add_all([course, owner, stranger])
+        phone_user = User(openid=f"ph-{prefix}", phone="13800001111")
+        no_phone_user = User(openid=f"np-{prefix}")
+        db.add_all([course, phone_user, no_phone_user])
         await db.flush()
-        chapter = CourseChapter(
-            course_id=course.id,
-            title="ch1",
-            sort_order=1,
-            resource_type="video",
-            video_storage_key=f"video-{prefix}",
-            resource_storage_key=f"video-{prefix}",
-            original_filename="a.mp4",
-            content_type="video/mp4",
-            size_bytes=100,
-            duration=60,
-        )
-        db.add(chapter)
-        await db.flush()
-        cid, owner_id, stranger_id, chid = course.id, owner.id, stranger.id, chapter.id
+        cid, uid, np_uid = course.id, phone_user.id, no_phone_user.id
 
     created_codes: list[int] = []
 
-    async def add_code(*, owner: int | None, status: str = "issued") -> tuple[int, str]:
+    async def add_code(*, owner: int | None = None, status: str = "issued") -> tuple[int, str]:
         raw = course_code_crypto.generate_code()
         async with factory() as db, db.begin():
             row = CourseCode(
@@ -117,8 +102,8 @@ async def ctx(monkeypatch):
     yield SimpleNamespace(
         factory=factory,
         cid=cid,
-        owner_id=owner_id,
-        stranger_id=stranger_id,
+        uid=uid,
+        np_uid=np_uid,
         add_code=add_code,
         set_course_status=set_course_status,
         grant_existing_access=grant_existing_access,
@@ -134,87 +119,78 @@ async def ctx(monkeypatch):
         )
         await db.execute(delete(CourseEnrollment).where(CourseEnrollment.course_id == cid))
         await db.execute(delete(CourseCode).where(CourseCode.course_id == cid))
-        await db.execute(delete(CourseChapter).where(CourseChapter.course_id == cid))
         await db.execute(delete(Course).where(Course.id == cid))
-        await db.execute(delete(User).where(User.id.in_([owner_id, stranger_id])))
+        await db.execute(delete(User).where(User.id.in_([uid, np_uid])))
     await engine.dispose()
 
 
-async def test_redeem_own_code_grants_course_access(ctx):
-    code_id, raw = await ctx.add_code(owner=ctx.owner_id)
-    result = await CourseCodeService.redeem(ctx.owner_id, raw)
+async def test_anonymous_code_grants_access_and_binds_owner(ctx):
+    code_id, raw = await ctx.add_code()
+    result = await CourseCodeService.redeem(ctx.uid, raw)
     assert result["learning_access"] is True
     assert result["already_redeemed"] is False
     async with ctx.factory() as db:
         code = await db.get(CourseCode, code_id)
+        assert code.owner_user_id == ctx.uid
         assert code.status == "redeemed" and code.redeemed_at is not None
         enrollment = await db.scalar(
-            select(CourseEnrollment).where(
-                CourseEnrollment.course_id == ctx.cid,
-                CourseEnrollment.user_id == ctx.owner_id,
-            )
+            select(CourseEnrollment).where(CourseEnrollment.course_id == ctx.cid)
         )
         assert enrollment.learning_access is True
-        assert enrollment.status == "enrolled"
         assert enrollment.source == "redeem"
         assert enrollment.course_code_id == code_id
 
 
-async def test_redeem_is_idempotent_and_keeps_existing_grant_time(ctx):
-    code_id, raw = await ctx.add_code(owner=ctx.owner_id)
-    await ctx.grant_existing_access(ctx.owner_id)
-    async with ctx.factory() as db:
-        before = await db.scalar(
-            select(CourseEnrollment).where(CourseEnrollment.course_id == ctx.cid)
-        )
-        granted_before = before.access_granted_at
-
-    result = await CourseCodeService.redeem(ctx.owner_id, raw)
-    assert result["already_redeemed"] is False
-    async with ctx.factory() as db:
-        enrollment = await db.scalar(
-            select(CourseEnrollment).where(CourseEnrollment.course_id == ctx.cid)
-        )
-        assert enrollment.access_granted_at == granted_before
-        assert enrollment.course_code_id == code_id
-
-    again = await CourseCodeService.redeem(ctx.owner_id, raw)
+async def test_second_redeem_of_same_code_is_idempotent(ctx):
+    _, raw = await ctx.add_code()
+    first = await CourseCodeService.redeem(ctx.uid, raw)
+    assert first["already_redeemed"] is False
+    again = await CourseCodeService.redeem(ctx.uid, raw)
     assert again["already_redeemed"] is True
 
 
-async def test_redeem_other_users_code_is_rejected(ctx):
-    _, raw = await ctx.add_code(owner=ctx.owner_id)
+async def test_existing_access_rejects_without_consuming_code(ctx):
+    code_id, raw = await ctx.add_code()
+    await ctx.grant_existing_access(ctx.uid)
+    with pytest.raises(BusinessException, match="已拥有该课程学习权限"):
+        await CourseCodeService.redeem(ctx.uid, raw)
+    async with ctx.factory() as db:
+        code = await db.get(CourseCode, code_id)
+        assert code.status == "issued"
+        assert code.owner_user_id is None
+
+
+async def test_code_bound_to_someone_else_is_rejected(ctx):
+    _, raw = await ctx.add_code(owner=ctx.np_uid)
     with pytest.raises(BusinessException, match="不属于当前账号"):
-        await CourseCodeService.redeem(ctx.stranger_id, raw)
+        await CourseCodeService.redeem(ctx.uid, raw)
+
+
+async def test_user_without_phone_cannot_redeem(ctx):
+    _, raw = await ctx.add_code()
+    with pytest.raises(BusinessException, match="授权手机号"):
+        await CourseCodeService.redeem(ctx.np_uid, raw)
 
 
 async def test_revoked_and_refunded_codes_are_rejected(ctx):
-    _, revoked_raw = await ctx.add_code(owner=ctx.owner_id, status="revoked")
-    _, refunded_raw = await ctx.add_code(owner=ctx.owner_id, status="refunded")
+    _, revoked_raw = await ctx.add_code(status="revoked")
+    _, refunded_raw = await ctx.add_code(status="refunded")
     with pytest.raises(BusinessException, match="已作废"):
-        await CourseCodeService.redeem(ctx.owner_id, revoked_raw)
+        await CourseCodeService.redeem(ctx.uid, revoked_raw)
     with pytest.raises(BusinessException, match="已退款回收"):
-        await CourseCodeService.redeem(ctx.owner_id, refunded_raw)
+        await CourseCodeService.redeem(ctx.uid, refunded_raw)
 
 
 async def test_unknown_code_is_rejected(ctx):
     with pytest.raises(BusinessException, match="兑换码不存在"):
-        await CourseCodeService.redeem(ctx.owner_id, "VW-AAAA-BBBB-CCCC-DDDD")
+        await CourseCodeService.redeem(ctx.uid, "VW-AAAA-BBBB-CCCC-DDDD")
 
 
 async def test_offline_or_archived_course_cannot_be_redeemed(ctx):
-    _, raw = await ctx.add_code(owner=ctx.owner_id)
+    _, raw = await ctx.add_code()
     await ctx.set_course_status("offline")
     with pytest.raises(BusinessException, match="已下线"):
-        await CourseCodeService.redeem(ctx.owner_id, raw)
+        await CourseCodeService.redeem(ctx.uid, raw)
     await ctx.set_course_status("archived")
     with pytest.raises(BusinessException, match="已归档"):
-        await CourseCodeService.redeem(ctx.owner_id, raw)
-
-
-async def test_list_for_user_only_returns_own_codes(ctx):
-    mine_id, _ = await ctx.add_code(owner=ctx.owner_id)
-    await ctx.add_code(owner=ctx.stranger_id)
-    codes = await CourseCodeService.list_for_user(ctx.owner_id)
-    assert [item["id"] for item in codes] == [mine_id]
-    assert codes[0]["owner_miniapp_user_id"] == ctx.owner_id
+        await CourseCodeService.redeem(ctx.uid, raw)

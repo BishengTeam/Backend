@@ -1,19 +1,21 @@
-"""课程兑换码（B2）：我的码直读本表 + 本人兑换。
+"""课程兑换码：匿名生成、兑换时绑定、权益不重复消耗。
 
-兑换规则（方案 7.2）：
-- 码仅本人可用；不存在/已撤销/已退款/他人所有文案分开
-- 课程状态：仅 published 可兑；offline / archived / draft 拒绝（恢复上线后可兑）
-- 幂等：同一用户重复兑同一课返回已有授权，不消耗第二张码
+规则（2026-11-26 定案）：
+- 后台生成匿名码（不指定用户）；兑换时用登录态把 owner_user_id 绑为兑换人
+- 码状态/课程状态校验；已撤销/退款/他人已绑定的码拒绝
+- 已有该课程有效权益时拒绝兑换且**不消耗码**
+- 兑换要求账号已绑定手机号（与"无手机号=游客"的登录策略一致）
 - 写授权：upsert course_enrollment（source='redeem'、course_code_id）
 """
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapter.database import get_db_ctx
 from app.domain.certification.src.index import Course, CourseAuditLog, CourseCode, CourseEnrollment
+from app.domain.user.src.index import User
 from app.port.exceptions import BusinessException, NotFoundException
 from app.services.course_code_crypto import decrypt_code, hash_code, normalize_code
 from app.services.videoweb_admin import is_videoweb_disabled
@@ -79,10 +81,31 @@ class CourseCodeService:
                     raise BusinessException("兑换码不存在，请检查后重试")
                 if row.status in STATUS_MESSAGES:
                     raise BusinessException(STATUS_MESSAGES[row.status])
-                if row.owner_user_id != user_id:
+                if row.status == "redeemed":
+                    # 已兑换：只有原兑换人重复提交才幂等返回
+                    if row.owner_user_id == user_id:
+                        enrollment = await cls._get_access(db, user_id, row.course_id)
+                        return {
+                            "code_id": row.id,
+                            "course_id": row.course_id,
+                            "entitlement_id": enrollment.id if enrollment else None,
+                            "status": "redeemed",
+                            "already_redeemed": True,
+                            "learning_access": True,
+                            "access_granted_at": enrollment.access_granted_at if enrollment else None,
+                        }
+                    raise BusinessException("该兑换码已被其他账号兑换")
+                if row.owner_user_id is not None and row.owner_user_id != user_id:
                     raise BusinessException("该兑换码不属于当前账号")
                 if await is_videoweb_disabled(db, user_id):
                     raise BusinessException("视频站访问已禁用，请联系管理员")
+                user = await db.get(User, user_id)
+                if user is None or not (user.phone or "").strip():
+                    raise BusinessException("请先在小程序授权手机号后再兑换")
+                existing = await cls._get_access(db, user_id, row.course_id)
+                if existing is not None:
+                    # 码是资产：没有产生新权益就不消耗
+                    raise BusinessException("您已拥有该课程学习权限，兑换码未使用")
                 course = await db.get(Course, row.course_id)
                 if course is None:
                     raise NotFoundException("课程")
@@ -91,10 +114,11 @@ class CourseCodeService:
                         _course_blocked_message(course.status)
                     )
                 enrollment = await cls._upsert_access(db, user_id, row)
-                already = row.status == "redeemed"
-                if not already:
-                    row.status = "redeemed"
-                    row.redeemed_at = cls._now()
+                # 匿名码在兑换时绑定兑换人
+                if row.owner_user_id is None:
+                    row.owner_user_id = user_id
+                row.status = "redeemed"
+                row.redeemed_at = cls._now()
                 db.add(
                     CourseAuditLog(
                         actor_type="user",
@@ -105,7 +129,7 @@ class CourseCodeService:
                         result="succeeded",
                         summary={
                             "course_id": row.course_id,
-                            "already_redeemed": already,
+                            "already_redeemed": False,
                             "enrollment_id": enrollment.id,
                         },
                     )
@@ -115,10 +139,29 @@ class CourseCodeService:
                     "course_id": row.course_id,
                     "entitlement_id": enrollment.id,
                     "status": "redeemed",
-                    "already_redeemed": already,
+                    "already_redeemed": False,
                     "learning_access": True,
                     "access_granted_at": enrollment.access_granted_at,
                 }
+
+    @staticmethod
+    async def _get_access(db: AsyncSession, user_id: int, course_id: int):
+        """有效学习授权（未过期、learning_access=True）。"""
+        now = datetime.now(timezone.utc)
+        return (
+            await db.execute(
+                select(CourseEnrollment).where(
+                    CourseEnrollment.user_id == user_id,
+                    CourseEnrollment.course_id == course_id,
+                    CourseEnrollment.learning_access.is_(True),
+                    CourseEnrollment.status.in_(("enrolled", "completed")),
+                    or_(
+                        CourseEnrollment.access_expires_at.is_(None),
+                        CourseEnrollment.access_expires_at > now,
+                    ),
+                )
+            )
+        ).scalar_one_or_none()
 
     @classmethod
     async def _upsert_access(

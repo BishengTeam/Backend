@@ -211,7 +211,6 @@ async def create_video_web_codes(
     codes = await CourseCodeAdminService.issue(
         course_id=body.course_id,
         quantity=body.quantity,
-        owner_user_id=body.owner_user_id,
         note=body.note,
         admin_id=_admin.id,
     )

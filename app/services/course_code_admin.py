@@ -163,7 +163,6 @@ class CourseCodeAdminService:
         *,
         course_id: int,
         quantity: int,
-        owner_user_id: int,
         note: str | None,
         admin_id: int,
     ) -> list[dict]:
@@ -172,9 +171,6 @@ class CourseCodeAdminService:
                 course = await db.get(Course, course_id)
                 if course is None:
                     raise NotFoundException("课程")
-                owner = await db.get(User, owner_user_id)
-                if owner is None or not owner.is_active:
-                    raise ValidationException("归属用户不存在或已停用")
                 created: list[tuple[CourseCode, str]] = []
                 for _ in range(quantity):
                     raw = generate_code()
@@ -182,7 +178,7 @@ class CourseCodeAdminService:
                         code_hash=hash_code(raw),
                         code_cipher=encrypt_code(raw),
                         course_id=course_id,
-                        owner_user_id=owner_user_id,
+                        owner_user_id=None,
                         status="issued",
                         source="admin",
                         note=note,
@@ -200,7 +196,7 @@ class CourseCodeAdminService:
                             object_type="course_code",
                             object_id=row.id,
                             result="succeeded",
-                            summary={"course_id": course_id, "owner_user_id": owner_user_id},
+                            summary={"course_id": course_id, "anonymous": True},
                         )
                     )
                 return [

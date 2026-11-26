@@ -103,11 +103,10 @@ async def ctx(monkeypatch):
     await engine.dispose()
 
 
-async def test_issue_requires_owner_and_returns_plaintext_codes(ctx):
+async def test_issue_creates_anonymous_codes_with_plaintext(ctx):
     codes = await CourseCodeAdminService.issue(
         course_id=ctx.cid,
         quantity=2,
-        owner_user_id=ctx.a_id,
         note="渠道补发",
         admin_id=ctx.admin_id,
     )
@@ -116,22 +115,25 @@ async def test_issue_requires_owner_and_returns_plaintext_codes(ctx):
         for item in codes:
             ctx.created_codes.append(item["id"])
             row = await db.get(CourseCode, item["id"])
-            assert row.owner_user_id == ctx.a_id
+            assert row.owner_user_id is None          # 匿名码：兑换时才绑定
             assert row.status == "issued" and row.source == "admin"
             assert row.code_hash == course_code_crypto.hash_code(item["code"])
             assert course_code_crypto.decrypt_code(row.code_cipher) == item["code"]
 
 
 async def test_owner_display_name_falls_back_in_order(ctx):
-    await CourseCodeAdminService.issue(
-        course_id=ctx.cid, quantity=1, owner_user_id=ctx.a_id, note=None, admin_id=ctx.admin_id
-    )
-    await CourseCodeAdminService.issue(
-        course_id=ctx.cid, quantity=1, owner_user_id=ctx.b_id, note=None, admin_id=ctx.admin_id
-    )
-    await CourseCodeAdminService.issue(
-        course_id=ctx.cid, quantity=1, owner_user_id=ctx.c_id, note=None, admin_id=ctx.admin_id
-    )
+    # 匿名生成为主；回退展示仍要覆盖"已绑定"的历史/手工场景
+    generated = []
+    for _ in range(3):
+        generated.extend(
+            await CourseCodeAdminService.issue(
+                course_id=ctx.cid, quantity=1, note=None, admin_id=ctx.admin_id
+            )
+        )
+    async with ctx.factory() as db, db.begin():
+        for item, owner in zip(generated, (ctx.a_id, ctx.b_id, ctx.c_id)):
+            row = await db.get(CourseCode, item["id"])
+            row.owner_user_id = owner
     listing = await CourseCodeAdminService.list_codes(
         course_id=ctx.cid, status="issued", page=1, page_size=50
     )
@@ -144,11 +146,12 @@ async def test_owner_display_name_falls_back_in_order(ctx):
 
 async def test_revoke_redeemed_code_also_reclaims_learning_access(ctx):
     [issued] = await CourseCodeAdminService.issue(
-        course_id=ctx.cid, quantity=1, owner_user_id=ctx.a_id, note=None, admin_id=ctx.admin_id
+        course_id=ctx.cid, quantity=1, note=None, admin_id=ctx.admin_id
     )
     ctx.created_codes.append(issued["id"])
     async with ctx.factory() as db, db.begin():
         row = await db.get(CourseCode, issued["id"])
+        row.owner_user_id = ctx.a_id
         row.status = "redeemed"
         row.redeemed_at = datetime.now(timezone.utc)
         db.add(

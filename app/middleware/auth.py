@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +23,32 @@ from app.policy.permissions import admin_has_any_permission, admin_has_permissio
 
 logger = logging.getLogger(__name__)
 
+# 手机号闸门（2026-11-26 定案）：未授权手机号 = 游客，只能浏览。
+# 读请求一律放行；写请求除下列"补全身份/登录"路径外一律要求 user.phone 非空。
+_PHONE_EXEMPT_WRITE_PREFIXES = (
+    "/api/auth/",
+    "/api/user/profile",
+    "/api/user/phone",
+    "/api/user/identity",
+    "/api/user/realname",
+    "/api/videoweb/login-code",
+    "/api/videoweb/site/login",
+    "/api/videoweb/codes/redeem",
+)
+_PHONE_EXEMPT_WRITE_SUFFIXES = ("/attachments", "/materials", "/upload")
+
+
+def _requires_bound_phone(method: str, path: str) -> bool:
+    if method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return False
+    if any(path.startswith(prefix) for prefix in _PHONE_EXEMPT_WRITE_PREFIXES):
+        # 兑换自身有更精确的手机号提示，交给业务层
+        return False
+    return not any(path.endswith(suffix) for suffix in _PHONE_EXEMPT_WRITE_SUFFIXES)
+
+
 async def get_current_user(
+    request: Request,
     authorization: str | None = Header(None),
     db: AsyncSession = Depends(get_db),
 ) -> User:
@@ -48,6 +73,8 @@ async def get_current_user(
         raise UnauthorizedException("用户不存在")
     if not user.is_active:
         raise UnauthorizedException("账号已注销")
+    if _requires_bound_phone(request.method, request.url.path) and not (user.phone or "").strip():
+        raise ForbiddenException("请先在小程序授权手机号后再使用该功能")
     return user
 
 
