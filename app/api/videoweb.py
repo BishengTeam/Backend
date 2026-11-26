@@ -10,6 +10,7 @@ from app.port.config import settings
 from app.port.exceptions import NotFoundException, UnauthorizedException
 from app.schemas.common import APIResponse, success
 from app.schemas.videoweb import (
+    VideoWebCodeRedeemRequest,
     VideoWebCodeCreate,
     VideoWebCodeStatus,
     VideoWebLoginCodeResponse,
@@ -18,6 +19,7 @@ from app.schemas.videoweb import (
     VideoWebUserLookupResponse,
 )
 from app.services.videoweb import VideoWebService
+from app.services.course_code import CourseCodeService
 
 
 user_router = APIRouter(prefix="/videoweb", tags=["课程视频站"])
@@ -59,7 +61,23 @@ async def lookup_video_web_user(
 async def my_video_web_codes(
     current_user: User = Depends(get_current_user),
 ) -> APIResponse[list[dict]]:
-    return success(data=await VideoWebService.list_user_codes(current_user.id))
+    # vweb001 收编：我的兑换码直读 Backend 本地表，不再转发视频站。
+    return success(data=await CourseCodeService.list_for_user(current_user.id))
+
+
+@user_router.post(
+    "/codes/redeem",
+    response_model=APIResponse[dict],
+    summary="兑换课程码（仅限本人持有的码）",
+)
+async def redeem_video_web_code(
+    body: VideoWebCodeRedeemRequest,
+    current_user: User = Depends(get_current_user),
+) -> APIResponse[dict]:
+    return success(
+        data=await CourseCodeService.redeem(current_user.id, body.code),
+        message="兑换成功",
+    )
 
 
 @user_router.post(
