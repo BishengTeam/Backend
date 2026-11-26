@@ -84,9 +84,9 @@ x-backend-environment: &backend_environment
   VIDEOWEB_BASE_URL: ${VIDEOWEB_BASE_URL:?VIDEOWEB_BASE_URL is required}
   VIDEOWEB_SERVICE_TOKEN_FILE: /run/secrets/videoweb_service_token
   VIDEOWEB_LOOKUP_SERVICE_TOKEN_FILE: /run/secrets/videoweb_lookup_service_token
-  # vweb001 course code crypto: mount as files for the same reason.
-  CODE_HASH_PEPPER_FILE: /run/secrets/code_hash_pepper
-  CODE_ENCRYPTION_KEY_FILE: /run/secrets/code_encryption_key
+  # vweb001 course code crypto: 必须与视频站现有值一致，经 runtime.env 注入（600 权限）
+  CODE_HASH_PEPPER: ${CODE_HASH_PEPPER:-}
+  CODE_ENCRYPTION_KEY: ${CODE_ENCRYPTION_KEY:-}
   VIDEOWEB_ISSUE_DELAY_SECONDS: "1"
   VIDEOWEB_RECONCILE_POLL_SECONDS: ${VIDEOWEB_RECONCILE_POLL_SECONDS:-300}
   VIDEOWEB_RECONCILE_WINDOW_DAYS: ${VIDEOWEB_RECONCILE_WINDOW_DAYS:-7}
