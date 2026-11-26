@@ -29,6 +29,7 @@ class VideoWebLoginExchangeResponse(BaseModel):
 
 class VideoWebCodeCreate(BaseModel):
     course_id: int = Field(gt=0)
+    owner_user_id: int = Field(gt=0)
     quantity: int = Field(default=1, ge=1, le=500)
     note: str | None = Field(default=None, max_length=512)
 

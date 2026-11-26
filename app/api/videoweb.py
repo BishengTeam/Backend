@@ -20,6 +20,7 @@ from app.schemas.videoweb import (
 )
 from app.services.videoweb import VideoWebService
 from app.services.course_code import CourseCodeService
+from app.services.course_code_admin import CourseCodeAdminService
 
 
 user_router = APIRouter(prefix="/videoweb", tags=["课程视频站"])
@@ -124,24 +125,39 @@ async def exchange_video_web_login_code(
     )
 
 
+@admin_router.get("/users", response_model=APIResponse[dict])
+async def search_video_web_users(
+    keyword: str | None = Query(default=None, max_length=64),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=50),
+    _admin=Depends(require_permission("course:read")),
+) -> APIResponse[dict]:
+    """生成兑换码时选择归属用户（手机号前缀 / 姓名 / 昵称模糊）。"""
+    return success(
+        data=await CourseCodeAdminService.search_users(
+            keyword=keyword, page=page, page_size=page_size
+        )
+    )
+
+
 @admin_router.get("/codes", response_model=APIResponse[dict])
 async def list_video_web_codes(
     course_id: int | None = Query(default=None, gt=0),
     status: str | None = Query(default=None, max_length=16),
+    owner_user_id: int | None = Query(default=None, gt=0),
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    page_size: int = Query(default=20, ge=1, le=2000),
     _admin=Depends(require_permission("course:read")),
 ) -> APIResponse[dict]:
-    data = await VideoWebService.list_codes(
-        course_id=course_id,
-        status=status,
-        page=page,
-        page_size=page_size,
+    return success(
+        data=await CourseCodeAdminService.list_codes(
+            course_id=course_id,
+            status=status,
+            owner_user_id=owner_user_id,
+            page=page,
+            page_size=page_size,
+        )
     )
-    if isinstance(data, dict):
-        data.setdefault("page", page)
-        data.setdefault("page_size", page_size)
-    return success(data=data)
 
 
 @admin_router.post("/codes", response_model=APIResponse[list[dict]])
@@ -149,15 +165,12 @@ async def create_video_web_codes(
     body: VideoWebCodeCreate,
     _admin=Depends(require_permission("course:write")),
 ) -> APIResponse[list[dict]]:
-    # The video site accepts a batch quantity, so issue the whole request in one
-    # round-trip; per-code loops exceeded the Admin client timeout for large N.
-    codes = await VideoWebService.issue_code(
+    codes = await CourseCodeAdminService.issue(
         course_id=body.course_id,
-        order_id=None,
-        miniapp_user_id=None,
-        created_by="admin",
-        note=body.note,
         quantity=body.quantity,
+        owner_user_id=body.owner_user_id,
+        note=body.note,
+        admin_id=_admin.id,
     )
     return success(data=codes, message="兑换码生成成功")
 
@@ -169,8 +182,8 @@ async def revoke_video_web_code(
     _admin=Depends(require_permission("course:write")),
 ) -> APIResponse[dict]:
     return success(
-        data=await VideoWebService.change_code_status(
-            code_id, "revoke", body.reason if body else None
+        data=await CourseCodeAdminService.change_status(
+            code_id, "revoke", body.reason if body else None, _admin.id
         ),
         message="兑换码已撤销",
     )
@@ -183,8 +196,8 @@ async def refund_video_web_code(
     _admin=Depends(require_permission("course:write")),
 ) -> APIResponse[dict]:
     return success(
-        data=await VideoWebService.change_code_status(
-            code_id, "refund", body.reason if body else None
+        data=await CourseCodeAdminService.change_status(
+            code_id, "refund", body.reason if body else None, _admin.id
         ),
         message="兑换码已退款回收",
     )
