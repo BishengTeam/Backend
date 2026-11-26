@@ -254,6 +254,19 @@ class CourseService:
             created_at=enrollment.created_at,
         )
 
+    @staticmethod
+    def _course_access_state(course: Course) -> str:
+        """课程访问状态口径（vweb001 收编统一）：
+
+        - published：正常
+        - offline：临时下线，已授权用户仍可看目录/播放，未授权拒绝
+        - archived：归档，一律拒绝（含已授权）
+        - draft：未发布，一律拒绝
+        """
+        if course.status in ("archived", "draft", "offline"):
+            return course.status
+        return "published"
+
     async def get_chapters(
         self, course_id: int, user_id: int | None
     ) -> CourseChaptersResponse:
@@ -266,7 +279,8 @@ class CourseService:
                 if user_id is not None
                 else False
             )
-            if not course.is_active and not has_access:
+            state = self._course_access_state(course)
+            if state in ("archived", "draft") or (state == "offline" and not has_access):
                 raise NotFoundException("课程")
             rows = list(
                 await db.scalars(
@@ -313,11 +327,16 @@ class CourseService:
             chapter = await db.get(CourseChapter, chapter_id)
             if course is None or chapter is None or chapter.course_id != course_id:
                 raise NotFoundException("课程章节")
-            if course.status != "published" or not course.is_active:
+            has_access = await self._has_learning_access(db, user_id, course_id)
+            state = self._course_access_state(course)
+            if state == "archived":
+                raise ForbiddenException("课程已归档")
+            if state == "draft":
+                raise ForbiddenException("课程未发布")
+            if state == "offline" and not has_access:
                 raise ForbiddenException("课程已下线")
             if video_only and chapter.resource_type != "video":
                 raise ValidationException("文档章节请使用通用资源接口")
-            has_access = await self._has_learning_access(db, user_id, course_id)
             can_play = (
                 has_access
                 or await self._is_preview(db, chapter, course.preview_chapter_count)
